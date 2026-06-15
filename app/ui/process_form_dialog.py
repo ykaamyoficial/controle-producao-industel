@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.ui.components.modern_button import ModernButton
+from app.ui.proposal_import_dialog import ProposalImportDialog
 
 
 class ItemEditorDelegate(QStyledItemDelegate):
@@ -62,11 +63,19 @@ class ProcessFormDialog(QDialog):
         body.setContentsMargins(2, 2, 6, 8)
         body.setSpacing(12)
 
+        heading_row = QHBoxLayout()
         heading = QLabel("Cadastro da proposta")
         heading.setStyleSheet("font-size: 18px; font-weight: 800;")
+        heading_row.addWidget(heading)
+        heading_row.addStretch()
+        if not self.process_id:
+            import_button = ModernButton("Conferir PDF Nomus", "pdf")
+            import_button.setToolTip("Abrir conferencia sem gravar dados no cadastro")
+            import_button.clicked.connect(self.open_nomus_preview)
+            heading_row.addWidget(import_button)
         caption = QLabel("Preencha os dados gerais e organize os itens que compoem a proposta.")
         caption.setObjectName("Caption")
-        body.addWidget(heading)
+        body.addLayout(heading_row)
         body.addWidget(caption)
 
         general = self._section("Dados gerais")
@@ -192,6 +201,10 @@ class ProcessFormDialog(QDialog):
         label.setStyleSheet("font-size: 13px; font-weight: 800;")
         layout.addWidget(label)
         return frame
+
+    def open_nomus_preview(self):
+        dialog = ProposalImportDialog(self)
+        dialog.exec()
 
     def add_item(self, number: str = "", description: str = "", quantity: str = "1", weight: str = ""):
         self.items_table.blockSignals(True)
