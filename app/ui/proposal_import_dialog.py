@@ -165,11 +165,14 @@ class ProposalImportDialog(QDialog):
         self.validation_result.setWordWrap(True)
         footer.addWidget(self.validation_result, 1)
         close_button = ModernButton("Fechar", "clear")
-        validate_button = ModernButton("Validar importacao", "status", accent=True)
+        validate_button = ModernButton("Validar", "status")
+        use_button = ModernButton("Usar dados no cadastro", "status", accent=True)
         close_button.clicked.connect(self.reject)
         validate_button.clicked.connect(self.validate_import)
+        use_button.clicked.connect(self.use_data_in_registration)
         footer.addWidget(close_button)
         footer.addWidget(validate_button)
+        footer.addWidget(use_button)
         root.addLayout(footer)
 
     def _section(self, title: str) -> QFrame:
@@ -387,3 +390,8 @@ class ProposalImportDialog(QDialog):
         self.validation_result.style().unpolish(self.validation_result)
         self.validation_result.style().polish(self.validation_result)
         return True
+
+    def use_data_in_registration(self):
+        """Accept the preview only after validation; no persistence occurs here."""
+        if self.validate_import():
+            self.accept()

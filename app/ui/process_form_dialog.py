@@ -75,8 +75,13 @@ class ProcessFormDialog(QDialog):
             heading_row.addWidget(import_button)
         caption = QLabel("Preencha os dados gerais e organize os itens que compoem a proposta.")
         caption.setObjectName("Caption")
+        self.import_notice = QLabel("")
+        self.import_notice.setObjectName("ValidationWarning")
+        self.import_notice.setWordWrap(True)
+        self.import_notice.hide()
         body.addLayout(heading_row)
         body.addWidget(caption)
+        body.addWidget(self.import_notice)
 
         general = self._section("Dados gerais")
         grid = QGridLayout()
@@ -204,7 +209,131 @@ class ProcessFormDialog(QDialog):
 
     def open_nomus_preview(self):
         dialog = ProposalImportDialog(self)
-        dialog.exec()
+        if dialog.exec() == QDialog.Accepted and dialog.prepared_data:
+            self.apply_import_data(dialog.prepared_data)
+
+    def apply_import_data(self, data: dict, confirm_overwrite=None) -> bool:
+        """Transfer reviewed operational data without saving the process."""
+        required = {
+            "proposal_number": "Proposta",
+            "client": "Cliente",
+            "site": "Obra/Site",
+            "proposal_date": "Data da proposta",
+        }
+        missing = [label for key, label in required.items() if not str(data.get(key) or "").strip()]
+        items = list(data.get("items") or [])
+        if missing or not items:
+            details = ", ".join(missing) if missing else "Itens"
+            QMessageBox.warning(
+                self,
+                "Usar dados no cadastro",
+                f"A importacao ainda possui dados obrigatorios ausentes: {details}.",
+            )
+            return False
+
+        field_map = {
+            "proposal_number": "proposta",
+            "client": "cliente",
+            "site": "obra_site",
+            "proposal_date": "data_entrada",
+            "purchase_order": "pedido_compra",
+            "lot": "lote",
+        }
+        incoming: dict[str, str] = {}
+        conflicts: list[str] = []
+        for source, target in field_map.items():
+            value = str(data.get(source) or "").strip()
+            if not value:
+                continue
+            incoming[target] = value
+            current = self.fields[target].text().strip()
+            if current:
+                if target == "proposta" and current.upper() == value.upper():
+                    conflicts.append(f"Proposta ja preenchida com o mesmo numero: {current}")
+                elif current != value:
+                    conflicts.append(f"{target.replace('_', ' ').title()}: '{current}' sera substituido por '{value}'")
+
+        deadline = str(data.get("delivery_deadline_raw") or "").strip()
+        deadline_pending = bool(data.get("delivery_deadline_needs_confirmation"))
+        if deadline and not deadline_pending:
+            incoming["prazo_entrega"] = deadline
+            current_deadline = self.fields["prazo_entrega"].text().strip()
+            if current_deadline and current_deadline != deadline:
+                conflicts.append(
+                    f"Prazo Entrega: '{current_deadline}' sera substituido por '{deadline}'"
+                )
+
+        if self.items_table.rowCount():
+            conflicts.append(
+                f"A lista atual com {self.items_table.rowCount()} item(ns) sera substituida."
+            )
+        current_total_weight = self.fields["peso"].text().strip()
+        if current_total_weight:
+            conflicts.append(
+                f"Peso total informado manualmente ('{current_total_weight}') podera ser recalculado ou limpo."
+            )
+
+        if conflicts:
+            if confirm_overwrite is None:
+                message = (
+                    "O cadastro ja possui dados preenchidos:\n\n"
+                    + "\n".join(f"- {conflict}" for conflict in conflicts)
+                    + "\n\nDeseja usar os dados conferidos mesmo assim?"
+                )
+                confirmed = QMessageBox.question(
+                    self,
+                    "Confirmar preenchimento",
+                    message,
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.No,
+                ) == QMessageBox.Yes
+            else:
+                confirmed = bool(confirm_overwrite(conflicts))
+            if not confirmed:
+                return False
+
+        for target, value in incoming.items():
+            self.fields[target].setText(value)
+
+        self.items_table.setRowCount(0)
+        pending_weights = 0
+        for item in items:
+            weight = item.get("weight_kg")
+            weight_text = "" if weight is None else f"{float(weight):g}"
+            self.add_item(
+                str(item.get("item_number") or ""),
+                str(item.get("description") or ""),
+                str(item.get("quantity") or 1),
+                weight_text,
+            )
+            if weight is None:
+                pending_weights += 1
+                weight_cell = self.items_table.item(self.items_table.rowCount() - 1, 3)
+                if weight_cell:
+                    weight_cell.setToolTip(
+                        "Peso nao informado no PDF; precisa de conferencia antes do cadastro."
+                    )
+
+        if pending_weights:
+            self.fields["peso"].clear()
+        else:
+            self.update_items_total()
+
+        notices = ["Dados do PDF apenas preenchidos no formulario; clique em Salvar para cadastrar."]
+        if deadline_pending:
+            notices.append(
+                f"Prazo '{deadline}' nao foi transferido porque ainda precisa de confirmacao."
+            )
+            self.fields["prazo_entrega"].setToolTip(
+                f"Prazo encontrado no PDF: {deadline}. Informe uma data definitiva."
+            )
+        if pending_weights:
+            notices.append(
+                f"{pending_weights} item(ns) permanecem sem peso e precisam de conferencia."
+            )
+        self.import_notice.setText(" ".join(notices))
+        self.import_notice.show()
+        return True
 
     def add_item(self, number: str = "", description: str = "", quantity: str = "1", weight: str = ""):
         self.items_table.blockSignals(True)

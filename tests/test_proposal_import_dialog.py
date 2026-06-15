@@ -7,7 +7,7 @@ from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication, QLabel, QPushButton
+from PySide6.QtWidgets import QApplication, QDialog, QLabel, QPushButton
 
 from app.ui.process_form_dialog import ProcessFormDialog
 from app.ui.proposal_import_dialog import ProposalImportDialog
@@ -94,6 +94,14 @@ class ProposalImportDialogTests(unittest.TestCase):
             self.assertIn("Conferir PDF Nomus", buttons)
         finally:
             form.close()
+
+    def test_use_button_accepts_only_validated_data(self):
+        self.dialog.fields["client"].clear()
+        self.dialog.use_data_in_registration()
+        self.assertNotEqual(self.dialog.result(), QDialog.DialogCode.Accepted)
+        self.dialog.fields["client"].setText("MNS ENGENHARIA")
+        self.dialog.use_data_in_registration()
+        self.assertEqual(self.dialog.result(), QDialog.DialogCode.Accepted)
 
 
 if __name__ == "__main__":
