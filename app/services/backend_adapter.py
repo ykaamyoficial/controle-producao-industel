@@ -263,6 +263,31 @@ class BackendService:
             raise legacy.AppError("Usuario nao autenticado.")
         self.repo.mark_galvanization_load_returned(load_id, self.user)
 
+    def fiscal_rows(self, filters: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+        return [row_to_dict(row) for row in self.repo.list_fiscal_processes(filters)]
+
+    def fiscal_items(self, fiscal_processo_id: int) -> list[dict[str, Any]]:
+        return [row_to_dict(row) for row in self.repo.list_fiscal_items(fiscal_processo_id)]
+
+    def fiscal_indicators(self) -> dict[str, int]:
+        return self.repo.fiscal_indicators()
+
+    def fiscal_critical_pending(self, process_id: int) -> bool:
+        return self.repo.identificar_pendencia_fiscal_critica(process_id)
+
+    def fiscal_status_label(self, status: str) -> str:
+        labels = {
+            "FALTA_EMITIR_NOTA_FISCAL": "Falta emitir NF",
+            "NOTA_FISCAL_PARCIAL": "NF parcial",
+            "NOTA_FISCAL_EMITIDA": "NF emitida",
+            "FISCAL_CANCELADO": "Fiscal cancelado",
+            "PENDENTE": "Pendente",
+            "PARCIAL": "Parcial",
+            "FATURADO": "Faturado",
+            "CANCELADO": "Cancelado",
+        }
+        return labels.get(legacy.normalize_status(status or ""), status or "-")
+
     def early_delivery_destination_candidates(self, search: str = "") -> list[dict[str, Any]]:
         return [row_to_dict(row) for row in self.repo.list_early_delivery_destination_candidates(search)]
 

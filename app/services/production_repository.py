@@ -1645,6 +1645,125 @@ class Repository:
                 ),
             )
 
+    def list_fiscal_processes(self, filters=None):
+        filters = filters or {}
+        where = []
+        params = []
+        text = (filters.get("text") or "").strip()
+        if text:
+            like = f"%{text}%"
+            where.append("(fp.proposta LIKE ? OR p.cliente LIKE ? OR p.obra_site LIKE ?)")
+            params.extend([like, like, like])
+        status = (filters.get("status_fiscal") or "").strip()
+        if status:
+            where.append("fp.status_fiscal = ?")
+            params.append(status)
+        entry_date = (filters.get("data_entrada_fiscal") or "").strip()
+        if entry_date:
+            where.append("fp.data_entrada_fiscal = ?")
+            params.append(entry_date)
+        critical = filters.get("pendencia_critica")
+        if critical in (True, "1", "SIM", "sim"):
+            where.append("(p.status_expedicao = 'ENTREGUE' AND fp.status_fiscal <> 'NOTA_FISCAL_EMITIDA')")
+        sql_where = " WHERE " + " AND ".join(where) if where else ""
+        return self.conn.execute(
+            f"""
+            SELECT
+                fp.id AS fiscal_processo_id,
+                fp.processo_id,
+                fp.proposta,
+                p.cliente,
+                p.obra_site,
+                fp.status_fiscal,
+                fp.data_entrada_fiscal,
+                fp.data_ultima_emissao,
+                p.status_expedicao,
+                COUNT(fi.id) AS quantidade_itens,
+                COALESCE(SUM(CASE WHEN fi.status_item_fiscal <> 'FATURADO' THEN 1 ELSE 0 END), 0) AS itens_pendentes,
+                COALESCE(SUM(CASE WHEN fi.status_item_fiscal = 'FATURADO' THEN 1 ELSE 0 END), 0) AS itens_faturados,
+                COALESCE(SUM(fi.peso_total), 0) AS peso_total,
+                COALESCE(SUM(fi.peso_faturado), 0) AS peso_faturado,
+                COALESCE(SUM(fi.peso_total - fi.peso_faturado), 0) AS peso_pendente,
+                CASE
+                    WHEN p.status_expedicao = 'ENTREGUE'
+                         AND fp.status_fiscal <> 'NOTA_FISCAL_EMITIDA'
+                    THEN 1 ELSE 0
+                END AS pendencia_critica
+            FROM fiscal_processos fp
+            JOIN processos p ON p.id = fp.processo_id
+            LEFT JOIN fiscal_itens fi ON fi.fiscal_processo_id = fp.id
+            {sql_where}
+            GROUP BY fp.id
+            ORDER BY fp.data_entrada_fiscal DESC, fp.id DESC
+            """,
+            tuple(params),
+        ).fetchall()
+
+    def list_fiscal_items(self, fiscal_processo_id):
+        return self.conn.execute(
+            """
+            SELECT
+                id,
+                fiscal_processo_id,
+                processo_id,
+                item_id,
+                numero_item,
+                descricao,
+                quantidade_total,
+                quantidade_faturada,
+                quantidade_total - quantidade_faturada AS quantidade_pendente,
+                peso_total,
+                peso_faturado,
+                peso_total - peso_faturado AS peso_pendente,
+                status_item_fiscal
+            FROM fiscal_itens
+            WHERE fiscal_processo_id = ?
+            ORDER BY CAST(numero_item AS INTEGER), numero_item, id
+            """,
+            (fiscal_processo_id,),
+        ).fetchall()
+
+    def fiscal_indicators(self):
+        rows = self.conn.execute(
+            """
+            SELECT
+                COALESCE(SUM(CASE WHEN status_fiscal = 'FALTA_EMITIR_NOTA_FISCAL' THEN 1 ELSE 0 END), 0) AS falta_emitir,
+                COALESCE(SUM(CASE WHEN status_fiscal = 'NOTA_FISCAL_PARCIAL' THEN 1 ELSE 0 END), 0) AS nf_parcial,
+                COALESCE(SUM(CASE WHEN status_fiscal = 'NOTA_FISCAL_EMITIDA' THEN 1 ELSE 0 END), 0) AS nf_emitida
+            FROM fiscal_processos
+            """
+        ).fetchone()
+        critical = self.conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM fiscal_processos fp
+            JOIN processos p ON p.id = fp.processo_id
+            WHERE p.status_expedicao = 'ENTREGUE'
+              AND fp.status_fiscal <> 'NOTA_FISCAL_EMITIDA'
+            """
+        ).fetchone()[0]
+        return {
+            "falta_emitir": int(rows["falta_emitir"] or 0),
+            "nf_parcial": int(rows["nf_parcial"] or 0),
+            "nf_emitida": int(rows["nf_emitida"] or 0),
+            "pendencia_critica": int(critical or 0),
+        }
+
+    def identificar_pendencia_fiscal_critica(self, processo_id):
+        row = self.conn.execute(
+            """
+            SELECT 1
+            FROM fiscal_processos fp
+            JOIN processos p ON p.id = fp.processo_id
+            WHERE fp.processo_id = ?
+              AND p.status_expedicao = 'ENTREGUE'
+              AND fp.status_fiscal <> 'NOTA_FISCAL_EMITIDA'
+            LIMIT 1
+            """,
+            (processo_id,),
+        ).fetchone()
+        return row is not None
+
     def process_main_id(self, process):
         return int(process["processo_pai_id"] or process["id"])
 
@@ -4120,4 +4239,3 @@ XLSX_STYLES = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <xf numFmtId="0" fontId="0" fillId="2" borderId="1" xfId="0" applyFill="1" applyBorder="1" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf>
 </cellXfs>
 </styleSheet>"""
-

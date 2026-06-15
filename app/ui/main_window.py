@@ -11,6 +11,7 @@ from app.ui.app_icon import app_icon
 from app.ui.components.modern_button import ModernButton
 from app.ui.data_page import DataPage
 from app.ui.dashboard_page import DashboardPage
+from app.ui.fiscal_page import FiscalPage
 from app.ui.login_dialog import LoginDialog
 from app.ui.process_page import ProcessPage
 from app.ui.settings_page import SettingsPage
@@ -123,6 +124,9 @@ class MainWindow(QMainWindow):
 
         self.pages["PARCIAIS"] = ProcessPage(self.service, "PARCIAIS", "Parciais e pendencias")
         self.stack.addWidget(self.pages["PARCIAIS"])
+
+        self.pages["FISCAL"] = FiscalPage(self.service)
+        self.stack.addWidget(self.pages["FISCAL"])
 
         self.pages["HISTORICO"] = DataPage(
             "Historico",

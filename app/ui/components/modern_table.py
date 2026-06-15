@@ -123,6 +123,20 @@ class ModernTable(QTableView):
             "status_galvanizacao": 230,
             "status_expedicao": 220,
             "status_almoxarifado": 220,
+            "status_fiscal": 170,
+            "data_entrada_fiscal": 125,
+            "data_ultima_emissao": 130,
+            "quantidade_itens": 80,
+            "itens_pendentes": 95,
+            "itens_faturados": 95,
+            "peso_total": 110,
+            "peso_pendente": 125,
+            "peso_faturado": 120,
+            "pendencia_critica": 150,
+            "quantidade_total": 95,
+            "quantidade_faturada": 110,
+            "quantidade_pendente": 112,
+            "status_item_fiscal": 150,
         }
         for index, (key, _label) in enumerate(columns):
             self.setColumnWidth(index, widths.get(key, 120))
