@@ -92,6 +92,20 @@ class MigrationSafetyTests(unittest.TestCase):
             ).fetchall()
             self.assertEqual([row[0] for row in versions], [1])
 
+    def test_checksum_is_stable_with_windows_line_endings(self):
+        migrations_dir = self.temp_dir / "line_endings"
+        migrations_dir.mkdir()
+        migration_path = migrations_dir / "001_line_endings.sql"
+        migration_path.write_bytes(
+            b"CREATE TABLE newline_test (id INTEGER);\n"
+        )
+        with self.connect(self.temp_dir / "line_endings.db") as conn:
+            self.assertEqual(apply_migrations(conn, migrations_dir), [1])
+            migration_path.write_bytes(
+                b"CREATE TABLE newline_test (id INTEGER);\r\n"
+            )
+            self.assertEqual(apply_migrations(conn, migrations_dir), [])
+
 
 if __name__ == "__main__":
     unittest.main()

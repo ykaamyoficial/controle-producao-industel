@@ -57,13 +57,16 @@ def _load_migrations(directory: Path) -> list[Migration]:
             raise MigrationError(f"Versao de migracao duplicada: {version}")
         versions.add(version)
         raw = path.read_bytes()
+        # Git may check out text files with CRLF on Windows. Migration
+        # checksums must represent SQL content, not the local newline style.
+        canonical = raw.replace(b"\r\n", b"\n")
         migrations.append(
             Migration(
                 version=version,
                 name=match.group("name"),
                 path=path,
                 sql=raw.decode("utf-8-sig"),
-                checksum=hashlib.sha256(raw).hexdigest(),
+                checksum=hashlib.sha256(canonical).hexdigest(),
             )
         )
     if not migrations:
