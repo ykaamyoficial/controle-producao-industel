@@ -31,6 +31,7 @@ def reviewed_data() -> dict:
     return {
         "source": "nomus_pdf",
         "source_file_name": "proposta.pdf",
+        "source_file_sha256": "a" * 64,
         "proposal_number": "CP05228",
         "client": "MNS ENGENHARIA",
         "site": "1101013505 - SP1FJ",
@@ -93,6 +94,7 @@ class NomusFormTransferTests(unittest.TestCase):
         self.assertEqual(self.form.items_table.item(0, 3).text(), "69.5")
         self.assertEqual(self.form.items_table.item(1, 3).text(), "")
         self.assertEqual(self.service.save_calls, [])
+        self.assertEqual(self.form.import_metadata["hash_sha256"], "a" * 64)
         self.assert_database_unchanged()
 
     def test_relative_deadline_is_not_transferred(self):

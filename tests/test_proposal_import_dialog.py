@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import unittest
 from pathlib import Path
@@ -62,6 +63,10 @@ class ProposalImportDialogTests(unittest.TestCase):
         self.assertEqual(prepared["proposal_number"], "CP05228")
         self.assertEqual(prepared["items"][0]["weight_kg"], 69.5)
         self.assertIsNone(prepared["items"][1]["weight_kg"])
+        self.assertEqual(
+            prepared["source_file_sha256"],
+            hashlib.sha256(self.pdf_path.read_bytes()).hexdigest(),
+        )
         self.assertNotIn("service", self.dialog.__dict__)
 
     def test_manual_correction_is_reflected_in_prepared_data(self):

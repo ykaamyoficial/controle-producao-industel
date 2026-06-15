@@ -29,6 +29,7 @@ class ProcessFormDialog(QDialog):
         self.service = service
         self.process_id = process_id
         self.initial_data = initial_data or {}
+        self.import_metadata: dict | None = None
         self.is_partial = False
         self.items_locked = False
         self.setWindowTitle("Proposta")
@@ -333,6 +334,17 @@ class ProcessFormDialog(QDialog):
             )
         self.import_notice.setText(" ".join(notices))
         self.import_notice.show()
+        self.import_metadata = {
+            "origem": "NOMUS_PDF",
+            "nome_arquivo": str(data.get("source_file_name") or "").strip(),
+            "hash_sha256": str(data.get("source_file_sha256") or "").strip().lower(),
+            "observacao": "; ".join(
+                part for part in (
+                    f"Prazo relativo pendente: {deadline}" if deadline_pending else "",
+                    f"Itens sem peso confirmado: {pending_weights}" if pending_weights else "",
+                ) if part
+            ),
+        }
         return True
 
     def add_item(self, number: str = "", description: str = "", quantity: str = "1", weight: str = ""):
@@ -449,7 +461,7 @@ class ProcessFormDialog(QDialog):
                 })
             data["itens"] = items
         try:
-            self.service.save_process(data, self.process_id)
+            self.service.save_process(data, self.process_id, self.import_metadata)
             self.accept()
         except Exception as exc:
             QMessageBox.warning(self, "Salvar proposta", str(exc))

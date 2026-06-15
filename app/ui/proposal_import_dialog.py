@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -318,6 +319,7 @@ class ProposalImportDialog(QDialog):
         return {
             "source": "nomus_pdf",
             "source_file_name": self.source_path.name if self.source_path else None,
+            "source_file_sha256": self._source_file_sha256(),
             "proposal_number": self.fields["proposal_number"].text().strip().upper(),
             "client": self.fields["client"].text().strip(),
             "site": self.fields["site"].text().strip(),
@@ -329,6 +331,15 @@ class ProposalImportDialog(QDialog):
             "items": items,
             "warnings": list(self.parser_warnings),
         }
+
+    def _source_file_sha256(self) -> str | None:
+        if not self.source_path or not self.source_path.is_file():
+            return None
+        digest = hashlib.sha256()
+        with self.source_path.open("rb") as source:
+            for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
 
     @staticmethod
     def _is_iso_date(value: str) -> bool:
