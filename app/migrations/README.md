@@ -22,4 +22,6 @@ numerados nesta pasta.
 
 `001_initial_schema.sql` representa o esquema existente no inicio do
 versionamento. `002_prepare_versioning.sql` documenta formalmente a tabela de
-controle criada durante o bootstrap.
+controle criada durante o bootstrap. `003_nomus_pdf_import_metadata.sql`
+armazena somente a origem operacional, o nome e o SHA-256 do PDF Nomus quando
+o processo e efetivamente salvo; o arquivo e seu texto integral nao sao copiados.

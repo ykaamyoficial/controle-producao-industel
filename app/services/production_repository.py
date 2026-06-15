@@ -2397,7 +2397,20 @@ class Repository:
         )
         self.conn.commit()
 
-    def save_process(self, data, user, process_id=None):
+    def save_process(self, data, user, process_id=None, import_metadata=None):
+        try:
+            saved_id = self._save_process_without_commit(data, user, process_id)
+            if import_metadata:
+                if process_id:
+                    raise AppError("A origem PDF Nomus so pode ser registrada na criacao do processo.")
+                self.register_pdf_import(saved_id, data, import_metadata, user)
+            self.conn.commit()
+            return saved_id
+        except Exception:
+            self.conn.rollback()
+            raise
+
+    def _save_process_without_commit(self, data, user, process_id=None):
         if not user_can_edit_process(user):
             raise AppError("Seu usuario nao tem permissao para cadastrar ou editar dados de processos.")
         self.validate_process(data, process_id)
@@ -2476,8 +2489,76 @@ class Repository:
             self.add_audit("processos", saved_id, "CRIACAO", "", "", all_values["proposta"], user)
         if "itens" in data:
             self.replace_proposal_items(saved_id, data.get("itens") or [], user)
-        self.conn.commit()
         return saved_id
+
+    def pdf_import_by_hash(self, hash_sha256):
+        normalized = str(hash_sha256 or "").strip().lower()
+        if not normalized:
+            return None
+        return self.conn.execute(
+            "SELECT * FROM proposta_importacoes_pdf WHERE hash_sha256 = ?",
+            (normalized,),
+        ).fetchone()
+
+    def register_pdf_import(self, process_id, process_data, metadata, user):
+        origin = str(metadata.get("origem") or "").strip().upper()
+        file_name = str(metadata.get("nome_arquivo") or "").strip()
+        file_hash = str(metadata.get("hash_sha256") or "").strip().lower()
+        observation = str(metadata.get("observacao") or "").strip()
+        if origin != "NOMUS_PDF":
+            raise AppError("Origem de importacao PDF invalida.")
+        if not file_name or not file_hash:
+            raise AppError("Nao foi possivel validar o nome e o hash do PDF Nomus.")
+        if len(file_hash) != 64 or any(char not in "0123456789abcdef" for char in file_hash):
+            raise AppError("Hash SHA-256 do PDF Nomus invalido.")
+        previous = self.pdf_import_by_hash(file_hash)
+        if previous:
+            raise AppError("Este PDF Nomus ja foi utilizado em outro cadastro.")
+
+        imported_at = now_br()
+        self.conn.execute(
+            """
+            INSERT INTO proposta_importacoes_pdf(
+                processo_id, origem, nome_arquivo, hash_sha256, importado_em,
+                importado_por, observacao, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                process_id,
+                origin,
+                file_name,
+                file_hash,
+                imported_at,
+                user["login"],
+                observation,
+                imported_at,
+            ),
+        )
+        proposal = format_proposal(process_data.get("proposta", ""))
+        history_note = (
+            "Processo criado a partir de importacao PDF Nomus"
+            f" | Arquivo: {file_name} | SHA-256: {file_hash}"
+        )
+        if observation:
+            history_note += f" | Confirmacoes: {observation}"
+        self.add_history(
+            process_id,
+            proposal,
+            "CONTROLE GERAL",
+            "",
+            "IMPORTACAO_PDF_NOMUS",
+            user,
+            history_note,
+        )
+        self.add_audit(
+            "proposta_importacoes_pdf",
+            process_id,
+            "IMPORTACAO_PDF_NOMUS",
+            "hash_sha256",
+            "",
+            file_hash,
+            user,
+        )
 
     def validate_process(self, data, process_id=None):
         if not data.get("cliente", "").strip():

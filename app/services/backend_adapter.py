@@ -542,10 +542,15 @@ class BackendService:
             produced_weight=produced_weight,
         )
 
-    def save_process(self, data: dict[str, Any], process_id: int | None = None) -> int:
+    def save_process(
+        self,
+        data: dict[str, Any],
+        process_id: int | None = None,
+        import_metadata: dict[str, Any] | None = None,
+    ) -> int:
         if not self.user:
             raise legacy.AppError("Usuario nao autenticado.")
-        return self.repo.save_process(data, self.user, process_id)
+        return self.repo.save_process(data, self.user, process_id, import_metadata)
 
     def proposal_items(self, process_id: int, pending_production: bool = False, pending_delivery: bool = False) -> list[dict[str, Any]]:
         return [row_to_dict(row) for row in self.repo.list_proposal_items(process_id, pending_production, pending_delivery)]

@@ -147,6 +147,27 @@ def app_stylesheet(palette: dict) -> str:
     QLineEdit:focus, QComboBox:focus, QTextEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus {{
         border: 1px solid {accent};
     }}
+    QLineEdit[validationState="error"], QTableWidget[validationState="error"] {{
+        border: 2px solid {danger};
+    }}
+    QLineEdit[validationState="warning"] {{
+        border: 2px solid {palette["warning"]};
+    }}
+    QLabel#ValidationWarning {{
+        color: {palette["warning"]};
+        font-size: 10px;
+        font-weight: 700;
+    }}
+    QLabel#ValidationError {{
+        color: {danger};
+        font-size: 10px;
+        font-weight: 700;
+    }}
+    QLabel#ValidationSuccess {{
+        color: {palette["success"]};
+        font-size: 11px;
+        font-weight: 700;
+    }}
     QComboBox::drop-down {{
         border: 0;
         width: 24px;
