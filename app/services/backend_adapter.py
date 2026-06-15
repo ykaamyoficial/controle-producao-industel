@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from app.services import production_repository as legacy
+from app.services.migration_runner import apply_migrations
 
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
@@ -51,6 +52,7 @@ class BackendService:
     def __init__(self):
         self.config = load_app_config()
         self.conn = legacy.db_connect(self.config["db_path"])
+        apply_migrations(self.conn)
         legacy.initialize_database(self.conn)
         self.repo = legacy.Repository(self.conn)
         self.user = None
@@ -347,6 +349,7 @@ class BackendService:
         shutil.copy2(source, current)
         legacy.remove_database_sidecars(current)
         self.conn = legacy.db_connect(self.config["db_path"])
+        apply_migrations(self.conn)
         legacy.initialize_database(self.conn)
         self.repo = legacy.Repository(self.conn)
         return safety

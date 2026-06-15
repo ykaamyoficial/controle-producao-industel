@@ -19,11 +19,25 @@ desktop.ini
 *.db
 *.db-shm
 *.db-wal
+*.db-journal
 *.sqlite
 *.sqlite3
+*.sqlite-shm
+*.sqlite-wal
+*.sqlite-journal
 *.log
+logs/
+backups/
+backup/
+*.bak
+*.backup
+*.tmp
+*.temp
+~$*
 .env
 .env.*
+!.env.example
+*.local
 app/config/controle_producao_config.json
 app/data/backups/
 
@@ -44,3 +58,6 @@ versoes_antigas/
 *.zip
 *.7z
 
+# Relatorios e exportacoes locais
+exports/
+relatorios_gerados/

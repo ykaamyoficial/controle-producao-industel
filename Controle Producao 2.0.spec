@@ -11,7 +11,7 @@ a = Analysis(
     ['app\\main.py'],
     pathex=[],
     binaries=[],
-    datas=[('app\\data', 'app\\data'), ('app\\config', 'app\\config'), ('app\\assets', 'app\\assets')],
+    datas=[('app\\data', 'app\\data'), ('app\\config', 'app\\config'), ('app\\assets', 'app\\assets'), ('app\\migrations', 'app\\migrations')],
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
