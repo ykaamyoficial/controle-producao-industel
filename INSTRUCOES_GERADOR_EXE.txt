@@ -1,0 +1,26 @@
+CONFIGURACAO PARA GERAR O EXE
+
+Arquivo principal para selecionar no gerador:
+setup.py
+
+Nome do programa:
+Controle Producao Industel Telecom
+
+Icone do programa:
+app\assets\images\Logo_Industel_Icone.ico
+
+Modo:
+Janela / Windowed / Sem console
+
+Pastas que devem ser adicionadas junto no gerador:
+app\assets
+app\config
+app\data
+
+Dependencias:
+PySide6
+pyinstaller
+
+Observacao importante:
+Nao selecione o arquivo setup_cxfreeze.py no seu gerador de EXE.
+Esse arquivo ficou apenas guardado como configuracao alternativa.

@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+
+# IDE e sistema operacional
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Dados operacionais e configuracoes locais
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+*.log
+.env
+.env.*
+app/config/controle_producao_config.json
+app/data/backups/
+
+# Arquivos gerados
+build/
+dist/
+gerados/
+*.spec.bak
+
+# Conteudo local e versoes arquivadas
+.codex-tools/
+desktop/
+versoes_antigas/
+
+# Instaladores e pacotes gerados
+*.exe
+*.msi
+*.zip
+*.7z
+

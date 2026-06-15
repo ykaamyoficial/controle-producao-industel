@@ -1,0 +1,8 @@
+{
+  "db_path": "app/data/controle_producao.db",
+  "backup_dir": "app/data/backups",
+  "backup_keep": 20,
+  "company": "Industel",
+  "color_palette": "aurora",
+  "saved_reports": []
+}

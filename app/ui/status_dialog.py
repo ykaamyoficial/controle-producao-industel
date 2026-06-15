@@ -1,0 +1,238 @@
+from __future__ import annotations
+
+from PySide6.QtWidgets import (
+    QComboBox, QDialog, QFrame, QHBoxLayout, QLabel, QMessageBox, QTextEdit, QVBoxLayout,
+)
+
+from app.ui.components.modern_button import ModernButton
+from app.ui.galvanization_load_dialog import GalvanizationLoadManagerDialog
+from app.ui.icons import make_icon
+from app.ui.item_selection_dialog import ItemSelectionDialog
+
+
+class StatusDialog(QDialog):
+    """Operator-facing workflow actions. Internal status names stay out of daily use."""
+
+    def __init__(self, service, process_id: int, area: str | None, parent=None):
+        super().__init__(parent)
+        self.service = service
+        self.process_id = process_id
+        self.process = service.get_process_dict(process_id)
+        self.area = area or service.current_location(self.process)[0] or "CONTROLE GERAL"
+        self.setWindowTitle("Acoes da proposta")
+        self.setMinimumWidth(580)
+        self._build()
+
+    def _build(self):
+        root = QVBoxLayout(self)
+        root.setContentsMargins(24, 22, 24, 20)
+        root.setSpacing(12)
+        title = QLabel(f"{self.process.get('proposta', '')} | {self.process.get('cliente', '')}")
+        title.setStyleSheet("font-size: 18px; font-weight: 800;")
+        area_key = self.area
+        area_label = self.area.title()
+        current_status = self.service.status_for_area(self.process, self.area)
+        current = QLabel(
+            f"Etapa atual: {area_label or '-'}  |  "
+            f"{self.service.area_status_label(area_key, current_status) if current_status else '-'}"
+        )
+        current.setObjectName("Caption")
+        instruction = QLabel("O que deseja registrar agora?")
+        instruction.setStyleSheet("font-weight: 700;")
+        root.addWidget(title)
+        root.addWidget(current)
+        root.addSpacing(4)
+        root.addWidget(instruction)
+
+        actions = self.service.process_actions(self.process_id, self.area)
+        if not actions:
+            message = "Nao ha nenhuma acao disponivel nesta etapa."
+            if self.area == "GALVANIZACAO":
+                message = "Esta movimentacao e controlada pela tela Cargas."
+            empty = QLabel(message)
+            empty.setObjectName("Caption")
+            root.addWidget(empty)
+        for action in actions:
+            button = ModernButton(action["label"], action["icon"], accent=True)
+            button.setMinimumHeight(42)
+            button.clicked.connect(lambda _checked=False, data=action: self.run_action(data))
+            root.addWidget(button)
+
+        root.addWidget(QLabel("Observacao (opcional)"))
+        self.observation = QTextEdit()
+        self.observation.setPlaceholderText("Acrescente uma informacao importante sobre esta operacao")
+        self.observation.setMaximumHeight(82)
+        root.addWidget(self.observation)
+
+        footer = QHBoxLayout()
+        if self.service.can_admin():
+            manual = ModernButton("Correcao administrativa", "settings")
+            manual.clicked.connect(self.open_manual_correction)
+            footer.addWidget(manual)
+        footer.addStretch()
+        close = ModernButton("Fechar", "clear")
+        close.clicked.connect(self.reject)
+        footer.addWidget(close)
+        root.addLayout(footer)
+
+    def run_action(self, action: dict[str, str]):
+        try:
+            action_id = action["id"]
+            if action_id == "MANAGE_LOAD":
+                dialog = GalvanizationLoadManagerDialog(self.service, [self.process_id], self)
+                if dialog.exec() or dialog.changed:
+                    self.accept()
+                return
+            if action_id == "REGISTER_PRODUCTION":
+                self._register_production()
+                return
+            if action_id == "REGISTER_DELIVERY":
+                self._register_delivery()
+                return
+            status = action["status"]
+            if status == "CANCELADA" and not self.observation.toPlainText().strip():
+                QMessageBox.warning(self, "Cancelar proposta", "Informe o motivo do cancelamento na observacao.")
+                return
+            self.service.update_status(
+                self.process_id,
+                action["area"],
+                status,
+                self.observation.toPlainText().strip(),
+            )
+            self.accept()
+        except Exception as exc:
+            QMessageBox.warning(self, "Acao da proposta", str(exc))
+
+    def _register_production(self):
+        available = self.service.proposal_items(self.process_id, pending_production=True)
+        options = self.service.next_status_options("PRODUCAO", self.process_id)
+        if not available:
+            status = "FINALIZADO"
+            if "FINALIZADO_PARCIAL" in options:
+                answer = QMessageBox.question(
+                    self,
+                    "Registrar producao",
+                    "A producao desta proposta foi concluida por completo?\n\n"
+                    "Escolha Nao para registrar uma producao parcial.",
+                    QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
+                    QMessageBox.Yes,
+                )
+                if answer == QMessageBox.Cancel:
+                    return
+                status = "FINALIZADO" if answer == QMessageBox.Yes else "FINALIZADO_PARCIAL"
+            self.service.update_status(
+                self.process_id, "PRODUCAO", status, self.observation.toPlainText().strip()
+            )
+            self.accept()
+            return
+        selector = ItemSelectionDialog(self.service, self.process_id, "production", self)
+        selector.setWindowTitle("Registrar itens produzidos")
+        if not selector.exec():
+            return
+        all_selected = len(selector.selected_ids) == len(available)
+        status = "FINALIZADO" if all_selected else "FINALIZADO_PARCIAL"
+        if status not in options:
+            raise RuntimeError("Esta selecao nao e permitida para o processo atual. Conclua todos os itens deste subprocesso.")
+        self.service.update_status(
+            self.process_id,
+            "PRODUCAO",
+            status,
+            self.observation.toPlainText().strip(),
+            selector.selected_ids,
+            produced_weight=selector.manual_weight,
+        )
+        self.accept()
+
+    def _register_delivery(self):
+        available = self.service.proposal_items(self.process_id, pending_delivery=True)
+        if available:
+            selector = ItemSelectionDialog(
+                self.service, self.process_id, "delivery", self, allow_full_selection=True
+            )
+            selector.setWindowTitle("Registrar itens retirados pelo cliente")
+            if not selector.exec():
+                return
+            status = "ENTREGUE" if len(selector.selected_ids) == len(available) else "ENTREGUE_PARCIAL"
+            self.service.update_status(
+                self.process_id,
+                "EXPEDICAO",
+                status,
+                self.observation.toPlainText().strip(),
+                selector.selected_ids,
+            )
+        else:
+            self.service.update_status(
+                self.process_id, "EXPEDICAO", "ENTREGUE", self.observation.toPlainText().strip()
+            )
+        self.accept()
+
+    def open_manual_correction(self):
+        dialog = ManualStatusDialog(self.service, self.process_id, self.area, self)
+        if dialog.exec():
+            self.accept()
+
+
+class ManualStatusDialog(QDialog):
+    """Restricted sequential correction tool for administrators."""
+
+    def __init__(self, service, process_id: int, area: str | None, parent=None):
+        super().__init__(parent)
+        self.service = service
+        self.process_id = process_id
+        process = service.get_process_dict(process_id)
+        self.area = area or service.current_location(process)[0] or "CONTROLE GERAL"
+        self.setWindowTitle("Correcao administrativa")
+        self.setMinimumWidth(520)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(24, 22, 24, 20)
+        warning = QLabel("Uso administrativo. Toda correcao fica registrada no historico.")
+        warning.setWordWrap(True)
+        warning.setStyleSheet("font-weight: 700;")
+        self.area_combo = QComboBox()
+        for area_name in service.visible_areas():
+            self.area_combo.addItem(area_name.title(), area_name)
+        self.area_combo.setCurrentIndex(max(0, self.area_combo.findData(self.area)))
+        self.status_combo = QComboBox()
+        self.reason = QTextEdit()
+        self.reason.setPlaceholderText("Justificativa obrigatoria")
+        save = ModernButton("Aplicar correcao", "status", accent=True)
+        cancel = ModernButton("Cancelar", "clear")
+        save.clicked.connect(self.save)
+        cancel.clicked.connect(self.reject)
+        self.area_combo.currentIndexChanged.connect(self.load_status)
+        root.addWidget(warning)
+        root.addWidget(QLabel("Area"))
+        root.addWidget(self.area_combo)
+        root.addWidget(QLabel("Proxima situacao permitida"))
+        root.addWidget(self.status_combo)
+        root.addWidget(QLabel("Justificativa"))
+        root.addWidget(self.reason)
+        root.addWidget(save)
+        root.addWidget(cancel)
+        self.load_status()
+
+    def load_status(self):
+        area = self.area_combo.currentData()
+        self.status_combo.clear()
+        for status in self.service.next_status_options(area, self.process_id):
+            self.status_combo.addItem(
+                make_icon(status, self.service.palette["accent"]),
+                self.service.area_status_label(area, status),
+                status,
+            )
+
+    def save(self):
+        reason = self.reason.toPlainText().strip()
+        if not reason:
+            QMessageBox.warning(self, "Correcao administrativa", "Informe a justificativa da correcao.")
+            return
+        status = self.status_combo.currentData()
+        if not status:
+            return
+        try:
+            self.service.update_status(
+                self.process_id, self.area_combo.currentData(), status, f"Correcao administrativa: {reason}"
+            )
+            self.accept()
+        except Exception as exc:
+            QMessageBox.warning(self, "Correcao administrativa", str(exc))

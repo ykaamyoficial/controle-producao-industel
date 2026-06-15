@@ -1,0 +1,51 @@
+# -*- mode: python ; coding: utf-8 -*-
+from PyInstaller.utils.hooks import collect_submodules
+
+hiddenimports = ['hmac', 'hashlib', 'secrets', 'json', 'sqlite3', 'datetime', 'pathlib', 'shutil']
+hiddenimports += collect_submodules('PySide6.QtWidgets')
+hiddenimports += collect_submodules('PySide6.QtCore')
+hiddenimports += collect_submodules('PySide6.QtGui')
+
+
+a = Analysis(
+    ['app\\main.py'],
+    pathex=[],
+    binaries=[],
+    datas=[('app\\data', 'app\\data'), ('app\\config', 'app\\config'), ('app\\assets', 'app\\assets')],
+    hiddenimports=hiddenimports,
+    hookspath=[],
+    hooksconfig={},
+    runtime_hooks=[],
+    excludes=[],
+    noarchive=False,
+    optimize=0,
+)
+pyz = PYZ(a.pure)
+
+exe = EXE(
+    pyz,
+    a.scripts,
+    [],
+    exclude_binaries=True,
+    name='Controle Producao 2.0',
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=True,
+    console=False,
+    disable_windowed_traceback=False,
+    argv_emulation=False,
+    target_arch=None,
+    codesign_identity=None,
+    entitlements_file=None,
+    icon=['app\\assets\\images\\Logo_Industel_Icone.ico'],
+)
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.datas,
+    strip=False,
+    upx=True,
+    upx_exclude=[],
+    name='Controle Producao 2.0',
+)
