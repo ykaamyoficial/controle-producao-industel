@@ -1550,6 +1550,101 @@ class Repository:
     def get_process_by_proposal(self, proposal):
         return self.conn.execute("SELECT * FROM processos WHERE proposta = ?", (format_proposal(proposal),)).fetchone()
 
+    def fiscal_entry_exists(self, process_id):
+        return self.conn.execute(
+            "SELECT id FROM fiscal_processos WHERE processo_id = ?",
+            (process_id,),
+        ).fetchone() is not None
+
+    def ensure_fiscal_entry_for_process(self, processo_id, usuario, observacao=None):
+        process = self.get_process(processo_id)
+        if not process:
+            raise AppError("Processo nao encontrado para entrada fiscal.")
+        if (process["status_galvanizacao"] or "") != "RETORNOU_GALVANIZACAO":
+            return None
+        if process["origem_remanejamento"] or (process["situacao_fluxo"] or "") == "PENDENTE_POR_REMANEJAMENTO":
+            return None
+        existing = self.conn.execute(
+            "SELECT * FROM fiscal_processos WHERE processo_id = ?",
+            (process["id"],),
+        ).fetchone()
+        if existing:
+            return existing["id"]
+
+        created_at = now_br()
+        fiscal_id = self.conn.execute(
+            """
+            INSERT INTO fiscal_processos(
+                processo_id, proposta, status_fiscal, data_entrada_fiscal,
+                observacao, created_at, updated_at
+            ) VALUES (?, ?, 'FALTA_EMITIR_NOTA_FISCAL', ?, ?, ?, ?)
+            """,
+            (
+                process["id"],
+                process["proposta"],
+                today_br(),
+                observacao or "",
+                created_at,
+                created_at,
+            ),
+        ).lastrowid
+        self.create_fiscal_items_from_process_items(process["id"], fiscal_id)
+        self.conn.execute(
+            """
+            INSERT INTO fiscal_movimentacoes(
+                fiscal_processo_id, processo_id, tipo_movimento, status_anterior,
+                status_novo, usuario, data_hora, observacao
+            ) VALUES (?, ?, 'ENTRADA_FISCAL', 'FORA_DO_FISCAL',
+                      'FALTA_EMITIR_NOTA_FISCAL', ?, ?, ?)
+            """,
+            (
+                fiscal_id,
+                process["id"],
+                usuario["login"],
+                now_br(),
+                observacao or "Entrada fiscal automatica pelo retorno da galvanizacao.",
+            ),
+        )
+        return fiscal_id
+
+    def create_fiscal_items_from_process_items(self, processo_id, fiscal_processo_id=None):
+        process = self.get_process(processo_id)
+        if not process:
+            raise AppError("Processo nao encontrado para itens fiscais.")
+        fiscal_id = fiscal_processo_id
+        if fiscal_id is None:
+            fiscal = self.conn.execute(
+                "SELECT id FROM fiscal_processos WHERE processo_id = ?",
+                (process["id"],),
+            ).fetchone()
+            if not fiscal:
+                raise AppError("Entrada fiscal nao encontrada para criar itens.")
+            fiscal_id = fiscal["id"]
+        created_at = now_br()
+        for item in self.list_proposal_items(process["id"]):
+            quantity = float(item["quantidade"] or 0)
+            unit_weight = float(item["peso"] or 0)
+            self.conn.execute(
+                """
+                INSERT OR IGNORE INTO fiscal_itens(
+                    fiscal_processo_id, processo_id, item_id, numero_item,
+                    descricao, quantidade_total, quantidade_faturada, peso_total,
+                    peso_faturado, status_item_fiscal, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, 0, 'PENDENTE', ?, ?)
+                """,
+                (
+                    fiscal_id,
+                    process["id"],
+                    item["id"],
+                    item["numero_item"],
+                    item["descricao"] or "",
+                    quantity,
+                    quantity * unit_weight,
+                    created_at,
+                    created_at,
+                ),
+            )
+
     def process_main_id(self, process):
         return int(process["processo_pai_id"] or process["id"])
 
@@ -2777,6 +2872,14 @@ class Repository:
             self.refresh_parent_completion(process["processo_pai_id"], user)
         if area in ("GALVANIZACAO", "EXPEDICAO") or "status_expedicao" in updates:
             self.try_auto_merge_expedition_partials(process_id, user)
+        if area == "GALVANIZACAO" and new_status == "RETORNOU_GALVANIZACAO":
+            returned_process = self.get_process(process_id)
+            if returned_process:
+                self.ensure_fiscal_entry_for_process(
+                    process_id,
+                    user,
+                    observation or "Entrada fiscal automatica pelo retorno da galvanizacao.",
+                )
         self.conn.commit()
 
     def stockroom_delivery_required(self, process):
@@ -3124,51 +3227,58 @@ class Repository:
         self.conn.commit()
 
     def mark_galvanization_load_returned(self, load_id, user):
-        if not user_can_mount_galvanization_load(user):
-            raise AppError("Seu usuario nao tem permissao para marcar retorno de carga.")
-        load = self.get_galvanization_load(load_id)
-        if not load:
-            raise AppError("Carga nao encontrada.")
-        if load["status"] != "LIBERADA_PARA_ENVIO":
-            raise AppError("Somente cargas liberadas para envio podem ser marcadas como retornadas.")
-        items = self.list_galvanization_load_items(load_id)
-        if not items:
-            raise AppError("A carga nao possui propostas.")
-        returned_process_ids = []
-        for item in items:
-            process = self.get_process(item["processo_id"])
-            if not process:
-                continue
-            returned_process_ids.append(process["id"])
-            old_status = process["status_galvanizacao"] or ""
-            new_status = "RETORNOU_GALVANIZACAO"
-            expedition_status = "EM_SEPARACAO"
-            observation = f"Carga {load_id} retornou da galvanizacao | Motorista: {load['motorista']}"
+        try:
+            if not user_can_mount_galvanization_load(user):
+                raise AppError("Seu usuario nao tem permissao para marcar retorno de carga.")
+            load = self.get_galvanization_load(load_id)
+            if not load:
+                raise AppError("Carga nao encontrada.")
+            if load["status"] != "LIBERADA_PARA_ENVIO":
+                raise AppError("Somente cargas liberadas para envio podem ser marcadas como retornadas.")
+            items = self.list_galvanization_load_items(load_id)
+            if not items:
+                raise AppError("A carga nao possui propostas.")
+            returned_process_ids = []
+            for item in items:
+                process = self.get_process(item["processo_id"])
+                if not process:
+                    continue
+                returned_process_ids.append(process["id"])
+                old_status = process["status_galvanizacao"] or ""
+                new_status = "RETORNOU_GALVANIZACAO"
+                expedition_status = "EM_SEPARACAO"
+                observation = f"Carga {load_id} retornou da galvanizacao | Motorista: {load['motorista']}"
+                self.conn.execute(
+                    """
+                    UPDATE processos
+                    SET status_galvanizacao = ?, data_retorno_galv = ?, observacoes_galvanizacao = ?,
+                        status_expedicao = CASE WHEN COALESCE(status_expedicao, '') = '' THEN ? ELSE status_expedicao END,
+                        atualizado_em = ?, atualizado_por = ?, status_geral = ?
+                    WHERE id = ?
+                    """,
+                    (new_status, today_br(), observation, expedition_status, now_br(), user["login"], "EM_EXPEDICAO", process["id"]),
+                )
+                self.conn.execute(
+                    "UPDATE proposta_itens SET galvanizado = 1, atualizado_em = ?, atualizado_por = ? WHERE processo_atual_id = ? AND produzido = 1",
+                    (now_br(), user["login"], process["id"]),
+                )
+                if old_status != new_status:
+                    self.add_history(process["id"], process["proposta"], "GALVANIZACAO", old_status, new_status, user, observation)
+                if not process["status_expedicao"]:
+                    self.add_history(process["id"], process["proposta"], "EXPEDICAO", "", expedition_status, user, "Liberacao automatica pelo retorno da carga")
+                returned_process = self.get_process(process["id"])
+                if returned_process:
+                    self.ensure_fiscal_entry_for_process(returned_process["id"], user, observation)
+            for process_id in returned_process_ids:
+                self.try_auto_merge_expedition_partials(process_id, user)
             self.conn.execute(
-                """
-                UPDATE processos
-                SET status_galvanizacao = ?, data_retorno_galv = ?, observacoes_galvanizacao = ?,
-                    status_expedicao = CASE WHEN COALESCE(status_expedicao, '') = '' THEN ? ELSE status_expedicao END,
-                    atualizado_em = ?, atualizado_por = ?, status_geral = ?
-                WHERE id = ?
-                """,
-                (new_status, today_br(), observation, expedition_status, now_br(), user["login"], "EM_EXPEDICAO", process["id"]),
+                "UPDATE cargas_galvanizacao SET status = ?, data_retorno = ?, observacao = ? WHERE id = ?",
+                ("RETORNADA_GALVANIZACAO", today_br(), f"Retornada em {now_br()} por {user['login']}", load_id),
             )
-            self.conn.execute(
-                "UPDATE proposta_itens SET galvanizado = 1, atualizado_em = ?, atualizado_por = ? WHERE processo_atual_id = ? AND produzido = 1",
-                (now_br(), user["login"], process["id"]),
-            )
-            if old_status != new_status:
-                self.add_history(process["id"], process["proposta"], "GALVANIZACAO", old_status, new_status, user, observation)
-            if not process["status_expedicao"]:
-                self.add_history(process["id"], process["proposta"], "EXPEDICAO", "", expedition_status, user, "Liberacao automatica pelo retorno da carga")
-        for process_id in returned_process_ids:
-            self.try_auto_merge_expedition_partials(process_id, user)
-        self.conn.execute(
-            "UPDATE cargas_galvanizacao SET status = ?, data_retorno = ?, observacao = ? WHERE id = ?",
-            ("RETORNADA_GALVANIZACAO", today_br(), f"Retornada em {now_br()} por {user['login']}", load_id),
-        )
-        self.conn.commit()
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
 
     def remanage_material_to_production(self, process_id, user, observation="", destination_process=None):
         if not user_can_access_area(user, "EXPEDICAO"):
@@ -4010,5 +4120,4 @@ XLSX_STYLES = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <xf numFmtId="0" fontId="0" fillId="2" borderId="1" xfId="0" applyFill="1" applyBorder="1" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf>
 </cellXfs>
 </styleSheet>"""
-
 
