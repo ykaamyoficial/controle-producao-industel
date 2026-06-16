@@ -39,14 +39,21 @@ class DashboardDetailsDialog(QDialog):
         for row_data in rows:
             row = table.rowCount()
             table.insertRow(row)
-            area_key, area_label, status = service.current_location(row_data)
+            if row_data.get("status_fiscal"):
+                area_label = "Fiscal"
+                status = service.fiscal_status_label(row_data.get("status_fiscal") or "")
+                prazo = row_data.get("data_entrada_fiscal") or "-"
+            else:
+                area_key, area_label, status_key = service.current_location(row_data)
+                status = service.area_status_label(area_key, status_key) if status_key else "-"
+                prazo = row_data.get("prazo_entrega") or "-"
             values = (
                 row_data.get("proposta") or "-",
                 row_data.get("cliente") or "-",
                 row_data.get("obra_site") or "-",
                 area_label or "-",
-                service.area_status_label(area_key, status) if status else "-",
-                row_data.get("prazo_entrega") or "-",
+                status,
+                prazo,
             )
             for column, value in enumerate(values):
                 item = QTableWidgetItem(str(value))

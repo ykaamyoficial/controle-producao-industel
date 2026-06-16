@@ -12,6 +12,7 @@ from PySide6.QtWidgets import QApplication, QPushButton
 
 from app.services.migration_runner import apply_migrations
 from app.services.production_repository import Repository, initialize_database
+from app.ui.dashboard_page import DashboardPage
 from app.ui.fiscal_page import FiscalPage
 from app.ui.sidebar import Sidebar
 
@@ -24,6 +25,8 @@ PALETTE = {
     "muted": "#94a3b8",
     "border": "#cbd5e1",
     "accent": "#0078d4",
+    "accent_hover": "#106ebe",
+    "accent_text": "#ffffff",
     "secondary": "#7c3aed",
     "success": "#16a34a",
     "warning": "#f59e0b",
@@ -47,6 +50,9 @@ class FiscalUiService:
     def fiscal_indicators(self):
         return self.repo.fiscal_indicators()
 
+    def fiscal_indicator_rows(self, indicator):
+        return [dict(row) for row in self.repo.fiscal_indicator_rows(indicator)]
+
     def can_register_fiscal_emission(self):
         return True
 
@@ -64,6 +70,27 @@ class FiscalUiService:
 
     def user_profile(self):
         return "Administrador"
+
+    def dashboard(self):
+        return dict(self.repo.dashboard())
+
+    def dashboard_charts(self):
+        return self.repo.dashboard_charts()
+
+    def dashboard_metric_rows(self, metric):
+        return [dict(row) for row in self.repo.dashboard_metric_rows(metric)]
+
+    def dashboard_chart_rows(self, chart_key, label):
+        return [dict(row) for row in self.repo.dashboard_chart_rows(chart_key, label)]
+
+    def current_location(self, process):
+        return ("CONTROLE GERAL", "Controle geral", process.get("status_geral") or "")
+
+    def area_status_label(self, _area, status):
+        return status or "-"
+
+    def fiscal_status_label(self, status):
+        return status or "-"
 
 
 class FiscalReadOnlyPageTests(unittest.TestCase):
@@ -122,6 +149,34 @@ class FiscalReadOnlyPageTests(unittest.TestCase):
         self.assertEqual(indicators["nf_emitida"], 1)
         self.assertEqual(indicators["pendencia_critica"], 1)
 
+    def test_fiscal_indicators_include_weights_delivered_without_nf_and_old_entries(self):
+        fiscal_id = self.create_fiscal_process(
+            "CP02009",
+            status_fiscal="NOTA_FISCAL_PARCIAL",
+            expedition_status="ENTREGUE",
+            entry_date="2020-01-01",
+        )
+        self.conn.execute(
+            "UPDATE fiscal_itens SET quantidade_faturada = 5, peso_faturado = 12.5, status_item_fiscal = 'PARCIAL' WHERE fiscal_processo_id = ? AND numero_item = '1'",
+            (fiscal_id,),
+        )
+        self.conn.commit()
+
+        indicators = self.repo.fiscal_indicators()
+
+        self.assertEqual(indicators["entregues_sem_nf"], 1)
+        self.assertEqual(indicators["mais_7_dias_sem_emissao"], 1)
+        self.assertAlmostEqual(indicators["peso_faturado"], 12.5)
+        self.assertAlmostEqual(indicators["peso_pendente"], 27.5)
+
+    def test_fiscal_indicator_rows_return_related_processes(self):
+        self.create_fiscal_process("CP02010", status_fiscal="FALTA_EMITIR_NOTA_FISCAL")
+        self.create_fiscal_process("CP02011", status_fiscal="NOTA_FISCAL_EMITIDA")
+
+        rows = [dict(row) for row in self.repo.fiscal_indicator_rows("falta_emitir")]
+
+        self.assertEqual([row["proposta"] for row in rows], ["CP02010"])
+
     def test_critical_pending_is_identified_by_process(self):
         process_id = self.create_fiscal_process("CP02005", expedition_status="ENTREGUE", return_process_id=True)
 
@@ -135,6 +190,43 @@ class FiscalReadOnlyPageTests(unittest.TestCase):
         page.refresh()
         after = self.fiscal_table_counts()
 
+        self.assertEqual(before, after)
+
+    def test_fiscal_page_refreshes_phase_five_alerts_without_writing(self):
+        self.create_fiscal_process(
+            "CP02012",
+            status_fiscal="FALTA_EMITIR_NOTA_FISCAL",
+            expedition_status="ENTREGUE",
+            entry_date="2020-01-01",
+        )
+        before = self.fiscal_table_counts()
+
+        page = FiscalPage(self.service)
+        page.refresh()
+        after = self.fiscal_table_counts()
+
+        self.assertEqual(page.card_critical.number.text(), "1")
+        self.assertEqual(page.card_delivered_without_nf.number.text(), "1")
+        self.assertEqual(page.card_older_than_7.number.text(), "1")
+        self.assertEqual(before, after)
+
+    def test_dashboard_loads_fiscal_cards_without_writing(self):
+        self.create_fiscal_process(
+            "CP02013",
+            status_fiscal="FALTA_EMITIR_NOTA_FISCAL",
+            expedition_status="ENTREGUE",
+            entry_date="2020-01-01",
+        )
+        before = self.fiscal_table_counts()
+
+        page = DashboardPage(self.service)
+        page.refresh()
+        after = self.fiscal_table_counts()
+
+        card_titles = [card.metric_key for card in page.cards]
+        self.assertIn("falta_emitir", card_titles)
+        self.assertIn("peso_pendente", card_titles)
+        self.assertIn("mais_7_dias_sem_emissao", card_titles)
         self.assertEqual(before, after)
 
     def test_fiscal_page_loads_items_for_selected_row(self):
@@ -183,6 +275,7 @@ class FiscalReadOnlyPageTests(unittest.TestCase):
         proposal: str,
         status_fiscal: str = "FALTA_EMITIR_NOTA_FISCAL",
         expedition_status: str = "EM_SEPARACAO",
+        entry_date: str = "2026-06-15",
         return_process_id: bool = False,
     ):
         process_id = self.conn.execute(
@@ -218,10 +311,10 @@ class FiscalReadOnlyPageTests(unittest.TestCase):
             INSERT INTO fiscal_processos(
                 processo_id, proposta, status_fiscal, data_entrada_fiscal,
                 created_at, updated_at
-            ) VALUES (?, ?, ?, '2026-06-15', '2026-06-15 10:00:00',
+            ) VALUES (?, ?, ?, ?, '2026-06-15 10:00:00',
                       '2026-06-15 10:00:00')
             """,
-            (process_id, proposal, status_fiscal),
+            (process_id, proposal, status_fiscal, entry_date),
         ).lastrowid
         for item_id, numero, descricao, quantity, weight in (
             (item_a, "1", "Fiscal item A", 10, 25),

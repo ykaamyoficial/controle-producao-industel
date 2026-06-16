@@ -269,8 +269,11 @@ class BackendService:
     def fiscal_items(self, fiscal_processo_id: int) -> list[dict[str, Any]]:
         return [row_to_dict(row) for row in self.repo.list_fiscal_items(fiscal_processo_id)]
 
-    def fiscal_indicators(self) -> dict[str, int]:
+    def fiscal_indicators(self) -> dict[str, Any]:
         return self.repo.fiscal_indicators()
+
+    def fiscal_indicator_rows(self, indicator: str) -> list[dict[str, Any]]:
+        return [row_to_dict(row) for row in self.repo.fiscal_indicator_rows(indicator)]
 
     def fiscal_critical_pending(self, process_id: int) -> bool:
         return self.repo.identificar_pendencia_fiscal_critica(process_id)

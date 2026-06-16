@@ -49,6 +49,7 @@ class FiscalProcessTableModel(QAbstractTableModel):
         ("peso_total", "Peso total"),
         ("peso_pendente", "Peso pendente"),
         ("peso_faturado", "Peso faturado"),
+        ("mais_7_dias_sem_emissao", "+7 dias s/ emissao"),
         ("pendencia_critica", "Alerta"),
     ]
 
@@ -78,6 +79,8 @@ class FiscalProcessTableModel(QAbstractTableModel):
                 return fiscal_status_label(str(value or ""))
             if key == "pendencia_critica":
                 return "Pendencia critica" if int(value or 0) else "-"
+            if key == "mais_7_dias_sem_emissao":
+                return "Mais de 7 dias" if int(value or 0) else "-"
             if key.startswith("peso_"):
                 return format_weight(value)
             return str(value or "-")
@@ -88,6 +91,8 @@ class FiscalProcessTableModel(QAbstractTableModel):
         if role == Qt.UserRole + 2:
             if key == "pendencia_critica" and int(value or 0):
                 return "FALTA_EMITIR_NOTA_FISCAL"
+            if key == "mais_7_dias_sem_emissao" and int(value or 0):
+                return "NOTA_FISCAL_PARCIAL"
             return row.get("status_fiscal") if key == "status_fiscal" else value
         if role == Qt.UserRole + 3:
             return "FISCAL"

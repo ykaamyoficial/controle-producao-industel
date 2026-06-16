@@ -4,6 +4,7 @@ from PySide6.QtCore import QRegularExpression, Qt
 from PySide6.QtWidgets import QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QVBoxLayout, QWidget
 
 from app.models.fiscal_items_table_model import FiscalItemsTableModel
+from app.models.fiscal_table_model import format_weight
 from app.models.fiscal_table_model import FiscalProcessTableModel
 from app.ui.components.kpi_card import KpiCard
 from app.ui.components.modern_button import ModernButton
@@ -62,6 +63,7 @@ class FiscalPage(QWidget):
         self.critical = QComboBox()
         self.critical.addItem("Todas", "")
         self.critical.addItem("Pendencia critica", "1")
+        self.critical.addItem("Mais de 7 dias sem emissao", "7")
         apply_btn = ModernButton("Aplicar", "search", accent=True)
         clear_btn = ModernButton("Limpar", "clear")
         apply_btn.clicked.connect(self.refresh)
@@ -86,15 +88,31 @@ class FiscalPage(QWidget):
         fl.addLayout(fields)
         root.addWidget(filters)
 
-        cards = QHBoxLayout()
-        cards.setSpacing(12)
+        cards = QGridLayout()
+        cards.setHorizontalSpacing(12)
+        cards.setVerticalSpacing(12)
         palette = self.service.palette
         self.card_missing = KpiCard("Falta emitir NF", 0, "audit", palette["danger"])
         self.card_partial = KpiCard("NF parcial", 0, "partial", palette["warning"])
         self.card_emitted = KpiCard("NF emitida", 0, "status", palette["success"])
         self.card_critical = KpiCard("Pendencia critica", 0, "clear", palette["danger"])
-        for card in (self.card_missing, self.card_partial, self.card_emitted, self.card_critical):
-            cards.addWidget(card)
+        self.card_delivered_without_nf = KpiCard("Entregues sem NF", 0, "expedition", palette["danger"])
+        self.card_pending_weight = KpiCard("Peso pendente", "0 kg", "clock", palette["warning"])
+        self.card_billed_weight = KpiCard("Peso faturado", "0 kg", "status", palette["success"])
+        self.card_older_than_7 = KpiCard("+7 dias sem emissao", 0, "history", palette["danger"])
+        for index, card in enumerate(
+            (
+                self.card_missing,
+                self.card_partial,
+                self.card_emitted,
+                self.card_critical,
+                self.card_delivered_without_nf,
+                self.card_pending_weight,
+                self.card_billed_weight,
+                self.card_older_than_7,
+            )
+        ):
+            cards.addWidget(card, index // 4, index % 4)
         root.addLayout(cards)
 
         self.table = ModernTable(self.service)
@@ -133,7 +151,10 @@ class FiscalPage(QWidget):
             "status_fiscal": self.status.currentData() or "",
             "data_entrada_fiscal": self.entry_date.text().strip(),
             "pendencia_critica": self.critical.currentData() or "",
+            "mais_7_dias_sem_emissao": "1" if self.critical.currentData() == "7" else "",
         }
+        if filters["mais_7_dias_sem_emissao"]:
+            filters["pendencia_critica"] = ""
         rows = self.service.fiscal_rows(filters)
         self.model.set_rows(rows)
         self.table.apply_column_layout()
@@ -150,6 +171,10 @@ class FiscalPage(QWidget):
         self.card_partial.set_value(indicators.get("nf_parcial", 0))
         self.card_emitted.set_value(indicators.get("nf_emitida", 0))
         self.card_critical.set_value(indicators.get("pendencia_critica", 0))
+        self.card_delivered_without_nf.set_value(indicators.get("entregues_sem_nf", 0))
+        self.card_pending_weight.set_value(format_weight(indicators.get("peso_pendente", 0)))
+        self.card_billed_weight.set_value(format_weight(indicators.get("peso_faturado", 0)))
+        self.card_older_than_7.set_value(indicators.get("mais_7_dias_sem_emissao", 0))
 
     def clear(self):
         self.search.clear()

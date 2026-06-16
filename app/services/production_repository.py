@@ -1671,6 +1671,15 @@ class Repository:
         critical = filters.get("pendencia_critica")
         if critical in (True, "1", "SIM", "sim"):
             where.append("(p.status_expedicao = 'ENTREGUE' AND fp.status_fiscal <> 'NOTA_FISCAL_EMITIDA')")
+        overdue_fiscal = filters.get("mais_7_dias_sem_emissao")
+        if overdue_fiscal in (True, "1", "SIM", "sim"):
+            where.append(
+                """
+                fp.status_fiscal <> 'NOTA_FISCAL_EMITIDA'
+                AND COALESCE(fp.data_ultima_emissao, '') = ''
+                AND date(fp.data_entrada_fiscal) < date('now', '-7 days')
+                """
+            )
         sql_where = " WHERE " + " AND ".join(where) if where else ""
         return self.conn.execute(
             f"""
@@ -1690,6 +1699,12 @@ class Repository:
                 COALESCE(SUM(fi.peso_total), 0) AS peso_total,
                 COALESCE(SUM(fi.peso_faturado), 0) AS peso_faturado,
                 COALESCE(SUM(fi.peso_total - fi.peso_faturado), 0) AS peso_pendente,
+                CASE
+                    WHEN fp.status_fiscal <> 'NOTA_FISCAL_EMITIDA'
+                         AND COALESCE(fp.data_ultima_emissao, '') = ''
+                         AND date(fp.data_entrada_fiscal) < date('now', '-7 days')
+                    THEN 1 ELSE 0
+                END AS mais_7_dias_sem_emissao,
                 CASE
                     WHEN p.status_expedicao = 'ENTREGUE'
                          AND fp.status_fiscal <> 'NOTA_FISCAL_EMITIDA'
@@ -1748,12 +1763,54 @@ class Repository:
               AND fp.status_fiscal <> 'NOTA_FISCAL_EMITIDA'
             """
         ).fetchone()[0]
+        weights = self.conn.execute(
+            """
+            SELECT
+                COALESCE(SUM(CASE WHEN fp.status_fiscal <> 'NOTA_FISCAL_EMITIDA' THEN fi.peso_total - fi.peso_faturado ELSE 0 END), 0) AS peso_pendente,
+                COALESCE(SUM(fi.peso_faturado), 0) AS peso_faturado
+            FROM fiscal_processos fp
+            LEFT JOIN fiscal_itens fi ON fi.fiscal_processo_id = fp.id
+            """
+        ).fetchone()
+        older_than_7 = self.conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM fiscal_processos fp
+            WHERE fp.status_fiscal <> 'NOTA_FISCAL_EMITIDA'
+              AND COALESCE(fp.data_ultima_emissao, '') = ''
+              AND date(fp.data_entrada_fiscal) < date('now', '-7 days')
+            """
+        ).fetchone()[0]
         return {
             "falta_emitir": int(rows["falta_emitir"] or 0),
             "nf_parcial": int(rows["nf_parcial"] or 0),
             "nf_emitida": int(rows["nf_emitida"] or 0),
             "pendencia_critica": int(critical or 0),
+            "entregues_sem_nf": int(critical or 0),
+            "peso_pendente": float(weights["peso_pendente"] or 0),
+            "peso_faturado": float(weights["peso_faturado"] or 0),
+            "mais_7_dias_sem_emissao": int(older_than_7 or 0),
         }
+
+    def fiscal_indicator_rows(self, indicator):
+        filters = {}
+        if indicator == "falta_emitir":
+            filters["status_fiscal"] = "FALTA_EMITIR_NOTA_FISCAL"
+        elif indicator == "nf_parcial":
+            filters["status_fiscal"] = "NOTA_FISCAL_PARCIAL"
+        elif indicator == "nf_emitida":
+            filters["status_fiscal"] = "NOTA_FISCAL_EMITIDA"
+        elif indicator in ("pendencia_critica", "entregues_sem_nf"):
+            filters["pendencia_critica"] = "1"
+        elif indicator == "mais_7_dias_sem_emissao":
+            filters["mais_7_dias_sem_emissao"] = "1"
+        elif indicator == "peso_pendente":
+            return [row for row in self.list_fiscal_processes() if float(row["peso_pendente"] or 0) > 0]
+        elif indicator == "peso_faturado":
+            return [row for row in self.list_fiscal_processes() if float(row["peso_faturado"] or 0) > 0]
+        else:
+            return []
+        return self.list_fiscal_processes(filters)
 
     def identificar_pendencia_fiscal_critica(self, processo_id):
         row = self.conn.execute(
