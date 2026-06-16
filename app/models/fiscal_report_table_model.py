@@ -12,9 +12,8 @@ FISCAL_REPORT_COLUMNS: dict[str, list[tuple[str, str]]] = {
         ("proposta", "Proposta"), ("cliente", "Cliente"), ("obra_site", "Obra/Site"),
         ("status_fiscal", "Status fiscal"), ("data_entrada_fiscal", "Entrada fiscal"),
         ("data_ultima_emissao", "Ultima emissao"), ("quantidade_itens", "Itens"),
-        ("itens_pendentes", "Pendentes"), ("peso_total", "Peso total"),
-        ("peso_faturado", "Peso faturado"), ("peso_pendente", "Peso pendente"),
-        ("numero_controle", "NF/Controle"), ("usuario_emissao", "Usuario"), ("observacao", "Observacao"),
+        ("itens_pendentes", "Pendentes"), ("peso_pendente", "Peso pendente"),
+        ("alerta", "Alerta"), ("acoes", "Acoes"),
     ],
     "PARCIAIS": [],
     "EMITIDAS": [],
@@ -28,7 +27,7 @@ FISCAL_REPORT_COLUMNS: dict[str, list[tuple[str, str]]] = {
         ("quantidade_total", "Qtd. total"), ("quantidade_faturada", "Qtd. faturada"),
         ("quantidade_pendente", "Qtd. pendente"), ("peso_total", "Peso total"),
         ("peso_faturado", "Peso faturado"), ("peso_pendente", "Peso pendente"),
-        ("status_item_fiscal", "Status item"),
+        ("status_item_fiscal", "Status item"), ("acoes", "Acoes"),
     ],
     "EMISSOES": [
         ("proposta", "Proposta"), ("cliente", "Cliente"), ("obra_site", "Obra/Site"),
@@ -36,7 +35,7 @@ FISCAL_REPORT_COLUMNS: dict[str, list[tuple[str, str]]] = {
         ("data_emissao", "Data emissao"), ("numero_controle", "NF/Controle"),
         ("tipo_emissao", "Tipo"), ("usuario", "Usuario"), ("observacao", "Observacao"),
         ("quantidade_itens", "Itens"), ("quantidade_emitida", "Qtd. emitida"),
-        ("peso_emitido", "Peso emitido"),
+        ("peso_emitido", "Peso emitido"), ("acoes", "Acoes"),
     ],
     "POR_CLIENTE": [
         ("cliente", "Cliente"), ("propostas", "Propostas"), ("falta_emitir", "Falta emitir"),
@@ -83,6 +82,8 @@ class FiscalReportTableModel(QAbstractTableModel):
         key, _label = self.columns[index.column()]
         value = row.get(key)
         if role in (Qt.DisplayRole, Qt.EditRole):
+            if key == "acoes":
+                return "..." if row.get("fiscal_processo_id") else "-"
             if key in ("status_fiscal", "status_item_fiscal"):
                 return fiscal_status_label(str(value or ""))
             if key.startswith("peso_"):
@@ -93,6 +94,8 @@ class FiscalReportTableModel(QAbstractTableModel):
         if role == Qt.UserRole + 1:
             return key
         if role == Qt.UserRole + 2:
+            if key == "acoes":
+                return ""
             return row.get("status_fiscal") if key == "status_fiscal" else value
         if role == Qt.UserRole + 3:
             return "FISCAL"
@@ -101,6 +104,8 @@ class FiscalReportTableModel(QAbstractTableModel):
                 "propostas", "falta_emitir", "nf_parcial", "nf_emitida", "itens_pendentes",
             }:
                 return Qt.AlignVCenter | Qt.AlignRight
+            if key == "acoes":
+                return Qt.AlignCenter
             return Qt.AlignVCenter | Qt.AlignLeft
         return None
 

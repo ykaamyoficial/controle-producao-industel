@@ -6,7 +6,6 @@ from PySide6.QtCore import QTimer
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QFrame, QGraphicsDropShadowEffect, QGridLayout, QLabel, QScrollArea, QVBoxLayout, QWidget
 
-from app.models.fiscal_table_model import format_weight
 from app.ui.components.barra_progresso_area import BarraProgressoArea
 from app.ui.components.card_indicador import CardIndicador
 from app.ui.components.grafico_status import GraficoStatus
@@ -56,7 +55,6 @@ class DashboardPage(QWidget):
         self._clear_dashboard_widgets()
         data = self.service.dashboard()
         charts = self.service.dashboard_charts()
-        fiscal = self.service.fiscal_indicators()
         self.header.update_content(
             self._focus_text(data),
             "Ultima atualizacao\n" + datetime.now().strftime("%d/%m/%Y  %H:%M"),
@@ -71,29 +69,15 @@ class DashboardPage(QWidget):
             ("Expedicao", data.get("Expedicao", 0), "expedition", self.service.palette["secondary"]),
             ("Pend. remanejadas", data.get("Pend. remanej.", 0), "partial", self.service.palette["warning"]),
             ("Entregues", data.get("Entregues", 0), "status", self.service.palette["success"]),
-            ("Falta emitir NF", fiscal.get("falta_emitir", 0), "audit", self.service.palette["danger"]),
-            ("NF parcial", fiscal.get("nf_parcial", 0), "partial", self.service.palette["warning"]),
-            ("NF emitida", fiscal.get("nf_emitida", 0), "status", self.service.palette["success"]),
-            ("Pendencia fiscal critica", fiscal.get("pendencia_critica", 0), "clear", self.service.palette["danger"]),
-            ("Entregues sem NF", fiscal.get("entregues_sem_nf", 0), "expedition", self.service.palette["danger"]),
-            ("Peso pendente fiscal", format_weight(fiscal.get("peso_pendente", 0)), "clock", self.service.palette["warning"]),
-            ("Peso faturado fiscal", format_weight(fiscal.get("peso_faturado", 0)), "status", self.service.palette["success"]),
-            ("+7 dias sem emissao", fiscal.get("mais_7_dias_sem_emissao", 0), "history", self.service.palette["danger"]),
         ]
         self.cards = [CardIndicador(*definition, self.service.palette) for definition in definitions]
         card_targets = [
             "Ativas", "Vencidos", "Prox. 7 dias", "Producao", "Galvanizacao", "Expedicao",
             "Pend. remanej.", "Entregues",
-            "falta_emitir", "nf_parcial", "nf_emitida", "pendencia_critica",
-            "entregues_sem_nf", "peso_pendente", "peso_faturado", "mais_7_dias_sem_emissao",
         ]
         for card, metric in zip(self.cards, card_targets):
             card.metric_key = metric
-            source = "fiscal" if metric in {
-                "falta_emitir", "nf_parcial", "nf_emitida", "pendencia_critica",
-                "entregues_sem_nf", "peso_pendente", "peso_faturado", "mais_7_dias_sem_emissao",
-            } else "metric"
-            card.clicked.connect(lambda key, source=source: self._show_related(source, key))
+            card.clicked.connect(lambda key, source="metric": self._show_related(source, key))
         areas = [
             row for row in charts.get("areas", [])
             if str(row["label"] if isinstance(row, dict) else row[0]).lower() not in {"almox.", "almoxarifado"}
@@ -167,8 +151,6 @@ class DashboardPage(QWidget):
         query_key = "7 dias" if source == "prazos" and key == "Prox. 7 dias" else key
         if source == "metric":
             rows = self.service.dashboard_metric_rows(query_key)
-        elif source == "fiscal":
-            rows = self.service.fiscal_indicator_rows(query_key)
         else:
             rows = self.service.dashboard_chart_rows(source, query_key)
         title = key.replace("_", " ").title()

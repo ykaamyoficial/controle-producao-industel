@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import csv
 
-from PySide6.QtCore import QRegularExpression, Qt
+from PySide6.QtCore import QPoint, QRegularExpression, Qt
+from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QComboBox,
+    QDialog,
     QFileDialog,
     QFrame,
     QGridLayout,
@@ -12,7 +15,11 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMessageBox,
+    QMenu,
     QTabWidget,
+    QTableWidget,
+    QTableWidgetItem,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -25,6 +32,7 @@ from app.ui.components.kpi_card import KpiCard
 from app.ui.components.modern_button import ModernButton
 from app.ui.components.modern_table import ModernTable, ProcessFilterProxy
 from app.ui.fiscal_emission_dialog import FiscalEmissionDialog
+from app.ui.process_detail_dialog import ProcessDetailDialog
 
 
 class FiscalPage(QWidget):
@@ -112,54 +120,18 @@ class FiscalPage(QWidget):
         fl.addLayout(fields)
         root.addWidget(filters)
 
-        cards = QGridLayout()
-        cards.setHorizontalSpacing(12)
-        cards.setVerticalSpacing(12)
-        palette = self.service.palette
-        self.card_missing = KpiCard("Falta emitir NF", 0, "audit", palette["danger"])
-        self.card_partial = KpiCard("NF parcial", 0, "partial", palette["warning"])
-        self.card_emitted = KpiCard("NF emitida", 0, "status", palette["success"])
-        self.card_critical = KpiCard("Pendencia critica", 0, "clear", palette["danger"])
-        self.card_delivered_without_nf = KpiCard("Entregues sem NF", 0, "expedition", palette["danger"])
-        self.card_pending_weight = KpiCard("Peso pendente", "0 kg", "clock", palette["warning"])
-        self.card_billed_weight = KpiCard("Peso faturado", "0 kg", "status", palette["success"])
-        self.card_older_than_7 = KpiCard("+7 dias sem emissao", 0, "history", palette["danger"])
-        for index, card in enumerate(
-            (
-                self.card_missing,
-                self.card_partial,
-                self.card_emitted,
-                self.card_critical,
-                self.card_delivered_without_nf,
-                self.card_pending_weight,
-                self.card_billed_weight,
-                self.card_older_than_7,
-            )
-        ):
-            cards.addWidget(card, index // 4, index % 4)
-        root.addLayout(cards)
-
         self.table = ModernTable(self.service)
         self.table.status_shortcut_enabled = False
         self.table.setModel(self.proxy)
-        self.table.setToolTip("Selecione uma proposta para visualizar os itens fiscais.")
-        self.table.selectionModel().selectionChanged.connect(self.load_selected_items)
-        root.addWidget(self.table, 2)
+        self.table.setToolTip("Clique com o botao direito ou na coluna Acoes para consultar detalhes fiscais.")
+        self.table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self.open_tracking_menu)
+        self.table.clicked.connect(self.handle_tracking_click)
+        root.addWidget(self.table, 1)
 
-        details = QFrame()
-        details.setObjectName("Panel")
-        details_layout = QVBoxLayout(details)
-        details_layout.setContentsMargins(14, 12, 14, 14)
-        details_layout.setSpacing(8)
-        details_title = QLabel("Itens fiscais da proposta selecionada")
-        details_title.setObjectName("FilterTitle")
-        self.items_table = ModernTable(self.service)
-        self.items_table.status_shortcut_enabled = False
-        self.items_table.setModel(self.items_model)
-        self.items_table.setToolTip("Itens fiscais apenas para consulta nesta fase.")
-        details_layout.addWidget(details_title)
-        details_layout.addWidget(self.items_table, 1)
-        root.addWidget(details, 1)
+        hint = QLabel("Dica: use o botao direito do mouse ou a coluna Acoes para ver itens, resumo, historico e emissoes.")
+        hint.setObjectName("Caption")
+        root.addWidget(hint)
 
         self.search.textChanged.connect(lambda text: self.proxy.setFilterRegularExpression(QRegularExpression(text)))
         tabs.addTab(tracking, "Acompanhamento fiscal")
@@ -184,23 +156,8 @@ class FiscalPage(QWidget):
         rows = self.service.fiscal_rows(filters)
         self.model.set_rows(rows)
         self.table.apply_column_layout()
-        self.refresh_cards()
         if rows:
             self.table.selectRow(0)
-            self.load_selected_items()
-        else:
-            self.items_model.set_rows([])
-
-    def refresh_cards(self):
-        indicators = self.service.fiscal_indicators()
-        self.card_missing.set_value(indicators.get("falta_emitir", 0))
-        self.card_partial.set_value(indicators.get("nf_parcial", 0))
-        self.card_emitted.set_value(indicators.get("nf_emitida", 0))
-        self.card_critical.set_value(indicators.get("pendencia_critica", 0))
-        self.card_delivered_without_nf.set_value(indicators.get("entregues_sem_nf", 0))
-        self.card_pending_weight.set_value(format_weight(indicators.get("peso_pendente", 0)))
-        self.card_billed_weight.set_value(format_weight(indicators.get("peso_faturado", 0)))
-        self.card_older_than_7.set_value(indicators.get("mais_7_dias_sem_emissao", 0))
 
     def clear(self):
         self.search.clear()
@@ -225,13 +182,185 @@ class FiscalPage(QWidget):
             return self.model.rows[source_index.row()]
         return None
 
-    def load_selected_items(self):
-        fiscal_id = self.selected_fiscal_id()
-        if not fiscal_id:
-            self.items_model.set_rows([])
+    def handle_tracking_click(self, index):
+        if not index.isValid():
             return
-        self.items_model.set_rows(self.service.fiscal_items(fiscal_id))
-        self.items_table.apply_column_layout()
+        source_index = self.proxy.mapToSource(index)
+        key = self.model.columns[source_index.column()][0]
+        if key == "acoes":
+            point = self.table.visualRect(index).bottomRight()
+            self.open_actions_menu(self.selected_fiscal_row(), self.table.viewport().mapToGlobal(point))
+
+    def open_tracking_menu(self, point: QPoint):
+        index = self.table.indexAt(point)
+        if index.isValid():
+            self.table.selectRow(index.row())
+        self.open_actions_menu(self.selected_fiscal_row(), self.table.viewport().mapToGlobal(point))
+
+    def selected_report_row(self) -> dict | None:
+        selected = self.report_table.selectionModel().selectedRows()
+        if not selected:
+            return None
+        row = selected[0].row()
+        if 0 <= row < len(self.report_model.rows):
+            return self.report_model.rows[row]
+        return None
+
+    def handle_report_click(self, index):
+        if not index.isValid():
+            return
+        key = self.report_model.columns[index.column()][0]
+        if key == "acoes":
+            point = self.report_table.visualRect(index).bottomRight()
+            self.open_actions_menu(self.report_model.rows[index.row()], self.report_table.viewport().mapToGlobal(point))
+
+    def open_report_menu(self, point: QPoint):
+        index = self.report_table.indexAt(point)
+        if index.isValid():
+            self.report_table.selectRow(index.row())
+        self.open_actions_menu(self.selected_report_row(), self.report_table.viewport().mapToGlobal(point))
+
+    def open_actions_menu(self, row: dict | None, global_pos: QPoint):
+        if not row or not row.get("fiscal_processo_id"):
+            return
+        menu = QMenu(self)
+        menu.addAction(QAction("Ver itens fiscais", self, triggered=lambda: self.show_fiscal_items(row)))
+        menu.addAction(QAction("Resumo da proposta", self, triggered=lambda: self.show_fiscal_summary(row)))
+        menu.addAction(QAction("Historico fiscal", self, triggered=lambda: self.show_fiscal_history(row)))
+        menu.addAction(QAction("Emissoes registradas", self, triggered=lambda: self.show_fiscal_emissions(row)))
+        menu.addSeparator()
+        menu.addAction(QAction("Detalhes completos", self, triggered=lambda: self.show_process_details(row)))
+        menu.exec(global_pos)
+
+    def show_fiscal_items(self, row: dict):
+        items = self.service.fiscal_items(int(row.get("fiscal_processo_id") or 0))
+        self._show_table_dialog(
+            f"Itens fiscais - {row.get('proposta') or '-'}",
+            items,
+            [
+                ("numero_item", "Item"),
+                ("descricao", "Descricao"),
+                ("quantidade_total", "Qtd. total"),
+                ("quantidade_faturada", "Qtd. faturada"),
+                ("quantidade_pendente", "Qtd. pendente"),
+                ("peso_total", "Peso total"),
+                ("peso_faturado", "Peso faturado"),
+                ("peso_pendente", "Peso pendente"),
+                ("status_item_fiscal", "Status"),
+            ],
+        )
+
+    def show_fiscal_summary(self, row: dict):
+        lines = [
+            ("Proposta", row.get("proposta")),
+            ("Cliente", row.get("cliente")),
+            ("Obra/Site", row.get("obra_site")),
+            ("Status fiscal", self.service.fiscal_status_label(row.get("status_fiscal") or "")),
+            ("Entrada fiscal", row.get("data_entrada_fiscal")),
+            ("Ultima emissao", row.get("data_ultima_emissao") or "-"),
+            ("Itens", row.get("quantidade_itens")),
+            ("Pendentes", row.get("itens_pendentes")),
+            ("Faturados", row.get("itens_faturados")),
+            ("Peso total", format_weight(row.get("peso_total"))),
+            ("Peso pendente", format_weight(row.get("peso_pendente"))),
+            ("Peso faturado", format_weight(row.get("peso_faturado"))),
+        ]
+        text = "\n".join(f"{label}: {value or '-'}" for label, value in lines)
+        self._show_text_dialog(f"Resumo fiscal - {row.get('proposta') or '-'}", text)
+
+    def show_fiscal_history(self, row: dict):
+        movements = self.service.fiscal_movements(int(row.get("fiscal_processo_id") or 0))
+        self._show_table_dialog(
+            f"Historico fiscal - {row.get('proposta') or '-'}",
+            movements,
+            [
+                ("tipo_movimento", "Movimento"),
+                ("status_anterior", "Anterior"),
+                ("status_novo", "Novo"),
+                ("usuario", "Usuario"),
+                ("data_hora", "Quando"),
+                ("observacao", "Observacao"),
+            ],
+        )
+
+    def show_fiscal_emissions(self, row: dict):
+        emissions = self.service.fiscal_emissions(int(row.get("fiscal_processo_id") or 0))
+        self._show_table_dialog(
+            f"Emissoes registradas - {row.get('proposta') or '-'}",
+            emissions,
+            [
+                ("numero_controle", "NF/Controle"),
+                ("tipo_emissao", "Tipo"),
+                ("data_emissao", "Data"),
+                ("usuario", "Usuario"),
+                ("quantidade_itens", "Itens"),
+                ("quantidade_emitida", "Qtd. emitida"),
+                ("peso_emitido", "Peso emitido"),
+                ("observacao", "Observacao"),
+            ],
+        )
+
+    def show_process_details(self, row: dict):
+        process_id = int(row.get("processo_id") or 0)
+        if not process_id:
+            QMessageBox.information(self, "Fiscal", "Nao foi possivel localizar a proposta operacional.")
+            return
+        dialog = ProcessDetailDialog(self.service, process_id, self)
+        dialog.setStyleSheet(self.window().styleSheet())
+        if dialog.exec() and getattr(dialog, "changed", False):
+            self.refresh()
+
+    def _show_text_dialog(self, title: str, text: str):
+        dialog = QDialog(self)
+        dialog.setWindowTitle(title)
+        dialog.resize(620, 430)
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(16, 16, 16, 16)
+        box = QTextEdit()
+        box.setReadOnly(True)
+        box.setPlainText(text)
+        layout.addWidget(box, 1)
+        close = ModernButton("Fechar", "clear")
+        close.clicked.connect(dialog.accept)
+        row = QHBoxLayout()
+        row.addStretch()
+        row.addWidget(close)
+        layout.addLayout(row)
+        dialog.setStyleSheet(self.window().styleSheet())
+        dialog.exec()
+
+    def _show_table_dialog(self, title: str, rows: list[dict], columns: list[tuple[str, str]]):
+        dialog = QDialog(self)
+        dialog.setWindowTitle(title)
+        dialog.resize(920, 540)
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(16, 16, 16, 16)
+        table = QTableWidget(len(rows), len(columns))
+        table.setHorizontalHeaderLabels([label for _key, label in columns])
+        table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        table.setAlternatingRowColors(True)
+        table.verticalHeader().setVisible(False)
+        for r, item in enumerate(rows):
+            for c, (key, _label) in enumerate(columns):
+                value = item.get(key)
+                if key in ("status_fiscal", "status_item_fiscal", "status_anterior", "status_novo"):
+                    value = self.service.fiscal_status_label(value or "")
+                elif key.startswith("peso_"):
+                    value = format_weight(value)
+                cell = QTableWidgetItem(str(value or "-"))
+                cell.setTextAlignment(Qt.AlignCenter if key != "observacao" and key != "descricao" else Qt.AlignVCenter | Qt.AlignLeft)
+                table.setItem(r, c, cell)
+        table.resizeColumnsToContents()
+        layout.addWidget(table, 1)
+        close = ModernButton("Fechar", "clear")
+        close.clicked.connect(dialog.accept)
+        row = QHBoxLayout()
+        row.addStretch()
+        row.addWidget(close)
+        layout.addLayout(row)
+        dialog.setStyleSheet(self.window().styleSheet())
+        dialog.exec()
 
     def register_emission(self):
         if not self.service.can_register_fiscal_emission():
@@ -269,13 +398,6 @@ class FiscalPage(QWidget):
         caption.setWordWrap(True)
         header.addWidget(title)
         header.addStretch()
-        self.export_csv_btn = ModernButton("Exportar CSV", "reports", accent=True)
-        self.export_pdf_btn = ModernButton("Exportar PDF", "pdf")
-        self.export_pdf_btn.setEnabled(False)
-        self.export_pdf_btn.setToolTip("PDF fiscal ficara para uma etapa futura; CSV ja esta seguro nesta fase.")
-        self.export_csv_btn.clicked.connect(self.export_report_csv)
-        header.addWidget(self.export_csv_btn)
-        header.addWidget(self.export_pdf_btn)
         layout.addLayout(header)
         layout.addWidget(caption)
 
@@ -296,6 +418,7 @@ class FiscalPage(QWidget):
             self.report_type.addItem(label, value)
         self.report_proposal = QLineEdit()
         self.report_proposal.setPlaceholderText("Proposta")
+        self.report_proposal.hide()
         self.report_client = QLineEdit()
         self.report_client.setPlaceholderText("Cliente")
         self.report_site = QLineEdit()
@@ -315,24 +438,31 @@ class FiscalPage(QWidget):
         self.report_alert.addItem("Mais de 7 dias sem emissao", "7")
         generate = ModernButton("Gerar relatorio", "search", accent=True)
         clear = ModernButton("Limpar filtros", "clear")
+        self.export_csv_btn = ModernButton("Exportar CSV", "reports", accent=True)
+        self.export_pdf_btn = ModernButton("Exportar PDF", "pdf")
+        self.export_pdf_btn.setEnabled(False)
+        self.export_pdf_btn.setToolTip("PDF fiscal ficara para uma etapa futura; CSV ja esta seguro nesta fase.")
         generate.clicked.connect(self.refresh_report)
         clear.clicked.connect(self.clear_report_filters)
+        self.export_csv_btn.clicked.connect(self.export_report_csv)
 
         grid = QGridLayout()
         grid.setHorizontalSpacing(10)
         grid.setVerticalSpacing(8)
         self._add_filter_field(grid, 0, 0, "Relatorio", self.report_type)
-        self._add_filter_field(grid, 0, 2, "Proposta", self.report_proposal)
-        self._add_filter_field(grid, 0, 4, "Cliente", self.report_client)
-        self._add_filter_field(grid, 0, 6, "Obra/Site", self.report_site)
-        self._add_filter_field(grid, 1, 0, "Status", self.report_status)
-        self._add_filter_field(grid, 1, 2, "Periodo inicial", self.report_start)
-        self._add_filter_field(grid, 1, 4, "Periodo final", self.report_end)
-        self._add_filter_field(grid, 1, 6, "Alerta", self.report_alert)
+        self._add_filter_field(grid, 0, 2, "Periodo inicial", self.report_start)
+        self._add_filter_field(grid, 0, 4, "Periodo final", self.report_end)
+        self._add_filter_field(grid, 0, 6, "Cliente", self.report_client)
+        self._add_filter_field(grid, 1, 0, "Obra/Site", self.report_site)
+        self._add_filter_field(grid, 1, 2, "Status fiscal", self.report_status)
+        self._add_filter_field(grid, 1, 4, "Pendencia critica / +7 dias", self.report_alert)
         actions = QHBoxLayout()
+        actions.setSpacing(8)
         actions.addWidget(generate)
         actions.addWidget(clear)
-        grid.addLayout(actions, 1, 8)
+        actions.addWidget(self.export_csv_btn)
+        actions.addWidget(self.export_pdf_btn)
+        grid.addLayout(actions, 1, 6)
         for column in (1, 3, 5, 7):
             grid.setColumnStretch(column, 1)
         layout.addLayout(grid)
@@ -341,15 +471,19 @@ class FiscalPage(QWidget):
         cards = QHBoxLayout()
         cards.setSpacing(12)
         palette = self.service.palette
-        self.report_total_card = KpiCard("Registros", 0, "reports", palette["accent"])
+        self.report_missing_card = KpiCard("NF pendente", 0, "audit", palette["danger"])
+        self.report_partial_card = KpiCard("NF parcial", 0, "partial", palette["warning"])
+        self.report_emitted_card = KpiCard("NF emitida", 0, "status", palette["success"])
+        self.report_critical_card = KpiCard("Pendencia critica", 0, "clear", palette["danger"])
+        self.report_old_card = KpiCard("+7 dias sem emissao", 0, "history", palette["secondary"])
         self.report_pending_weight_card = KpiCard("Peso pendente", "0 kg", "clock", palette["warning"])
-        self.report_billed_weight_card = KpiCard("Peso faturado", "0 kg", "status", palette["success"])
-        self.report_critical_card = KpiCard("Criticos", 0, "clear", palette["danger"])
         for card in (
-            self.report_total_card,
-            self.report_pending_weight_card,
-            self.report_billed_weight_card,
+            self.report_missing_card,
+            self.report_partial_card,
+            self.report_emitted_card,
             self.report_critical_card,
+            self.report_old_card,
+            self.report_pending_weight_card,
         ):
             cards.addWidget(card)
         root.addLayout(cards)
@@ -357,6 +491,9 @@ class FiscalPage(QWidget):
         self.report_table = ModernTable(self.service)
         self.report_table.status_shortcut_enabled = False
         self.report_table.setModel(self.report_model)
+        self.report_table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.report_table.customContextMenuRequested.connect(self.open_report_menu)
+        self.report_table.clicked.connect(self.handle_report_click)
         root.addWidget(self.report_table, 1)
         return tab
 
@@ -381,13 +518,14 @@ class FiscalPage(QWidget):
         self.refresh_report_cards(rows)
 
     def refresh_report_cards(self, rows: list[dict]):
-        self.report_total_card.set_value(len(rows))
+        indicators = self.service.fiscal_indicators()
         pending = sum(float(row.get("peso_pendente") or 0) for row in rows)
-        billed = sum(float(row.get("peso_faturado") or row.get("peso_emitido") or 0) for row in rows)
-        critical = sum(1 for row in rows if (row.get("status_fiscal") or "") != "NOTA_FISCAL_EMITIDA")
+        self.report_missing_card.set_value(indicators.get("falta_emitir", 0))
+        self.report_partial_card.set_value(indicators.get("nf_parcial", 0))
+        self.report_emitted_card.set_value(indicators.get("nf_emitida", 0))
+        self.report_critical_card.set_value(indicators.get("pendencia_critica", 0))
+        self.report_old_card.set_value(indicators.get("mais_7_dias_sem_emissao", 0))
         self.report_pending_weight_card.set_value(format_weight(pending))
-        self.report_billed_weight_card.set_value(format_weight(billed))
-        self.report_critical_card.set_value(critical)
 
     def clear_report_filters(self):
         self.report_proposal.clear()

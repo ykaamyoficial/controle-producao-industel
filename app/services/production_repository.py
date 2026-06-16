@@ -1744,6 +1744,45 @@ class Repository:
             (fiscal_processo_id,),
         ).fetchall()
 
+    def list_fiscal_movements(self, fiscal_processo_id):
+        return self.conn.execute(
+            """
+            SELECT
+                tipo_movimento,
+                status_anterior,
+                status_novo,
+                usuario,
+                data_hora,
+                observacao
+            FROM fiscal_movimentacoes
+            WHERE fiscal_processo_id = ?
+            ORDER BY data_hora DESC, id DESC
+            """,
+            (fiscal_processo_id,),
+        ).fetchall()
+
+    def list_fiscal_emissions(self, fiscal_processo_id):
+        return self.conn.execute(
+            """
+            SELECT
+                fe.id,
+                fe.numero_controle,
+                fe.tipo_emissao,
+                fe.data_emissao,
+                fe.usuario,
+                fe.observacao,
+                COUNT(fei.id) AS quantidade_itens,
+                COALESCE(SUM(fei.quantidade_emitida), 0) AS quantidade_emitida,
+                COALESCE(SUM(fei.peso_emitido), 0) AS peso_emitido
+            FROM fiscal_emissoes fe
+            LEFT JOIN fiscal_emissao_itens fei ON fei.fiscal_emissao_id = fe.id
+            WHERE fe.fiscal_processo_id = ?
+            GROUP BY fe.id
+            ORDER BY fe.data_emissao DESC, fe.id DESC
+            """,
+            (fiscal_processo_id,),
+        ).fetchall()
+
     def fiscal_indicators(self):
         rows = self.conn.execute(
             """
@@ -1873,6 +1912,8 @@ class Repository:
         return self.conn.execute(
             f"""
             SELECT
+                fp.id AS fiscal_processo_id,
+                fp.processo_id,
                 fp.proposta,
                 p.cliente,
                 p.obra_site,
@@ -1951,6 +1992,8 @@ class Repository:
         return self.conn.execute(
             f"""
             SELECT
+                fp.id AS fiscal_processo_id,
+                fp.processo_id,
                 fp.proposta,
                 p.cliente,
                 p.obra_site,
@@ -1962,6 +2005,16 @@ class Repository:
                 COALESCE(SUM(fi.peso_total), 0) AS peso_total,
                 COALESCE(SUM(fi.peso_faturado), 0) AS peso_faturado,
                 COALESCE(SUM(fi.peso_total - fi.peso_faturado), 0) AS peso_pendente,
+                CASE
+                    WHEN p.status_expedicao = 'ENTREGUE'
+                         AND fp.status_fiscal <> 'NOTA_FISCAL_EMITIDA'
+                    THEN 'Critica'
+                    WHEN fp.status_fiscal <> 'NOTA_FISCAL_EMITIDA'
+                         AND COALESCE(fp.data_ultima_emissao, '') = ''
+                         AND date(fp.data_entrada_fiscal) < date('now', '-7 days')
+                    THEN '+7 dias'
+                    ELSE ''
+                END AS alerta,
                 MAX(fe.numero_controle) AS numero_controle,
                 MAX(fe.usuario) AS usuario_emissao,
                 MAX(fe.observacao) AS observacao
@@ -1983,6 +2036,8 @@ class Repository:
         return self.conn.execute(
             f"""
             SELECT
+                fp.id AS fiscal_processo_id,
+                fp.processo_id,
                 fp.proposta,
                 p.cliente,
                 p.obra_site,

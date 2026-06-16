@@ -278,6 +278,12 @@ class BackendService:
     def fiscal_report_rows(self, report_type: str, filters: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         return [row_to_dict(row) for row in self.repo.fiscal_report_rows(report_type, filters)]
 
+    def fiscal_movements(self, fiscal_processo_id: int) -> list[dict[str, Any]]:
+        return [row_to_dict(row) for row in self.repo.list_fiscal_movements(fiscal_processo_id)]
+
+    def fiscal_emissions(self, fiscal_processo_id: int) -> list[dict[str, Any]]:
+        return [row_to_dict(row) for row in self.repo.list_fiscal_emissions(fiscal_processo_id)]
+
     def fiscal_critical_pending(self, process_id: int) -> bool:
         return self.repo.identificar_pendencia_fiscal_critica(process_id)
 

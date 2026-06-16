@@ -57,6 +57,12 @@ class FiscalUiService:
     def fiscal_report_rows(self, report_type, filters=None):
         return [dict(row) for row in self.repo.fiscal_report_rows(report_type, filters)]
 
+    def fiscal_movements(self, fiscal_processo_id):
+        return [dict(row) for row in self.repo.list_fiscal_movements(fiscal_processo_id)]
+
+    def fiscal_emissions(self, fiscal_processo_id):
+        return [dict(row) for row in self.repo.list_fiscal_emissions(fiscal_processo_id)]
+
     def can_register_fiscal_emission(self):
         return True
 
@@ -196,7 +202,7 @@ class FiscalReadOnlyPageTests(unittest.TestCase):
 
         self.assertEqual(before, after)
 
-    def test_fiscal_page_refreshes_phase_five_alerts_without_writing(self):
+    def test_fiscal_page_refreshes_alert_rows_without_writing(self):
         self.create_fiscal_process(
             "CP02012",
             status_fiscal="FALTA_EMITIR_NOTA_FISCAL",
@@ -209,12 +215,11 @@ class FiscalReadOnlyPageTests(unittest.TestCase):
         page.refresh()
         after = self.fiscal_table_counts()
 
-        self.assertEqual(page.card_critical.number.text(), "1")
-        self.assertEqual(page.card_delivered_without_nf.number.text(), "1")
-        self.assertEqual(page.card_older_than_7.number.text(), "1")
+        self.assertEqual(page.model.rows[0]["pendencia_critica"], 1)
+        self.assertEqual(page.model.rows[0]["mais_7_dias_sem_emissao"], 1)
         self.assertEqual(before, after)
 
-    def test_dashboard_loads_fiscal_cards_without_writing(self):
+    def test_dashboard_keeps_fiscal_indicators_out_of_operational_panel(self):
         self.create_fiscal_process(
             "CP02013",
             status_fiscal="FALTA_EMITIR_NOTA_FISCAL",
@@ -228,9 +233,10 @@ class FiscalReadOnlyPageTests(unittest.TestCase):
         after = self.fiscal_table_counts()
 
         card_titles = [card.metric_key for card in page.cards]
-        self.assertIn("falta_emitir", card_titles)
-        self.assertIn("peso_pendente", card_titles)
-        self.assertIn("mais_7_dias_sem_emissao", card_titles)
+        self.assertNotIn("falta_emitir", card_titles)
+        self.assertNotIn("peso_pendente", card_titles)
+        self.assertNotIn("mais_7_dias_sem_emissao", card_titles)
+        self.assertIn("Producao", card_titles)
         self.assertEqual(before, after)
 
     def test_fiscal_reports_return_pending_partial_emitted_and_critical_rows(self):
@@ -295,14 +301,15 @@ class FiscalReadOnlyPageTests(unittest.TestCase):
         self.assertTrue(csv_path.exists())
         self.assertFalse(any(term in content for term in forbidden))
 
-    def test_fiscal_page_loads_items_for_selected_row(self):
+    def test_fiscal_page_uses_context_actions_instead_of_fixed_items_panel(self):
         self.create_fiscal_process("CP02007")
 
         page = FiscalPage(self.service)
         page.refresh()
 
         self.assertGreater(page.model.rowCount(), 0)
-        self.assertEqual(page.items_model.rowCount(), 2)
+        self.assertFalse(hasattr(page, "items_table"))
+        self.assertEqual(page.model.columns[-1][0], "acoes")
 
     def test_fiscal_page_exposes_manual_emission_button_for_allowed_user(self):
         self.create_fiscal_process("CP02008A")

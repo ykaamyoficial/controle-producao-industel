@@ -138,6 +138,8 @@ class ModernTable(QTableView):
             "quantidade_faturada": 110,
             "quantidade_pendente": 112,
             "status_item_fiscal": 150,
+            "acoes": 72,
+            "alerta": 120,
         }
         for index, (key, _label) in enumerate(columns):
             self.setColumnWidth(index, widths.get(key, 120))

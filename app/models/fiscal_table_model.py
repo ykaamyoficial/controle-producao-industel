@@ -51,6 +51,7 @@ class FiscalProcessTableModel(QAbstractTableModel):
         ("peso_faturado", "Peso faturado"),
         ("mais_7_dias_sem_emissao", "+7 dias s/ emissao"),
         ("pendencia_critica", "Alerta"),
+        ("acoes", "Acoes"),
     ]
 
     def __init__(self, rows: list[dict[str, Any]] | None = None):
@@ -75,6 +76,8 @@ class FiscalProcessTableModel(QAbstractTableModel):
         key, _label = self.columns[index.column()]
         value = row.get(key)
         if role in (Qt.DisplayRole, Qt.EditRole):
+            if key == "acoes":
+                return "..."
             if key == "status_fiscal":
                 return fiscal_status_label(str(value or ""))
             if key == "pendencia_critica":
@@ -89,6 +92,8 @@ class FiscalProcessTableModel(QAbstractTableModel):
         if role == Qt.UserRole + 1:
             return key
         if role == Qt.UserRole + 2:
+            if key == "acoes":
+                return ""
             if key == "pendencia_critica" and int(value or 0):
                 return "FALTA_EMITIR_NOTA_FISCAL"
             if key == "mais_7_dias_sem_emissao" and int(value or 0):
@@ -103,6 +108,8 @@ class FiscalProcessTableModel(QAbstractTableModel):
             }
             if key in numeric:
                 return Qt.AlignVCenter | Qt.AlignRight
+            if key == "acoes":
+                return Qt.AlignCenter
             return Qt.AlignVCenter | Qt.AlignLeft
         return None
 

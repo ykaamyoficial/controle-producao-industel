@@ -1,14 +1,10 @@
 from __future__ import annotations
 
-from pathlib import Path
-
-from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QMainWindow, QStackedWidget, QVBoxLayout, QWidget
 
 from app.services.backend_adapter import BackendService
 from app.ui.animations import animate_width, fade_in
 from app.ui.app_icon import app_icon
-from app.ui.components.modern_button import ModernButton
 from app.ui.data_page import DataPage
 from app.ui.dashboard_page import DashboardPage
 from app.ui.fiscal_page import FiscalPage
@@ -76,38 +72,9 @@ class MainWindow(QMainWindow):
 
         content = QWidget()
         content_layout = QVBoxLayout(content)
-        content_layout.setContentsMargins(18, 6, 18, 18)
-        content_layout.setSpacing(8)
+        content_layout.setContentsMargins(18, 14, 18, 18)
+        content_layout.setSpacing(10)
         main.addWidget(content, 1)
-
-        topbar = QFrame()
-        topbar.setObjectName("TopBar")
-        topbar.setFixedHeight(50)
-        top_layout = QHBoxLayout(topbar)
-        top_layout.setContentsMargins(14, 5, 10, 5)
-        top_layout.setSpacing(8)
-        title = QLabel("Operacao industrial")
-        title.setObjectName("AppTitle")
-        user_info = QLabel(f"Usuario  {self.service.user_name()}")
-        user_info.setObjectName("TopInfoChip")
-        profile_info = QLabel(f"Perfil  {self.service.user_profile()}")
-        profile_info.setObjectName("TopInfoChip")
-        database_path = str(self.service.config.get("db_path") or "")
-        database_info = QLabel(f"Banco  {Path(database_path).name or '-'}")
-        database_info.setObjectName("TopDatabaseChip")
-        database_info.setToolTip(database_path)
-        refresh = ModernButton("Atualizar", "refresh")
-        refresh.setMinimumHeight(26)
-        refresh.setMaximumHeight(26)
-        refresh.setToolTip("Atualizar os dados da pagina atual")
-        refresh.clicked.connect(self.refresh_current)
-        top_layout.addWidget(title)
-        top_layout.addStretch()
-        top_layout.addWidget(user_info)
-        top_layout.addWidget(profile_info)
-        top_layout.addWidget(database_info)
-        top_layout.addWidget(refresh)
-        content_layout.addWidget(topbar)
 
         self.stack = QStackedWidget()
         content_layout.addWidget(self.stack, 1)
