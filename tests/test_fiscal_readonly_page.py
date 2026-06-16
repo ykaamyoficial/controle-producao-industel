@@ -5,6 +5,7 @@ import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -52,6 +53,9 @@ class FiscalUiService:
 
     def fiscal_indicator_rows(self, indicator):
         return [dict(row) for row in self.repo.fiscal_indicator_rows(indicator)]
+
+    def fiscal_report_rows(self, report_type, filters=None):
+        return [dict(row) for row in self.repo.fiscal_report_rows(report_type, filters)]
 
     def can_register_fiscal_emission(self):
         return True
@@ -229,6 +233,68 @@ class FiscalReadOnlyPageTests(unittest.TestCase):
         self.assertIn("mais_7_dias_sem_emissao", card_titles)
         self.assertEqual(before, after)
 
+    def test_fiscal_reports_return_pending_partial_emitted_and_critical_rows(self):
+        self.create_fiscal_process("CP02100", status_fiscal="FALTA_EMITIR_NOTA_FISCAL")
+        self.create_fiscal_process("CP02101", status_fiscal="NOTA_FISCAL_PARCIAL")
+        self.create_fiscal_process("CP02102", status_fiscal="NOTA_FISCAL_EMITIDA")
+        self.create_fiscal_process("CP02103", status_fiscal="FALTA_EMITIR_NOTA_FISCAL", expedition_status="ENTREGUE")
+
+        self.assertCountEqual([dict(row)["proposta"] for row in self.repo.fiscal_report_rows("PENDENTES")], ["CP02103", "CP02100"])
+        self.assertEqual([dict(row)["proposta"] for row in self.repo.fiscal_report_rows("PARCIAIS")], ["CP02101"])
+        self.assertEqual([dict(row)["proposta"] for row in self.repo.fiscal_report_rows("EMITIDAS")], ["CP02102"])
+        self.assertEqual([dict(row)["proposta"] for row in self.repo.fiscal_report_rows("CRITICAS")], ["CP02103"])
+
+    def test_fiscal_reports_items_and_emissions(self):
+        fiscal_id = self.create_fiscal_process("CP02104", status_fiscal="NOTA_FISCAL_PARCIAL")
+        self.create_fiscal_emission(fiscal_id, "NF-123", "fiscal", "2026-06-10")
+
+        items = [dict(row) for row in self.repo.fiscal_report_rows("ITENS_PENDENTES")]
+        emissions = [dict(row) for row in self.repo.fiscal_report_rows("EMISSOES")]
+
+        self.assertTrue(any(row["proposta"] == "CP02104" for row in items))
+        self.assertEqual(emissions[0]["numero_controle"], "NF-123")
+        self.assertEqual(emissions[0]["usuario"], "fiscal")
+        self.assertEqual(emissions[0]["data_emissao"], "2026-06-10")
+
+    def test_fiscal_report_filters_by_period_client_and_status(self):
+        self.create_fiscal_process("CP02105", status_fiscal="FALTA_EMITIR_NOTA_FISCAL", entry_date="2026-06-01")
+        self.create_fiscal_process("CP02106", status_fiscal="NOTA_FISCAL_EMITIDA", entry_date="2026-07-01")
+
+        rows = [
+            dict(row)
+            for row in self.repo.fiscal_report_rows(
+                "POR_PERIODO",
+                {"data_inicio": "2026-06-01", "data_fim": "2026-06-30", "cliente": "Cliente Fiscal"},
+            )
+        ]
+        emitted = [
+            dict(row)
+            for row in self.repo.fiscal_report_rows("EMITIDAS", {"status_fiscal": "NOTA_FISCAL_EMITIDA"})
+        ]
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["periodo"], "2026-06-01")
+        self.assertEqual([row["proposta"] for row in emitted], ["CP02106"])
+
+    def test_fiscal_report_page_and_csv_are_readonly_and_without_financial_fields(self):
+        self.create_fiscal_process("CP02107", status_fiscal="FALTA_EMITIR_NOTA_FISCAL")
+        before = self.fiscal_table_counts()
+        csv_path = Path(self.temp_dir.name) / "relatorio_fiscal.csv"
+
+        page = FiscalPage(self.service)
+        page.report_type.setCurrentIndex(0)
+        page.refresh_report()
+        with patch("app.ui.fiscal_page.QFileDialog.getSaveFileName", return_value=(str(csv_path), "CSV (*.csv)")):
+            with patch("app.ui.fiscal_page.QMessageBox.information"):
+                page.export_report_csv()
+        after = self.fiscal_table_counts()
+        content = csv_path.read_text(encoding="utf-8-sig").lower()
+        forbidden = ("price", "valor", "value", "amount", "subtotal", "tax", "discount", "payment", "currency", "r$")
+
+        self.assertEqual(before, after)
+        self.assertTrue(csv_path.exists())
+        self.assertFalse(any(term in content for term in forbidden))
+
     def test_fiscal_page_loads_items_for_selected_row(self):
         self.create_fiscal_process("CP02007")
 
@@ -346,6 +412,30 @@ class FiscalReadOnlyPageTests(unittest.TestCase):
             table: self.conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
             for table in tables
         }
+
+    def create_fiscal_emission(self, fiscal_id: int, number: str, user: str, emission_date: str):
+        emission_id = self.conn.execute(
+            """
+            INSERT INTO fiscal_emissoes(
+                fiscal_processo_id, numero_controle, tipo_emissao,
+                data_emissao, usuario, observacao, created_at
+            ) VALUES (?, ?, 'PARCIAL', ?, ?, 'Teste fiscal', ?)
+            """,
+            (fiscal_id, number, emission_date, user, emission_date),
+        ).lastrowid
+        item = self.conn.execute(
+            "SELECT id FROM fiscal_itens WHERE fiscal_processo_id = ? ORDER BY id LIMIT 1",
+            (fiscal_id,),
+        ).fetchone()
+        self.conn.execute(
+            """
+            INSERT INTO fiscal_emissao_itens(
+                fiscal_emissao_id, item_id, quantidade_emitida, peso_emitido, created_at
+            ) VALUES (?, ?, 1, 2, ?)
+            """,
+            (emission_id, item["id"], emission_date),
+        )
+        self.conn.commit()
 
 
 if __name__ == "__main__":

@@ -1,9 +1,24 @@
 from __future__ import annotations
 
+import csv
+
 from PySide6.QtCore import QRegularExpression, Qt
-from PySide6.QtWidgets import QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QComboBox,
+    QFileDialog,
+    QFrame,
+    QGridLayout,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QMessageBox,
+    QTabWidget,
+    QVBoxLayout,
+    QWidget,
+)
 
 from app.models.fiscal_items_table_model import FiscalItemsTableModel
+from app.models.fiscal_report_table_model import FiscalReportTableModel
 from app.models.fiscal_table_model import format_weight
 from app.models.fiscal_table_model import FiscalProcessTableModel
 from app.ui.components.kpi_card import KpiCard
@@ -21,10 +36,19 @@ class FiscalPage(QWidget):
         self.proxy.setSourceModel(self.model)
         self.proxy.setFilterCaseSensitivity(Qt.CaseInsensitive)
         self.items_model = FiscalItemsTableModel()
+        self.report_model = FiscalReportTableModel()
         self._build()
 
     def _build(self):
-        root = QVBoxLayout(self)
+        shell = QVBoxLayout(self)
+        shell.setContentsMargins(0, 0, 0, 0)
+        shell.setSpacing(0)
+        tabs = QTabWidget()
+        tabs.setObjectName("ModernTabs")
+        shell.addWidget(tabs, 1)
+
+        tracking = QWidget()
+        root = QVBoxLayout(tracking)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(12)
 
@@ -138,6 +162,8 @@ class FiscalPage(QWidget):
         root.addWidget(details, 1)
 
         self.search.textChanged.connect(lambda text: self.proxy.setFilterRegularExpression(QRegularExpression(text)))
+        tabs.addTab(tracking, "Acompanhamento fiscal")
+        tabs.addTab(self._build_report_tab(), "Relatorios fiscais")
 
     def _add_filter_field(self, layout, row, column, label_text, widget):
         label = QLabel(label_text)
@@ -222,3 +248,181 @@ class FiscalPage(QWidget):
         if dialog.exec():
             self.refresh()
             QMessageBox.information(self, "Fiscal", "Emissao fiscal registrada com sucesso.")
+
+    def _build_report_tab(self) -> QWidget:
+        tab = QWidget()
+        root = QVBoxLayout(tab)
+        root.setContentsMargins(0, 12, 0, 0)
+        root.setSpacing(12)
+
+        filters = QFrame()
+        filters.setObjectName("FilterBar")
+        layout = QVBoxLayout(filters)
+        layout.setContentsMargins(16, 12, 16, 12)
+        layout.setSpacing(10)
+
+        header = QHBoxLayout()
+        title = QLabel("Relatorios fiscais")
+        title.setObjectName("FilterTitle")
+        caption = QLabel("Consultas fiscais por proposta, item, cliente, periodo e emissao. Nao inclui valores financeiros.")
+        caption.setObjectName("Caption")
+        caption.setWordWrap(True)
+        header.addWidget(title)
+        header.addStretch()
+        self.export_csv_btn = ModernButton("Exportar CSV", "reports", accent=True)
+        self.export_pdf_btn = ModernButton("Exportar PDF", "pdf")
+        self.export_pdf_btn.setEnabled(False)
+        self.export_pdf_btn.setToolTip("PDF fiscal ficara para uma etapa futura; CSV ja esta seguro nesta fase.")
+        self.export_csv_btn.clicked.connect(self.export_report_csv)
+        header.addWidget(self.export_csv_btn)
+        header.addWidget(self.export_pdf_btn)
+        layout.addLayout(header)
+        layout.addWidget(caption)
+
+        self.report_type = QComboBox()
+        report_options = [
+            ("Propostas com NF pendente", "PENDENTES"),
+            ("Propostas com NF parcial", "PARCIAIS"),
+            ("Propostas com NF emitida", "EMITIDAS"),
+            ("Pendencia fiscal critica", "CRITICAS"),
+            ("Propostas entregues sem NF", "ENTREGUES_SEM_NF"),
+            ("Itens pendentes de faturamento", "ITENS_PENDENTES"),
+            ("Historico de emissoes fiscais", "EMISSOES"),
+            ("Fiscal por cliente", "POR_CLIENTE"),
+            ("Fiscal por periodo", "POR_PERIODO"),
+            ("Propostas ha mais de 7 dias sem emissao", "MAIS_7_DIAS"),
+        ]
+        for label, value in report_options:
+            self.report_type.addItem(label, value)
+        self.report_proposal = QLineEdit()
+        self.report_proposal.setPlaceholderText("Proposta")
+        self.report_client = QLineEdit()
+        self.report_client.setPlaceholderText("Cliente")
+        self.report_site = QLineEdit()
+        self.report_site.setPlaceholderText("Obra/Site")
+        self.report_status = QComboBox()
+        self.report_status.addItem("Todos", "")
+        self.report_status.addItem("Falta emitir NF", "FALTA_EMITIR_NOTA_FISCAL")
+        self.report_status.addItem("NF parcial", "NOTA_FISCAL_PARCIAL")
+        self.report_status.addItem("NF emitida", "NOTA_FISCAL_EMITIDA")
+        self.report_start = QLineEdit()
+        self.report_start.setPlaceholderText("Inicio AAAA-MM-DD")
+        self.report_end = QLineEdit()
+        self.report_end.setPlaceholderText("Fim AAAA-MM-DD")
+        self.report_alert = QComboBox()
+        self.report_alert.addItem("Todos", "")
+        self.report_alert.addItem("Pendencia critica", "critica")
+        self.report_alert.addItem("Mais de 7 dias sem emissao", "7")
+        generate = ModernButton("Gerar relatorio", "search", accent=True)
+        clear = ModernButton("Limpar filtros", "clear")
+        generate.clicked.connect(self.refresh_report)
+        clear.clicked.connect(self.clear_report_filters)
+
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(10)
+        grid.setVerticalSpacing(8)
+        self._add_filter_field(grid, 0, 0, "Relatorio", self.report_type)
+        self._add_filter_field(grid, 0, 2, "Proposta", self.report_proposal)
+        self._add_filter_field(grid, 0, 4, "Cliente", self.report_client)
+        self._add_filter_field(grid, 0, 6, "Obra/Site", self.report_site)
+        self._add_filter_field(grid, 1, 0, "Status", self.report_status)
+        self._add_filter_field(grid, 1, 2, "Periodo inicial", self.report_start)
+        self._add_filter_field(grid, 1, 4, "Periodo final", self.report_end)
+        self._add_filter_field(grid, 1, 6, "Alerta", self.report_alert)
+        actions = QHBoxLayout()
+        actions.addWidget(generate)
+        actions.addWidget(clear)
+        grid.addLayout(actions, 1, 8)
+        for column in (1, 3, 5, 7):
+            grid.setColumnStretch(column, 1)
+        layout.addLayout(grid)
+        root.addWidget(filters)
+
+        cards = QHBoxLayout()
+        cards.setSpacing(12)
+        palette = self.service.palette
+        self.report_total_card = KpiCard("Registros", 0, "reports", palette["accent"])
+        self.report_pending_weight_card = KpiCard("Peso pendente", "0 kg", "clock", palette["warning"])
+        self.report_billed_weight_card = KpiCard("Peso faturado", "0 kg", "status", palette["success"])
+        self.report_critical_card = KpiCard("Criticos", 0, "clear", palette["danger"])
+        for card in (
+            self.report_total_card,
+            self.report_pending_weight_card,
+            self.report_billed_weight_card,
+            self.report_critical_card,
+        ):
+            cards.addWidget(card)
+        root.addLayout(cards)
+
+        self.report_table = ModernTable(self.service)
+        self.report_table.status_shortcut_enabled = False
+        self.report_table.setModel(self.report_model)
+        root.addWidget(self.report_table, 1)
+        return tab
+
+    def fiscal_report_filters(self) -> dict:
+        alert = self.report_alert.currentData() or ""
+        return {
+            "proposta": self.report_proposal.text().strip(),
+            "cliente": self.report_client.text().strip(),
+            "obra_site": self.report_site.text().strip(),
+            "status_fiscal": self.report_status.currentData() or "",
+            "data_inicio": self.report_start.text().strip(),
+            "data_fim": self.report_end.text().strip(),
+            "pendencia_critica": "1" if alert == "critica" else "",
+            "mais_7_dias_sem_emissao": "1" if alert == "7" else "",
+        }
+
+    def refresh_report(self):
+        report_type = self.report_type.currentData() or "PENDENTES"
+        rows = self.service.fiscal_report_rows(report_type, self.fiscal_report_filters())
+        self.report_model.set_report(report_type, rows)
+        self.report_table.apply_column_layout()
+        self.refresh_report_cards(rows)
+
+    def refresh_report_cards(self, rows: list[dict]):
+        self.report_total_card.set_value(len(rows))
+        pending = sum(float(row.get("peso_pendente") or 0) for row in rows)
+        billed = sum(float(row.get("peso_faturado") or row.get("peso_emitido") or 0) for row in rows)
+        critical = sum(1 for row in rows if (row.get("status_fiscal") or "") != "NOTA_FISCAL_EMITIDA")
+        self.report_pending_weight_card.set_value(format_weight(pending))
+        self.report_billed_weight_card.set_value(format_weight(billed))
+        self.report_critical_card.set_value(critical)
+
+    def clear_report_filters(self):
+        self.report_proposal.clear()
+        self.report_client.clear()
+        self.report_site.clear()
+        self.report_status.setCurrentIndex(0)
+        self.report_start.clear()
+        self.report_end.clear()
+        self.report_alert.setCurrentIndex(0)
+        self.refresh_report()
+
+    def export_report_csv(self):
+        rows = self.report_model.rows
+        if not rows:
+            QMessageBox.information(self, "Relatorios fiscais", "Nao ha dados para exportar.")
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Exportar relatorio fiscal",
+            "relatorio_fiscal.csv",
+            "CSV (*.csv)",
+        )
+        if not path:
+            return
+        with open(path, "w", newline="", encoding="utf-8-sig") as file:
+            writer = csv.writer(file, delimiter=";")
+            writer.writerow([label for _key, label in self.report_model.columns])
+            for row in rows:
+                values = []
+                for key, _label in self.report_model.columns:
+                    value = row.get(key)
+                    if key in ("status_fiscal", "status_item_fiscal"):
+                        value = self.service.fiscal_status_label(value or "")
+                    elif key.startswith("peso_"):
+                        value = format_weight(value)
+                    values.append(value or "")
+                writer.writerow(values)
+        QMessageBox.information(self, "Relatorios fiscais", "CSV gerado com sucesso.")

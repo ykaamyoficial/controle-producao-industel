@@ -1812,6 +1812,229 @@ class Repository:
             return []
         return self.list_fiscal_processes(filters)
 
+    def _fiscal_report_filters(self, filters, date_expression="fp.data_entrada_fiscal"):
+        filters = filters or {}
+        where = []
+        params = []
+        text = (filters.get("text") or "").strip()
+        if text:
+            like = f"%{text}%"
+            where.append("(fp.proposta LIKE ? OR p.cliente LIKE ? OR p.obra_site LIKE ?)")
+            params.extend([like, like, like])
+        proposal = (filters.get("proposta") or "").strip()
+        if proposal:
+            where.append("fp.proposta LIKE ?")
+            params.append(f"%{proposal}%")
+        client = (filters.get("cliente") or "").strip()
+        if client:
+            where.append("p.cliente LIKE ?")
+            params.append(f"%{client}%")
+        site = (filters.get("obra_site") or "").strip()
+        if site:
+            where.append("p.obra_site LIKE ?")
+            params.append(f"%{site}%")
+        status = (filters.get("status_fiscal") or "").strip()
+        if status:
+            where.append("fp.status_fiscal = ?")
+            params.append(status)
+        start = (filters.get("data_inicio") or "").strip()
+        if start:
+            where.append(f"date({date_expression}) >= date(?)")
+            params.append(start)
+        end = (filters.get("data_fim") or "").strip()
+        if end:
+            where.append(f"date({date_expression}) <= date(?)")
+            params.append(end)
+        if filters.get("pendencia_critica") in (True, "1", "SIM", "sim"):
+            where.append("(p.status_expedicao = 'ENTREGUE' AND fp.status_fiscal <> 'NOTA_FISCAL_EMITIDA')")
+        if filters.get("mais_7_dias_sem_emissao") in (True, "1", "SIM", "sim"):
+            where.append(
+                """
+                fp.status_fiscal <> 'NOTA_FISCAL_EMITIDA'
+                AND COALESCE(fp.data_ultima_emissao, '') = ''
+                AND date(fp.data_entrada_fiscal) < date('now', '-7 days')
+                """
+            )
+        return where, params
+
+    def gerar_relatorio_fiscal_pendencias(self, filters=None):
+        filters = dict(filters or {})
+        filters["status_fiscal"] = "FALTA_EMITIR_NOTA_FISCAL"
+        return self.gerar_relatorio_fiscal_processos(filters)
+
+    def gerar_relatorio_fiscal_emissoes(self, filters=None):
+        emission_date_expr = (
+            "CASE WHEN instr(fe.data_emissao, '/') > 0 "
+            "THEN date(substr(fe.data_emissao, 7, 4) || '-' || substr(fe.data_emissao, 4, 2) || '-' || substr(fe.data_emissao, 1, 2)) "
+            "ELSE date(fe.data_emissao) END"
+        )
+        where, params = self._fiscal_report_filters(filters, emission_date_expr)
+        sql_where = " WHERE " + " AND ".join(where) if where else ""
+        return self.conn.execute(
+            f"""
+            SELECT
+                fp.proposta,
+                p.cliente,
+                p.obra_site,
+                fp.status_fiscal,
+                fp.data_entrada_fiscal,
+                fe.data_emissao,
+                fe.numero_controle,
+                fe.tipo_emissao,
+                fe.usuario,
+                fe.observacao,
+                COUNT(fei.id) AS quantidade_itens,
+                COALESCE(SUM(fei.quantidade_emitida), 0) AS quantidade_emitida,
+                COALESCE(SUM(fei.peso_emitido), 0) AS peso_emitido
+            FROM fiscal_emissoes fe
+            JOIN fiscal_processos fp ON fp.id = fe.fiscal_processo_id
+            JOIN processos p ON p.id = fp.processo_id
+            LEFT JOIN fiscal_emissao_itens fei ON fei.fiscal_emissao_id = fe.id
+            {sql_where}
+            GROUP BY fe.id
+            ORDER BY fe.data_emissao DESC, fp.proposta
+            """,
+            tuple(params),
+        ).fetchall()
+
+    def gerar_relatorio_fiscal_por_cliente(self, filters=None):
+        where, params = self._fiscal_report_filters(filters)
+        sql_where = " WHERE " + " AND ".join(where) if where else ""
+        return self.conn.execute(
+            f"""
+            SELECT
+                p.cliente,
+                COUNT(DISTINCT fp.id) AS propostas,
+                COALESCE(SUM(CASE WHEN fp.status_fiscal = 'FALTA_EMITIR_NOTA_FISCAL' THEN 1 ELSE 0 END), 0) AS falta_emitir,
+                COALESCE(SUM(CASE WHEN fp.status_fiscal = 'NOTA_FISCAL_PARCIAL' THEN 1 ELSE 0 END), 0) AS nf_parcial,
+                COALESCE(SUM(CASE WHEN fp.status_fiscal = 'NOTA_FISCAL_EMITIDA' THEN 1 ELSE 0 END), 0) AS nf_emitida,
+                COALESCE(SUM(fi.peso_total), 0) AS peso_total,
+                COALESCE(SUM(fi.peso_faturado), 0) AS peso_faturado,
+                COALESCE(SUM(fi.peso_total - fi.peso_faturado), 0) AS peso_pendente
+            FROM fiscal_processos fp
+            JOIN processos p ON p.id = fp.processo_id
+            LEFT JOIN fiscal_itens fi ON fi.fiscal_processo_id = fp.id
+            {sql_where}
+            GROUP BY p.cliente
+            ORDER BY p.cliente
+            """,
+            tuple(params),
+        ).fetchall()
+
+    def gerar_relatorio_fiscal_por_periodo(self, filters=None):
+        where, params = self._fiscal_report_filters(filters)
+        sql_where = " WHERE " + " AND ".join(where) if where else ""
+        return self.conn.execute(
+            f"""
+            SELECT
+                fp.data_entrada_fiscal AS periodo,
+                COUNT(DISTINCT fp.id) AS propostas,
+                COALESCE(SUM(CASE WHEN fp.status_fiscal = 'FALTA_EMITIR_NOTA_FISCAL' THEN 1 ELSE 0 END), 0) AS falta_emitir,
+                COALESCE(SUM(CASE WHEN fp.status_fiscal = 'NOTA_FISCAL_PARCIAL' THEN 1 ELSE 0 END), 0) AS nf_parcial,
+                COALESCE(SUM(CASE WHEN fp.status_fiscal = 'NOTA_FISCAL_EMITIDA' THEN 1 ELSE 0 END), 0) AS nf_emitida,
+                COALESCE(SUM(fi.peso_total), 0) AS peso_total,
+                COALESCE(SUM(fi.peso_faturado), 0) AS peso_faturado,
+                COALESCE(SUM(fi.peso_total - fi.peso_faturado), 0) AS peso_pendente
+            FROM fiscal_processos fp
+            JOIN processos p ON p.id = fp.processo_id
+            LEFT JOIN fiscal_itens fi ON fi.fiscal_processo_id = fp.id
+            {sql_where}
+            GROUP BY fp.data_entrada_fiscal
+            ORDER BY fp.data_entrada_fiscal DESC
+            """,
+            tuple(params),
+        ).fetchall()
+
+    def gerar_relatorio_fiscal_processos(self, filters=None):
+        where, params = self._fiscal_report_filters(filters)
+        sql_where = " WHERE " + " AND ".join(where) if where else ""
+        return self.conn.execute(
+            f"""
+            SELECT
+                fp.proposta,
+                p.cliente,
+                p.obra_site,
+                fp.status_fiscal,
+                fp.data_entrada_fiscal,
+                fp.data_ultima_emissao,
+                COUNT(fi.id) AS quantidade_itens,
+                COALESCE(SUM(CASE WHEN fi.status_item_fiscal <> 'FATURADO' THEN 1 ELSE 0 END), 0) AS itens_pendentes,
+                COALESCE(SUM(fi.peso_total), 0) AS peso_total,
+                COALESCE(SUM(fi.peso_faturado), 0) AS peso_faturado,
+                COALESCE(SUM(fi.peso_total - fi.peso_faturado), 0) AS peso_pendente,
+                MAX(fe.numero_controle) AS numero_controle,
+                MAX(fe.usuario) AS usuario_emissao,
+                MAX(fe.observacao) AS observacao
+            FROM fiscal_processos fp
+            JOIN processos p ON p.id = fp.processo_id
+            LEFT JOIN fiscal_itens fi ON fi.fiscal_processo_id = fp.id
+            LEFT JOIN fiscal_emissoes fe ON fe.fiscal_processo_id = fp.id
+            {sql_where}
+            GROUP BY fp.id
+            ORDER BY fp.data_entrada_fiscal DESC, fp.proposta
+            """,
+            tuple(params),
+        ).fetchall()
+
+    def gerar_relatorio_fiscal_itens_pendentes(self, filters=None):
+        where, params = self._fiscal_report_filters(filters)
+        where.append("fi.status_item_fiscal <> 'FATURADO'")
+        sql_where = " WHERE " + " AND ".join(where)
+        return self.conn.execute(
+            f"""
+            SELECT
+                fp.proposta,
+                p.cliente,
+                p.obra_site,
+                fp.status_fiscal,
+                fp.data_entrada_fiscal,
+                fi.numero_item,
+                fi.descricao,
+                fi.quantidade_total,
+                fi.quantidade_faturada,
+                fi.quantidade_total - fi.quantidade_faturada AS quantidade_pendente,
+                fi.peso_total,
+                fi.peso_faturado,
+                fi.peso_total - fi.peso_faturado AS peso_pendente,
+                fi.status_item_fiscal
+            FROM fiscal_itens fi
+            JOIN fiscal_processos fp ON fp.id = fi.fiscal_processo_id
+            JOIN processos p ON p.id = fp.processo_id
+            {sql_where}
+            ORDER BY fp.proposta, CAST(fi.numero_item AS INTEGER), fi.numero_item
+            """,
+            tuple(params),
+        ).fetchall()
+
+    def fiscal_report_rows(self, report_type, filters=None):
+        filters = dict(filters or {})
+        if report_type == "PENDENTES":
+            return self.gerar_relatorio_fiscal_pendencias(filters)
+        if report_type == "PARCIAIS":
+            filters["status_fiscal"] = "NOTA_FISCAL_PARCIAL"
+            return self.gerar_relatorio_fiscal_processos(filters)
+        if report_type == "EMITIDAS":
+            filters["status_fiscal"] = "NOTA_FISCAL_EMITIDA"
+            return self.gerar_relatorio_fiscal_processos(filters)
+        if report_type == "CRITICAS":
+            filters["pendencia_critica"] = "1"
+            return self.gerar_relatorio_fiscal_processos(filters)
+        if report_type == "ENTREGUES_SEM_NF":
+            filters["pendencia_critica"] = "1"
+            return self.gerar_relatorio_fiscal_processos(filters)
+        if report_type == "ITENS_PENDENTES":
+            return self.gerar_relatorio_fiscal_itens_pendentes(filters)
+        if report_type == "EMISSOES":
+            return self.gerar_relatorio_fiscal_emissoes(filters)
+        if report_type == "POR_CLIENTE":
+            return self.gerar_relatorio_fiscal_por_cliente(filters)
+        if report_type == "POR_PERIODO":
+            return self.gerar_relatorio_fiscal_por_periodo(filters)
+        if report_type == "MAIS_7_DIAS":
+            filters["mais_7_dias_sem_emissao"] = "1"
+            return self.gerar_relatorio_fiscal_processos(filters)
+        return []
+
     def identificar_pendencia_fiscal_critica(self, processo_id):
         row = self.conn.execute(
             """
