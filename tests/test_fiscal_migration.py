@@ -67,6 +67,7 @@ class FiscalMigrationTests(unittest.TestCase):
             before_processes = conn.execute("SELECT COUNT(*) FROM processos").fetchone()[0]
             before_history = conn.execute("SELECT COUNT(*) FROM historico_status").fetchone()[0]
             before_audit = conn.execute("SELECT COUNT(*) FROM auditoria").fetchone()[0]
+            before_fiscal_counts = self.fiscal_table_counts(conn)
 
             apply_migrations(conn)
             production_repository.initialize_database(conn)
@@ -77,7 +78,7 @@ class FiscalMigrationTests(unittest.TestCase):
             self.assertEqual(conn.execute("PRAGMA integrity_check").fetchone()[0], "ok")
             self.assertEqual(conn.execute("PRAGMA foreign_key_check").fetchall(), [])
             self.assert_fiscal_schema(conn)
-            self.assert_fiscal_tables_empty(conn)
+            self.assertEqual(self.fiscal_table_counts(conn), before_fiscal_counts)
 
     def test_foreign_keys_prevent_orphan_fiscal_records(self):
         with self.connect(self.temp_dir / "foreign_keys.db") as conn:
@@ -177,6 +178,19 @@ class FiscalMigrationTests(unittest.TestCase):
         for table in FISCAL_TABLES:
             with self.subTest(table=table):
                 self.assertEqual(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0], 0)
+
+    def fiscal_table_counts(self, conn: sqlite3.Connection):
+        tables = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+        return {
+            table: conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+            for table in FISCAL_TABLES
+            if table in tables
+        }
 
     def create_process_item_and_fiscal(self, conn: sqlite3.Connection):
         process_id = conn.execute(

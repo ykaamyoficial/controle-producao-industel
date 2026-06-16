@@ -275,6 +275,26 @@ class BackendService:
     def fiscal_critical_pending(self, process_id: int) -> bool:
         return self.repo.identificar_pendencia_fiscal_critica(process_id)
 
+    def can_register_fiscal_emission(self) -> bool:
+        return bool(self.user and legacy.user_can_register_fiscal(self.user))
+
+    def register_fiscal_emission(
+        self,
+        fiscal_processo_id: int,
+        emissions: list[dict[str, Any]],
+        numero_controle: str = "",
+        observacao: str = "",
+    ) -> int:
+        if not self.user:
+            raise legacy.AppError("Usuario nao autenticado.")
+        return self.repo.register_fiscal_emission(
+            fiscal_processo_id,
+            emissions,
+            self.user,
+            numero_controle=numero_controle,
+            observacao=observacao,
+        )
+
     def fiscal_status_label(self, status: str) -> str:
         labels = {
             "FALTA_EMITIR_NOTA_FISCAL": "Falta emitir NF",

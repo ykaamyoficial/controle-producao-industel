@@ -47,6 +47,18 @@ class FiscalUiService:
     def fiscal_indicators(self):
         return self.repo.fiscal_indicators()
 
+    def can_register_fiscal_emission(self):
+        return True
+
+    def register_fiscal_emission(self, fiscal_processo_id, emissions, numero_controle="", observacao=""):
+        return self.repo.register_fiscal_emission(
+            fiscal_processo_id,
+            emissions,
+            {"login": "admin", "perfil": "admin", "areas_acesso": ""},
+            numero_controle,
+            observacao,
+        )
+
     def visible_areas(self):
         return ["CONTROLE GERAL", "PRODUCAO", "GALVANIZACAO", "EXPEDICAO", "ALMOXARIFADO"]
 
@@ -134,6 +146,17 @@ class FiscalReadOnlyPageTests(unittest.TestCase):
         self.assertGreater(page.model.rowCount(), 0)
         self.assertEqual(page.items_model.rowCount(), 2)
 
+    def test_fiscal_page_exposes_manual_emission_button_for_allowed_user(self):
+        self.create_fiscal_process("CP02008A")
+        page = FiscalPage(self.service)
+        page.refresh()
+
+        buttons = {button.text().lower(): button for button in page.findChildren(QPushButton)}
+
+        self.assertIn("registrar emissao fiscal", buttons)
+        self.assertTrue(buttons["registrar emissao fiscal"].isEnabled())
+
+    @unittest.skip("Fase 4 habilita registro fiscal manual controlado por permissao.")
     def test_fiscal_page_has_no_active_emission_buttons(self):
         self.create_fiscal_process("CP02008")
         page = FiscalPage(self.service)

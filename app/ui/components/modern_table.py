@@ -89,6 +89,7 @@ class ModernTable(QTableView):
         self.setWordWrap(True)
         self.setToolTip("Clique no icone da primeira coluna para abrir as acoes da proposta.")
         self.setMouseTracking(True)
+        self.status_shortcut_enabled = True
 
     def setModel(self, model):
         super().setModel(model)
@@ -152,7 +153,7 @@ class ModernTable(QTableView):
 
     def mousePressEvent(self, event):
         index = self.indexAt(event.position().toPoint())
-        if index.isValid() and index.column() == 0:
+        if self.status_shortcut_enabled and index.isValid() and index.column() == 0:
             model = self.model()
             source_index = model.mapToSource(index) if hasattr(model, "mapToSource") else index
             process_id = model.sourceModel().process_id_at(source_index.row()) if hasattr(model, "sourceModel") else model.process_id_at(source_index.row())
@@ -163,5 +164,6 @@ class ModernTable(QTableView):
 
     def mouseMoveEvent(self, event):
         index = self.indexAt(event.position().toPoint())
-        self.setCursor(Qt.PointingHandCursor if index.isValid() and index.column() == 0 else Qt.ArrowCursor)
+        shortcut_cell = self.status_shortcut_enabled and index.isValid() and index.column() == 0
+        self.setCursor(Qt.PointingHandCursor if shortcut_cell else Qt.ArrowCursor)
         super().mouseMoveEvent(event)

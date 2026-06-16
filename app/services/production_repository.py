@@ -559,6 +559,7 @@ PROFILE_OPTIONS = [
     ("galvanizacao", "Galvanizacao"),
     ("expedicao", "Expedicao"),
     ("almoxarifado", "Almoxarifado"),
+    ("fiscal", "Fiscal"),
     ("consulta", "Consulta"),
 ]
 
@@ -571,6 +572,7 @@ PROFILE_DEFAULT_AREAS = {
     "galvanizacao": ["GALVANIZACAO"],
     "expedicao": ["EXPEDICAO"],
     "almoxarifado": ["ALMOXARIFADO"],
+    "fiscal": [],
     "consulta": [],
     "operador": list(AREAS.keys()),
 }
@@ -881,6 +883,10 @@ def user_can_access_area(user, area):
 
 def user_can_mount_galvanization_load(user):
     return user_can_admin(user) or bool(user_areas(user) & {"EXPEDICAO", "GALVANIZACAO"})
+
+
+def user_can_register_fiscal(user):
+    return bool(user and (user_can_admin(user) or user["perfil"] == "fiscal"))
 
 
 def visible_area_names(user):
@@ -1763,6 +1769,167 @@ class Repository:
             (processo_id,),
         ).fetchone()
         return row is not None
+
+    def get_fiscal_process(self, fiscal_processo_id):
+        return self.conn.execute(
+            "SELECT * FROM fiscal_processos WHERE id = ?",
+            (fiscal_processo_id,),
+        ).fetchone()
+
+    def register_fiscal_emission(self, fiscal_processo_id, emissions, user, numero_controle="", observacao=""):
+        if not user_can_register_fiscal(user):
+            raise AppError("Seu usuario nao tem permissao para registrar emissao fiscal.")
+        fiscal = self.get_fiscal_process(fiscal_processo_id)
+        if not fiscal:
+            raise AppError("Controle fiscal nao encontrado.")
+        if fiscal["status_fiscal"] == "NOTA_FISCAL_EMITIDA":
+            raise AppError("Esta proposta ja esta totalmente faturada.")
+        emissions = emissions or []
+        if not emissions:
+            raise AppError("Selecione pelo menos um item para registrar emissao fiscal.")
+
+        item_rows = {
+            int(row["id"]): row
+            for row in self.conn.execute(
+                "SELECT * FROM fiscal_itens WHERE fiscal_processo_id = ?",
+                (fiscal_processo_id,),
+            ).fetchall()
+        }
+        prepared = []
+        for entry in emissions:
+            item_id = int(entry.get("fiscal_item_id") or entry.get("item_id") or 0)
+            if item_id not in item_rows:
+                raise AppError("Item fiscal invalido para esta proposta.")
+            item = item_rows[item_id]
+            quantity = float(entry.get("quantidade_emitida") or 0)
+            weight = float(entry.get("peso_emitido") or 0)
+            if quantity < 0:
+                raise AppError("Quantidade emitida nao pode ser negativa.")
+            if weight < 0:
+                raise AppError("Peso emitido nao pode ser negativo.")
+            quantity_balance = float(item["quantidade_total"] or 0) - float(item["quantidade_faturada"] or 0)
+            weight_balance = float(item["peso_total"] or 0) - float(item["peso_faturado"] or 0)
+            if quantity > quantity_balance + 0.000001:
+                raise AppError("Quantidade emitida nao pode ser maior que o saldo.")
+            if weight > weight_balance + 0.000001:
+                raise AppError("Peso emitido nao pode ser maior que o saldo.")
+            if quantity == 0 and weight == 0:
+                continue
+            prepared.append((item, quantity, weight))
+
+        if not prepared:
+            raise AppError("Informe quantidade ou peso para pelo menos um item.")
+
+        old_status = fiscal["status_fiscal"] or ""
+        timestamp = now_br()
+        try:
+            emission_id = self.conn.execute(
+                """
+                INSERT INTO fiscal_emissoes(
+                    fiscal_processo_id, numero_controle, tipo_emissao,
+                    data_emissao, usuario, observacao, created_at
+                ) VALUES (?, ?, 'PARCIAL', ?, ?, ?, ?)
+                """,
+                (
+                    fiscal_processo_id,
+                    (numero_controle or "").strip(),
+                    timestamp,
+                    user["login"],
+                    observacao or "",
+                    timestamp,
+                ),
+            ).lastrowid
+
+            for item, quantity, weight in prepared:
+                new_quantity = float(item["quantidade_faturada"] or 0) + quantity
+                new_weight = float(item["peso_faturado"] or 0) + weight
+                total_quantity = float(item["quantidade_total"] or 0)
+                total_weight = float(item["peso_total"] or 0)
+                quantity_done = new_quantity >= total_quantity - 0.000001
+                weight_done = total_weight == 0 or new_weight >= total_weight - 0.000001
+                if quantity_done and weight_done:
+                    item_status = "FATURADO"
+                elif new_quantity > 0 or new_weight > 0:
+                    item_status = "PARCIAL"
+                else:
+                    item_status = "PENDENTE"
+                self.conn.execute(
+                    """
+                    UPDATE fiscal_itens
+                    SET quantidade_faturada = ?, peso_faturado = ?,
+                        status_item_fiscal = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (new_quantity, new_weight, item_status, timestamp, item["id"]),
+                )
+                self.conn.execute(
+                    """
+                    INSERT INTO fiscal_emissao_itens(
+                        fiscal_emissao_id, item_id, quantidade_emitida,
+                        peso_emitido, created_at
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (emission_id, item["id"], quantity, weight, timestamp),
+                )
+
+            summary = self.conn.execute(
+                """
+                SELECT
+                    COUNT(*) AS total,
+                    SUM(CASE WHEN status_item_fiscal = 'FATURADO' THEN 1 ELSE 0 END) AS faturados,
+                    SUM(CASE WHEN quantidade_faturada > 0 OR peso_faturado > 0 THEN 1 ELSE 0 END) AS com_faturamento
+                FROM fiscal_itens
+                WHERE fiscal_processo_id = ?
+                """,
+                (fiscal_processo_id,),
+            ).fetchone()
+            total = int(summary["total"] or 0)
+            billed = int(summary["faturados"] or 0)
+            with_billing = int(summary["com_faturamento"] or 0)
+            new_status = "NOTA_FISCAL_EMITIDA" if total and billed == total else "NOTA_FISCAL_PARCIAL"
+            emission_type = "TOTAL" if new_status == "NOTA_FISCAL_EMITIDA" and with_billing else "PARCIAL"
+            self.conn.execute(
+                "UPDATE fiscal_emissoes SET tipo_emissao = ? WHERE id = ?",
+                (emission_type, emission_id),
+            )
+            self.conn.execute(
+                """
+                UPDATE fiscal_processos
+                SET status_fiscal = ?, data_ultima_emissao = ?,
+                    emitido_por = ?, observacao = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    new_status,
+                    timestamp,
+                    user["login"],
+                    observacao or "",
+                    timestamp,
+                    fiscal_processo_id,
+                ),
+            )
+            self.conn.execute(
+                """
+                INSERT INTO fiscal_movimentacoes(
+                    fiscal_processo_id, processo_id, tipo_movimento,
+                    status_anterior, status_novo, usuario, data_hora, observacao
+                ) VALUES (?, ?, 'EMISSAO_FISCAL', ?, ?, ?, ?, ?)
+                """,
+                (
+                    fiscal_processo_id,
+                    fiscal["processo_id"],
+                    old_status,
+                    new_status,
+                    user["login"],
+                    timestamp,
+                    observacao or "",
+                ),
+            )
+            self.conn.commit()
+            return emission_id
+        except Exception:
+            self.conn.rollback()
+            raise
 
     def process_main_id(self, process):
         return int(process["processo_pai_id"] or process["id"])

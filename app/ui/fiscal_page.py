@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QRegularExpression, Qt
-from PySide6.QtWidgets import QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QVBoxLayout, QWidget
 
 from app.models.fiscal_items_table_model import FiscalItemsTableModel
 from app.models.fiscal_table_model import FiscalProcessTableModel
 from app.ui.components.kpi_card import KpiCard
 from app.ui.components.modern_button import ModernButton
 from app.ui.components.modern_table import ModernTable, ProcessFilterProxy
+from app.ui.fiscal_emission_dialog import FiscalEmissionDialog
 
 
 class FiscalPage(QWidget):
@@ -40,6 +41,12 @@ class FiscalPage(QWidget):
         header = QHBoxLayout()
         header.addWidget(title)
         header.addStretch()
+        self.register_btn = ModernButton("Registrar emissao fiscal", "status", accent=True)
+        self.register_btn.clicked.connect(self.register_emission)
+        if not self.service.can_register_fiscal_emission():
+            self.register_btn.setEnabled(False)
+            self.register_btn.setToolTip("Disponivel apenas para administrador ou perfil Fiscal.")
+        header.addWidget(self.register_btn)
         fl.addLayout(header)
         fl.addWidget(caption)
 
@@ -91,6 +98,7 @@ class FiscalPage(QWidget):
         root.addLayout(cards)
 
         self.table = ModernTable(self.service)
+        self.table.status_shortcut_enabled = False
         self.table.setModel(self.proxy)
         self.table.setToolTip("Selecione uma proposta para visualizar os itens fiscais.")
         self.table.selectionModel().selectionChanged.connect(self.load_selected_items)
@@ -104,6 +112,7 @@ class FiscalPage(QWidget):
         details_title = QLabel("Itens fiscais da proposta selecionada")
         details_title.setObjectName("FilterTitle")
         self.items_table = ModernTable(self.service)
+        self.items_table.status_shortcut_enabled = False
         self.items_table.setModel(self.items_model)
         self.items_table.setToolTip("Itens fiscais apenas para consulta nesta fase.")
         details_layout.addWidget(details_title)
@@ -156,6 +165,15 @@ class FiscalPage(QWidget):
         source_index = self.proxy.mapToSource(selected[0])
         return self.model.fiscal_id_at(source_index.row())
 
+    def selected_fiscal_row(self) -> dict | None:
+        selected = self.table.selectionModel().selectedRows()
+        if not selected:
+            return None
+        source_index = self.proxy.mapToSource(selected[0])
+        if 0 <= source_index.row() < len(self.model.rows):
+            return self.model.rows[source_index.row()]
+        return None
+
     def load_selected_items(self):
         fiscal_id = self.selected_fiscal_id()
         if not fiscal_id:
@@ -163,3 +181,19 @@ class FiscalPage(QWidget):
             return
         self.items_model.set_rows(self.service.fiscal_items(fiscal_id))
         self.items_table.apply_column_layout()
+
+    def register_emission(self):
+        if not self.service.can_register_fiscal_emission():
+            QMessageBox.warning(self, "Fiscal", "Seu usuario nao tem permissao para registrar emissao fiscal.")
+            return
+        fiscal_row = self.selected_fiscal_row()
+        if not fiscal_row:
+            QMessageBox.warning(self, "Fiscal", "Selecione uma proposta fiscal.")
+            return
+        if fiscal_row.get("status_fiscal") == "NOTA_FISCAL_EMITIDA":
+            QMessageBox.information(self, "Fiscal", "Esta proposta ja esta totalmente faturada.")
+            return
+        dialog = FiscalEmissionDialog(self.service, fiscal_row, self)
+        if dialog.exec():
+            self.refresh()
+            QMessageBox.information(self, "Fiscal", "Emissao fiscal registrada com sucesso.")
