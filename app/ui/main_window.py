@@ -9,6 +9,7 @@ from app.ui.data_page import DataPage
 from app.ui.dashboard_page import DashboardPage
 from app.ui.fiscal_page import FiscalPage
 from app.ui.login_dialog import LoginDialog
+from app.ui.operational_reports_page import OperationalReportsPage
 from app.ui.process_page import ProcessPage
 from app.ui.settings_page import SettingsPage
 from app.ui.sidebar import Sidebar
@@ -94,6 +95,9 @@ class MainWindow(QMainWindow):
 
         self.pages["FISCAL"] = FiscalPage(self.service)
         self.stack.addWidget(self.pages["FISCAL"])
+
+        self.pages["RELATORIOS OPERACIONAIS"] = OperationalReportsPage(self.service)
+        self.stack.addWidget(self.pages["RELATORIOS OPERACIONAIS"])
 
         self.pages["HISTORICO"] = DataPage(
             "Historico",
