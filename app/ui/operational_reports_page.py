@@ -4,17 +4,24 @@ import csv
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QPoint, Qt
+from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QApplication,
     QComboBox,
+    QDialog,
     QFileDialog,
     QFrame,
     QGridLayout,
+    QHeaderView,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QMessageBox,
-    QScrollArea,
+    QMenu,
+    QTableWidget,
+    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -229,6 +236,9 @@ class OperationalReportsPage(QWidget):
         self.table = ModernTable(self.service)
         self.table.status_shortcut_enabled = False
         self.table.setModel(self.model)
+        self.table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self.open_row_menu)
+        self.table.doubleClicked.connect(self.open_selected_details)
         root.addWidget(self.table, 1)
 
         self._sync_report_types()
@@ -300,9 +310,226 @@ class OperationalReportsPage(QWidget):
             unit = card.get("unidade", "")
             display = f"{value} {unit}".strip()
             widget = KpiCard(card.get("titulo", "-"), display, "reports", colors[index % len(colors)])
+            widget.setCursor(Qt.PointingHandCursor)
+            widget.setToolTip("Clique para ver os registros relacionados.")
+            widget.mousePressEvent = lambda event, selected=card: self.open_card_drilldown(selected)
             self.cards_layout.addWidget(widget)
             self._card_widgets.append(widget)
         self.cards_layout.addStretch()
+
+    def open_card_drilldown(self, card: dict[str, Any]) -> None:
+        if not self.current_report:
+            return
+        area = self.area.currentData() or "PRODUCAO"
+        title = str(card.get("titulo") or "")
+        rows = self._filter_rows_for_card(area, title, self.current_report.get("linhas") or [])
+        columns = TABLE_COLUMNS.get(area) or self._columns_from_rows(rows)
+        dialog = OperationalRowsDialog(
+            self.service,
+            f"{title} - {area.title()}",
+            rows,
+            columns,
+            self,
+        )
+        dialog.exec()
+
+    def _filter_rows_for_card(self, area: str, title: str, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        normalized = _normalize_text(title)
+        if area == "PRODUCAO":
+            if "completa" in normalized:
+                return [row for row in rows if row.get("status_producao") == "FINALIZADO"]
+            if "parcial" in normalized:
+                return [row for row in rows if row.get("status_producao") == "FINALIZADO_PARCIAL"]
+            if "remanej" in normalized or "pend" in normalized:
+                return [
+                    row for row in rows
+                    if row.get("status_producao") == "ITEM_PENDENTE_FABRICACAO" or row.get("origem_remanejamento")
+                ]
+        if area == "GALVANIZACAO":
+            if "aberta" in normalized:
+                return [row for row in rows if row.get("status_carga") != "RETORNADA_GALVANIZACAO"]
+            if "finalizada" in normalized or "retornado" in normalized:
+                return [row for row in rows if row.get("status_carga") == "RETORNADA_GALVANIZACAO"]
+            if "pend" in normalized:
+                return [row for row in rows if float(row.get("peso_pendente") or 0) > 0 or row.get("status_carga") != "RETORNADA_GALVANIZACAO"]
+        if area == "EXPEDICAO":
+            if "completa" in normalized or "entregue" in normalized:
+                return [row for row in rows if row.get("status_expedicao") == "ENTREGUE" or row.get("status_geral") == "ENTREGUE"]
+            if "parcia" in normalized:
+                return [row for row in rows if row.get("status_expedicao") == "ENTREGUE_PARCIAL"]
+            if "pend" in normalized:
+                return [row for row in rows if row.get("status_expedicao") not in ("ENTREGUE", "ENTREGUE_PARCIAL", "")]
+        if area == "ALMOXARIFADO":
+            if "pend" in normalized:
+                return [row for row in rows if row.get("status_almoxarifado") in ("AGUARDANDO_CONFIRMACAO", "EM_SEPARACAO")]
+            if "separada" in normalized:
+                return [row for row in rows if row.get("status_almoxarifado") == "SEPARADO"]
+            if "sem parafuso" in normalized:
+                return [row for row in rows if row.get("status_almoxarifado") == "SEM_PARAFUSOS"]
+        if area == "REMANEJAMENTOS":
+            if "origem" in normalized:
+                return _unique_rows(rows, "processo_origem_id")
+            if "destino" in normalized:
+                return _unique_rows(rows, "processo_destino_id")
+            if "pend" in normalized:
+                return [row for row in rows if row.get("status_reposicao") == "ITEM_PENDENTE_FABRICACAO"]
+        return rows
+
+    def selected_row(self) -> dict[str, Any] | None:
+        selected = self.table.selectionModel().selectedRows()
+        if not selected:
+            return None
+        row = selected[0].row()
+        if 0 <= row < len(self.model.rows):
+            return self.model.rows[row]
+        return None
+
+    def open_row_menu(self, point: QPoint) -> None:
+        index = self.table.indexAt(point)
+        if index.isValid():
+            self.table.selectRow(index.row())
+        row = self.selected_row()
+        if not row:
+            return
+        menu = QMenu(self)
+        menu.addAction(QAction("Ver detalhes da proposta", self, triggered=lambda: self.show_process_details(row)))
+        menu.addAction(QAction("Ver itens", self, triggered=lambda: self.show_items(row)))
+        menu.addAction(QAction("Ver historico", self, triggered=lambda: self.show_history(row)))
+        menu.addAction(QAction("Ver remanejamentos", self, triggered=lambda: self.show_remanagements(row)))
+        menu.addAction(QAction("Ver carga de galvanizacao", self, triggered=lambda: self.show_load(row)))
+        menu.addAction(QAction("Ver situacao da expedicao", self, triggered=lambda: self.show_expedition(row)))
+        if (self.area.currentData() or "") == "REMANEJAMENTOS":
+            menu.addSeparator()
+            menu.addAction(QAction("Abrir proposta origem", self, triggered=lambda: self.show_related_process(row, "processo_origem_id")))
+            menu.addAction(QAction("Abrir proposta destino", self, triggered=lambda: self.show_related_process(row, "processo_destino_id")))
+        menu.addSeparator()
+        menu.addAction(QAction("Copiar numero da proposta", self, triggered=lambda: self.copy_proposal(row)))
+        menu.exec(self.table.viewport().mapToGlobal(point))
+
+    def open_selected_details(self, _index=None) -> None:
+        row = self.selected_row()
+        if row:
+            self.show_process_details(row)
+
+    def show_related_process(self, row: dict[str, Any], key: str) -> None:
+        process_id = _row_process_id(row, preferred_key=key)
+        if not process_id:
+            QMessageBox.information(self, "Relatorios Operacionais", "Nao foi possivel localizar esta proposta.")
+            return
+        OperationalProcessReadOnlyDialog(self.service, process_id, self).exec()
+
+    def show_process_details(self, row: dict[str, Any]) -> None:
+        process_id = _row_process_id(row)
+        if not process_id:
+            QMessageBox.information(self, "Relatorios Operacionais", "Nao foi possivel localizar a proposta.")
+            return
+        OperationalProcessReadOnlyDialog(self.service, process_id, self).exec()
+
+    def show_items(self, row: dict[str, Any]) -> None:
+        process_id = _row_process_id(row)
+        if not process_id:
+            QMessageBox.information(self, "Relatorios Operacionais", "Nao foi possivel localizar os itens.")
+            return
+        items = self.service.proposal_items(process_id)
+        self._show_table_dialog(
+            "Itens da proposta",
+            items,
+            [
+                ("numero_item", "Item"),
+                ("descricao", "Descricao"),
+                ("quantidade", "Qtd."),
+                ("peso", "Peso unit."),
+                ("produzido", "Produzido"),
+                ("galvanizado", "Galvanizado"),
+                ("entregue", "Entregue"),
+            ],
+        )
+
+    def show_history(self, row: dict[str, Any]) -> None:
+        process_id = _row_process_id(row)
+        if not process_id:
+            QMessageBox.information(self, "Relatorios Operacionais", "Nao foi possivel localizar o historico.")
+            return
+        self._show_table_dialog(
+            "Historico resumido",
+            self.service.process_history_rows(process_id),
+            [
+                ("area", "Area"),
+                ("status_anterior", "Anterior"),
+                ("status_novo", "Novo"),
+                ("data_hora", "Quando"),
+                ("usuario", "Usuario"),
+                ("observacao", "Observacao"),
+            ],
+        )
+
+    def show_remanagements(self, row: dict[str, Any]) -> None:
+        process_id = _row_process_id(row)
+        rows = self._remanagement_rows_for(row, process_id)
+        self._show_table_dialog(
+            "Remanejamentos relacionados",
+            rows,
+            [
+                ("data_hora", "Data"),
+                ("usuario", "Usuario"),
+                ("proposta_origem", "Origem"),
+                ("proposta_destino", "Destino"),
+                ("numero_item", "Item"),
+                ("item_descricao", "Descricao"),
+                ("quantidade", "Qtd."),
+                ("peso_remanejado", "Peso"),
+                ("observacao", "Observacao"),
+            ],
+        )
+
+    def _remanagement_rows_for(self, row: dict[str, Any], process_id: int | None) -> list[dict[str, Any]]:
+        if self.area.currentData() == "REMANEJAMENTOS" and row.get("remanejamento_id"):
+            return [row]
+        report = self.reports.gerar_relatorio_remanejamentos({})
+        rows = report.get("linhas") or []
+        if not process_id:
+            return rows
+        return [
+            item for item in rows
+            if int(item.get("processo_origem_id") or 0) == process_id
+            or int(item.get("processo_destino_id") or 0) == process_id
+        ]
+
+    def show_load(self, row: dict[str, Any]) -> None:
+        load_id = int(row.get("carga_id") or 0)
+        if not load_id:
+            process_id = _row_process_id(row)
+            loads = self.service.process_loads(process_id) if process_id else []
+            load_id = int(loads[0]["id"]) if loads else 0
+        if not load_id:
+            QMessageBox.information(self, "Relatorios Operacionais", "Esta linha nao possui carga de galvanizacao vinculada.")
+            return
+        OperationalLoadReadOnlyDialog(self.service, load_id, self).exec()
+
+    def show_expedition(self, row: dict[str, Any]) -> None:
+        process_id = _row_process_id(row)
+        process = self.service.get_process_dict(process_id) if process_id else {}
+        if not process:
+            QMessageBox.information(self, "Relatorios Operacionais", "Nao foi possivel localizar a proposta.")
+            return
+        lines = [
+            ("Proposta", process.get("proposta")),
+            ("Cliente", process.get("cliente")),
+            ("Status expedicao", self.service.area_status_label("EXPEDICAO", process.get("status_expedicao") or "")),
+            ("Data separacao", process.get("data_separacao")),
+            ("Data retirada", process.get("data_retirada")),
+            ("Situacao fluxo", self.service.status_label(process.get("situacao_fluxo") or "")),
+        ]
+        text = "\n".join(f"{label}: {value or '-'}" for label, value in lines)
+        QMessageBox.information(self, "Situacao da expedicao", text)
+
+    def copy_proposal(self, row: dict[str, Any]) -> None:
+        proposal = row.get("proposta") or row.get("proposta_destino") or row.get("proposta_origem") or ""
+        QApplication.clipboard().setText(str(proposal))
+
+    def _show_table_dialog(self, title: str, rows: list[dict[str, Any]], columns: list[tuple[str, str]]) -> None:
+        dialog = OperationalRowsDialog(self.service, title, rows, columns, self)
+        dialog.exec()
 
     def _render_warnings(self, report: dict[str, Any]) -> None:
         reliability = str(report.get("confiabilidade") or "-").title()
@@ -353,3 +580,260 @@ class OperationalReportsPage(QWidget):
 def _contains_forbidden_financial_term(text: str) -> bool:
     normalized = str(text or "").lower()
     return any(term in normalized for term in FORBIDDEN_EXPORT_TERMS)
+
+
+class OperationalRowsDialog(QDialog):
+    def __init__(self, service, title: str, rows: list[dict[str, Any]], columns: list[tuple[str, str]], parent=None):
+        super().__init__(parent)
+        self.service = service
+        self.setWindowTitle(title)
+        self.resize(980, 540)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(16, 16, 16, 16)
+        root.setSpacing(10)
+        heading = QLabel(title)
+        heading.setStyleSheet("font-size: 18px; font-weight: 800;")
+        summary = QLabel(f"{len(rows)} registro(s) relacionado(s)")
+        summary.setObjectName("Caption")
+        root.addWidget(heading)
+        root.addWidget(summary)
+        table = QTableWidget(len(rows), len(columns))
+        table.setHorizontalHeaderLabels([label for _key, label in columns])
+        table.setAlternatingRowColors(True)
+        table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        table.verticalHeader().setVisible(False)
+        table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+        table.horizontalHeader().setStretchLastSection(True)
+        for row_index, data in enumerate(rows):
+            for col_index, (key, _label) in enumerate(columns):
+                value = _display_value(data.get(key))
+                cell = QTableWidgetItem(value)
+                cell.setToolTip(value)
+                cell.setTextAlignment(Qt.AlignVCenter | Qt.AlignLeft)
+                table.setItem(row_index, col_index, cell)
+        table.resizeColumnsToContents()
+        root.addWidget(table, 1)
+        close = ModernButton("Fechar", "clear")
+        close.clicked.connect(self.accept)
+        root.addWidget(close, 0, Qt.AlignRight)
+        if self.parent() and self.parent().window():
+            self.setStyleSheet(self.parent().window().styleSheet())
+
+
+class OperationalProcessReadOnlyDialog(QDialog):
+    def __init__(self, service, process_id: int, parent=None):
+        super().__init__(parent)
+        self.service = service
+        self.process_id = process_id
+        self.process = service.get_process_dict(process_id)
+        self.setWindowTitle("Detalhes da proposta")
+        self.resize(1040, 650)
+        self._build()
+        if parent and parent.window():
+            self.setStyleSheet(parent.window().styleSheet())
+
+    def _build(self) -> None:
+        root = QVBoxLayout(self)
+        root.setContentsMargins(16, 14, 16, 14)
+        root.setSpacing(12)
+        header = QFrame()
+        header.setObjectName("Panel")
+        hl = QVBoxLayout(header)
+        hl.setContentsMargins(16, 12, 16, 12)
+        title = QLabel(f"{self.process.get('proposta') or '-'} | {self.process.get('cliente') or '-'}")
+        title.setStyleSheet("font-size: 18px; font-weight: 800;")
+        subtitle = QLabel(
+            f"Obra/Site: {self.process.get('obra_site') or '-'} | Lote: {self.process.get('lote') or '-'} | "
+            f"Peso: {self.process.get('peso') or '-'} | Prazo: {self.process.get('prazo_entrega') or '-'}"
+        )
+        subtitle.setObjectName("Caption")
+        hl.addWidget(title)
+        hl.addWidget(subtitle)
+        root.addWidget(header)
+
+        body = QHBoxLayout()
+        body.setSpacing(12)
+        body.addWidget(self._status_panel(), 1)
+        body.addWidget(self._summary_panel(), 1)
+        root.addLayout(body)
+        root.addWidget(self._items_panel(), 1)
+        root.addWidget(self._history_panel(), 1)
+        close = ModernButton("Fechar", "clear")
+        close.clicked.connect(self.accept)
+        root.addWidget(close, 0, Qt.AlignRight)
+
+    def _panel(self, title: str) -> QFrame:
+        panel = QFrame()
+        panel.setObjectName("Panel")
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(14, 12, 14, 12)
+        label = QLabel(title)
+        label.setStyleSheet("font-size: 14px; font-weight: 800;")
+        layout.addWidget(label)
+        return panel
+
+    def _status_panel(self) -> QFrame:
+        panel = self._panel("Status por area")
+        layout = panel.layout()
+        statuses = [
+            ("Controle Geral", self.process.get("status_geral")),
+            ("Producao", self.process.get("status_producao")),
+            ("Galvanizacao", self.process.get("status_galvanizacao")),
+            ("Expedicao", self.process.get("status_expedicao")),
+            ("Almoxarifado", self.process.get("status_almoxarifado")),
+        ]
+        for area, status in statuses:
+            line = QLabel(f"{area}: {self.service.area_status_label(area.upper(), status or '') if status else '-'}")
+            line.setWordWrap(True)
+            layout.addWidget(line)
+        layout.addStretch()
+        return panel
+
+    def _summary_panel(self) -> QFrame:
+        panel = self._panel("Resumo operacional")
+        layout = panel.layout()
+        rows = [
+            ("Tipo", self.process.get("tipo_processo")),
+            ("Peso/Saldo", self.service.weight_progress_text(self.process_id)),
+            ("Origem remanejamento", self.process.get("origem_remanejamento")),
+            ("Obs. remanejamento", self.process.get("observacao_remanejamento")),
+            ("Atualizado por", self.process.get("atualizado_por")),
+            ("Atualizado em", self.process.get("atualizado_em")),
+        ]
+        for label, value in rows:
+            text = QLabel(f"{label}: {value or '-'}")
+            text.setWordWrap(True)
+            layout.addWidget(text)
+        layout.addStretch()
+        return panel
+
+    def _items_panel(self) -> QFrame:
+        items = self.service.proposal_items(self.process_id)
+        panel = self._panel(f"Itens da proposta ({len(items)})")
+        table = QTableWidget(len(items), 7)
+        table.setHorizontalHeaderLabels(["Item", "Descricao", "Qtd.", "Peso", "Produzido", "Galvanizado", "Entregue"])
+        table.setAlternatingRowColors(True)
+        table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        table.verticalHeader().setVisible(False)
+        table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        for row, item in enumerate(items):
+            values = [
+                item.get("numero_item"),
+                item.get("descricao"),
+                item.get("quantidade"),
+                f"{float(item.get('peso') or 0):g} kg",
+                "Sim" if item.get("produzido") else "Nao",
+                "Sim" if item.get("galvanizado") else "Nao",
+                "Sim" if item.get("entregue") else "Nao",
+            ]
+            for col, value in enumerate(values):
+                table.setItem(row, col, QTableWidgetItem(str(value or "-")))
+        panel.layout().addWidget(table)
+        return panel
+
+    def _history_panel(self) -> QFrame:
+        history = self.service.process_history_rows(self.process_id)[:20]
+        panel = self._panel(f"Historico resumido ({len(history)})")
+        table = QTableWidget(len(history), 5)
+        table.setHorizontalHeaderLabels(["Area", "Anterior", "Novo", "Quando", "Usuario"])
+        table.setAlternatingRowColors(True)
+        table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        table.verticalHeader().setVisible(False)
+        table.horizontalHeader().setStretchLastSection(True)
+        for row, item in enumerate(history):
+            values = [item.get("area"), item.get("status_anterior"), item.get("status_novo"), item.get("data_hora"), item.get("usuario")]
+            for col, value in enumerate(values):
+                table.setItem(row, col, QTableWidgetItem(str(value or "-")))
+        panel.layout().addWidget(table)
+        return panel
+
+
+class OperationalLoadReadOnlyDialog(QDialog):
+    def __init__(self, service, load_id: int, parent=None):
+        super().__init__(parent)
+        self.service = service
+        self.load_id = load_id
+        self.load = service.get_galvanization_load_dict(load_id)
+        self.setWindowTitle(f"Carga de galvanizacao {load_id}")
+        self.resize(980, 560)
+        self._build()
+        if parent and parent.window():
+            self.setStyleSheet(parent.window().styleSheet())
+
+    def _build(self) -> None:
+        root = QVBoxLayout(self)
+        root.setContentsMargins(16, 16, 16, 16)
+        title = QLabel(
+            f"Carga {self.load_id} | {self.service.load_status_label(self.load.get('status') or '')} | "
+            f"Motorista: {self.load.get('motorista') or '-'}"
+        )
+        title.setStyleSheet("font-size: 18px; font-weight: 800;")
+        root.addWidget(title)
+        proposals = self.service.galvanization_load_items(self.load_id)
+        table = QTableWidget(len(proposals), 6)
+        table.setHorizontalHeaderLabels(["Proposta", "Cliente", "Peso total", "Peso enviado", "Parcial", "Itens"])
+        table.setAlternatingRowColors(True)
+        table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        table.verticalHeader().setVisible(False)
+        table.horizontalHeader().setStretchLastSection(True)
+        for row, data in enumerate(proposals):
+            process_id = int(data.get("processo_id") or 0)
+            items = self.service.galvanization_load_proposal_items(self.load_id, process_id) if process_id else []
+            values = [
+                data.get("proposta"),
+                data.get("cliente"),
+                _display_value(data.get("peso_total_proposta")),
+                _display_value(data.get("peso_enviado")),
+                "Sim" if data.get("parcial") else "Nao",
+                sum(int(item.get("quantidade") or 1) for item in items),
+            ]
+            for col, value in enumerate(values):
+                table.setItem(row, col, QTableWidgetItem(str(value or "-")))
+        root.addWidget(table, 1)
+        close = ModernButton("Fechar", "clear")
+        close.clicked.connect(self.accept)
+        root.addWidget(close, 0, Qt.AlignRight)
+
+
+def _row_process_id(row: dict[str, Any], preferred_key: str = "") -> int | None:
+    keys = [preferred_key] if preferred_key else []
+    keys.extend(["processo_id", "id", "processo_destino_id", "processo_origem_id"])
+    for key in keys:
+        if not key:
+            continue
+        try:
+            value = int(row.get(key) or 0)
+        except (TypeError, ValueError):
+            value = 0
+        if value:
+            return value
+    return None
+
+
+def _display_value(value: Any) -> str:
+    if value is None or value == "":
+        return "-"
+    if isinstance(value, float):
+        return f"{value:g}"
+    return str(value)
+
+
+def _normalize_text(value: str) -> str:
+    text = str(value or "").lower()
+    replacements = {"ç": "c", "ã": "a", "á": "a", "é": "e", "í": "i", "ó": "o", "ú": "u", "ê": "e"}
+    for src, dst in replacements.items():
+        text = text.replace(src, dst)
+    return text
+
+
+def _unique_rows(rows: list[dict[str, Any]], key: str) -> list[dict[str, Any]]:
+    seen = set()
+    result = []
+    for row in rows:
+        value = row.get(key)
+        if value in seen:
+            continue
+        seen.add(value)
+        result.append(row)
+    return result

@@ -10,10 +10,13 @@ from unittest.mock import patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QPushButton
 
 from app.services.migration_runner import apply_migrations
 from app.services.production_repository import initialize_database
 from app.ui.operational_reports_page import OperationalReportsPage
+from app.ui.operational_reports_page import OperationalLoadReadOnlyDialog
+from app.ui.operational_reports_page import OperationalProcessReadOnlyDialog
 from app.ui.sidebar import Sidebar
 
 
@@ -49,6 +52,70 @@ class OperationalUiService:
 
     def close(self):
         pass
+
+    def get_process_dict(self, process_id):
+        row = self.conn.execute("SELECT * FROM processos WHERE id = ?", (process_id,)).fetchone()
+        return dict(row) if row else {}
+
+    def proposal_items(self, process_id):
+        rows = self.conn.execute(
+            """
+            SELECT * FROM proposta_itens
+            WHERE processo_atual_id = ? OR processo_principal_id = ?
+            ORDER BY numero_item, id
+            """,
+            (process_id, process_id),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def process_history_rows(self, process_id):
+        rows = self.conn.execute(
+            "SELECT * FROM historico_status WHERE processo_id = ? ORDER BY id DESC",
+            (process_id,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def process_loads(self, process_id):
+        rows = self.conn.execute(
+            """
+            SELECT c.*
+            FROM cargas_galvanizacao c
+            JOIN cargas_galvanizacao_itens i ON i.carga_id = c.id
+            WHERE i.processo_id = ?
+            ORDER BY c.id DESC
+            """,
+            (process_id,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_galvanization_load_dict(self, load_id):
+        row = self.conn.execute("SELECT * FROM cargas_galvanizacao WHERE id = ?", (load_id,)).fetchone()
+        return dict(row) if row else {}
+
+    def galvanization_load_items(self, load_id):
+        rows = self.conn.execute(
+            "SELECT * FROM cargas_galvanizacao_itens WHERE carga_id = ? ORDER BY id",
+            (load_id,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def galvanization_load_proposal_items(self, load_id, process_id):
+        _ = load_id
+        return self.proposal_items(process_id)
+
+    def weight_progress_text(self, process_id):
+        process = self.get_process_dict(process_id)
+        return str(process.get("peso") or "-")
+
+    def area_status_label(self, area, status):
+        _ = area
+        return status or "-"
+
+    def status_label(self, status):
+        return status or "-"
+
+    def load_status_label(self, status):
+        return status or "-"
 
 
 class OperationalReportsPageTests(unittest.TestCase):
@@ -135,6 +202,74 @@ class OperationalReportsPageTests(unittest.TestCase):
         self.assertTrue(csv_path.exists())
         self.assertEqual(self.conn.total_changes, before)
 
+    def test_card_drilldown_filters_related_rows_without_writing(self):
+        page = OperationalReportsPage(self.service)
+        page.refresh()
+        before = self.conn.total_changes
+
+        rows = page._filter_rows_for_card("PRODUCAO", "Producao completa", page.current_report["linhas"])
+
+        self.assertEqual([row["proposta"] for row in rows], ["CP20001"])
+        self.assertEqual(self.conn.total_changes, before)
+
+    def test_row_actions_can_show_readonly_details_items_history_and_load(self):
+        page = OperationalReportsPage(self.service)
+        page.refresh()
+        row = page.model.rows[0]
+        before = self.conn.total_changes
+
+        with patch("app.ui.operational_reports_page.OperationalProcessReadOnlyDialog.exec", return_value=0) as details:
+            page.show_process_details(row)
+        with patch("app.ui.operational_reports_page.OperationalRowsDialog.exec", return_value=0) as rows_dialog:
+            page.show_items(row)
+            page.show_history(row)
+            page.show_remanagements(row)
+        page.area.setCurrentIndex(1)
+        page.refresh()
+        with patch("app.ui.operational_reports_page.OperationalLoadReadOnlyDialog.exec", return_value=0) as load_dialog:
+            page.show_load(page.model.rows[0])
+
+        self.assertTrue(details.called)
+        self.assertGreaterEqual(rows_dialog.call_count, 3)
+        self.assertTrue(load_dialog.called)
+        self.assertEqual(self.conn.total_changes, before)
+
+    def test_remanagement_navigation_opens_origin_and_destination(self):
+        page = OperationalReportsPage(self.service)
+        page.area.setCurrentIndex(4)
+        page.refresh()
+        before = self.conn.total_changes
+
+        with patch("app.ui.operational_reports_page.OperationalProcessReadOnlyDialog.exec", return_value=0) as details:
+            page.show_related_process(page.model.rows[0], "processo_origem_id")
+            page.show_related_process(page.model.rows[0], "processo_destino_id")
+
+        self.assertEqual(details.call_count, 2)
+        self.assertEqual(self.conn.total_changes, before)
+
+    def test_copy_proposal_uses_clipboard(self):
+        page = OperationalReportsPage(self.service)
+        page.refresh()
+
+        page.copy_proposal({"proposta": "CP20001"})
+
+        self.assertEqual(QApplication.clipboard().text(), "CP20001")
+
+    def test_readonly_detail_dialogs_build_without_operational_buttons_or_writes(self):
+        page = OperationalReportsPage(self.service)
+        page.refresh()
+        process_id = page.model.rows[0]["id"]
+        before = self.conn.total_changes
+
+        detail = OperationalProcessReadOnlyDialog(self.service, process_id, page)
+        load = OperationalLoadReadOnlyDialog(self.service, 1, page)
+
+        blocked_labels = {"Salvar", "Editar", "Alterar status", "Acoes", "Acoes em lote"}
+        button_texts = {button.text() for button in detail.findChildren(QPushButton)}
+        self.assertTrue(blocked_labels.isdisjoint(button_texts))
+        self.assertIn("Carga", load.windowTitle())
+        self.assertEqual(self.conn.total_changes, before)
+
     def test_sidebar_exposes_operational_reports_page(self):
         sidebar = Sidebar(self.service)
         received = []
@@ -193,6 +328,14 @@ class OperationalReportsPageTests(unittest.TestCase):
             ) VALUES (?, ?, ?, '13/06/2026 10:00:00', 'admin', 'Teste')
             """,
             (exp, stock, item),
+        )
+        self.conn.execute(
+            """
+            INSERT INTO historico_status(
+                processo_id, proposta, area, status_anterior, status_novo, data_hora, usuario, computador, observacao
+            ) VALUES (?, 'CP20001', 'PRODUCAO', 'AGUARDANDO_INICIO', 'FINALIZADO', '10/06/2026 09:00:00', 'admin', 'TESTE', 'Teste')
+            """,
+            (prod,),
         )
         self.conn.commit()
 
