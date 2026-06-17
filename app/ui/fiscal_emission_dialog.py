@@ -6,6 +6,8 @@ from PySide6.QtWidgets import (
     QDialog,
     QDoubleSpinBox,
     QFrame,
+    QGridLayout,
+    QHeaderView,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -29,7 +31,7 @@ class FiscalEmissionDialog(QDialog):
         self.quantity_inputs: dict[int, QDoubleSpinBox] = {}
         self.weight_inputs: dict[int, QDoubleSpinBox] = {}
         self.setWindowTitle("Registrar emissao fiscal")
-        self.setMinimumSize(980, 620)
+        self.setMinimumSize(1080, 650)
         self._build()
 
     def _build(self):
@@ -47,18 +49,27 @@ class FiscalEmissionDialog(QDialog):
 
         fields = QFrame()
         fields.setObjectName("Panel")
-        field_layout = QHBoxLayout(fields)
+        field_layout = QGridLayout(fields)
         field_layout.setContentsMargins(14, 12, 14, 12)
-        field_layout.setSpacing(12)
+        field_layout.setHorizontalSpacing(12)
+        field_layout.setVerticalSpacing(6)
         self.control_number = QLineEdit()
         self.control_number.setPlaceholderText("Numero da NF ou controle interno")
+        self.control_number.setMinimumWidth(260)
         self.observation = QTextEdit()
         self.observation.setPlaceholderText("Observacao fiscal")
-        self.observation.setMaximumHeight(64)
-        field_layout.addWidget(QLabel("NF/Controle"))
-        field_layout.addWidget(self.control_number, 1)
-        field_layout.addWidget(QLabel("Observacao"))
-        field_layout.addWidget(self.observation, 2)
+        self.observation.setMinimumHeight(70)
+        self.observation.setMaximumHeight(78)
+        nf_label = QLabel("NF/Controle")
+        nf_label.setObjectName("FieldLabel")
+        obs_label = QLabel("Observacao")
+        obs_label.setObjectName("FieldLabel")
+        field_layout.addWidget(nf_label, 0, 0)
+        field_layout.addWidget(self.control_number, 0, 1)
+        field_layout.addWidget(obs_label, 0, 2)
+        field_layout.addWidget(self.observation, 0, 3)
+        field_layout.setColumnStretch(1, 1)
+        field_layout.setColumnStretch(3, 3)
         root.addWidget(fields)
 
         self.table = QTableWidget(0, 9)
@@ -77,7 +88,8 @@ class FiscalEmissionDialog(QDialog):
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.verticalHeader().setVisible(False)
-        self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.horizontalHeader().setStretchLastSection(False)
+        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         root.addWidget(self.table, 1)
         self._populate_items()
 
@@ -118,12 +130,14 @@ class FiscalEmissionDialog(QDialog):
                 self.table.setItem(row_index, column, table_item)
 
             quantity = QDoubleSpinBox()
+            quantity.setMinimumWidth(96)
             quantity.setDecimals(3)
             quantity.setMinimum(0)
             quantity.setMaximum(max(0, quantity_balance))
             quantity.setSingleStep(1)
             quantity.setValue(0)
             weight = QDoubleSpinBox()
+            weight.setMinimumWidth(96)
             weight.setDecimals(3)
             weight.setMinimum(0)
             weight.setMaximum(max(0, weight_balance))
@@ -134,10 +148,9 @@ class FiscalEmissionDialog(QDialog):
             self.table.setCellWidget(row_index, 5, quantity)
             self.table.setCellWidget(row_index, 8, weight)
 
-        self.table.setColumnWidth(0, 70)
-        self.table.setColumnWidth(1, 260)
-        for column in range(2, 9):
-            self.table.setColumnWidth(column, 105)
+        widths = (68, 280, 92, 108, 92, 108, 108, 118, 108)
+        for column, width in enumerate(widths):
+            self.table.setColumnWidth(column, width)
 
     def mark_all_pending(self):
         for item in self.items:
