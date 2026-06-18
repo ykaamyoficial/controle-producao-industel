@@ -89,6 +89,7 @@ class ModernTable(QTableView):
         self.setWordWrap(True)
         self.setToolTip("Clique no icone da primeira coluna para abrir as acoes da proposta.")
         self.setMouseTracking(True)
+        self.status_shortcut_enabled = True
 
     def setModel(self, model):
         super().setModel(model)
@@ -123,6 +124,46 @@ class ModernTable(QTableView):
             "status_galvanizacao": 230,
             "status_expedicao": 220,
             "status_almoxarifado": 220,
+            "status_fiscal": 170,
+            "data_entrada_fiscal": 125,
+            "data_ultima_emissao": 130,
+            "quantidade_itens": 80,
+            "itens_pendentes": 95,
+            "itens_faturados": 95,
+            "peso_total": 110,
+            "peso_pendente": 125,
+            "peso_faturado": 120,
+            "pendencia_critica": 150,
+            "quantidade_total": 95,
+            "quantidade_faturada": 110,
+            "quantidade_pendente": 112,
+            "status_item_fiscal": 150,
+            "acoes": 72,
+            "alerta": 120,
+            "carga_id": 75,
+            "status_carga": 170,
+            "motorista": 130,
+            "data_prevista_retorno": 130,
+            "data_retorno": 115,
+            "criado_em": 150,
+            "data_final_producao": 130,
+            "data_retirada": 115,
+            "data_separacao": 115,
+            "total_itens": 85,
+            "itens_produzidos": 110,
+            "itens_entregues": 110,
+            "peso_total_itens": 125,
+            "peso_produzido_atual": 145,
+            "kg_entregue_atual": 125,
+            "origem_remanejamento": 145,
+            "proposta_origem": 130,
+            "proposta_destino": 130,
+            "cliente_origem": 140,
+            "cliente_destino": 140,
+            "numero_item": 75,
+            "item_descricao": 220,
+            "peso_remanejado": 130,
+            "proposta_reposicao": 145,
         }
         for index, (key, _label) in enumerate(columns):
             self.setColumnWidth(index, widths.get(key, 120))
@@ -138,7 +179,7 @@ class ModernTable(QTableView):
 
     def mousePressEvent(self, event):
         index = self.indexAt(event.position().toPoint())
-        if index.isValid() and index.column() == 0:
+        if self.status_shortcut_enabled and index.isValid() and index.column() == 0:
             model = self.model()
             source_index = model.mapToSource(index) if hasattr(model, "mapToSource") else index
             process_id = model.sourceModel().process_id_at(source_index.row()) if hasattr(model, "sourceModel") else model.process_id_at(source_index.row())
@@ -149,5 +190,6 @@ class ModernTable(QTableView):
 
     def mouseMoveEvent(self, event):
         index = self.indexAt(event.position().toPoint())
-        self.setCursor(Qt.PointingHandCursor if index.isValid() and index.column() == 0 else Qt.ArrowCursor)
+        shortcut_cell = self.status_shortcut_enabled and index.isValid() and index.column() == 0
+        self.setCursor(Qt.PointingHandCursor if shortcut_cell else Qt.ArrowCursor)
         super().mouseMoveEvent(event)

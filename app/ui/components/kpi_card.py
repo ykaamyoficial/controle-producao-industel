@@ -26,8 +26,11 @@ class KpiCard(QFrame):
         text_box = QVBoxLayout()
         label = QLabel(title)
         label.setObjectName("Caption")
-        number = QLabel(str(value))
-        number.setStyleSheet("font-size: 24px; font-weight: 800;")
+        self.number = QLabel(str(value))
+        self.number.setStyleSheet("font-size: 24px; font-weight: 800;")
         text_box.addWidget(label)
-        text_box.addWidget(number)
+        text_box.addWidget(self.number)
         layout.addLayout(text_box)
+
+    def set_value(self, value: str | int):
+        self.number.setText(str(value))

@@ -13,9 +13,11 @@ NAV_ITEMS = [
     ("GALVANIZACAO", "Galvanizacao", "galvanization"),
     ("EXPEDICAO", "Expedicao", "expedition"),
     ("ALMOXARIFADO", "Almoxarifado", "stock"),
+    ("FISCAL", "Fiscal", "fiscal"),
     ("PARCIAIS", "Parciais", "partial"),
     ("HISTORICO", "Historico", "history"),
     ("AUDITORIA", "Auditoria", "audit"),
+    ("RELATORIOS OPERACIONAIS", "Relatorios Operacionais", "reports"),
     ("RELATORIOS", "Relatorios", "reports"),
     ("CONFIGURACOES", "Configuracoes", "settings"),
 ]
@@ -55,7 +57,15 @@ class Sidebar(QFrame):
 
         visible = set(self.service.visible_areas())
         for key, label, icon in NAV_ITEMS:
-            if key in {"HISTORICO", "RELATORIOS", "CONFIGURACOES", "PAINEL GERAL", "PARCIAIS"} or key in visible:
+            if key in {
+                "HISTORICO",
+                "RELATORIOS OPERACIONAIS",
+                "RELATORIOS",
+                "CONFIGURACOES",
+                "PAINEL GERAL",
+                "PARCIAIS",
+                "FISCAL",
+            } or key in visible:
                 if key == "AUDITORIA" and self.service.user_profile() != "Administrador":
                     continue
                 btn = QPushButton(label)

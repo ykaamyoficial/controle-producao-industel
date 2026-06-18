@@ -71,11 +71,11 @@ class DashboardPage(QWidget):
             ("Entregues", data.get("Entregues", 0), "status", self.service.palette["success"]),
         ]
         self.cards = [CardIndicador(*definition, self.service.palette) for definition in definitions]
-        card_metrics = [
+        card_targets = [
             "Ativas", "Vencidos", "Prox. 7 dias", "Producao", "Galvanizacao", "Expedicao",
             "Pend. remanej.", "Entregues",
         ]
-        for card, metric in zip(self.cards, card_metrics):
+        for card, metric in zip(self.cards, card_targets):
             card.metric_key = metric
             card.clicked.connect(lambda key, source="metric": self._show_related(source, key))
         areas = [

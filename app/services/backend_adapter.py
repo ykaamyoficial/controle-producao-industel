@@ -263,6 +263,63 @@ class BackendService:
             raise legacy.AppError("Usuario nao autenticado.")
         self.repo.mark_galvanization_load_returned(load_id, self.user)
 
+    def fiscal_rows(self, filters: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+        return [row_to_dict(row) for row in self.repo.list_fiscal_processes(filters)]
+
+    def fiscal_items(self, fiscal_processo_id: int) -> list[dict[str, Any]]:
+        return [row_to_dict(row) for row in self.repo.list_fiscal_items(fiscal_processo_id)]
+
+    def fiscal_indicators(self) -> dict[str, Any]:
+        return self.repo.fiscal_indicators()
+
+    def fiscal_indicator_rows(self, indicator: str) -> list[dict[str, Any]]:
+        return [row_to_dict(row) for row in self.repo.fiscal_indicator_rows(indicator)]
+
+    def fiscal_report_rows(self, report_type: str, filters: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+        return [row_to_dict(row) for row in self.repo.fiscal_report_rows(report_type, filters)]
+
+    def fiscal_movements(self, fiscal_processo_id: int) -> list[dict[str, Any]]:
+        return [row_to_dict(row) for row in self.repo.list_fiscal_movements(fiscal_processo_id)]
+
+    def fiscal_emissions(self, fiscal_processo_id: int) -> list[dict[str, Any]]:
+        return [row_to_dict(row) for row in self.repo.list_fiscal_emissions(fiscal_processo_id)]
+
+    def fiscal_critical_pending(self, process_id: int) -> bool:
+        return self.repo.identificar_pendencia_fiscal_critica(process_id)
+
+    def can_register_fiscal_emission(self) -> bool:
+        return bool(self.user and legacy.user_can_register_fiscal(self.user))
+
+    def register_fiscal_emission(
+        self,
+        fiscal_processo_id: int,
+        emissions: list[dict[str, Any]],
+        numero_controle: str = "",
+        observacao: str = "",
+    ) -> int:
+        if not self.user:
+            raise legacy.AppError("Usuario nao autenticado.")
+        return self.repo.register_fiscal_emission(
+            fiscal_processo_id,
+            emissions,
+            self.user,
+            numero_controle=numero_controle,
+            observacao=observacao,
+        )
+
+    def fiscal_status_label(self, status: str) -> str:
+        labels = {
+            "FALTA_EMITIR_NOTA_FISCAL": "Falta emitir NF",
+            "NOTA_FISCAL_PARCIAL": "NF parcial",
+            "NOTA_FISCAL_EMITIDA": "NF emitida",
+            "FISCAL_CANCELADO": "Fiscal cancelado",
+            "PENDENTE": "Pendente",
+            "PARCIAL": "Parcial",
+            "FATURADO": "Faturado",
+            "CANCELADO": "Cancelado",
+        }
+        return labels.get(legacy.normalize_status(status or ""), status or "-")
+
     def early_delivery_destination_candidates(self, search: str = "") -> list[dict[str, Any]]:
         return [row_to_dict(row) for row in self.repo.list_early_delivery_destination_candidates(search)]
 

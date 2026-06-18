@@ -15,3 +15,6 @@ class ModernButton(QPushButton):
         if icon_name:
             self.setIcon(make_icon(icon_name, "#ffffff" if accent else "#2563eb"))
             self.setIconSize(QSize(18, 18))
+        if text:
+            icon_space = 28 if icon_name else 0
+            self.setMinimumWidth(max(82, self.fontMetrics().horizontalAdvance(text) + icon_space + 30))

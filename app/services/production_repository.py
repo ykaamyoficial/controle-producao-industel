@@ -559,6 +559,7 @@ PROFILE_OPTIONS = [
     ("galvanizacao", "Galvanizacao"),
     ("expedicao", "Expedicao"),
     ("almoxarifado", "Almoxarifado"),
+    ("fiscal", "Fiscal"),
     ("consulta", "Consulta"),
 ]
 
@@ -571,6 +572,7 @@ PROFILE_DEFAULT_AREAS = {
     "galvanizacao": ["GALVANIZACAO"],
     "expedicao": ["EXPEDICAO"],
     "almoxarifado": ["ALMOXARIFADO"],
+    "fiscal": [],
     "consulta": [],
     "operador": list(AREAS.keys()),
 }
@@ -881,6 +883,10 @@ def user_can_access_area(user, area):
 
 def user_can_mount_galvanization_load(user):
     return user_can_admin(user) or bool(user_areas(user) & {"EXPEDICAO", "GALVANIZACAO"})
+
+
+def user_can_register_fiscal(user):
+    return bool(user and (user_can_admin(user) or user["perfil"] == "fiscal"))
 
 
 def visible_area_names(user):
@@ -1549,6 +1555,716 @@ class Repository:
 
     def get_process_by_proposal(self, proposal):
         return self.conn.execute("SELECT * FROM processos WHERE proposta = ?", (format_proposal(proposal),)).fetchone()
+
+    def fiscal_entry_exists(self, process_id):
+        return self.conn.execute(
+            "SELECT id FROM fiscal_processos WHERE processo_id = ?",
+            (process_id,),
+        ).fetchone() is not None
+
+    def ensure_fiscal_entry_for_process(self, processo_id, usuario, observacao=None):
+        process = self.get_process(processo_id)
+        if not process:
+            raise AppError("Processo nao encontrado para entrada fiscal.")
+        if (process["status_galvanizacao"] or "") != "RETORNOU_GALVANIZACAO":
+            return None
+        if process["origem_remanejamento"] or (process["situacao_fluxo"] or "") == "PENDENTE_POR_REMANEJAMENTO":
+            return None
+        existing = self.conn.execute(
+            "SELECT * FROM fiscal_processos WHERE processo_id = ?",
+            (process["id"],),
+        ).fetchone()
+        if existing:
+            return existing["id"]
+
+        created_at = now_br()
+        fiscal_id = self.conn.execute(
+            """
+            INSERT INTO fiscal_processos(
+                processo_id, proposta, status_fiscal, data_entrada_fiscal,
+                observacao, created_at, updated_at
+            ) VALUES (?, ?, 'FALTA_EMITIR_NOTA_FISCAL', ?, ?, ?, ?)
+            """,
+            (
+                process["id"],
+                process["proposta"],
+                today_br(),
+                observacao or "",
+                created_at,
+                created_at,
+            ),
+        ).lastrowid
+        self.create_fiscal_items_from_process_items(process["id"], fiscal_id)
+        self.conn.execute(
+            """
+            INSERT INTO fiscal_movimentacoes(
+                fiscal_processo_id, processo_id, tipo_movimento, status_anterior,
+                status_novo, usuario, data_hora, observacao
+            ) VALUES (?, ?, 'ENTRADA_FISCAL', 'FORA_DO_FISCAL',
+                      'FALTA_EMITIR_NOTA_FISCAL', ?, ?, ?)
+            """,
+            (
+                fiscal_id,
+                process["id"],
+                usuario["login"],
+                now_br(),
+                observacao or "Entrada fiscal automatica pelo retorno da galvanizacao.",
+            ),
+        )
+        return fiscal_id
+
+    def create_fiscal_items_from_process_items(self, processo_id, fiscal_processo_id=None):
+        process = self.get_process(processo_id)
+        if not process:
+            raise AppError("Processo nao encontrado para itens fiscais.")
+        fiscal_id = fiscal_processo_id
+        if fiscal_id is None:
+            fiscal = self.conn.execute(
+                "SELECT id FROM fiscal_processos WHERE processo_id = ?",
+                (process["id"],),
+            ).fetchone()
+            if not fiscal:
+                raise AppError("Entrada fiscal nao encontrada para criar itens.")
+            fiscal_id = fiscal["id"]
+        created_at = now_br()
+        for item in self.list_proposal_items(process["id"]):
+            quantity = float(item["quantidade"] or 0)
+            unit_weight = float(item["peso"] or 0)
+            self.conn.execute(
+                """
+                INSERT OR IGNORE INTO fiscal_itens(
+                    fiscal_processo_id, processo_id, item_id, numero_item,
+                    descricao, quantidade_total, quantidade_faturada, peso_total,
+                    peso_faturado, status_item_fiscal, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, 0, 'PENDENTE', ?, ?)
+                """,
+                (
+                    fiscal_id,
+                    process["id"],
+                    item["id"],
+                    item["numero_item"],
+                    item["descricao"] or "",
+                    quantity,
+                    quantity * unit_weight,
+                    created_at,
+                    created_at,
+                ),
+            )
+
+    def list_fiscal_processes(self, filters=None):
+        filters = filters or {}
+        where = []
+        params = []
+        text = (filters.get("text") or "").strip()
+        if text:
+            like = f"%{text}%"
+            where.append("(fp.proposta LIKE ? OR p.cliente LIKE ? OR p.obra_site LIKE ?)")
+            params.extend([like, like, like])
+        status = (filters.get("status_fiscal") or "").strip()
+        if status:
+            where.append("fp.status_fiscal = ?")
+            params.append(status)
+        entry_date = (filters.get("data_entrada_fiscal") or "").strip()
+        if entry_date:
+            where.append("fp.data_entrada_fiscal = ?")
+            params.append(entry_date)
+        critical = filters.get("pendencia_critica")
+        if critical in (True, "1", "SIM", "sim"):
+            where.append("(p.status_expedicao = 'ENTREGUE' AND fp.status_fiscal <> 'NOTA_FISCAL_EMITIDA')")
+        overdue_fiscal = filters.get("mais_7_dias_sem_emissao")
+        if overdue_fiscal in (True, "1", "SIM", "sim"):
+            where.append(
+                """
+                fp.status_fiscal <> 'NOTA_FISCAL_EMITIDA'
+                AND COALESCE(fp.data_ultima_emissao, '') = ''
+                AND date(fp.data_entrada_fiscal) < date('now', '-7 days')
+                """
+            )
+        sql_where = " WHERE " + " AND ".join(where) if where else ""
+        return self.conn.execute(
+            f"""
+            SELECT
+                fp.id AS fiscal_processo_id,
+                fp.processo_id,
+                fp.proposta,
+                p.cliente,
+                p.obra_site,
+                fp.status_fiscal,
+                fp.data_entrada_fiscal,
+                fp.data_ultima_emissao,
+                p.status_expedicao,
+                COUNT(fi.id) AS quantidade_itens,
+                COALESCE(SUM(CASE WHEN fi.status_item_fiscal <> 'FATURADO' THEN 1 ELSE 0 END), 0) AS itens_pendentes,
+                COALESCE(SUM(CASE WHEN fi.status_item_fiscal = 'FATURADO' THEN 1 ELSE 0 END), 0) AS itens_faturados,
+                COALESCE(SUM(fi.peso_total), 0) AS peso_total,
+                COALESCE(SUM(fi.peso_faturado), 0) AS peso_faturado,
+                COALESCE(SUM(fi.peso_total - fi.peso_faturado), 0) AS peso_pendente,
+                CASE
+                    WHEN fp.status_fiscal <> 'NOTA_FISCAL_EMITIDA'
+                         AND COALESCE(fp.data_ultima_emissao, '') = ''
+                         AND date(fp.data_entrada_fiscal) < date('now', '-7 days')
+                    THEN 1 ELSE 0
+                END AS mais_7_dias_sem_emissao,
+                CASE
+                    WHEN p.status_expedicao = 'ENTREGUE'
+                         AND fp.status_fiscal <> 'NOTA_FISCAL_EMITIDA'
+                    THEN 1 ELSE 0
+                END AS pendencia_critica
+            FROM fiscal_processos fp
+            JOIN processos p ON p.id = fp.processo_id
+            LEFT JOIN fiscal_itens fi ON fi.fiscal_processo_id = fp.id
+            {sql_where}
+            GROUP BY fp.id
+            ORDER BY fp.data_entrada_fiscal DESC, fp.id DESC
+            """,
+            tuple(params),
+        ).fetchall()
+
+    def list_fiscal_items(self, fiscal_processo_id):
+        return self.conn.execute(
+            """
+            SELECT
+                id,
+                fiscal_processo_id,
+                processo_id,
+                item_id,
+                numero_item,
+                descricao,
+                quantidade_total,
+                quantidade_faturada,
+                quantidade_total - quantidade_faturada AS quantidade_pendente,
+                peso_total,
+                peso_faturado,
+                peso_total - peso_faturado AS peso_pendente,
+                status_item_fiscal
+            FROM fiscal_itens
+            WHERE fiscal_processo_id = ?
+            ORDER BY CAST(numero_item AS INTEGER), numero_item, id
+            """,
+            (fiscal_processo_id,),
+        ).fetchall()
+
+    def list_fiscal_movements(self, fiscal_processo_id):
+        return self.conn.execute(
+            """
+            SELECT
+                tipo_movimento,
+                status_anterior,
+                status_novo,
+                usuario,
+                data_hora,
+                observacao
+            FROM fiscal_movimentacoes
+            WHERE fiscal_processo_id = ?
+            ORDER BY data_hora DESC, id DESC
+            """,
+            (fiscal_processo_id,),
+        ).fetchall()
+
+    def list_fiscal_emissions(self, fiscal_processo_id):
+        return self.conn.execute(
+            """
+            SELECT
+                fe.id,
+                fe.numero_controle,
+                fe.tipo_emissao,
+                fe.data_emissao,
+                fe.usuario,
+                fe.observacao,
+                COUNT(fei.id) AS quantidade_itens,
+                COALESCE(SUM(fei.quantidade_emitida), 0) AS quantidade_emitida,
+                COALESCE(SUM(fei.peso_emitido), 0) AS peso_emitido
+            FROM fiscal_emissoes fe
+            LEFT JOIN fiscal_emissao_itens fei ON fei.fiscal_emissao_id = fe.id
+            WHERE fe.fiscal_processo_id = ?
+            GROUP BY fe.id
+            ORDER BY fe.data_emissao DESC, fe.id DESC
+            """,
+            (fiscal_processo_id,),
+        ).fetchall()
+
+    def fiscal_indicators(self):
+        rows = self.conn.execute(
+            """
+            SELECT
+                COALESCE(SUM(CASE WHEN status_fiscal = 'FALTA_EMITIR_NOTA_FISCAL' THEN 1 ELSE 0 END), 0) AS falta_emitir,
+                COALESCE(SUM(CASE WHEN status_fiscal = 'NOTA_FISCAL_PARCIAL' THEN 1 ELSE 0 END), 0) AS nf_parcial,
+                COALESCE(SUM(CASE WHEN status_fiscal = 'NOTA_FISCAL_EMITIDA' THEN 1 ELSE 0 END), 0) AS nf_emitida
+            FROM fiscal_processos
+            """
+        ).fetchone()
+        critical = self.conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM fiscal_processos fp
+            JOIN processos p ON p.id = fp.processo_id
+            WHERE p.status_expedicao = 'ENTREGUE'
+              AND fp.status_fiscal <> 'NOTA_FISCAL_EMITIDA'
+            """
+        ).fetchone()[0]
+        weights = self.conn.execute(
+            """
+            SELECT
+                COALESCE(SUM(CASE WHEN fp.status_fiscal <> 'NOTA_FISCAL_EMITIDA' THEN fi.peso_total - fi.peso_faturado ELSE 0 END), 0) AS peso_pendente,
+                COALESCE(SUM(fi.peso_faturado), 0) AS peso_faturado
+            FROM fiscal_processos fp
+            LEFT JOIN fiscal_itens fi ON fi.fiscal_processo_id = fp.id
+            """
+        ).fetchone()
+        older_than_7 = self.conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM fiscal_processos fp
+            WHERE fp.status_fiscal <> 'NOTA_FISCAL_EMITIDA'
+              AND COALESCE(fp.data_ultima_emissao, '') = ''
+              AND date(fp.data_entrada_fiscal) < date('now', '-7 days')
+            """
+        ).fetchone()[0]
+        return {
+            "falta_emitir": int(rows["falta_emitir"] or 0),
+            "nf_parcial": int(rows["nf_parcial"] or 0),
+            "nf_emitida": int(rows["nf_emitida"] or 0),
+            "pendencia_critica": int(critical or 0),
+            "entregues_sem_nf": int(critical or 0),
+            "peso_pendente": float(weights["peso_pendente"] or 0),
+            "peso_faturado": float(weights["peso_faturado"] or 0),
+            "mais_7_dias_sem_emissao": int(older_than_7 or 0),
+        }
+
+    def fiscal_indicator_rows(self, indicator):
+        filters = {}
+        if indicator == "falta_emitir":
+            filters["status_fiscal"] = "FALTA_EMITIR_NOTA_FISCAL"
+        elif indicator == "nf_parcial":
+            filters["status_fiscal"] = "NOTA_FISCAL_PARCIAL"
+        elif indicator == "nf_emitida":
+            filters["status_fiscal"] = "NOTA_FISCAL_EMITIDA"
+        elif indicator in ("pendencia_critica", "entregues_sem_nf"):
+            filters["pendencia_critica"] = "1"
+        elif indicator == "mais_7_dias_sem_emissao":
+            filters["mais_7_dias_sem_emissao"] = "1"
+        elif indicator == "peso_pendente":
+            return [row for row in self.list_fiscal_processes() if float(row["peso_pendente"] or 0) > 0]
+        elif indicator == "peso_faturado":
+            return [row for row in self.list_fiscal_processes() if float(row["peso_faturado"] or 0) > 0]
+        else:
+            return []
+        return self.list_fiscal_processes(filters)
+
+    def _fiscal_report_filters(self, filters, date_expression="fp.data_entrada_fiscal"):
+        filters = filters or {}
+        where = []
+        params = []
+        text = (filters.get("text") or "").strip()
+        if text:
+            like = f"%{text}%"
+            where.append("(fp.proposta LIKE ? OR p.cliente LIKE ? OR p.obra_site LIKE ?)")
+            params.extend([like, like, like])
+        proposal = (filters.get("proposta") or "").strip()
+        if proposal:
+            where.append("fp.proposta LIKE ?")
+            params.append(f"%{proposal}%")
+        client = (filters.get("cliente") or "").strip()
+        if client:
+            where.append("p.cliente LIKE ?")
+            params.append(f"%{client}%")
+        site = (filters.get("obra_site") or "").strip()
+        if site:
+            where.append("p.obra_site LIKE ?")
+            params.append(f"%{site}%")
+        status = (filters.get("status_fiscal") or "").strip()
+        if status:
+            where.append("fp.status_fiscal = ?")
+            params.append(status)
+        start = (filters.get("data_inicio") or "").strip()
+        if start:
+            where.append(f"date({date_expression}) >= date(?)")
+            params.append(start)
+        end = (filters.get("data_fim") or "").strip()
+        if end:
+            where.append(f"date({date_expression}) <= date(?)")
+            params.append(end)
+        if filters.get("pendencia_critica") in (True, "1", "SIM", "sim"):
+            where.append("(p.status_expedicao = 'ENTREGUE' AND fp.status_fiscal <> 'NOTA_FISCAL_EMITIDA')")
+        if filters.get("mais_7_dias_sem_emissao") in (True, "1", "SIM", "sim"):
+            where.append(
+                """
+                fp.status_fiscal <> 'NOTA_FISCAL_EMITIDA'
+                AND COALESCE(fp.data_ultima_emissao, '') = ''
+                AND date(fp.data_entrada_fiscal) < date('now', '-7 days')
+                """
+            )
+        return where, params
+
+    def gerar_relatorio_fiscal_pendencias(self, filters=None):
+        filters = dict(filters or {})
+        filters["status_fiscal"] = "FALTA_EMITIR_NOTA_FISCAL"
+        return self.gerar_relatorio_fiscal_processos(filters)
+
+    def gerar_relatorio_fiscal_emissoes(self, filters=None):
+        emission_date_expr = (
+            "CASE WHEN instr(fe.data_emissao, '/') > 0 "
+            "THEN date(substr(fe.data_emissao, 7, 4) || '-' || substr(fe.data_emissao, 4, 2) || '-' || substr(fe.data_emissao, 1, 2)) "
+            "ELSE date(fe.data_emissao) END"
+        )
+        where, params = self._fiscal_report_filters(filters, emission_date_expr)
+        sql_where = " WHERE " + " AND ".join(where) if where else ""
+        return self.conn.execute(
+            f"""
+            SELECT
+                fp.id AS fiscal_processo_id,
+                fp.processo_id,
+                fp.proposta,
+                p.cliente,
+                p.obra_site,
+                fp.status_fiscal,
+                fp.data_entrada_fiscal,
+                fe.data_emissao,
+                fe.numero_controle,
+                fe.tipo_emissao,
+                fe.usuario,
+                fe.observacao,
+                COUNT(fei.id) AS quantidade_itens,
+                COALESCE(SUM(fei.quantidade_emitida), 0) AS quantidade_emitida,
+                COALESCE(SUM(fei.peso_emitido), 0) AS peso_emitido
+            FROM fiscal_emissoes fe
+            JOIN fiscal_processos fp ON fp.id = fe.fiscal_processo_id
+            JOIN processos p ON p.id = fp.processo_id
+            LEFT JOIN fiscal_emissao_itens fei ON fei.fiscal_emissao_id = fe.id
+            {sql_where}
+            GROUP BY fe.id
+            ORDER BY fe.data_emissao DESC, fp.proposta
+            """,
+            tuple(params),
+        ).fetchall()
+
+    def gerar_relatorio_fiscal_por_cliente(self, filters=None):
+        where, params = self._fiscal_report_filters(filters)
+        sql_where = " WHERE " + " AND ".join(where) if where else ""
+        return self.conn.execute(
+            f"""
+            SELECT
+                p.cliente,
+                COUNT(DISTINCT fp.id) AS propostas,
+                COALESCE(SUM(CASE WHEN fp.status_fiscal = 'FALTA_EMITIR_NOTA_FISCAL' THEN 1 ELSE 0 END), 0) AS falta_emitir,
+                COALESCE(SUM(CASE WHEN fp.status_fiscal = 'NOTA_FISCAL_PARCIAL' THEN 1 ELSE 0 END), 0) AS nf_parcial,
+                COALESCE(SUM(CASE WHEN fp.status_fiscal = 'NOTA_FISCAL_EMITIDA' THEN 1 ELSE 0 END), 0) AS nf_emitida,
+                COALESCE(SUM(fi.peso_total), 0) AS peso_total,
+                COALESCE(SUM(fi.peso_faturado), 0) AS peso_faturado,
+                COALESCE(SUM(fi.peso_total - fi.peso_faturado), 0) AS peso_pendente
+            FROM fiscal_processos fp
+            JOIN processos p ON p.id = fp.processo_id
+            LEFT JOIN fiscal_itens fi ON fi.fiscal_processo_id = fp.id
+            {sql_where}
+            GROUP BY p.cliente
+            ORDER BY p.cliente
+            """,
+            tuple(params),
+        ).fetchall()
+
+    def gerar_relatorio_fiscal_por_periodo(self, filters=None):
+        where, params = self._fiscal_report_filters(filters)
+        sql_where = " WHERE " + " AND ".join(where) if where else ""
+        return self.conn.execute(
+            f"""
+            SELECT
+                fp.data_entrada_fiscal AS periodo,
+                COUNT(DISTINCT fp.id) AS propostas,
+                COALESCE(SUM(CASE WHEN fp.status_fiscal = 'FALTA_EMITIR_NOTA_FISCAL' THEN 1 ELSE 0 END), 0) AS falta_emitir,
+                COALESCE(SUM(CASE WHEN fp.status_fiscal = 'NOTA_FISCAL_PARCIAL' THEN 1 ELSE 0 END), 0) AS nf_parcial,
+                COALESCE(SUM(CASE WHEN fp.status_fiscal = 'NOTA_FISCAL_EMITIDA' THEN 1 ELSE 0 END), 0) AS nf_emitida,
+                COALESCE(SUM(fi.peso_total), 0) AS peso_total,
+                COALESCE(SUM(fi.peso_faturado), 0) AS peso_faturado,
+                COALESCE(SUM(fi.peso_total - fi.peso_faturado), 0) AS peso_pendente
+            FROM fiscal_processos fp
+            JOIN processos p ON p.id = fp.processo_id
+            LEFT JOIN fiscal_itens fi ON fi.fiscal_processo_id = fp.id
+            {sql_where}
+            GROUP BY fp.data_entrada_fiscal
+            ORDER BY fp.data_entrada_fiscal DESC
+            """,
+            tuple(params),
+        ).fetchall()
+
+    def gerar_relatorio_fiscal_processos(self, filters=None):
+        where, params = self._fiscal_report_filters(filters)
+        sql_where = " WHERE " + " AND ".join(where) if where else ""
+        return self.conn.execute(
+            f"""
+            SELECT
+                fp.id AS fiscal_processo_id,
+                fp.processo_id,
+                fp.proposta,
+                p.cliente,
+                p.obra_site,
+                fp.status_fiscal,
+                fp.data_entrada_fiscal,
+                fp.data_ultima_emissao,
+                COUNT(fi.id) AS quantidade_itens,
+                COALESCE(SUM(CASE WHEN fi.status_item_fiscal <> 'FATURADO' THEN 1 ELSE 0 END), 0) AS itens_pendentes,
+                COALESCE(SUM(fi.peso_total), 0) AS peso_total,
+                COALESCE(SUM(fi.peso_faturado), 0) AS peso_faturado,
+                COALESCE(SUM(fi.peso_total - fi.peso_faturado), 0) AS peso_pendente,
+                CASE
+                    WHEN p.status_expedicao = 'ENTREGUE'
+                         AND fp.status_fiscal <> 'NOTA_FISCAL_EMITIDA'
+                    THEN 'Critica'
+                    WHEN fp.status_fiscal <> 'NOTA_FISCAL_EMITIDA'
+                         AND COALESCE(fp.data_ultima_emissao, '') = ''
+                         AND date(fp.data_entrada_fiscal) < date('now', '-7 days')
+                    THEN '+7 dias'
+                    ELSE ''
+                END AS alerta,
+                MAX(fe.numero_controle) AS numero_controle,
+                MAX(fe.usuario) AS usuario_emissao,
+                MAX(fe.observacao) AS observacao
+            FROM fiscal_processos fp
+            JOIN processos p ON p.id = fp.processo_id
+            LEFT JOIN fiscal_itens fi ON fi.fiscal_processo_id = fp.id
+            LEFT JOIN fiscal_emissoes fe ON fe.fiscal_processo_id = fp.id
+            {sql_where}
+            GROUP BY fp.id
+            ORDER BY fp.data_entrada_fiscal DESC, fp.proposta
+            """,
+            tuple(params),
+        ).fetchall()
+
+    def gerar_relatorio_fiscal_itens_pendentes(self, filters=None):
+        where, params = self._fiscal_report_filters(filters)
+        where.append("fi.status_item_fiscal <> 'FATURADO'")
+        sql_where = " WHERE " + " AND ".join(where)
+        return self.conn.execute(
+            f"""
+            SELECT
+                fp.id AS fiscal_processo_id,
+                fp.processo_id,
+                fp.proposta,
+                p.cliente,
+                p.obra_site,
+                fp.status_fiscal,
+                fp.data_entrada_fiscal,
+                fi.numero_item,
+                fi.descricao,
+                fi.quantidade_total,
+                fi.quantidade_faturada,
+                fi.quantidade_total - fi.quantidade_faturada AS quantidade_pendente,
+                fi.peso_total,
+                fi.peso_faturado,
+                fi.peso_total - fi.peso_faturado AS peso_pendente,
+                fi.status_item_fiscal
+            FROM fiscal_itens fi
+            JOIN fiscal_processos fp ON fp.id = fi.fiscal_processo_id
+            JOIN processos p ON p.id = fp.processo_id
+            {sql_where}
+            ORDER BY fp.proposta, CAST(fi.numero_item AS INTEGER), fi.numero_item
+            """,
+            tuple(params),
+        ).fetchall()
+
+    def fiscal_report_rows(self, report_type, filters=None):
+        filters = dict(filters or {})
+        if report_type == "PENDENTES":
+            return self.gerar_relatorio_fiscal_pendencias(filters)
+        if report_type == "PARCIAIS":
+            filters["status_fiscal"] = "NOTA_FISCAL_PARCIAL"
+            return self.gerar_relatorio_fiscal_processos(filters)
+        if report_type == "EMITIDAS":
+            filters["status_fiscal"] = "NOTA_FISCAL_EMITIDA"
+            return self.gerar_relatorio_fiscal_processos(filters)
+        if report_type == "CRITICAS":
+            filters["pendencia_critica"] = "1"
+            return self.gerar_relatorio_fiscal_processos(filters)
+        if report_type == "ENTREGUES_SEM_NF":
+            filters["pendencia_critica"] = "1"
+            return self.gerar_relatorio_fiscal_processos(filters)
+        if report_type == "ITENS_PENDENTES":
+            return self.gerar_relatorio_fiscal_itens_pendentes(filters)
+        if report_type == "EMISSOES":
+            return self.gerar_relatorio_fiscal_emissoes(filters)
+        if report_type == "POR_CLIENTE":
+            return self.gerar_relatorio_fiscal_por_cliente(filters)
+        if report_type == "POR_PERIODO":
+            return self.gerar_relatorio_fiscal_por_periodo(filters)
+        if report_type == "MAIS_7_DIAS":
+            filters["mais_7_dias_sem_emissao"] = "1"
+            return self.gerar_relatorio_fiscal_processos(filters)
+        return []
+
+    def identificar_pendencia_fiscal_critica(self, processo_id):
+        row = self.conn.execute(
+            """
+            SELECT 1
+            FROM fiscal_processos fp
+            JOIN processos p ON p.id = fp.processo_id
+            WHERE fp.processo_id = ?
+              AND p.status_expedicao = 'ENTREGUE'
+              AND fp.status_fiscal <> 'NOTA_FISCAL_EMITIDA'
+            LIMIT 1
+            """,
+            (processo_id,),
+        ).fetchone()
+        return row is not None
+
+    def get_fiscal_process(self, fiscal_processo_id):
+        return self.conn.execute(
+            "SELECT * FROM fiscal_processos WHERE id = ?",
+            (fiscal_processo_id,),
+        ).fetchone()
+
+    def register_fiscal_emission(self, fiscal_processo_id, emissions, user, numero_controle="", observacao=""):
+        if not user_can_register_fiscal(user):
+            raise AppError("Seu usuario nao tem permissao para registrar emissao fiscal.")
+        fiscal = self.get_fiscal_process(fiscal_processo_id)
+        if not fiscal:
+            raise AppError("Controle fiscal nao encontrado.")
+        if fiscal["status_fiscal"] == "NOTA_FISCAL_EMITIDA":
+            raise AppError("Esta proposta ja esta totalmente faturada.")
+        emissions = emissions or []
+        if not emissions:
+            raise AppError("Selecione pelo menos um item para registrar emissao fiscal.")
+
+        item_rows = {
+            int(row["id"]): row
+            for row in self.conn.execute(
+                "SELECT * FROM fiscal_itens WHERE fiscal_processo_id = ?",
+                (fiscal_processo_id,),
+            ).fetchall()
+        }
+        prepared = []
+        for entry in emissions:
+            item_id = int(entry.get("fiscal_item_id") or entry.get("item_id") or 0)
+            if item_id not in item_rows:
+                raise AppError("Item fiscal invalido para esta proposta.")
+            item = item_rows[item_id]
+            quantity = float(entry.get("quantidade_emitida") or 0)
+            weight = float(entry.get("peso_emitido") or 0)
+            if quantity < 0:
+                raise AppError("Quantidade emitida nao pode ser negativa.")
+            if weight < 0:
+                raise AppError("Peso emitido nao pode ser negativo.")
+            quantity_balance = float(item["quantidade_total"] or 0) - float(item["quantidade_faturada"] or 0)
+            weight_balance = float(item["peso_total"] or 0) - float(item["peso_faturado"] or 0)
+            if quantity > quantity_balance + 0.000001:
+                raise AppError("Quantidade emitida nao pode ser maior que o saldo.")
+            if weight > weight_balance + 0.000001:
+                raise AppError("Peso emitido nao pode ser maior que o saldo.")
+            if quantity == 0 and weight == 0:
+                continue
+            prepared.append((item, quantity, weight))
+
+        if not prepared:
+            raise AppError("Informe quantidade ou peso para pelo menos um item.")
+
+        old_status = fiscal["status_fiscal"] or ""
+        timestamp = now_br()
+        try:
+            emission_id = self.conn.execute(
+                """
+                INSERT INTO fiscal_emissoes(
+                    fiscal_processo_id, numero_controle, tipo_emissao,
+                    data_emissao, usuario, observacao, created_at
+                ) VALUES (?, ?, 'PARCIAL', ?, ?, ?, ?)
+                """,
+                (
+                    fiscal_processo_id,
+                    (numero_controle or "").strip(),
+                    timestamp,
+                    user["login"],
+                    observacao or "",
+                    timestamp,
+                ),
+            ).lastrowid
+
+            for item, quantity, weight in prepared:
+                new_quantity = float(item["quantidade_faturada"] or 0) + quantity
+                new_weight = float(item["peso_faturado"] or 0) + weight
+                total_quantity = float(item["quantidade_total"] or 0)
+                total_weight = float(item["peso_total"] or 0)
+                quantity_done = new_quantity >= total_quantity - 0.000001
+                weight_done = total_weight == 0 or new_weight >= total_weight - 0.000001
+                if quantity_done and weight_done:
+                    item_status = "FATURADO"
+                elif new_quantity > 0 or new_weight > 0:
+                    item_status = "PARCIAL"
+                else:
+                    item_status = "PENDENTE"
+                self.conn.execute(
+                    """
+                    UPDATE fiscal_itens
+                    SET quantidade_faturada = ?, peso_faturado = ?,
+                        status_item_fiscal = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (new_quantity, new_weight, item_status, timestamp, item["id"]),
+                )
+                self.conn.execute(
+                    """
+                    INSERT INTO fiscal_emissao_itens(
+                        fiscal_emissao_id, item_id, quantidade_emitida,
+                        peso_emitido, created_at
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (emission_id, item["id"], quantity, weight, timestamp),
+                )
+
+            summary = self.conn.execute(
+                """
+                SELECT
+                    COUNT(*) AS total,
+                    SUM(CASE WHEN status_item_fiscal = 'FATURADO' THEN 1 ELSE 0 END) AS faturados,
+                    SUM(CASE WHEN quantidade_faturada > 0 OR peso_faturado > 0 THEN 1 ELSE 0 END) AS com_faturamento
+                FROM fiscal_itens
+                WHERE fiscal_processo_id = ?
+                """,
+                (fiscal_processo_id,),
+            ).fetchone()
+            total = int(summary["total"] or 0)
+            billed = int(summary["faturados"] or 0)
+            with_billing = int(summary["com_faturamento"] or 0)
+            new_status = "NOTA_FISCAL_EMITIDA" if total and billed == total else "NOTA_FISCAL_PARCIAL"
+            emission_type = "TOTAL" if new_status == "NOTA_FISCAL_EMITIDA" and with_billing else "PARCIAL"
+            self.conn.execute(
+                "UPDATE fiscal_emissoes SET tipo_emissao = ? WHERE id = ?",
+                (emission_type, emission_id),
+            )
+            self.conn.execute(
+                """
+                UPDATE fiscal_processos
+                SET status_fiscal = ?, data_ultima_emissao = ?,
+                    emitido_por = ?, observacao = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    new_status,
+                    timestamp,
+                    user["login"],
+                    observacao or "",
+                    timestamp,
+                    fiscal_processo_id,
+                ),
+            )
+            self.conn.execute(
+                """
+                INSERT INTO fiscal_movimentacoes(
+                    fiscal_processo_id, processo_id, tipo_movimento,
+                    status_anterior, status_novo, usuario, data_hora, observacao
+                ) VALUES (?, ?, 'EMISSAO_FISCAL', ?, ?, ?, ?, ?)
+                """,
+                (
+                    fiscal_processo_id,
+                    fiscal["processo_id"],
+                    old_status,
+                    new_status,
+                    user["login"],
+                    timestamp,
+                    observacao or "",
+                ),
+            )
+            self.conn.commit()
+            return emission_id
+        except Exception:
+            self.conn.rollback()
+            raise
 
     def process_main_id(self, process):
         return int(process["processo_pai_id"] or process["id"])
@@ -2777,6 +3493,14 @@ class Repository:
             self.refresh_parent_completion(process["processo_pai_id"], user)
         if area in ("GALVANIZACAO", "EXPEDICAO") or "status_expedicao" in updates:
             self.try_auto_merge_expedition_partials(process_id, user)
+        if area == "GALVANIZACAO" and new_status == "RETORNOU_GALVANIZACAO":
+            returned_process = self.get_process(process_id)
+            if returned_process:
+                self.ensure_fiscal_entry_for_process(
+                    process_id,
+                    user,
+                    observation or "Entrada fiscal automatica pelo retorno da galvanizacao.",
+                )
         self.conn.commit()
 
     def stockroom_delivery_required(self, process):
@@ -3124,51 +3848,58 @@ class Repository:
         self.conn.commit()
 
     def mark_galvanization_load_returned(self, load_id, user):
-        if not user_can_mount_galvanization_load(user):
-            raise AppError("Seu usuario nao tem permissao para marcar retorno de carga.")
-        load = self.get_galvanization_load(load_id)
-        if not load:
-            raise AppError("Carga nao encontrada.")
-        if load["status"] != "LIBERADA_PARA_ENVIO":
-            raise AppError("Somente cargas liberadas para envio podem ser marcadas como retornadas.")
-        items = self.list_galvanization_load_items(load_id)
-        if not items:
-            raise AppError("A carga nao possui propostas.")
-        returned_process_ids = []
-        for item in items:
-            process = self.get_process(item["processo_id"])
-            if not process:
-                continue
-            returned_process_ids.append(process["id"])
-            old_status = process["status_galvanizacao"] or ""
-            new_status = "RETORNOU_GALVANIZACAO"
-            expedition_status = "EM_SEPARACAO"
-            observation = f"Carga {load_id} retornou da galvanizacao | Motorista: {load['motorista']}"
+        try:
+            if not user_can_mount_galvanization_load(user):
+                raise AppError("Seu usuario nao tem permissao para marcar retorno de carga.")
+            load = self.get_galvanization_load(load_id)
+            if not load:
+                raise AppError("Carga nao encontrada.")
+            if load["status"] != "LIBERADA_PARA_ENVIO":
+                raise AppError("Somente cargas liberadas para envio podem ser marcadas como retornadas.")
+            items = self.list_galvanization_load_items(load_id)
+            if not items:
+                raise AppError("A carga nao possui propostas.")
+            returned_process_ids = []
+            for item in items:
+                process = self.get_process(item["processo_id"])
+                if not process:
+                    continue
+                returned_process_ids.append(process["id"])
+                old_status = process["status_galvanizacao"] or ""
+                new_status = "RETORNOU_GALVANIZACAO"
+                expedition_status = "EM_SEPARACAO"
+                observation = f"Carga {load_id} retornou da galvanizacao | Motorista: {load['motorista']}"
+                self.conn.execute(
+                    """
+                    UPDATE processos
+                    SET status_galvanizacao = ?, data_retorno_galv = ?, observacoes_galvanizacao = ?,
+                        status_expedicao = CASE WHEN COALESCE(status_expedicao, '') = '' THEN ? ELSE status_expedicao END,
+                        atualizado_em = ?, atualizado_por = ?, status_geral = ?
+                    WHERE id = ?
+                    """,
+                    (new_status, today_br(), observation, expedition_status, now_br(), user["login"], "EM_EXPEDICAO", process["id"]),
+                )
+                self.conn.execute(
+                    "UPDATE proposta_itens SET galvanizado = 1, atualizado_em = ?, atualizado_por = ? WHERE processo_atual_id = ? AND produzido = 1",
+                    (now_br(), user["login"], process["id"]),
+                )
+                if old_status != new_status:
+                    self.add_history(process["id"], process["proposta"], "GALVANIZACAO", old_status, new_status, user, observation)
+                if not process["status_expedicao"]:
+                    self.add_history(process["id"], process["proposta"], "EXPEDICAO", "", expedition_status, user, "Liberacao automatica pelo retorno da carga")
+                returned_process = self.get_process(process["id"])
+                if returned_process:
+                    self.ensure_fiscal_entry_for_process(returned_process["id"], user, observation)
+            for process_id in returned_process_ids:
+                self.try_auto_merge_expedition_partials(process_id, user)
             self.conn.execute(
-                """
-                UPDATE processos
-                SET status_galvanizacao = ?, data_retorno_galv = ?, observacoes_galvanizacao = ?,
-                    status_expedicao = CASE WHEN COALESCE(status_expedicao, '') = '' THEN ? ELSE status_expedicao END,
-                    atualizado_em = ?, atualizado_por = ?, status_geral = ?
-                WHERE id = ?
-                """,
-                (new_status, today_br(), observation, expedition_status, now_br(), user["login"], "EM_EXPEDICAO", process["id"]),
+                "UPDATE cargas_galvanizacao SET status = ?, data_retorno = ?, observacao = ? WHERE id = ?",
+                ("RETORNADA_GALVANIZACAO", today_br(), f"Retornada em {now_br()} por {user['login']}", load_id),
             )
-            self.conn.execute(
-                "UPDATE proposta_itens SET galvanizado = 1, atualizado_em = ?, atualizado_por = ? WHERE processo_atual_id = ? AND produzido = 1",
-                (now_br(), user["login"], process["id"]),
-            )
-            if old_status != new_status:
-                self.add_history(process["id"], process["proposta"], "GALVANIZACAO", old_status, new_status, user, observation)
-            if not process["status_expedicao"]:
-                self.add_history(process["id"], process["proposta"], "EXPEDICAO", "", expedition_status, user, "Liberacao automatica pelo retorno da carga")
-        for process_id in returned_process_ids:
-            self.try_auto_merge_expedition_partials(process_id, user)
-        self.conn.execute(
-            "UPDATE cargas_galvanizacao SET status = ?, data_retorno = ?, observacao = ? WHERE id = ?",
-            ("RETORNADA_GALVANIZACAO", today_br(), f"Retornada em {now_br()} por {user['login']}", load_id),
-        )
-        self.conn.commit()
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
 
     def remanage_material_to_production(self, process_id, user, observation="", destination_process=None):
         if not user_can_access_area(user, "EXPEDICAO"):
@@ -4010,5 +4741,3 @@ XLSX_STYLES = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <xf numFmtId="0" fontId="0" fillId="2" borderId="1" xfId="0" applyFill="1" applyBorder="1" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf>
 </cellXfs>
 </styleSheet>"""
-
-

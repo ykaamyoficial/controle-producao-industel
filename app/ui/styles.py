@@ -277,8 +277,13 @@ def status_color(status: str, palette: dict, area: str = "") -> tuple[str, str]:
         color = palette["warning"]
     elif "ENTREGUE" in status or status in {
         "FINALIZADO", "RETORNOU_GALVANIZACAO", "SEPARADO", "UNIFICADA_PRINCIPAL",
+        "NOTA_FISCAL_EMITIDA", "FATURADO",
     }:
         color = palette["success"]
+    elif status in {"FALTA_EMITIR_NOTA_FISCAL", "PENDENTE"}:
+        color = palette["danger"]
+    elif status in {"NOTA_FISCAL_PARCIAL", "PARCIAL"}:
+        color = palette["warning"]
     elif status in {"NAO_LIBERADO", "NAO_INICIADO", "AGUARDANDO_CONFIRMACAO", "NAO_DEFINIDO"}:
         color = palette["muted"]
     elif status in {"EM_CARGA", "ENVIADO_GALVANIZACAO"}:
