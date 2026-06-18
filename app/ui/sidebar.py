@@ -8,6 +8,7 @@ from app.ui.icons import make_icon
 
 NAV_ITEMS = [
     ("PAINEL GERAL", "Painel geral", "dashboard"),
+    ("DASHBOARD EXECUTIVO", "Dashboard Executivo", "dashboard"),
     ("CONTROLE GERAL", "Controle Geral", "control"),
     ("PRODUCAO", "Producao", "production"),
     ("GALVANIZACAO", "Galvanizacao", "galvanization"),
@@ -59,6 +60,7 @@ class Sidebar(QFrame):
         for key, label, icon in NAV_ITEMS:
             if key in {
                 "HISTORICO",
+                "DASHBOARD EXECUTIVO",
                 "RELATORIOS OPERACIONAIS",
                 "RELATORIOS",
                 "CONFIGURACOES",

@@ -7,6 +7,7 @@ from app.ui.animations import animate_width, fade_in
 from app.ui.app_icon import app_icon
 from app.ui.data_page import DataPage
 from app.ui.dashboard_page import DashboardPage
+from app.ui.executive_dashboard_page import ExecutiveDashboardPage
 from app.ui.fiscal_page import FiscalPage
 from app.ui.login_dialog import LoginDialog
 from app.ui.operational_reports_page import OperationalReportsPage
@@ -85,6 +86,9 @@ class MainWindow(QMainWindow):
     def _create_pages(self):
         self.pages["PAINEL GERAL"] = DashboardPage(self.service)
         self.stack.addWidget(self.pages["PAINEL GERAL"])
+
+        self.pages["DASHBOARD EXECUTIVO"] = ExecutiveDashboardPage(self.service)
+        self.stack.addWidget(self.pages["DASHBOARD EXECUTIVO"])
 
         for area in self.service.visible_areas():
             self.pages[area] = ProcessPage(self.service, area, area.title())
