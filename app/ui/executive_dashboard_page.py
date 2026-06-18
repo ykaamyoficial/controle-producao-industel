@@ -20,9 +20,9 @@ from PySide6.QtWidgets import (
 
 from app.models.operational_report_table_model import OperationalReportTableModel
 from app.services.executive_dashboard import ExecutiveDashboardService
-from app.ui.components.kpi_card import KpiCard
 from app.ui.components.modern_button import ModernButton
 from app.ui.components.modern_table import ModernTable
+from app.ui.icons import make_icon
 from app.ui.styles import area_color
 
 
@@ -42,15 +42,15 @@ class ExecutiveDashboardPage(QWidget):
         self.service = service
         self.dashboard_service = ExecutiveDashboardService(service.conn)
         self.current_data: dict[str, Any] = {}
-        self.operational_cards: list[KpiCard] = []
-        self.fiscal_cards: list[KpiCard] = []
+        self.operational_cards: list[QWidget] = []
+        self.fiscal_cards: list[QWidget] = []
         self.alert_model = OperationalReportTableModel(self)
         self._build()
 
     def _build(self) -> None:
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(12)
+        root.setSpacing(8)
 
         self.filter_bar = self._build_filter_bar()
         root.addWidget(self.filter_bar)
@@ -62,17 +62,34 @@ class ExecutiveDashboardPage(QWidget):
         self.content = QWidget()
         self.content.setObjectName("DashboardContent")
         body = QVBoxLayout(self.content)
-        body.setContentsMargins(2, 2, 10, 12)
-        body.setSpacing(12)
-
-        self.header = self._build_header()
-        body.addWidget(self.header)
+        body.setContentsMargins(2, 2, 10, 8)
+        body.setSpacing(7)
 
         self.operational_panel, self.operational_layout = self._card_panel("Indicadores operacionais")
         body.addWidget(self.operational_panel)
 
         self.fiscal_panel, self.fiscal_layout = self._card_panel("Indicadores fiscais")
         body.addWidget(self.fiscal_panel)
+
+        self.alerts_panel = QFrame()
+        self.alerts_panel.setObjectName("Panel")
+        alerts_layout = QVBoxLayout(self.alerts_panel)
+        alerts_layout.setContentsMargins(12, 9, 12, 10)
+        alerts_layout.setSpacing(6)
+        alerts_title = QLabel("Alertas executivos")
+        alerts_title.setObjectName("FilterTitle")
+        self.alert_empty = self._empty_label("Nenhum alerta executivo encontrado")
+        self.alert_empty.setStyleSheet(
+            f"font-size: 12px; font-weight: 800; color: {self.service.palette['success']}; padding: 14px;"
+        )
+        self.alert_table = ModernTable(self.service)
+        self.alert_table.status_shortcut_enabled = False
+        self.alert_table.setModel(self.alert_model)
+        self.alert_table.setMaximumHeight(148)
+        alerts_layout.addWidget(alerts_title)
+        alerts_layout.addWidget(self.alert_empty, 1)
+        alerts_layout.addWidget(self.alert_table, 1)
+        body.addWidget(self.alerts_panel)
 
         charts = QHBoxLayout()
         charts.setSpacing(12)
@@ -90,20 +107,6 @@ class ExecutiveDashboardPage(QWidget):
         lower.addWidget(self.ranking_panel, 1)
         body.addLayout(lower)
 
-        self.alerts_panel = QFrame()
-        self.alerts_panel.setObjectName("Panel")
-        alerts_layout = QVBoxLayout(self.alerts_panel)
-        alerts_layout.setContentsMargins(16, 14, 16, 16)
-        alerts_layout.setSpacing(10)
-        alerts_title = QLabel("Alertas executivos")
-        alerts_title.setObjectName("FilterTitle")
-        self.alert_table = ModernTable(self.service)
-        self.alert_table.status_shortcut_enabled = False
-        self.alert_table.setModel(self.alert_model)
-        alerts_layout.addWidget(alerts_title)
-        alerts_layout.addWidget(self.alert_table, 1)
-        body.addWidget(self.alerts_panel, 1)
-
         self.warning_box = QLabel("")
         self.warning_box.setObjectName("Caption")
         self.warning_box.setWordWrap(True)
@@ -117,16 +120,20 @@ class ExecutiveDashboardPage(QWidget):
         frame = QFrame()
         frame.setObjectName("FilterBar")
         layout = QVBoxLayout(frame)
-        layout.setContentsMargins(16, 12, 16, 12)
-        layout.setSpacing(10)
+        layout.setContentsMargins(12, 6, 12, 7)
+        layout.setSpacing(5)
 
         header = QHBoxLayout()
+        header.setSpacing(8)
         title_box = QVBoxLayout()
+        title_box.setSpacing(1)
         title = QLabel("Dashboard Executivo")
         title.setObjectName("FilterTitle")
-        subtitle = QLabel("Visao gerencial com pesos, prazos, gargalos, fiscal e alertas.")
+        title.setStyleSheet("font-size: 15px; font-weight: 900;")
+        subtitle = QLabel("Pesos, prazos, gargalos, fiscal e alertas.")
         subtitle.setObjectName("Caption")
-        subtitle.setWordWrap(True)
+        subtitle.setWordWrap(False)
+        self.focus_label = subtitle
         title_box.addWidget(title)
         title_box.addWidget(subtitle)
         header.addLayout(title_box)
@@ -136,6 +143,8 @@ class ExecutiveDashboardPage(QWidget):
         self.updated_at = QLabel("Ultima atualizacao: -")
         self.updated_at.setObjectName("TopInfoChip")
         self.refresh_btn = ModernButton("Atualizar", "refresh", accent=True)
+        self.refresh_btn.setMinimumHeight(28)
+        self.refresh_btn.setMaximumHeight(28)
         self.refresh_btn.clicked.connect(self.refresh)
         header.addWidget(self.reliability_badge)
         header.addWidget(self.updated_at)
@@ -172,18 +181,24 @@ class ExecutiveDashboardPage(QWidget):
         self.include_partials = QCheckBox("Incluir parciais")
         self.include_partials.setChecked(True)
         self.more_filters_btn = ModernButton("Mais filtros", "filter")
+        self.more_filters_btn.setMinimumHeight(28)
+        self.more_filters_btn.setMaximumHeight(28)
         self.more_filters_btn.setCheckable(True)
         self.more_filters_btn.toggled.connect(self._toggle_more_filters)
         self.clear_btn = ModernButton("Limpar", "clear")
+        self.clear_btn.setMinimumHeight(28)
+        self.clear_btn.setMaximumHeight(28)
         self.clear_btn.clicked.connect(self.clear_filters)
 
         row1 = QGridLayout()
         row1.setHorizontalSpacing(10)
-        row1.setVerticalSpacing(8)
+        row1.setVerticalSpacing(4)
         self._add_field(row1, 0, 0, "Inicial", self.start)
         self._add_field(row1, 0, 2, "Final", self.end)
         self._add_field(row1, 0, 4, "Cliente", self.client)
         self._add_field(row1, 0, 6, "Proposta", self.proposal)
+        row1.addWidget(self.more_filters_btn, 0, 8)
+        row1.addWidget(self.clear_btn, 0, 9)
         for column in (1, 3, 5, 7):
             row1.setColumnStretch(column, 1)
         layout.addLayout(row1)
@@ -192,7 +207,7 @@ class ExecutiveDashboardPage(QWidget):
         row2 = QGridLayout(self.more_filters)
         row2.setContentsMargins(0, 0, 0, 0)
         row2.setHorizontalSpacing(10)
-        row2.setVerticalSpacing(8)
+        row2.setVerticalSpacing(4)
         self._add_field(row2, 0, 0, "Obra/Site", self.site)
         self._add_field(row2, 0, 2, "Lote", self.lot)
         self._add_field(row2, 0, 4, "Area", self.area)
@@ -204,11 +219,6 @@ class ExecutiveDashboardPage(QWidget):
         self.more_filters.setVisible(False)
         layout.addWidget(self.more_filters)
 
-        actions = QHBoxLayout()
-        actions.addStretch()
-        actions.addWidget(self.more_filters_btn)
-        actions.addWidget(self.clear_btn)
-        layout.addLayout(actions)
         return frame
 
     def _add_field(self, layout: QGridLayout, row: int, column: int, text: str, widget: QWidget) -> None:
@@ -217,31 +227,17 @@ class ExecutiveDashboardPage(QWidget):
         layout.addWidget(label, row, column)
         layout.addWidget(widget, row, column + 1)
 
-    def _build_header(self) -> QFrame:
-        panel = QFrame()
-        panel.setObjectName("Panel")
-        layout = QVBoxLayout(panel)
-        layout.setContentsMargins(18, 16, 18, 16)
-        layout.setSpacing(6)
-        title = QLabel("Visao executiva da fabrica")
-        title.setStyleSheet("font-size: 22px; font-weight: 900;")
-        self.focus_label = QLabel("Carregue o dashboard para visualizar o foco operacional.")
-        self.focus_label.setObjectName("Caption")
-        self.focus_label.setWordWrap(True)
-        layout.addWidget(title)
-        layout.addWidget(self.focus_label)
-        return panel
-
     def _card_panel(self, title: str) -> tuple[QFrame, QGridLayout]:
         panel = QFrame()
         panel.setObjectName("Panel")
         box = QVBoxLayout(panel)
-        box.setContentsMargins(14, 12, 14, 14)
+        box.setContentsMargins(10, 7, 10, 9)
+        box.setSpacing(5)
         label = QLabel(title)
         label.setObjectName("FilterTitle")
         grid = QGridLayout()
-        grid.setHorizontalSpacing(10)
-        grid.setVerticalSpacing(10)
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(8)
         box.addWidget(label)
         box.addLayout(grid)
         return panel, grid
@@ -250,8 +246,8 @@ class ExecutiveDashboardPage(QWidget):
         panel = QFrame()
         panel.setObjectName("Panel")
         layout = QVBoxLayout(panel)
-        layout.setContentsMargins(16, 14, 16, 16)
-        layout.setSpacing(8)
+        layout.setContentsMargins(12, 9, 12, 10)
+        layout.setSpacing(5)
         heading = QLabel(title)
         heading.setObjectName("FilterTitle")
         caption = QLabel(subtitle)
@@ -333,10 +329,17 @@ class ExecutiveDashboardPage(QWidget):
             colors = [self.service.palette["warning"], self.service.palette["secondary"], self.service.palette["success"], self.service.palette["danger"], self.service.palette["accent"]]
         for index, card in enumerate(cards):
             display = _card_display(card)
-            widget = KpiCard(card.get("titulo", "-"), display, "dashboard" if group == "operacional" else "fiscal", colors[index % len(colors)])
+            widget = ExecutiveMetricCard(
+                card.get("titulo", "-"),
+                display,
+                "dashboard" if group == "operacional" else "fiscal",
+                colors[index % len(colors)],
+                self.service.palette,
+            )
             widget.setToolTip(f"Confiabilidade: {card.get('confiabilidade', '-')}")
-            row = index // 4
-            col = index % 4
+            columns = 7 if group == "fiscal" else 4
+            row = index // columns
+            col = index % columns
             layout.addWidget(widget, row, col)
             target.append(widget)
 
@@ -350,25 +353,35 @@ class ExecutiveDashboardPage(QWidget):
         for row in rows:
             label_text = str(row.get(label_key) or "-")
             value = float(row.get(value_key) or 0)
-            line = QLabel(f"{label_text}  {value:g} {unit}".strip())
-            bar = QProgressBar()
-            bar.setTextVisible(False)
-            bar.setMaximum(100)
-            bar.setValue(int(value / maximum * 100) if maximum else 0)
-            bar.setToolTip(f"{label_text}: {value:g} {unit}".strip())
-            bar.setStyleSheet(f"QProgressBar::chunk {{ background: {area_color(label_text.upper(), self.service.palette)}; border-radius: 7px; }}")
-            body.addWidget(line)
-            body.addWidget(bar)
+            body.addWidget(
+                self._bar_row(
+                    label_text,
+                    value,
+                    maximum,
+                    unit,
+                    area_color(label_text.upper(), self.service.palette),
+                    highlight=value == maximum and value > 0,
+                )
+            )
         body.addStretch()
 
     def _render_evolution(self, evolution: dict[str, Any]) -> None:
         body = self.evolution_panel.body_layout
         self._clear_layout(body)
         groups = ["producao", "galvanizacao_envio", "galvanizacao_retorno", "expedicao"]
+        totals = []
+        point_count = 0
         for group in groups:
             rows = evolution.get(group) or []
+            point_count += len(rows)
             total = sum(float(row.get("peso_kg") or 0) for row in rows)
-            body.addWidget(QLabel(f"{group.replace('_', ' ').title()}: {total:g} kg"))
+            totals.append((group.replace("_", " ").title(), total))
+        maximum = max((value for _label, value in totals), default=0) or 1
+        if not any(value for _label, value in totals) or point_count <= len(groups):
+            body.addWidget(self._empty_label("Evolucao operacional sera mais precisa com historico por periodo."))
+            return
+        for label, value in totals:
+            body.addWidget(self._bar_row(label, value, maximum, "kg", self.service.palette["accent"]))
         body.addStretch()
 
     def _render_ranking(self, rows: list[dict[str, Any]]) -> None:
@@ -378,16 +391,10 @@ class ExecutiveDashboardPage(QWidget):
             body.addWidget(self._empty_label("Sem clientes no periodo."))
             return
         maximum = max(float(row.get("peso_operacional") or 0) for row in rows) or 1
-        for row in rows[:8]:
-            label = str(row.get("cliente") or "-")
+        for position, row in enumerate(rows[:5], start=1):
+            label = f"{position}o {row.get('cliente') or '-'}"
             weight = float(row.get("peso_operacional") or 0)
-            line = QLabel(f"{label}  {weight:g} kg")
-            bar = QProgressBar()
-            bar.setTextVisible(False)
-            bar.setMaximum(100)
-            bar.setValue(int(weight / maximum * 100) if maximum else 0)
-            body.addWidget(line)
-            body.addWidget(bar)
+            body.addWidget(self._bar_row(label, weight, maximum, "kg", self.service.palette["secondary"], highlight=position == 1 and weight > 0))
         body.addStretch()
 
     def _render_alerts(self, alerts: list[dict[str, Any]]) -> None:
@@ -406,6 +413,8 @@ class ExecutiveDashboardPage(QWidget):
             )
         self.alert_model.set_report(ALERT_COLUMNS, rows)
         self.alert_table.apply_column_layout()
+        self.alert_empty.setVisible(not bool(rows))
+        self.alert_table.setVisible(bool(rows))
 
     def _render_warnings(self, warnings: list[str]) -> None:
         self.warning_box.setText("\n".join(f"- {warning}" for warning in warnings) if warnings else "Sem avisos tecnicos para os filtros atuais.")
@@ -415,7 +424,42 @@ class ExecutiveDashboardPage(QWidget):
         label.setObjectName("Caption")
         label.setAlignment(Qt.AlignCenter)
         label.setWordWrap(True)
+        label.setMinimumHeight(58)
         return label
+
+    def _bar_row(self, label_text: str, value: float, maximum: float, unit: str, color: str, highlight: bool = False) -> QWidget:
+        box = QFrame()
+        box.setObjectName("MiniChartRow")
+        layout = QVBoxLayout(box)
+        layout.setContentsMargins(0, 1, 0, 1)
+        layout.setSpacing(2)
+        header = QHBoxLayout()
+        title = QLabel(label_text)
+        title.setObjectName("Caption")
+        title.setStyleSheet("font-weight: 800;" if highlight else "")
+        number = QLabel(_number_display(value, unit))
+        number.setObjectName("Caption")
+        number.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        header.addWidget(title, 1)
+        header.addWidget(number)
+        bar = QProgressBar()
+        bar.setFixedHeight(8)
+        bar.setTextVisible(False)
+        bar.setMaximum(100)
+        bar.setValue(int(value / maximum * 100) if maximum else 0)
+        bg = self.service.palette["surface_alt"]
+        border = color if highlight else bg
+        bar.setStyleSheet(
+            "QProgressBar {"
+            f"background: {bg}; border: 1px solid {border}; border-radius: 5px;"
+            "}"
+            "QProgressBar::chunk {"
+            f"background: {color}; border-radius: 5px;"
+            "}"
+        )
+        layout.addLayout(header)
+        layout.addWidget(bar)
+        return box
 
     def _clear_layout(self, layout) -> None:
         while layout.count():
@@ -439,3 +483,43 @@ def _card_display(card: dict[str, Any]) -> str:
     else:
         formatted = str(number)
     return f"{formatted} {unit}".strip()
+
+
+def _number_display(value: float, unit: str) -> str:
+    if float(value).is_integer():
+        formatted = str(int(value))
+    else:
+        formatted = f"{value:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    return f"{formatted} {unit}".strip()
+
+
+class ExecutiveMetricCard(QFrame):
+    def __init__(self, title: str, value: str, icon_name: str, accent: str, palette: dict[str, str], parent=None):
+        super().__init__(parent)
+        self.setObjectName("KpiCard")
+        self.setMinimumHeight(56)
+        self.setMaximumHeight(62)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(9, 7, 9, 7)
+        layout.setSpacing(7)
+
+        icon = QLabel()
+        icon.setPixmap(make_icon(icon_name, accent, 18).pixmap(18, 18))
+        icon.setFixedSize(28, 28)
+        icon.setAlignment(Qt.AlignCenter)
+        icon.setStyleSheet(f"background: {accent}22; border-radius: 10px;")
+        layout.addWidget(icon)
+
+        text_box = QVBoxLayout()
+        text_box.setSpacing(1)
+        label = QLabel(title)
+        label.setObjectName("Caption")
+        label.setWordWrap(False)
+        label.setToolTip(title)
+        label.setStyleSheet("font-size: 9px;")
+        self.number = QLabel(value)
+        self.number.setStyleSheet(f"font-size: 18px; font-weight: 900; color: {palette['text']};")
+        self.number.setToolTip(value)
+        text_box.addWidget(label)
+        text_box.addWidget(self.number)
+        layout.addLayout(text_box, 1)

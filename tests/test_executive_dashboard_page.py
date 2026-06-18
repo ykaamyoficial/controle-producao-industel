@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication, QWidget
+from PySide6.QtWidgets import QApplication, QLabel, QWidget
 
 from app.services.migration_runner import apply_migrations
 from app.services.production_repository import initialize_database
@@ -94,6 +94,9 @@ class ExecutiveDashboardPageTests(unittest.TestCase):
         self.assertGreaterEqual(page.alert_model.rowCount(), 1)
         self.assertIn("Confiabilidade:", page.reliability_badge.text())
         self.assertIn("Ultima atualizacao:", page.updated_at.text())
+        self.assertLessEqual(max(card.height() for card in page.operational_cards), 62)
+        self.assertLessEqual(max(card.height() for card in page.fiscal_cards), 62)
+        self.assertEqual(page.content.layout().indexOf(page.alerts_panel), 2)
         self.assertEqual(self.conn.total_changes, before)
 
     def test_filters_are_sent_to_executive_service(self):
@@ -119,6 +122,11 @@ class ExecutiveDashboardPageTests(unittest.TestCase):
         self.assertEqual(filters["area"], "PRODUCAO")
         self.assertEqual(filters["status"], "FINALIZADO")
         self.assertEqual(filters["confiabilidade"], "alta")
+        self.assertFalse(page.more_filters.isHidden())
+
+        page.more_filters_btn.setChecked(False)
+
+        self.assertTrue(page.more_filters.isHidden())
 
     def test_refresh_button_reloads_without_database_change(self):
         page = ExecutiveDashboardPage(self.service)
@@ -153,6 +161,41 @@ class ExecutiveDashboardPageTests(unittest.TestCase):
         for forbidden in ("valor", "preco", "preço", "subtotal", "imposto", "pagamento", "frete", "currency", "r$"):
             self.assertNotIn(forbidden, visible_text)
 
+    def test_empty_alerts_show_empty_state_instead_of_table(self):
+        page = ExecutiveDashboardPage(self.service)
+
+        page._render_alerts([])
+
+        self.assertFalse(page.alert_empty.isHidden())
+        self.assertTrue(page.alert_table.isHidden())
+        self.assertIn("Nenhum alerta executivo", page.alert_empty.text())
+
+    def test_evolution_without_period_history_shows_informative_state(self):
+        page = ExecutiveDashboardPage(self.service)
+
+        page._render_evolution({})
+
+        self.assertIn("Evolucao operacional sera mais precisa", self._visible_text(page.evolution_panel))
+
+    def test_ranking_handles_zero_one_and_many_clients(self):
+        page = ExecutiveDashboardPage(self.service)
+
+        page._render_ranking([])
+        self.assertIn("Sem clientes", self._visible_text(page.ranking_panel))
+
+        page._render_ranking([{"cliente": "MNS", "peso_operacional": 120}])
+        self.assertIn("1o MNS", self._visible_text(page.ranking_panel))
+
+        page._render_ranking([
+            {"cliente": "MNS", "peso_operacional": 120},
+            {"cliente": "ABC", "peso_operacional": 80},
+            {"cliente": "XYZ", "peso_operacional": 40},
+        ])
+        text = self._visible_text(page.ranking_panel)
+        self.assertIn("1o MNS", text)
+        self.assertIn("2o ABC", text)
+        self.assertIn("3o XYZ", text)
+
     def test_sidebar_exposes_executive_dashboard_page(self):
         sidebar = Sidebar(self.service)
         received = []
@@ -176,6 +219,9 @@ class ExecutiveDashboardPageTests(unittest.TestCase):
 
         self.assertIn("DASHBOARD EXECUTIVO", window.pages)
         self.assertIsInstance(window.pages["DASHBOARD EXECUTIVO"], ExecutiveDashboardPage)
+
+    def _visible_text(self, widget) -> str:
+        return " ".join(label.text() for label in widget.findChildren(QLabel))
 
     def seed_data(self):
         today = date.today()
