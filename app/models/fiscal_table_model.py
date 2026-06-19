@@ -44,13 +44,6 @@ class FiscalProcessTableModel(QAbstractTableModel):
         ("data_entrada_fiscal", "Entrada Fiscal"),
         ("data_ultima_emissao", "Ultima emissao"),
         ("pendencia_critica", "Alerta"),
-        ("quantidade_itens", "Itens"),
-        ("itens_pendentes", "Pendentes"),
-        ("itens_faturados", "Faturados"),
-        ("peso_total", "Peso total"),
-        ("peso_pendente", "Peso pendente"),
-        ("peso_faturado", "Peso faturado"),
-        ("mais_7_dias_sem_emissao", "+7 dias s/ emissao"),
         ("acoes", "Acoes"),
     ]
 
@@ -81,9 +74,12 @@ class FiscalProcessTableModel(QAbstractTableModel):
             if key == "status_fiscal":
                 return fiscal_status_label(str(value or ""))
             if key == "pendencia_critica":
-                return "Pendencia critica" if int(value or 0) else "-"
-            if key == "mais_7_dias_sem_emissao":
-                return "Mais de 7 dias" if int(value or 0) else "-"
+                alerts = []
+                if int(row.get("pendencia_critica") or 0):
+                    alerts.append("Critica")
+                if int(row.get("mais_7_dias_sem_emissao") or 0):
+                    alerts.append("+7 dias")
+                return " | ".join(alerts) if alerts else "-"
             if key.startswith("peso_"):
                 return format_weight(value)
             return str(value or "-")
@@ -96,18 +92,12 @@ class FiscalProcessTableModel(QAbstractTableModel):
                 return ""
             if key == "pendencia_critica" and int(value or 0):
                 return "FALTA_EMITIR_NOTA_FISCAL"
-            if key == "mais_7_dias_sem_emissao" and int(value or 0):
+            if key == "pendencia_critica" and int(row.get("mais_7_dias_sem_emissao") or 0):
                 return "NOTA_FISCAL_PARCIAL"
             return row.get("status_fiscal") if key == "status_fiscal" else value
         if role == Qt.UserRole + 3:
             return "FISCAL"
         if role == Qt.TextAlignmentRole:
-            numeric = {
-                "quantidade_itens", "itens_pendentes", "itens_faturados",
-                "peso_total", "peso_pendente", "peso_faturado",
-            }
-            if key in numeric:
-                return Qt.AlignVCenter | Qt.AlignRight
             if key == "acoes":
                 return Qt.AlignCenter
             return Qt.AlignVCenter | Qt.AlignLeft
