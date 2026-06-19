@@ -39,10 +39,11 @@ class FiscalProcessTableModel(QAbstractTableModel):
     columns = [
         ("proposta", "Proposta"),
         ("cliente", "Cliente"),
-        ("obra_site", "Obra/Site"),
         ("status_fiscal", "Status Fiscal"),
+        ("obra_site", "Obra/Site"),
         ("data_entrada_fiscal", "Entrada Fiscal"),
         ("data_ultima_emissao", "Ultima emissao"),
+        ("pendencia_critica", "Alerta"),
         ("quantidade_itens", "Itens"),
         ("itens_pendentes", "Pendentes"),
         ("itens_faturados", "Faturados"),
@@ -50,7 +51,6 @@ class FiscalProcessTableModel(QAbstractTableModel):
         ("peso_pendente", "Peso pendente"),
         ("peso_faturado", "Peso faturado"),
         ("mais_7_dias_sem_emissao", "+7 dias s/ emissao"),
-        ("pendencia_critica", "Alerta"),
         ("acoes", "Acoes"),
     ]
 
