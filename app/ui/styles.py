@@ -51,6 +51,13 @@ def app_stylesheet(palette: dict) -> str:
         color: {muted};
         font-size: 11px;
     }}
+    QLabel#SidebarGroupLabel {{
+        color: {muted};
+        font-size: 10px;
+        font-weight: 800;
+        letter-spacing: 0px;
+        padding: 10px 4px 2px 4px;
+    }}
     QLabel#TopInfoChip, QLabel#TopDatabaseChip {{
         background: {surface_alt};
         color: {muted};

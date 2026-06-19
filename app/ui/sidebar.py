@@ -6,22 +6,43 @@ from PySide6.QtWidgets import QFrame, QLabel, QPushButton, QVBoxLayout
 from app.ui.icons import make_icon
 
 
-NAV_ITEMS = [
-    ("PAINEL GERAL", "Painel geral", "dashboard"),
-    ("DASHBOARD EXECUTIVO", "Dashboard Executivo", "dashboard"),
-    ("CONTROLE GERAL", "Controle Geral", "control"),
-    ("PRODUCAO", "Producao", "production"),
-    ("GALVANIZACAO", "Galvanizacao", "galvanization"),
-    ("EXPEDICAO", "Expedicao", "expedition"),
-    ("ALMOXARIFADO", "Almoxarifado", "stock"),
-    ("FISCAL", "Fiscal", "fiscal"),
-    ("PARCIAIS", "Parciais", "partial"),
-    ("HISTORICO", "Historico", "history"),
-    ("AUDITORIA", "Auditoria", "audit"),
-    ("RELATORIOS OPERACIONAIS", "Relatorios Operacionais", "reports"),
-    ("RELATORIOS", "Relatorios", "reports"),
-    ("CONFIGURACOES", "Configuracoes", "settings"),
+NAV_GROUPS = [
+    (
+        "PAINEIS",
+        [
+            ("PAINEL GERAL", "Painel geral", "dashboard"),
+            ("DASHBOARD EXECUTIVO", "Dashboard Executivo", "dashboard"),
+        ],
+    ),
+    (
+        "OPERACAO",
+        [
+            ("CONTROLE GERAL", "Controle Geral", "control"),
+            ("PRODUCAO", "Producao", "production"),
+            ("GALVANIZACAO", "Galvanizacao", "galvanization"),
+            ("EXPEDICAO", "Expedicao", "expedition"),
+            ("FISCAL", "Fiscal", "fiscal"),
+            ("PARCIAIS", "Parciais", "partial"),
+            ("ALMOXARIFADO", "Almoxarifado", "stock"),
+        ],
+    ),
+    (
+        "ANALISE",
+        [
+            ("RELATORIOS OPERACIONAIS", "Relatorios Operacionais", "reports"),
+            ("HISTORICO", "Historico", "history"),
+        ],
+    ),
+    (
+        "SISTEMA",
+        [
+            ("CONFIGURACOES", "Configuracoes", "settings"),
+        ],
+    ),
 ]
+
+NAV_ITEMS = [item for _group, items in NAV_GROUPS for item in items]
+NAV_LABELS = {key: label for key, label, _icon in NAV_ITEMS}
 
 
 class Sidebar(QFrame):
@@ -32,6 +53,7 @@ class Sidebar(QFrame):
         super().__init__(parent)
         self.service = service
         self.buttons: dict[str, QPushButton] = {}
+        self.group_labels: list[QLabel] = []
         self.setObjectName("Sidebar")
         self.setMinimumWidth(236)
         self.setMaximumWidth(236)
@@ -57,25 +79,30 @@ class Sidebar(QFrame):
         layout.addWidget(caption)
 
         visible = set(self.service.visible_areas())
-        for key, label, icon in NAV_ITEMS:
-            if key in {
-                "HISTORICO",
-                "DASHBOARD EXECUTIVO",
-                "RELATORIOS OPERACIONAIS",
-                "RELATORIOS",
-                "CONFIGURACOES",
-                "PAINEL GERAL",
-                "PARCIAIS",
-                "FISCAL",
-            } or key in visible:
-                if key == "AUDITORIA" and self.service.user_profile() != "Administrador":
-                    continue
+        always_visible = {
+            "HISTORICO",
+            "DASHBOARD EXECUTIVO",
+            "RELATORIOS OPERACIONAIS",
+            "CONFIGURACOES",
+            "PAINEL GERAL",
+            "PARCIAIS",
+            "FISCAL",
+        }
+        for group, items in NAV_GROUPS:
+            group_buttons = [item for item in items if item[0] in always_visible or item[0] in visible]
+            if not group_buttons:
+                continue
+            group_label = QLabel(group)
+            group_label.setObjectName("SidebarGroupLabel")
+            self.group_labels.append(group_label)
+            layout.addWidget(group_label)
+            for key, label, icon in group_buttons:
                 btn = QPushButton(label)
                 btn.setObjectName("NavButton")
                 btn.setProperty("active", "false")
                 btn.setIcon(make_icon(icon, self.service.palette["accent"]))
                 btn.setIconSize(QSize(18, 18))
-                btn.setMinimumHeight(40)
+                btn.setMinimumHeight(38)
                 btn.setToolTip(label)
                 btn.clicked.connect(lambda _=False, page=key: self.page_selected.emit(page))
                 self.buttons[key] = btn
@@ -94,5 +121,7 @@ class Sidebar(QFrame):
         self.setMaximumWidth(width)
         self.top_button.setText("" if collapsed else "  " + self.service.company)
         self.caption.setVisible(not collapsed)
+        for label in self.group_labels:
+            label.setVisible(not collapsed)
         for key, button in self.buttons.items():
-            button.setText("" if collapsed else next(label for item, label, _icon in NAV_ITEMS if item == key))
+            button.setText("" if collapsed else NAV_LABELS[key])

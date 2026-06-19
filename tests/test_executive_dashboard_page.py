@@ -205,6 +205,32 @@ class ExecutiveDashboardPageTests(unittest.TestCase):
         sidebar.buttons["DASHBOARD EXECUTIVO"].click()
         self.assertEqual(received, ["DASHBOARD EXECUTIVO"])
 
+    def test_sidebar_groups_menu_and_hides_legacy_reports(self):
+        sidebar = Sidebar(self.service)
+        expected_order = [
+            "PAINEL GERAL",
+            "DASHBOARD EXECUTIVO",
+            "CONTROLE GERAL",
+            "PRODUCAO",
+            "GALVANIZACAO",
+            "EXPEDICAO",
+            "FISCAL",
+            "PARCIAIS",
+            "ALMOXARIFADO",
+            "RELATORIOS OPERACIONAIS",
+            "HISTORICO",
+            "CONFIGURACOES",
+        ]
+
+        self.assertEqual(list(sidebar.buttons), expected_order)
+        self.assertNotIn("RELATORIOS", sidebar.buttons)
+        self.assertEqual([label.text() for label in sidebar.group_labels], ["PAINEIS", "OPERACAO", "ANALISE", "SISTEMA"])
+
+        sidebar.set_collapsed(True)
+
+        self.assertTrue(all(label.isHidden() for label in sidebar.group_labels))
+        self.assertTrue(all(button.toolTip() for button in sidebar.buttons.values()))
+
     def test_main_window_registers_executive_dashboard_page(self):
         with patch("app.ui.main_window.BackendService", return_value=self.service):
             window = MainWindow()
@@ -219,6 +245,10 @@ class ExecutiveDashboardPageTests(unittest.TestCase):
 
         self.assertIn("DASHBOARD EXECUTIVO", window.pages)
         self.assertIsInstance(window.pages["DASHBOARD EXECUTIVO"], ExecutiveDashboardPage)
+        self.assertNotIn("RELATORIOS", window.sidebar.buttons)
+        self.assertIn("RELATORIOS", window.pages)
+        for key in window.sidebar.buttons:
+            self.assertIn(key, window.pages)
 
     def _visible_text(self, widget) -> str:
         return " ".join(label.text() for label in widget.findChildren(QLabel))
