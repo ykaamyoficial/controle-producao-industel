@@ -9,12 +9,12 @@ from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication, QPushButton
+from PySide6.QtWidgets import QApplication, QPushButton, QTabWidget
 
 from app.services.migration_runner import apply_migrations
 from app.services.production_repository import Repository, initialize_database
 from app.ui.dashboard_page import DashboardPage
-from app.ui.fiscal_page import FiscalPage
+from app.ui.fiscal_page import FiscalPage, FiscalProposalDetailDialog
 from app.ui.sidebar import Sidebar
 
 
@@ -310,6 +310,38 @@ class FiscalReadOnlyPageTests(unittest.TestCase):
         self.assertGreater(page.model.rowCount(), 0)
         self.assertFalse(hasattr(page, "items_table"))
         self.assertEqual(page.model.columns[-1][0], "acoes")
+
+    def test_fiscal_details_dialog_groups_summary_items_emissions_history_and_alerts(self):
+        fiscal_id = self.create_fiscal_process(
+            "CP02007D",
+            status_fiscal="NOTA_FISCAL_PARCIAL",
+            expedition_status="ENTREGUE",
+        )
+        self.create_fiscal_emission(fiscal_id, "NF-987", "fiscal", "2026-06-16")
+        row = [dict(row) for row in self.repo.list_fiscal_processes({"text": "CP02007D"})][0]
+
+        dialog = FiscalProposalDetailDialog(self.service, row)
+        tabs = dialog.findChild(QTabWidget)
+
+        self.assertIsNotNone(tabs)
+        self.assertGreaterEqual(dialog.width(), 980)
+        self.assertGreaterEqual(dialog.height(), 640)
+        self.assertEqual(
+            [tabs.tabText(index) for index in range(tabs.count())],
+            ["Resumo", "Itens", "Emissoes", "Historico Fiscal", "Alertas"],
+        )
+        self.assertTrue(dialog.items)
+        self.assertTrue(dialog.emissions)
+        self.assertIsInstance(dialog.movements, list)
+
+    def test_fiscal_context_menu_uses_single_proposal_details_entry(self):
+        self.create_fiscal_process("CP02007M")
+        page = FiscalPage(self.service)
+        page.refresh()
+        row = page.model.rows[0]
+        menu = page.build_actions_menu(row)
+
+        self.assertEqual([action.text() for action in menu.actions()], ["Detalhes da Proposta"])
 
     def test_fiscal_page_exposes_manual_emission_button_for_allowed_user(self):
         self.create_fiscal_process("CP02008A")

@@ -11,15 +11,17 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFrame,
     QGridLayout,
+    QHeaderView,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QMessageBox,
     QMenu,
+    QSizePolicy,
+    QScrollArea,
     QTabWidget,
     QTableWidget,
     QTableWidgetItem,
-    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -32,7 +34,270 @@ from app.ui.components.kpi_card import KpiCard
 from app.ui.components.modern_button import ModernButton
 from app.ui.components.modern_table import ModernTable, ProcessFilterProxy
 from app.ui.fiscal_emission_dialog import FiscalEmissionDialog
-from app.ui.process_detail_dialog import ProcessDetailDialog
+
+
+class FiscalProposalDetailDialog(QDialog):
+    def __init__(self, service, fiscal_row: dict, parent=None):
+        super().__init__(parent)
+        self.service = service
+        self.fiscal_row = fiscal_row
+        self.fiscal_id = int(fiscal_row.get("fiscal_processo_id") or 0)
+        self.items = self.service.fiscal_items(self.fiscal_id)
+        self.emissions = self.service.fiscal_emissions(self.fiscal_id)
+        self.movements = self.service.fiscal_movements(self.fiscal_id)
+        self.setWindowTitle("Detalhes da Proposta")
+        self.setSizeGripEnabled(True)
+        self._resize_to_parent(parent)
+        self._build()
+
+    def _resize_to_parent(self, parent):
+        if parent:
+            base = parent.window().size()
+            width = max(980, int(base.width() * 0.80))
+            height = max(640, int(base.height() * 0.80))
+            self.resize(width, height)
+            center = parent.window().geometry().center()
+            frame = self.frameGeometry()
+            frame.moveCenter(center)
+            self.move(frame.topLeft())
+        else:
+            self.resize(1120, 720)
+
+    def _build(self):
+        root = QVBoxLayout(self)
+        root.setContentsMargins(18, 18, 18, 18)
+        root.setSpacing(14)
+
+        title = QLabel(f"{self.fiscal_row.get('proposta') or '-'} | {self.fiscal_row.get('cliente') or '-'}")
+        title.setObjectName("FilterTitle")
+        subtitle = QLabel(
+            f"Status fiscal: {self.service.fiscal_status_label(self.fiscal_row.get('status_fiscal') or '')} | "
+            f"Entrada: {self.fiscal_row.get('data_entrada_fiscal') or '-'}"
+        )
+        subtitle.setObjectName("Caption")
+        root.addWidget(title)
+        root.addWidget(subtitle)
+
+        tabs = QTabWidget()
+        tabs.setObjectName("ModernTabs")
+        tabs.addTab(self._summary_tab(), "Resumo")
+        tabs.addTab(self._items_tab(), "Itens")
+        tabs.addTab(self._emissions_tab(), "Emissoes")
+        tabs.addTab(self._history_tab(), "Historico Fiscal")
+        tabs.addTab(self._alerts_tab(), "Alertas")
+        root.addWidget(tabs, 1)
+
+        close = ModernButton("Fechar", "clear")
+        close.clicked.connect(self.accept)
+        footer = QHBoxLayout()
+        footer.addStretch()
+        footer.addWidget(close)
+        root.addLayout(footer)
+
+    def _summary_tab(self) -> QWidget:
+        tab = self._scroll_tab()
+        layout = tab.widget().layout()
+
+        info = QFrame()
+        info.setObjectName("FilterBar")
+        grid = QGridLayout(info)
+        grid.setContentsMargins(16, 14, 16, 14)
+        grid.setHorizontalSpacing(18)
+        grid.setVerticalSpacing(10)
+        latest_nf = self._latest_nf_number()
+        alert = self._alert_text()
+        rows = [
+            ("Proposta", self.fiscal_row.get("proposta")),
+            ("Cliente", self.fiscal_row.get("cliente")),
+            ("Obra/Site", self.fiscal_row.get("obra_site")),
+            ("Status Fiscal", self.service.fiscal_status_label(self.fiscal_row.get("status_fiscal") or "")),
+            ("Entrada Fiscal", self.fiscal_row.get("data_entrada_fiscal")),
+            ("Ultima Emissao", self.fiscal_row.get("data_ultima_emissao") or "-"),
+            ("Numero da NF", latest_nf),
+            ("Alerta atual", alert),
+        ]
+        for index, (label, value) in enumerate(rows):
+            row = index // 2
+            col = (index % 2) * 2
+            field = QLabel(label)
+            field.setObjectName("FieldLabel")
+            data = QLabel(str(value or "-"))
+            data.setWordWrap(True)
+            grid.addWidget(field, row, col)
+            grid.addWidget(data, row, col + 1)
+        grid.setColumnStretch(1, 1)
+        grid.setColumnStretch(3, 1)
+        layout.addWidget(info)
+
+        cards = QGridLayout()
+        cards.setHorizontalSpacing(12)
+        cards.setVerticalSpacing(12)
+        metrics = [
+            ("Total de itens", self.fiscal_row.get("quantidade_itens") or 0, "audit"),
+            ("Itens pendentes", self.fiscal_row.get("itens_pendentes") or 0, "clock"),
+            ("Itens faturados", self.fiscal_row.get("itens_faturados") or 0, "status"),
+            ("Peso total", format_weight(self.fiscal_row.get("peso_total")), "reports"),
+            ("Peso pendente", format_weight(self.fiscal_row.get("peso_pendente")), "partial"),
+            ("Peso faturado", format_weight(self.fiscal_row.get("peso_faturado")), "status"),
+        ]
+        for index, (label, value, icon) in enumerate(metrics):
+            cards.addWidget(self._metric_card(label, value, icon), index // 3, index % 3)
+        layout.addLayout(cards)
+        layout.addStretch()
+        return tab
+
+    def _items_tab(self) -> QWidget:
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(0, 12, 0, 0)
+        columns = [
+            ("numero_item", "Item"),
+            ("descricao", "Descricao"),
+            ("quantidade_total", "Quantidade Total"),
+            ("quantidade_faturada", "Quantidade Faturada"),
+            ("quantidade_pendente", "Quantidade Pendente"),
+            ("peso_total", "Peso Total"),
+            ("peso_faturado", "Peso Faturado"),
+            ("peso_pendente", "Peso Pendente"),
+            ("status_item_fiscal", "Status Item"),
+        ]
+        table = self._table(self.items, columns, description_key="descricao")
+        layout.addWidget(table, 1)
+        return tab
+
+    def _emissions_tab(self) -> QWidget:
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(0, 12, 0, 0)
+        columns = [
+            ("id", "Numero da emissao"),
+            ("numero_controle", "Numero da NF"),
+            ("data_emissao", "Data"),
+            ("usuario", "Usuario"),
+            ("quantidade_emitida", "Quantidade faturada"),
+            ("peso_emitido", "Peso faturado"),
+            ("observacao", "Observacao"),
+        ]
+        layout.addWidget(self._table(self.emissions, columns, description_key="observacao"), 1)
+        return tab
+
+    def _history_tab(self) -> QWidget:
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(0, 12, 0, 0)
+        columns = [
+            ("data_hora", "Data/Hora"),
+            ("usuario", "Usuario"),
+            ("tipo_movimento", "Acao"),
+            ("status_anterior", "Status Anterior"),
+            ("status_novo", "Status Novo"),
+            ("observacao", "Observacao"),
+        ]
+        layout.addWidget(self._table(self.movements, columns, description_key="observacao"), 1)
+        return tab
+
+    def _alerts_tab(self) -> QWidget:
+        tab = self._scroll_tab()
+        layout = tab.widget().layout()
+        alerts = self._alerts()
+        if not alerts:
+            empty = QLabel("Nenhum alerta fiscal encontrado para esta proposta.")
+            empty.setObjectName("Caption")
+            empty.setAlignment(Qt.AlignCenter)
+            layout.addWidget(empty, 1)
+            return tab
+        for title, detail, kind in alerts:
+            layout.addWidget(self._alert_badge(title, detail, kind))
+        layout.addStretch()
+        return tab
+
+    def _scroll_tab(self) -> QScrollArea:
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        content = QWidget()
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(0, 12, 0, 0)
+        layout.setSpacing(12)
+        scroll.setWidget(content)
+        return scroll
+
+    def _metric_card(self, title: str, value, icon_name: str) -> QFrame:
+        card = KpiCard(title, value, icon_name, self.service.palette["accent"])
+        card.setMinimumHeight(88)
+        card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        return card
+
+    def _alert_badge(self, title: str, detail: str, kind: str) -> QFrame:
+        colors = {
+            "danger": self.service.palette["danger"],
+            "warning": self.service.palette["warning"],
+            "secondary": self.service.palette["secondary"],
+        }
+        color = colors.get(kind, self.service.palette["accent"])
+        frame = QFrame()
+        frame.setObjectName("KpiCard")
+        layout = QHBoxLayout(frame)
+        layout.setContentsMargins(16, 12, 16, 12)
+        icon = QLabel("!")
+        icon.setAlignment(Qt.AlignCenter)
+        icon.setFixedSize(34, 34)
+        icon.setStyleSheet(f"background: {color}22; color: {color}; border-radius: 10px; font-weight: 900;")
+        text = QLabel(f"<b>{title}</b><br>{detail}")
+        text.setWordWrap(True)
+        layout.addWidget(icon)
+        layout.addWidget(text, 1)
+        return frame
+
+    def _table(self, rows: list[dict], columns: list[tuple[str, str]], description_key: str | None = None) -> QTableWidget:
+        table = QTableWidget(len(rows), len(columns))
+        table.setHorizontalHeaderLabels([label for _key, label in columns])
+        table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        table.setAlternatingRowColors(True)
+        table.verticalHeader().setVisible(False)
+        table.horizontalHeader().setStretchLastSection(False)
+        table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        if description_key:
+            description_index = next((i for i, (key, _label) in enumerate(columns) if key == description_key), None)
+            if description_index is not None:
+                table.horizontalHeader().setSectionResizeMode(description_index, QHeaderView.Stretch)
+        for r, item in enumerate(rows):
+            for c, (key, _label) in enumerate(columns):
+                value = self._display_value(key, item.get(key))
+                cell = QTableWidgetItem(str(value or "-"))
+                alignment = Qt.AlignVCenter | Qt.AlignLeft if key in {"descricao", "observacao"} else Qt.AlignCenter
+                cell.setTextAlignment(alignment)
+                table.setItem(r, c, cell)
+        return table
+
+    def _display_value(self, key: str, value):
+        if key in {"status_fiscal", "status_item_fiscal", "status_anterior", "status_novo"}:
+            return self.service.fiscal_status_label(value or "")
+        if key.startswith("peso_"):
+            return format_weight(value)
+        return value
+
+    def _latest_nf_number(self):
+        for emission in self.emissions:
+            value = emission.get("numero_controle")
+            if value:
+                return value
+        return "-"
+
+    def _alert_text(self):
+        labels = [title for title, _detail, _kind in self._alerts()]
+        return " | ".join(labels) if labels else "Sem alerta"
+
+    def _alerts(self) -> list[tuple[str, str, str]]:
+        alerts = []
+        if int(self.fiscal_row.get("pendencia_critica") or 0):
+            alerts.append(("Pendencia Fiscal Critica", "Proposta entregue ou critica sem NF totalmente emitida.", "danger"))
+            alerts.append(("Entregue sem NF", "A expedicao ja concluiu a entrega e o fiscal ainda possui pendencia.", "warning"))
+        if int(self.fiscal_row.get("mais_7_dias_sem_emissao") or 0):
+            alerts.append(("Mais de 7 dias sem emissao", "Entrada fiscal antiga sem emissao total registrada.", "secondary"))
+        if self.fiscal_row.get("status_fiscal") == "NOTA_FISCAL_PARCIAL":
+            alerts.append(("Nota Fiscal Parcial", "Ainda existem itens ou peso pendentes de faturamento.", "warning"))
+        return alerts
 
 
 class FiscalPage(QWidget):
@@ -223,111 +488,30 @@ class FiscalPage(QWidget):
     def open_actions_menu(self, row: dict | None, global_pos: QPoint):
         if not row or not row.get("fiscal_processo_id"):
             return
-        menu = QMenu(self)
-        menu.addAction(QAction("Ver itens fiscais", self, triggered=lambda: self.show_fiscal_items(row)))
-        menu.addAction(QAction("Resumo da proposta", self, triggered=lambda: self.show_fiscal_summary(row)))
-        menu.addAction(QAction("Historico fiscal", self, triggered=lambda: self.show_fiscal_history(row)))
-        menu.addAction(QAction("Emissoes registradas", self, triggered=lambda: self.show_fiscal_emissions(row)))
-        menu.addSeparator()
-        menu.addAction(QAction("Detalhes completos", self, triggered=lambda: self.show_process_details(row)))
+        menu = self.build_actions_menu(row)
         menu.exec(global_pos)
 
-    def show_fiscal_items(self, row: dict):
-        items = self.service.fiscal_items(int(row.get("fiscal_processo_id") or 0))
-        self._show_table_dialog(
-            f"Itens fiscais - {row.get('proposta') or '-'}",
-            items,
-            [
-                ("numero_item", "Item"),
-                ("descricao", "Descricao"),
-                ("quantidade_total", "Qtd. total"),
-                ("quantidade_faturada", "Qtd. faturada"),
-                ("quantidade_pendente", "Qtd. pendente"),
-                ("peso_total", "Peso total"),
-                ("peso_faturado", "Peso faturado"),
-                ("peso_pendente", "Peso pendente"),
-                ("status_item_fiscal", "Status"),
-            ],
-        )
+    def build_actions_menu(self, row: dict) -> QMenu:
+        menu = QMenu(self)
+        menu.addAction(QAction("Detalhes da Proposta", self, triggered=lambda: self.show_fiscal_details(row)))
+        return menu
 
-    def show_fiscal_summary(self, row: dict):
-        lines = [
-            ("Proposta", row.get("proposta")),
-            ("Cliente", row.get("cliente")),
-            ("Obra/Site", row.get("obra_site")),
-            ("Status fiscal", self.service.fiscal_status_label(row.get("status_fiscal") or "")),
-            ("Entrada fiscal", row.get("data_entrada_fiscal")),
-            ("Ultima emissao", row.get("data_ultima_emissao") or "-"),
-            ("Itens", row.get("quantidade_itens")),
-            ("Pendentes", row.get("itens_pendentes")),
-            ("Faturados", row.get("itens_faturados")),
-            ("Peso total", format_weight(row.get("peso_total"))),
-            ("Peso pendente", format_weight(row.get("peso_pendente"))),
-            ("Peso faturado", format_weight(row.get("peso_faturado"))),
-        ]
-        text = "\n".join(f"{label}: {value or '-'}" for label, value in lines)
-        self._show_text_dialog(f"Resumo fiscal - {row.get('proposta') or '-'}", text)
-
-    def show_fiscal_history(self, row: dict):
-        movements = self.service.fiscal_movements(int(row.get("fiscal_processo_id") or 0))
-        self._show_table_dialog(
-            f"Historico fiscal - {row.get('proposta') or '-'}",
-            movements,
-            [
-                ("tipo_movimento", "Movimento"),
-                ("status_anterior", "Anterior"),
-                ("status_novo", "Novo"),
-                ("usuario", "Usuario"),
-                ("data_hora", "Quando"),
-                ("observacao", "Observacao"),
-            ],
-        )
-
-    def show_fiscal_emissions(self, row: dict):
-        emissions = self.service.fiscal_emissions(int(row.get("fiscal_processo_id") or 0))
-        self._show_table_dialog(
-            f"Emissoes registradas - {row.get('proposta') or '-'}",
-            emissions,
-            [
-                ("numero_controle", "NF/Controle"),
-                ("tipo_emissao", "Tipo"),
-                ("data_emissao", "Data"),
-                ("usuario", "Usuario"),
-                ("quantidade_itens", "Itens"),
-                ("quantidade_emitida", "Qtd. emitida"),
-                ("peso_emitido", "Peso emitido"),
-                ("observacao", "Observacao"),
-            ],
-        )
-
-    def show_process_details(self, row: dict):
-        process_id = int(row.get("processo_id") or 0)
-        if not process_id:
-            QMessageBox.information(self, "Fiscal", "Nao foi possivel localizar a proposta operacional.")
-            return
-        dialog = ProcessDetailDialog(self.service, process_id, self)
-        dialog.setStyleSheet(self.window().styleSheet())
-        if dialog.exec() and getattr(dialog, "changed", False):
-            self.refresh()
-
-    def _show_text_dialog(self, title: str, text: str):
-        dialog = QDialog(self)
-        dialog.setWindowTitle(title)
-        dialog.resize(620, 430)
-        layout = QVBoxLayout(dialog)
-        layout.setContentsMargins(16, 16, 16, 16)
-        box = QTextEdit()
-        box.setReadOnly(True)
-        box.setPlainText(text)
-        layout.addWidget(box, 1)
-        close = ModernButton("Fechar", "clear")
-        close.clicked.connect(dialog.accept)
-        row = QHBoxLayout()
-        row.addStretch()
-        row.addWidget(close)
-        layout.addLayout(row)
+    def show_fiscal_details(self, row: dict):
+        dialog = FiscalProposalDetailDialog(self.service, row, self)
         dialog.setStyleSheet(self.window().styleSheet())
         dialog.exec()
+
+    def show_fiscal_items(self, row: dict):
+        self.show_fiscal_details(row)
+
+    def show_fiscal_summary(self, row: dict):
+        self.show_fiscal_details(row)
+
+    def show_fiscal_history(self, row: dict):
+        self.show_fiscal_details(row)
+
+    def show_fiscal_emissions(self, row: dict):
+        self.show_fiscal_details(row)
 
     def _show_table_dialog(self, title: str, rows: list[dict], columns: list[tuple[str, str]]):
         dialog = QDialog(self)
