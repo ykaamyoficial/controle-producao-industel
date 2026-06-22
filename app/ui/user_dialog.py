@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.ui.components.modern_button import ModernButton
+from app.ui.dialog_utils import apply_large_dialog_geometry, style_dialog_from_parent
 
 
 AREAS = ["CONTROLE GERAL", "PRODUCAO", "GALVANIZACAO", "EXPEDICAO", "ALMOXARIFADO"]
@@ -108,7 +109,8 @@ class UserManagerDialog(QDialog):
         super().__init__(parent)
         self.service = service
         self.setWindowTitle("Usuarios e permissoes")
-        self.resize(940, 540)
+        apply_large_dialog_geometry(self, parent)
+        style_dialog_from_parent(self, parent)
         self._build()
         self.refresh()
 

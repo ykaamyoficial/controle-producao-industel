@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.ui.components.modern_button import ModernButton
+from app.ui.dialog_utils import apply_large_dialog_geometry, style_dialog_from_parent
 
 
 def display_weight(value) -> str:
@@ -33,7 +34,8 @@ class GalvanizationLoadDialog(QDialog):
         self.items: dict[int, dict] = {}
         self.saved = False
         self.setWindowTitle("Editar carga de galvanizacao" if load_id else "Montar carga para galvanizacao")
-        self.setMinimumSize(1120, 640)
+        apply_large_dialog_geometry(self, parent)
+        style_dialog_from_parent(self, parent)
         self._build()
         self._load_existing()
         self.load_candidates()
@@ -311,7 +313,8 @@ class GalvanizationLoadManagerDialog(QDialog):
         self.preselected_ids = preselected_ids or []
         self.changed = False
         self.setWindowTitle("Cargas de galvanizacao")
-        self.setMinimumSize(1120, 700)
+        apply_large_dialog_geometry(self, parent)
+        style_dialog_from_parent(self, parent)
         self._build()
         self.load()
 

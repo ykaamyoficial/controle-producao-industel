@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 
 from app.models.fiscal_table_model import format_number, format_weight
 from app.ui.components.modern_button import ModernButton
+from app.ui.dialog_utils import apply_large_dialog_geometry, style_dialog_from_parent
 
 
 class FiscalEmissionDialog(QDialog):
@@ -31,7 +32,8 @@ class FiscalEmissionDialog(QDialog):
         self.quantity_inputs: dict[int, QDoubleSpinBox] = {}
         self.weight_inputs: dict[int, QDoubleSpinBox] = {}
         self.setWindowTitle("Registrar emissao fiscal")
-        self.setMinimumSize(1080, 650)
+        apply_large_dialog_geometry(self, parent)
+        style_dialog_from_parent(self, parent)
         self._build()
 
     def _build(self):

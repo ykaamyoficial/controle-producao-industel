@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.ui.components.modern_button import ModernButton
+from app.ui.dialog_utils import apply_large_dialog_geometry, style_dialog_from_parent
 from app.ui.item_selection_dialog import ItemSelectionDialog
 
 
@@ -25,7 +26,8 @@ class EarlyRemanagementDeliveryDialog(QDialog):
         self.selected_item_ids: list[int] = []
         self.selected_source_id: int | None = None
         self.setWindowTitle("Entrega por remanejamento")
-        self.setMinimumSize(1080, 640)
+        apply_large_dialog_geometry(self, parent)
+        style_dialog_from_parent(self, parent)
         self._build()
         self.load_destinations()
         self.load_sources()

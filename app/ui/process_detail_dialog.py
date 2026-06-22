@@ -3,7 +3,6 @@ from __future__ import annotations
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QAbstractItemView,
-    QApplication,
     QDialog,
     QFrame,
     QGridLayout,
@@ -19,6 +18,7 @@ from PySide6.QtWidgets import (
 
 from app.services.backend_adapter import legacy
 from app.ui.components.modern_button import ModernButton
+from app.ui.dialog_utils import apply_large_dialog_geometry, style_dialog_from_parent
 from app.ui.icons import make_icon
 from app.ui.process_form_dialog import ProcessFormDialog
 from app.ui.status_dialog import StatusDialog
@@ -31,16 +31,8 @@ class ProcessDetailDialog(QDialog):
         self.process_id = process_id
         self.changed = False
         self.setWindowTitle("Detalhes da proposta")
-        self.setMinimumSize(900, 540)
-        screen = parent.screen() if parent and hasattr(parent, "screen") else QApplication.primaryScreen()
-        available = screen.availableGeometry() if screen else None
-        if available:
-            width = min(1080, max(900, int(available.width() * 0.82)))
-            height = min(680, max(540, int(available.height() * 0.88)))
-            self.setMaximumHeight(max(540, available.height() - 20))
-            self.resize(width, height)
-        else:
-            self.resize(1000, 650)
+        apply_large_dialog_geometry(self, parent)
+        style_dialog_from_parent(self, parent)
         self._build()
         self.load()
 

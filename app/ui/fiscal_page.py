@@ -33,6 +33,7 @@ from app.models.fiscal_table_model import FiscalProcessTableModel
 from app.ui.components.kpi_card import KpiCard
 from app.ui.components.modern_button import ModernButton
 from app.ui.components.modern_table import ModernTable, ProcessFilterProxy
+from app.ui.dialog_utils import apply_large_dialog_geometry, style_dialog_from_parent
 from app.ui.fiscal_emission_dialog import FiscalEmissionDialog
 
 
@@ -46,22 +47,8 @@ class FiscalProposalDetailDialog(QDialog):
         self.emissions = self.service.fiscal_emissions(self.fiscal_id)
         self.movements = self.service.fiscal_movements(self.fiscal_id)
         self.setWindowTitle("Detalhes da Proposta")
-        self.setSizeGripEnabled(True)
-        self._resize_to_parent(parent)
+        apply_large_dialog_geometry(self, parent)
         self._build()
-
-    def _resize_to_parent(self, parent):
-        if parent:
-            base = parent.window().size()
-            width = max(980, int(base.width() * 0.80))
-            height = max(640, int(base.height() * 0.80))
-            self.resize(width, height)
-            center = parent.window().geometry().center()
-            frame = self.frameGeometry()
-            frame.moveCenter(center)
-            self.move(frame.topLeft())
-        else:
-            self.resize(1120, 720)
 
     def _build(self):
         root = QVBoxLayout(self)
@@ -498,7 +485,7 @@ class FiscalPage(QWidget):
 
     def show_fiscal_details(self, row: dict):
         dialog = FiscalProposalDetailDialog(self.service, row, self)
-        dialog.setStyleSheet(self.window().styleSheet())
+        style_dialog_from_parent(dialog, self)
         dialog.exec()
 
     def show_fiscal_items(self, row: dict):
@@ -516,7 +503,7 @@ class FiscalPage(QWidget):
     def _show_table_dialog(self, title: str, rows: list[dict], columns: list[tuple[str, str]]):
         dialog = QDialog(self)
         dialog.setWindowTitle(title)
-        dialog.resize(920, 540)
+        apply_large_dialog_geometry(dialog, self)
         layout = QVBoxLayout(dialog)
         layout.setContentsMargins(16, 16, 16, 16)
         table = QTableWidget(len(rows), len(columns))
@@ -543,7 +530,7 @@ class FiscalPage(QWidget):
         row.addStretch()
         row.addWidget(close)
         layout.addLayout(row)
-        dialog.setStyleSheet(self.window().styleSheet())
+        style_dialog_from_parent(dialog, self)
         dialog.exec()
 
     def register_emission(self):

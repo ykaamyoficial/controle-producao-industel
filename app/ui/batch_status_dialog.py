@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.ui.components.modern_button import ModernButton
+from app.ui.dialog_utils import apply_large_dialog_geometry, style_dialog_from_parent
 from app.ui.icons import make_icon
 from app.ui.item_selection_dialog import ItemSelectionDialog
 
@@ -26,7 +27,8 @@ class BatchStatusDialog(QDialog):
         self.selected_ids = []
         self.default_area = area
         self.setWindowTitle("Acoes em lote")
-        self.setMinimumSize(1080, 620)
+        apply_large_dialog_geometry(self, parent)
+        style_dialog_from_parent(self, parent)
         self._build()
         for process_id in process_ids or []:
             self._add_process(process_id)

@@ -31,6 +31,7 @@ from app.services.operational_reports import OperationalReportsService
 from app.ui.components.kpi_card import KpiCard
 from app.ui.components.modern_button import ModernButton
 from app.ui.components.modern_table import ModernTable
+from app.ui.dialog_utils import apply_large_dialog_geometry, style_dialog_from_parent
 
 
 AREA_OPTIONS = [
@@ -587,7 +588,7 @@ class OperationalRowsDialog(QDialog):
         super().__init__(parent)
         self.service = service
         self.setWindowTitle(title)
-        self.resize(980, 540)
+        apply_large_dialog_geometry(self, parent)
         root = QVBoxLayout(self)
         root.setContentsMargins(16, 16, 16, 16)
         root.setSpacing(10)
@@ -617,8 +618,7 @@ class OperationalRowsDialog(QDialog):
         close = ModernButton("Fechar", "clear")
         close.clicked.connect(self.accept)
         root.addWidget(close, 0, Qt.AlignRight)
-        if self.parent() and self.parent().window():
-            self.setStyleSheet(self.parent().window().styleSheet())
+        style_dialog_from_parent(self, parent)
 
 
 class OperationalProcessReadOnlyDialog(QDialog):
@@ -628,10 +628,9 @@ class OperationalProcessReadOnlyDialog(QDialog):
         self.process_id = process_id
         self.process = service.get_process_dict(process_id)
         self.setWindowTitle("Detalhes da proposta")
-        self.resize(1040, 650)
+        apply_large_dialog_geometry(self, parent)
         self._build()
-        if parent and parent.window():
-            self.setStyleSheet(parent.window().styleSheet())
+        style_dialog_from_parent(self, parent)
 
     def _build(self) -> None:
         root = QVBoxLayout(self)
@@ -756,10 +755,9 @@ class OperationalLoadReadOnlyDialog(QDialog):
         self.load_id = load_id
         self.load = service.get_galvanization_load_dict(load_id)
         self.setWindowTitle(f"Carga de galvanizacao {load_id}")
-        self.resize(980, 560)
+        apply_large_dialog_geometry(self, parent)
         self._build()
-        if parent and parent.window():
-            self.setStyleSheet(parent.window().styleSheet())
+        style_dialog_from_parent(self, parent)
 
     def _build(self) -> None:
         root = QVBoxLayout(self)

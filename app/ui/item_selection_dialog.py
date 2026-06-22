@@ -7,6 +7,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.ui.components.modern_button import ModernButton
+from app.ui.dialog_utils import apply_large_dialog_geometry, style_dialog_from_parent
 
 
 class ItemSelectionDialog(QDialog):
@@ -24,7 +25,8 @@ class ItemSelectionDialog(QDialog):
             "remanagement": "Selecionar itens para remanejamento",
         }
         self.setWindowTitle(titles.get(mode, "Selecionar itens"))
-        self.setMinimumSize(720, 470)
+        apply_large_dialog_geometry(self, parent, minimum_width=900, minimum_height=560)
+        style_dialog_from_parent(self, parent)
         self._build()
         self._load()
 
