@@ -80,13 +80,13 @@ class ModernTable(QTableView):
         self.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.setShowGrid(False)
         self.verticalHeader().setVisible(False)
-        self.verticalHeader().setDefaultSectionSize(30)
-        self.horizontalHeader().setMinimumHeight(28)
-        self.horizontalHeader().setFixedHeight(30)
+        self.verticalHeader().setDefaultSectionSize(28)
+        self.horizontalHeader().setMinimumHeight(26)
+        self.horizontalHeader().setFixedHeight(28)
         self.horizontalHeader().setStretchLastSection(True)
         self.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
         self.setItemDelegate(StatusBadgeDelegate(service, self))
-        self.setWordWrap(True)
+        self.setWordWrap(False)
         self.setToolTip("Clique no icone da primeira coluna para abrir as acoes da proposta.")
         self.setMouseTracking(True)
         self.status_shortcut_enabled = True
@@ -101,29 +101,29 @@ class ModernTable(QTableView):
         columns = getattr(source, "columns", [])
         widths = {
             "status_icon": 44,
-            "id": 58,
-            "tipo_processo": 92,
-            "cliente": 140,
+            "id": 54,
+            "tipo_processo": 86,
+            "cliente": 150,
             "proposta": 130,
-            "pedido_compra": 120,
-            "obra_site": 170,
-            "peso": 88,
+            "pedido_compra": 112,
+            "obra_site": 190,
+            "peso": 84,
             "progresso_peso": 125,
-            "lote": 90,
-            "carga_galvanizacao": 105,
-            "data_entrada": 110,
-            "prazo_entrega": 110,
-            "data_envio_galv": 120,
-            "data_prevista_retorno_galv": 132,
-            "data_retorno_galv": 122,
+            "lote": 82,
+            "carga_galvanizacao": 96,
+            "data_entrada": 96,
+            "prazo_entrega": 96,
+            "data_envio_galv": 108,
+            "data_prevista_retorno_galv": 124,
+            "data_retorno_galv": 112,
             "almoxarifado_info": 115,
             "necessita_almoxarifado": 115,
             "status_localizacao": 210,
             "localizacao_atual": 175,
-            "status_producao": 220,
-            "status_galvanizacao": 230,
-            "status_expedicao": 220,
-            "status_almoxarifado": 220,
+            "status_producao": 215,
+            "status_galvanizacao": 220,
+            "status_expedicao": 215,
+            "status_almoxarifado": 215,
             "status_fiscal": 170,
             "data_entrada_fiscal": 125,
             "data_ultima_emissao": 130,

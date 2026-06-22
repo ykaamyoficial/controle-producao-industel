@@ -3,10 +3,11 @@ from __future__ import annotations
 from PySide6.QtCore import QRegularExpression, Qt
 from PySide6.QtGui import QAction, QTextDocument
 from PySide6.QtPrintSupport import QPrinter
-from PySide6.QtWidgets import QFileDialog, QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMenu, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QFileDialog, QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMenu, QStackedLayout, QVBoxLayout, QWidget
 
 from app.controllers.process_controller import ProcessController
 from app.models.process_table_model import ProcessTableModel
+from app.ui.components.empty_state import EmptyState
 from app.ui.components.modern_button import ModernButton
 from app.ui.components.modern_table import ModernTable, ProcessFilterProxy
 from app.ui.status_dialog import StatusDialog
@@ -34,13 +35,13 @@ class ProcessPage(QWidget):
     def _build(self):
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(12)
+        root.setSpacing(8)
 
         filters = QFrame()
         filters.setObjectName("FilterBar")
         fl = QVBoxLayout(filters)
-        fl.setContentsMargins(16, 12, 16, 12)
-        fl.setSpacing(10)
+        fl.setContentsMargins(14, 10, 14, 10)
+        fl.setSpacing(8)
         self.search = QLineEdit()
         self.search.setPlaceholderText("Pesquisar proposta, cliente, site ou lote")
         self.status = QComboBox()
@@ -67,9 +68,15 @@ class ProcessPage(QWidget):
         remanage_btn.clicked.connect(self.open_early_remanagement_delivery)
         title = QLabel(self.title)
         title.setObjectName("FilterTitle")
+        subtitle = QLabel(self._area_subtitle())
+        subtitle.setObjectName("FilterSubtitle")
+        title_col = QVBoxLayout()
+        title_col.setSpacing(1)
+        title_col.addWidget(title)
+        title_col.addWidget(subtitle)
         top_row = QHBoxLayout()
         top_row.setSpacing(10)
-        top_row.addWidget(title)
+        top_row.addLayout(title_col)
         top_row.addStretch()
         fl.addLayout(top_row)
 
@@ -94,8 +101,8 @@ class ProcessPage(QWidget):
             proposal_actions.addWidget(load_btn)
 
         field_row = QGridLayout()
-        field_row.setHorizontalSpacing(12)
-        field_row.setVerticalSpacing(4)
+        field_row.setHorizontalSpacing(10)
+        field_row.setVerticalSpacing(3)
         self._add_filter_field(field_row, 0, 0, "Busca geral", self.search)
         self._add_filter_field(field_row, 0, 2, "Status", self.status)
         self._add_filter_field(field_row, 0, 4, "Prazo", self.prazo)
@@ -113,13 +120,45 @@ class ProcessPage(QWidget):
         self.table.status_shortcut_requested.connect(self.change_status_for_id)
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self.open_context_menu)
-        root.addWidget(self.table)
+        self.empty_state = EmptyState(
+            "Nenhuma proposta encontrada",
+            "Ajuste os filtros ou cadastre uma nova proposta.",
+            self.service.palette,
+        )
+        self.empty_state.setObjectName("OperationalEmptyState")
+        table_stack_frame = QFrame()
+        table_stack_frame.setObjectName("TableStack")
+        table_stack = QStackedLayout(table_stack_frame)
+        table_stack.setContentsMargins(0, 0, 0, 0)
+        table_stack.addWidget(self.table)
+        table_stack.addWidget(self.empty_state)
+        self.table_stack = table_stack
+        root.addWidget(table_stack_frame, 1)
 
-        self.search.textChanged.connect(lambda text: self.proxy.setFilterRegularExpression(QRegularExpression(text)))
+        self.search.textChanged.connect(self._apply_search_filter)
+
+    def _area_subtitle(self) -> str:
+        subtitles = {
+            "CONTROLE GERAL": "Visao geral das propostas e liberacoes.",
+            "PRODUCAO": "Acompanhe fabricacao, parciais e pendencias.",
+            "GALVANIZACAO": "Controle cargas, retornos e propostas na galvanizacao.",
+            "EXPEDICAO": "Gerencie separacao, entregas e remanejamentos.",
+            "ALMOXARIFADO": "Acompanhe separacao de materiais complementares.",
+        }
+        return subtitles.get(self.area or "", "Acompanhe propostas e acoes operacionais.")
+
+    def _apply_search_filter(self, text: str):
+        self.proxy.setFilterRegularExpression(QRegularExpression(text))
+        self._update_empty_state()
+
+    def _update_empty_state(self):
+        has_rows = self.proxy.rowCount() > 0
+        self.table_stack.setCurrentWidget(self.table if has_rows else self.empty_state)
 
     def _add_filter_field(self, layout, row, column, label_text, widget):
         label = QLabel(label_text)
         label.setObjectName("FieldLabel")
+        widget.setMinimumHeight(32)
         layout.addWidget(label, row, column)
         layout.addWidget(widget, row, column + 1)
 
@@ -143,6 +182,7 @@ class ProcessPage(QWidget):
         rows = self.controller.rows_for(self.area, filters)
         self.model.set_rows(rows)
         self.table.apply_column_layout()
+        self._update_empty_state()
 
     def clear(self):
         self.search.clear()

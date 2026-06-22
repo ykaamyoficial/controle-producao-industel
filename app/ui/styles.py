@@ -138,6 +138,10 @@ def app_stylesheet(palette: dict) -> str:
         font-weight: 800;
         color: {text};
     }}
+    QLabel#FilterSubtitle {{
+        font-size: 10px;
+        color: {muted};
+    }}
     QLabel#FieldLabel {{
         font-size: 10px;
         font-weight: 700;
@@ -195,7 +199,7 @@ def app_stylesheet(palette: dict) -> str:
         {radius(12)}
     }}
     QTableView::item, QTableWidget::item {{
-        padding: 4px 8px;
+        padding: 3px 8px;
         border: 0;
     }}
     QTableView::item:hover, QTableWidget::item:hover {{
@@ -204,10 +208,19 @@ def app_stylesheet(palette: dict) -> str:
     QHeaderView::section {{
         background: {surface_alt};
         color: {text};
-        padding: 4px 8px;
+        padding: 3px 8px;
         border: 0;
         border-bottom: 1px solid {border};
         font-weight: 700;
+    }}
+    QFrame#TableStack {{
+        background: transparent;
+        border: 0;
+    }}
+    QWidget#OperationalEmptyState {{
+        background: {surface};
+        border: 1px solid {border};
+        {radius(14)}
     }}
     QTableCornerButton::section {{
         background: {surface_alt};
