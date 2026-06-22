@@ -170,12 +170,18 @@ class ExecutiveDashboardPageTests(unittest.TestCase):
         self.assertTrue(page.alert_table.isHidden())
         self.assertIn("Nenhum alerta executivo", page.alert_empty.text())
 
-    def test_evolution_without_period_history_shows_informative_state(self):
+    def test_dashboard_uses_operational_flow_and_performance_sections(self):
         page = ExecutiveDashboardPage(self.service)
 
-        page._render_evolution({})
+        page.refresh()
 
-        self.assertIn("Evolucao operacional sera mais precisa", self._visible_text(page.evolution_panel))
+        visible_text = self._visible_text(page)
+        self.assertIn("Fluxo Operacional", visible_text)
+        self.assertIn("Gargalo Atual", visible_text)
+        self.assertIn("Indicadores de Performance", visible_text)
+        self.assertIn("Producao concluida", visible_text)
+        self.assertNotIn("Comparativo por area", visible_text)
+        self.assertNotIn("Evolucao operacional", visible_text)
 
     def test_ranking_handles_zero_one_and_many_clients(self):
         page = ExecutiveDashboardPage(self.service)
