@@ -53,6 +53,7 @@ desktop/
 versoes_antigas/
 
 # Instaladores e pacotes gerados
+release/
 *.exe
 *.msi
 *.zip
