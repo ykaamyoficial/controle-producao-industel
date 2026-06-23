@@ -1,12 +1,17 @@
 from __future__ import annotations
 
-from PySide6.QtWidgets import QFileDialog, QComboBox, QFrame, QGridLayout, QLabel, QMessageBox, QVBoxLayout, QWidget
+from datetime import datetime
 
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QApplication, QFileDialog, QComboBox, QFrame, QGridLayout, QLabel, QMessageBox, QVBoxLayout, QWidget
+
+from app.services.update_checker import check_for_updates
 from app.ui.components.kpi_card import KpiCard
 from app.ui.components.modern_button import ModernButton
 from app.ui.components.toast_notification import ToastNotification
+from app.ui.update_dialog import UpdateDialog
 from app.ui.user_dialog import UserManagerDialog
-from app.version import APP_VERSION
+from app.version import APP_CHANNEL, APP_VERSION
 
 
 class SettingsPage(QWidget):
@@ -83,10 +88,21 @@ class SettingsPage(QWidget):
         data.layout().addWidget(choose)
         grid.addWidget(data, 1, 1)
 
+        updates = self.panel("Atualizacoes")
+        updates.layout().addWidget(QLabel(f"Versao atual: {APP_VERSION}"))
+        updates.layout().addWidget(QLabel(f"Canal: {APP_CHANNEL}"))
+        self.last_update_check = QLabel("Ultima verificacao: nunca")
+        self.last_update_check.setObjectName("Caption")
+        updates.layout().addWidget(self.last_update_check)
+        check_updates = ModernButton("Verificar atualizacoes", "refresh", accent=True)
+        check_updates.clicked.connect(self.check_updates)
+        updates.layout().addWidget(check_updates)
+        grid.addWidget(updates, 2, 0)
+
         identity = self.panel("Identidade")
         identity.layout().addWidget(QLabel(f"Empresa configurada: {self.service.company}"))
         identity.layout().addWidget(QLabel("Logo e icones profissionais foram copiados para app/assets e ficam separados da versao antiga."))
-        grid.addWidget(identity, 2, 0, 1, 2)
+        grid.addWidget(identity, 2, 1)
         root.addStretch()
 
     def panel(self, title: str):
@@ -137,3 +153,34 @@ class SettingsPage(QWidget):
             return
         self.service.choose_database(path)
         QMessageBox.information(self, "Banco SQLite", "Reabra o sistema para usar o novo banco.")
+
+    def check_updates(self):
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            result = check_for_updates()
+        finally:
+            QApplication.restoreOverrideCursor()
+
+        checked_at = datetime.now().strftime("%d/%m/%Y %H:%M")
+        self.last_update_check.setText(f"Ultima verificacao: {checked_at}")
+
+        if result.get("error"):
+            QMessageBox.warning(
+                self,
+                "Atualizacoes",
+                "Nao foi possivel verificar atualizacoes agora.\n\n"
+                f"Detalhes: {result.get('error')}",
+            )
+            return
+
+        if result.get("update_available"):
+            UpdateDialog(result, self).exec()
+            return
+
+        QMessageBox.information(
+            self,
+            "Atualizacoes",
+            "Sistema atualizado.\n"
+            f"Versao instalada: {result.get('current_version', APP_VERSION)}\n"
+            f"Ultima versao: {result.get('latest_version', APP_VERSION)}",
+        )
