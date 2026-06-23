@@ -31,6 +31,7 @@ class FiscalEmissionDialog(QDialog):
         self.items = service.fiscal_items(int(fiscal_row["fiscal_processo_id"]))
         self.quantity_inputs: dict[int, QDoubleSpinBox] = {}
         self.weight_inputs: dict[int, QDoubleSpinBox] = {}
+        self.item_balances: dict[int, tuple[float, float]] = {}
         self.setWindowTitle("Registrar emissao fiscal")
         apply_large_dialog_geometry(self, parent)
         style_dialog_from_parent(self, parent)
@@ -114,6 +115,7 @@ class FiscalEmissionDialog(QDialog):
             fiscal_item_id = int(item["id"])
             quantity_balance = float(item.get("quantidade_pendente") or 0)
             weight_balance = float(item.get("peso_pendente") or 0)
+            self.item_balances[fiscal_item_id] = (quantity_balance, weight_balance)
             values = [
                 item.get("numero_item") or "",
                 item.get("descricao") or "",
@@ -149,6 +151,9 @@ class FiscalEmissionDialog(QDialog):
             self.weight_inputs[fiscal_item_id] = weight
             self.table.setCellWidget(row_index, 5, quantity)
             self.table.setCellWidget(row_index, 8, weight)
+            quantity.valueChanged.connect(
+                lambda value, current_id=fiscal_item_id: self._sync_weight_from_quantity(current_id, value)
+            )
 
         widths = (68, 280, 92, 108, 92, 108, 108, 118, 108)
         for column, width in enumerate(widths):
@@ -159,6 +164,20 @@ class FiscalEmissionDialog(QDialog):
             fiscal_item_id = int(item["id"])
             self.quantity_inputs[fiscal_item_id].setValue(float(item.get("quantidade_pendente") or 0))
             self.weight_inputs[fiscal_item_id].setValue(float(item.get("peso_pendente") or 0))
+
+    def _sync_weight_from_quantity(self, fiscal_item_id: int, quantity_now: float):
+        quantity_balance, weight_balance = self.item_balances.get(fiscal_item_id, (0.0, 0.0))
+        weight_input = self.weight_inputs.get(fiscal_item_id)
+        if not weight_input:
+            return
+        if quantity_balance <= 0 or weight_balance <= 0 or quantity_now <= 0:
+            weight_input.setValue(0)
+            return
+        if quantity_now >= quantity_balance:
+            weight_input.setValue(weight_balance)
+            return
+        proportional = round(weight_balance * (quantity_now / quantity_balance), 3)
+        weight_input.setValue(max(0, min(weight_balance, proportional)))
 
     def prepared_emissions(self) -> list[dict]:
         emissions = []

@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
+    QComboBox,
     QDialog,
+    QFrame,
     QGridLayout,
     QHBoxLayout,
     QInputDialog,
@@ -23,6 +28,16 @@ def display_weight(value) -> str:
         return ""
     number = float(value)
     return str(int(number)) if number.is_integer() else f"{number:.2f}"
+
+
+def parse_date(value):
+    text = str(value or "").strip()
+    for fmt in ("%d/%m/%Y", "%d/%m/%Y %H:%M:%S", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(text, fmt)
+        except ValueError:
+            continue
+    return None
 
 
 class GalvanizationLoadDialog(QDialog):
@@ -322,6 +337,47 @@ class GalvanizationLoadManagerDialog(QDialog):
         root = QVBoxLayout(self)
         root.setContentsMargins(22, 20, 22, 18)
         root.setSpacing(12)
+
+        filters = QFrame()
+        filters.setObjectName("FilterBar")
+        filter_layout = QGridLayout(filters)
+        filter_layout.setContentsMargins(12, 10, 12, 10)
+        filter_layout.setHorizontalSpacing(10)
+        filter_layout.setVerticalSpacing(4)
+        self.load_search = QLineEdit()
+        self.load_search.setPlaceholderText("Buscar carga, motorista ou proposta")
+        self.load_status = QComboBox()
+        self.load_status.addItem("Todos", "")
+        self.load_status.addItem("Aguardando liberacao", "AGUARDANDO_LIBERACAO")
+        self.load_status.addItem("Enviada", "LIBERADA_PARA_ENVIO")
+        self.load_status.addItem("Retornada", "RETORNADA_GALVANIZACAO")
+        self.load_status.addItem("Atrasada", "__ATRASADA__")
+        self.load_driver = QLineEdit()
+        self.load_driver.setPlaceholderText("Motorista")
+        self.load_start = QLineEdit()
+        self.load_start.setPlaceholderText("Inicial dd/mm/aaaa")
+        self.load_end = QLineEdit()
+        self.load_end.setPlaceholderText("Final dd/mm/aaaa")
+        apply_filters = ModernButton("Aplicar", "search", accent=True)
+        clear_filters = ModernButton("Limpar", "clear")
+        apply_filters.clicked.connect(self.load)
+        clear_filters.clicked.connect(self.clear_filters)
+        filter_layout.addWidget(QLabel("Buscar"), 0, 0)
+        filter_layout.addWidget(self.load_search, 0, 1)
+        filter_layout.addWidget(QLabel("Status"), 0, 2)
+        filter_layout.addWidget(self.load_status, 0, 3)
+        filter_layout.addWidget(QLabel("Motorista"), 0, 4)
+        filter_layout.addWidget(self.load_driver, 0, 5)
+        filter_layout.addWidget(QLabel("Periodo"), 1, 0)
+        filter_layout.addWidget(self.load_start, 1, 1)
+        filter_layout.addWidget(self.load_end, 1, 3)
+        filter_layout.addWidget(apply_filters, 1, 5)
+        filter_layout.addWidget(clear_filters, 1, 6)
+        filter_layout.setColumnStretch(1, 2)
+        filter_layout.setColumnStretch(3, 1)
+        filter_layout.setColumnStretch(5, 1)
+        root.addWidget(filters)
+
         self.table = QTableWidget(0, 9)
         self.table.setHorizontalHeaderLabels(["Carga", "Status", "Motorista", "Peso", "Propostas", "Prev. retorno", "Retorno", "Criada em", "Usuario"])
         self.table.verticalHeader().setVisible(False)
@@ -380,6 +436,82 @@ class GalvanizationLoadManagerDialog(QDialog):
         self.table.itemSelectionChanged.connect(self.load_selected_details)
         self.table.cellDoubleClicked.connect(lambda *_args: self.load_selected_details())
         self.load_proposals.itemSelectionChanged.connect(self.load_selected_proposal_items)
+        self.load_search.textChanged.connect(self.load)
+        self.load_status.currentIndexChanged.connect(self.load)
+        self.load_driver.textChanged.connect(self.load)
+
+    def clear_filters(self):
+        self.load_search.clear()
+        self.load_driver.clear()
+        self.load_start.clear()
+        self.load_end.clear()
+        self.load_status.setCurrentIndex(0)
+        self.load()
+
+    def _is_load_overdue(self, row_data: dict) -> bool:
+        status = row_data.get("status") or ""
+        if status == "RETORNADA_GALVANIZACAO":
+            return False
+        expected = parse_date(row_data.get("data_prevista_retorno"))
+        return bool(expected and expected.date() < datetime.now().date())
+
+    def _filtered_loads(self, rows: list[dict]) -> list[dict]:
+        search = self.load_search.text().strip().lower()
+        driver = self.load_driver.text().strip().lower()
+        status = self.load_status.currentData() or ""
+        start = parse_date(self.load_start.text())
+        end = parse_date(self.load_end.text())
+        filtered = []
+        for row in rows:
+            load_text = " ".join(
+                str(value or "")
+                for value in (
+                    row.get("id"),
+                    row.get("motorista"),
+                    row.get("status"),
+                    row.get("data_prevista_retorno"),
+                    row.get("data_retorno"),
+                )
+            ).lower()
+            if search:
+                try:
+                    proposal_text = " ".join(
+                        str(value or "")
+                        for item in self.service.galvanization_load_items(int(row.get("id") or 0))
+                        for value in (item.get("proposta"), item.get("cliente"))
+                    ).lower()
+                    load_text = f"{load_text} {proposal_text}"
+                except Exception:
+                    pass
+            if search and search not in load_text:
+                continue
+            if driver and driver not in str(row.get("motorista") or "").lower():
+                continue
+            if status == "__ATRASADA__":
+                if not self._is_load_overdue(row):
+                    continue
+            elif status and row.get("status") != status:
+                continue
+            created = parse_date(row.get("criado_em"))
+            if start and (not created or created < start):
+                continue
+            if end and (not created or created.date() > end.date()):
+                continue
+            filtered.append(row)
+        return filtered
+
+    def _style_status_item(self, item: QTableWidgetItem, row_data: dict):
+        status = row_data.get("status") or ""
+        if self._is_load_overdue(row_data):
+            color = self.service.palette["danger"]
+        elif status == "RETORNADA_GALVANIZACAO":
+            color = self.service.palette["success"]
+        elif status == "LIBERADA_PARA_ENVIO":
+            color = self.service.palette["accent"]
+        else:
+            color = self.service.palette["warning"]
+        item.setBackground(QColor(color))
+        item.setForeground(QColor(self.service.palette["accent_text"]))
 
     def _detail_table(self, headers: list[str], widths: list[int]) -> QTableWidget:
         table = QTableWidget(0, len(headers))
@@ -398,12 +530,12 @@ class GalvanizationLoadManagerDialog(QDialog):
     def load(self):
         selected_id = self._selected_load_id(False)
         self.table.setRowCount(0)
-        for row_data in self.service.galvanization_loads():
+        for row_data in self._filtered_loads(self.service.galvanization_loads()):
             row = self.table.rowCount()
             self.table.insertRow(row)
             values = [
                 row_data.get("id"),
-                self.service.load_status_label(row_data.get("status") or ""),
+                "Atrasada" if self._is_load_overdue(row_data) else self.service.load_status_label(row_data.get("status") or ""),
                 row_data.get("motorista"),
                 display_weight(row_data.get("peso_total")),
                 row_data.get("item_count"),
@@ -417,6 +549,8 @@ class GalvanizationLoadManagerDialog(QDialog):
                 item.setData(Qt.UserRole, row_data["id"])
                 item.setTextAlignment(Qt.AlignCenter)
                 self.table.setItem(row, col, item)
+                if col == 1:
+                    self._style_status_item(item, row_data)
             if selected_id == int(row_data["id"]):
                 self.table.selectRow(row)
         if self.table.rowCount() and not self.table.selectionModel().hasSelection():

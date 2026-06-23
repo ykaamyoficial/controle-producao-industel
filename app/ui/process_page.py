@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 from PySide6.QtCore import QRegularExpression, Qt
 from PySide6.QtGui import QAction, QTextDocument
 from PySide6.QtPrintSupport import QPrinter
@@ -180,9 +182,41 @@ class ProcessPage(QWidget):
             self.prazo.currentText() if self.prazo.currentText() != "TODOS" else "",
         )
         rows = self.controller.rows_for(self.area, filters)
+        rows = self._sort_rows_by_status(rows)
         self.model.set_rows(rows)
         self.table.apply_column_layout()
         self._update_empty_state()
+
+    def _sort_rows_by_status(self, rows: list[dict]) -> list[dict]:
+        area = self.area if self.area in self.service.visible_areas() else ""
+
+        def parse_date(value):
+            text = str(value or "").strip()
+            for fmt in ("%d/%m/%Y", "%d/%m/%Y %H:%M:%S", "%Y-%m-%d"):
+                try:
+                    return datetime.strptime(text, fmt)
+                except ValueError:
+                    continue
+            return datetime.max
+
+        def date_for(row: dict):
+            return (
+                row.get("prazo_entrega")
+                or row.get("data_prevista_retorno_galv")
+                or row.get("data_retorno_galv")
+                or row.get("data_envio_galv")
+                or row.get("data_entrada")
+                or row.get("data_cadastro")
+            )
+
+        return sorted(
+            rows,
+            key=lambda row: (
+                self.service.status_label(self.service.status_for_area(row, area)).lower(),
+                parse_date(date_for(row)),
+                str(row.get("proposta") or "").lower(),
+            ),
+        )
 
     def clear(self):
         self.search.clear()

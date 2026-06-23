@@ -48,12 +48,16 @@ class BatchStatusDialog(QDialog):
             self.area_combo.addItem(area.title(), area)
         idx = self.area_combo.findData(self.default_area)
         self.area_combo.setCurrentIndex(max(0, idx))
+        self.status_filter = QComboBox()
+        self.status_filter.setMinimumWidth(220)
         search_btn = ModernButton("Pesquisar", "search", accent=True)
         search_btn.clicked.connect(self.load_candidates)
         top.addWidget(QLabel("Buscar"))
         top.addWidget(self.search, 1)
         top.addWidget(QLabel("Area"))
         top.addWidget(self.area_combo)
+        top.addWidget(QLabel("Status"))
+        top.addWidget(self.status_filter)
         top.addWidget(search_btn)
         root.addLayout(top)
 
@@ -83,6 +87,7 @@ class BatchStatusDialog(QDialog):
 
         bottom = QHBoxLayout()
         self.status_combo = QComboBox()
+        self.status_combo.setMinimumWidth(260)
         self.observation = QLineEdit()
         self.observation.setPlaceholderText("Observacao para o lote")
         bottom.addWidget(QLabel("Acao"))
@@ -106,8 +111,10 @@ class BatchStatusDialog(QDialog):
 
         self.search.textChanged.connect(self.load_candidates)
         self.area_combo.currentIndexChanged.connect(self.on_area_changed)
+        self.status_filter.currentIndexChanged.connect(self.load_candidates)
         self.candidates.cellDoubleClicked.connect(lambda *_args: self.add_candidates())
         self.selected.cellDoubleClicked.connect(lambda *_args: self.remove_selected())
+        self.refresh_status_filter()
 
     def _make_table(self) -> QTableWidget:
         table = QTableWidget(0, 5)
@@ -123,17 +130,42 @@ class BatchStatusDialog(QDialog):
         return table
 
     def on_area_changed(self):
+        self.refresh_status_filter()
         self.load_candidates()
         self.refresh_selected()
 
     def current_area(self) -> str:
         return self.area_combo.currentData()
 
+    def refresh_status_filter(self):
+        if not hasattr(self, "status_filter"):
+            return
+        current = self.status_filter.currentData() or ""
+        area = self.current_area()
+        self.status_filter.blockSignals(True)
+        self.status_filter.clear()
+        self.status_filter.addItem("Todos", "")
+        for status in self.service.list_status(area):
+            self.status_filter.addItem(self.service.area_status_label(area, status), status)
+        index = self.status_filter.findData(current)
+        self.status_filter.setCurrentIndex(max(0, index))
+        self.status_filter.blockSignals(False)
+
     def load_candidates(self):
         if not hasattr(self, "candidates"):
             return
         area = self.current_area()
         rows = self.service.batch_status_candidates(area, self.search.text(), set(self.selected_ids))
+        status_filter = self.status_filter.currentData() if hasattr(self, "status_filter") else ""
+        if status_filter:
+            rows = [row for row in rows if self.service.status_for_area(row, area) == status_filter]
+        rows = sorted(
+            rows,
+            key=lambda row: (
+                self.service.area_status_label(area, self.service.status_for_area(row, area)).lower(),
+                str(row.get("proposta") or "").lower(),
+            ),
+        )
         self._fill_table(self.candidates, rows, area)
 
     def _fill_table(self, table: QTableWidget, rows: list[dict], area: str):
