@@ -6,6 +6,7 @@ from app.ui.components.kpi_card import KpiCard
 from app.ui.components.modern_button import ModernButton
 from app.ui.components.toast_notification import ToastNotification
 from app.ui.user_dialog import UserManagerDialog
+from app.version import APP_VERSION
 
 
 class SettingsPage(QWidget):
@@ -53,7 +54,7 @@ class SettingsPage(QWidget):
         db_info = QLabel(f"Banco conectado:\n{self.service.config.get('db_path')}")
         db_info.setWordWrap(True)
         system_info.layout().addWidget(db_info)
-        system_info.layout().addWidget(QLabel("Versao do sistema: 2.0"))
+        system_info.layout().addWidget(QLabel(f"Versao do sistema: {APP_VERSION}"))
         refresh = ModernButton("Atualizar pagina atual", "refresh")
         refresh.clicked.connect(lambda: self.window().refresh_current() if hasattr(self.window(), "refresh_current") else None)
         system_info.layout().addWidget(refresh)

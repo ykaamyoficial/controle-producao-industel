@@ -15,6 +15,7 @@ from app.ui.process_page import ProcessPage
 from app.ui.settings_page import SettingsPage
 from app.ui.sidebar import Sidebar
 from app.ui.styles import app_stylesheet
+from app.version import APP_NAME, APP_VERSION
 
 
 class SimplePage(QWidget):
@@ -45,7 +46,7 @@ class MainWindow(QMainWindow):
         self._width_animation = None
         self._page_animation = None
         self.pages: dict[str, QWidget] = {}
-        self.setWindowTitle("Controle de Producao Industel 2.0")
+        self.setWindowTitle(f"{APP_NAME} {APP_VERSION}")
         self.setWindowIcon(app_icon())
         self.resize(1380, 820)
         self.setMinimumSize(1120, 680)
