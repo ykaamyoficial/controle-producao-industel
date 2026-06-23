@@ -5,38 +5,53 @@ from pathlib import Path
 from typing import Any
 
 from app.services import production_repository as legacy
+from app.services.app_paths import (
+    ensure_app_data_dirs,
+    get_backup_dir,
+    get_config_example_path,
+    get_config_path,
+    get_database_path,
+)
 from app.services.migration_runner import apply_migrations
 
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 APP_DIR = ROOT_DIR / "app"
-APP_CONFIG_FILE = APP_DIR / "config" / "controle_producao_config.json"
-APP_DB_FILE = APP_DIR / "data" / "controle_producao.db"
-APP_BACKUP_DIR = APP_DIR / "data" / "backups"
+
+
+def _load_config_example() -> dict[str, Any]:
+    example_path = get_config_example_path()
+    if not example_path.exists():
+        return {}
+    with example_path.open("r", encoding="utf-8") as file:
+        return legacy.json.load(file)
 
 
 def load_app_config() -> dict[str, Any]:
-    if APP_CONFIG_FILE.exists():
-        with APP_CONFIG_FILE.open("r", encoding="utf-8") as file:
+    ensure_app_data_dirs()
+    config_path = get_config_path()
+    if config_path.exists():
+        with config_path.open("r", encoding="utf-8") as file:
             data = legacy.json.load(file)
+        data.setdefault("db_path", str(get_database_path()))
+        data.setdefault("backup_dir", str(get_backup_dir()))
     else:
-        data = {}
-    data.setdefault("db_path", str(APP_DB_FILE))
-    data.setdefault("backup_dir", str(APP_BACKUP_DIR))
+        data = _load_config_example()
+        data["db_path"] = str(get_database_path())
+        data["backup_dir"] = str(get_backup_dir())
     data.setdefault("backup_keep", 20)
     data.setdefault("company", "Industel")
     data.setdefault("color_palette", "aurora")
     data.setdefault("saved_reports", legacy.DEFAULT_REPORT_DEFINITIONS)
     if data["color_palette"] not in legacy.COLOR_PALETTES:
         data["color_palette"] = "aurora"
-    APP_CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
     save_app_config(data)
     return data
 
 
 def save_app_config(config: dict[str, Any]):
-    APP_CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with APP_CONFIG_FILE.open("w", encoding="utf-8") as file:
+    ensure_app_data_dirs()
+    with get_config_path().open("w", encoding="utf-8") as file:
         legacy.json.dump(config, file, ensure_ascii=False, indent=2)
 
 
