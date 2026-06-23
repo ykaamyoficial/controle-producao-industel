@@ -1,17 +1,25 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_submodules
 
-hiddenimports = []
+hiddenimports = ['hmac', 'hashlib', 'secrets', 'json', 'sqlite3', 'datetime', 'pathlib', 'shutil']
 hiddenimports += collect_submodules('PySide6.QtWidgets')
 hiddenimports += collect_submodules('PySide6.QtCore')
 hiddenimports += collect_submodules('PySide6.QtGui')
+hiddenimports += collect_submodules('PySide6.QtPrintSupport')
+hiddenimports += collect_submodules('pdfplumber')
+hiddenimports += collect_submodules('pdfminer')
+hiddenimports += collect_submodules('PIL')
 
 
 a = Analysis(
     ['app\\main.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=[
+        ('app\\assets', 'app\\assets'),
+        ('app\\migrations', 'app\\migrations'),
+        ('app\\config\\controle_producao_config.example.json', 'app\\config'),
+    ],
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
@@ -32,12 +40,13 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
-    console=True,
+    console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon=['app\\assets\\images\\Logo_Industel_Icone.ico'],
 )
 coll = COLLECT(
     exe,
