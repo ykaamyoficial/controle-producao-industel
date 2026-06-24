@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QDialog, QFrame, QHBoxLayout, QLabel, QTextEdit, QVBoxLayout
+from PySide6.QtWidgets import QApplication, QDialog, QFrame, QHBoxLayout, QLabel, QMessageBox, QTextEdit, QVBoxLayout
 
+from app.services.update_downloader import UpdateDownloadError, download_update as download_update_file
 from app.ui.components.modern_button import ModernButton
 
 
@@ -50,7 +51,32 @@ class UpdateDialog(QDialog):
 
         footer = QHBoxLayout()
         footer.addStretch()
+        download = ModernButton("Baixar atualizacao", "download", accent=True)
+        download.clicked.connect(self.download_update)
+        footer.addWidget(download, alignment=Qt.AlignRight)
         close = ModernButton("Fechar", "close")
         close.clicked.connect(self.accept)
         footer.addWidget(close, alignment=Qt.AlignRight)
         root.addLayout(footer)
+
+    def download_update(self):
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            result = download_update_file(self.update_info)
+        except UpdateDownloadError as exc:
+            QMessageBox.warning(
+                self,
+                "Baixar atualizacao",
+                "Nao foi possivel baixar e validar a atualizacao.\n\n"
+                f"Detalhes: {exc}",
+            )
+            return
+        finally:
+            QApplication.restoreOverrideCursor()
+
+        QMessageBox.information(
+            self,
+            "Baixar atualizacao",
+            "Instalador baixado e validado com sucesso.\n\n"
+            f"Arquivo: {result['installer_path']}",
+        )

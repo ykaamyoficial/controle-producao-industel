@@ -28,6 +28,7 @@ ICON_SYMBOLS = {
     "collapse": "menu",
     "next": "next",
     "previous": "prev",
+    "download": "download",
 }
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
@@ -165,6 +166,11 @@ def make_icon(name: str, color: str = "#2563eb", size: int = 20) -> QIcon:
     elif shape == "prev":
         painter.drawLine(QPointF(w * .62, w * .25), QPointF(w * .38, w * .50))
         painter.drawLine(QPointF(w * .38, w * .50), QPointF(w * .62, w * .75))
+    elif shape == "download":
+        painter.drawLine(QPointF(w * .50, w * .18), QPointF(w * .50, w * .62))
+        painter.drawLine(QPointF(w * .32, w * .45), QPointF(w * .50, w * .64))
+        painter.drawLine(QPointF(w * .68, w * .45), QPointF(w * .50, w * .64))
+        painter.drawLine(QPointF(w * .25, w * .78), QPointF(w * .75, w * .78))
     else:
         painter.drawEllipse(QRectF(w * .30, w * .30, w * .40, w * .40))
 
