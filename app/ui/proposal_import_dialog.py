@@ -26,7 +26,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from app.services.nomus_pdf_parser import NomusPdfParserError, parse_nomus_pdf
+from app.services.nomus_pdf_parser import NomusPdfParserError, parse_nomus_pdf as parse_nomus_pdf_legacy
+from app.services.proposal_import import import_nomus_pdf as import_nomus_pdf_hybrid
 from app.ui.components.modern_button import ModernButton
 
 
@@ -48,6 +49,8 @@ class ProposalImportDialog(QDialog):
         self.setMinimumSize(780, 580)
         self.source_path: Path | None = None
         self.parser_warnings: list[str] = []
+        self.field_confidence: dict[str, dict[str, Any]] = {}
+        self.loaded_with_fallback = False
         self.prepared_data: dict[str, Any] | None = None
         self.fields: dict[str, QLineEdit] = {}
         self.field_messages: dict[str, QLabel] = {}
@@ -134,15 +137,16 @@ class ProposalImportDialog(QDialog):
         )
         items_caption.setObjectName("Caption")
         items_panel.layout().addWidget(items_caption)
-        self.items_table = QTableWidget(0, 5)
+        self.items_table = QTableWidget(0, 6)
         self.items_table.setHorizontalHeaderLabels(
-            ["Item", "Descricao", "Quantidade", "Peso (kg)", "Conferencia"]
+            ["Item", "Codigo", "Descricao", "Quantidade", "Peso (kg)", "Conferencia"]
         )
         self.items_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        self.items_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
-        self.items_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self.items_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self.items_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
         self.items_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
         self.items_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        self.items_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeToContents)
         self.items_table.verticalHeader().setVisible(False)
         self.items_table.verticalHeader().setDefaultSectionSize(36)
         self.items_table.setAlternatingRowColors(True)
@@ -199,14 +203,28 @@ class ProposalImportDialog(QDialog):
             self.load_pdf(path)
 
     def load_pdf(self, path: str | Path) -> bool:
+        self.loaded_with_fallback = False
         try:
-            proposal = parse_nomus_pdf(path)
-        except NomusPdfParserError as exc:
-            QMessageBox.warning(self, "Importar proposta Nomus", str(exc))
-            return False
+            data = self._hybrid_preview_data(path)
+        except Exception as hybrid_exc:
+            try:
+                data = self._legacy_preview_data(path)
+                self.loaded_with_fallback = True
+                data.setdefault("warnings", []).insert(
+                    0,
+                    "A importacao hibrida nao interpretou totalmente este PDF; "
+                    "foi usado o leitor anterior como fallback. Revise os dados manualmente.",
+                )
+            except NomusPdfParserError as legacy_exc:
+                QMessageBox.warning(
+                    self,
+                    "Importar proposta Nomus",
+                    "Nao foi possivel interpretar totalmente este PDF. "
+                    f"Revise os dados manualmente.\n\nDetalhe: {legacy_exc or hybrid_exc}",
+                )
+                return False
         self.source_path = Path(path)
         self.path_field.setText(str(self.source_path))
-        data = proposal.to_dict()
         for key, field in self.fields.items():
             field.setText(str(data.get(key) or ""))
             self._set_field_state(field, self.field_messages[key], "", "")
@@ -218,16 +236,17 @@ class ProposalImportDialog(QDialog):
             self.items_table.insertRow(row)
             values = [
                 item.get("item_number"),
+                item.get("product_code"),
                 item.get("description"),
                 item.get("quantity"),
                 "" if item.get("weight_kg") is None else f"{item['weight_kg']:g}",
-                "",
+                item.get("confidence_label") or "",
             ]
             for column, value in enumerate(values):
                 cell = QTableWidgetItem(str(value or ""))
-                if column in {0, 2, 3, 4}:
+                if column in {0, 1, 3, 4, 5}:
                     cell.setTextAlignment(Qt.AlignCenter)
-                if column == 4:
+                if column == 5:
                     cell.setFlags(cell.flags() & ~Qt.ItemIsEditable)
                 self.items_table.setItem(row, column, cell)
         self.items_table.blockSignals(False)
@@ -236,6 +255,79 @@ class ProposalImportDialog(QDialog):
         self.prepared_data = None
         self.validation_result.clear()
         return True
+
+    @staticmethod
+    def _field_value(data: dict[str, Any], key: str) -> Any:
+        value = data.get(key)
+        if isinstance(value, dict):
+            return value.get("value")
+        return value
+
+    @staticmethod
+    def _field_meta(data: dict[str, Any], key: str) -> dict[str, Any]:
+        value = data.get(key)
+        return value if isinstance(value, dict) else {}
+
+    def _hybrid_preview_data(self, path: str | Path) -> dict[str, Any]:
+        result = import_nomus_pdf_hybrid(path).to_dict()
+        warnings = [
+            warning.get("message", "")
+            for warning in result.get("warnings") or []
+            if isinstance(warning, dict) and warning.get("message")
+        ]
+        items: list[dict[str, Any]] = []
+        for item in result.get("items") or []:
+            weight_missing = item.get("weight_kg") is None
+            needs_confirmation = bool(item.get("needs_confirmation") or item.get("weight_needs_confirmation"))
+            confidence = float(item.get("confidence") or 0)
+            label = "OK"
+            if weight_missing:
+                label = "Peso pendente"
+            elif needs_confirmation or confidence < 0.7:
+                label = "Revisar"
+            items.append(
+                {
+                    "item_number": item.get("item_number"),
+                    "product_code": item.get("product_code"),
+                    "description": item.get("description"),
+                    "quantity": item.get("quantity") or 0,
+                    "weight_kg": item.get("weight_kg"),
+                    "weight_needs_confirmation": weight_missing,
+                    "needs_confirmation": needs_confirmation,
+                    "confidence": confidence,
+                    "confidence_label": label,
+                }
+            )
+        self.field_confidence = {
+            key: self._field_meta(result, key)
+            for key in (
+                "proposal_number",
+                "client",
+                "site",
+                "proposal_date",
+                "delivery_deadline_raw",
+            )
+        }
+        return {
+            "source": "nomus_pdf_hybrid",
+            "proposal_number": self._field_value(result, "proposal_number"),
+            "raw_budget_number": self._field_value(result, "raw_budget_number"),
+            "client": self._field_value(result, "client"),
+            "site": self._field_value(result, "site"),
+            "proposal_date": self._field_value(result, "proposal_date"),
+            "delivery_deadline_raw": self._field_value(result, "delivery_deadline_raw"),
+            "delivery_deadline_needs_confirmation": bool(
+                self._field_meta(result, "delivery_deadline_raw").get("needs_confirmation")
+            ),
+            "purchase_order": None,
+            "lot": None,
+            "items": items,
+            "warnings": warnings,
+        }
+
+    def _legacy_preview_data(self, path: str | Path) -> dict[str, Any]:
+        self.field_confidence = {}
+        return parse_nomus_pdf_legacy(path).to_dict()
 
     def _apply_parser_warnings(self, data: dict[str, Any]):
         for key in self.REQUIRED_FIELDS:
@@ -246,6 +338,15 @@ class ProposalImportDialog(QDialog):
                     "error",
                     "Nao identificado no PDF; preenchimento obrigatorio.",
                 )
+                continue
+            meta = self.field_confidence.get(key) or {}
+            if meta.get("needs_confirmation") or float(meta.get("confidence") or 1) < 0.7:
+                self._set_field_state(
+                    self.fields[key],
+                    self.field_messages[key],
+                    "warning",
+                    "Baixa confianca: revise antes de usar no cadastro.",
+                )
         if data.get("delivery_deadline_needs_confirmation"):
             self._set_field_state(
                 self.fields["delivery_deadline_raw"],
@@ -253,6 +354,9 @@ class ProposalImportDialog(QDialog):
                 "warning",
                 "Prazo relativo: precisa confirmacao humana.",
             )
+        if self.loaded_with_fallback:
+            self.validation_result.setObjectName("ValidationWarning")
+            self.validation_result.setText("Leitor anterior usado como fallback; revise os dados antes de continuar.")
         self.alerts_label.setText(
             "\n".join(f"- {warning}" for warning in self.parser_warnings)
             or "Nenhum alerta informado pelo leitor."
@@ -276,13 +380,14 @@ class ProposalImportDialog(QDialog):
     def _refresh_item_confirmation(self, *_args):
         self.items_table.blockSignals(True)
         for row in range(self.items_table.rowCount()):
-            weight = self.items_table.item(row, 3)
-            confirmation = self.items_table.item(row, 4)
+            weight = self.items_table.item(row, 4)
+            confirmation = self.items_table.item(row, 5)
             if confirmation is None:
                 confirmation = QTableWidgetItem()
                 confirmation.setFlags(confirmation.flags() & ~Qt.ItemIsEditable)
-                self.items_table.setItem(row, 4, confirmation)
-            confirmation.setText("OK" if weight and weight.text().strip() else "Precisa confirmacao")
+                self.items_table.setItem(row, 5, confirmation)
+            current = confirmation.text().strip()
+            confirmation.setText(current if weight and weight.text().strip() and current else ("OK" if weight and weight.text().strip() else "Peso pendente"))
             confirmation.setToolTip(
                 "Peso explicitamente informado ou corrigido."
                 if weight and weight.text().strip()
@@ -297,19 +402,20 @@ class ProposalImportDialog(QDialog):
                 cell = self.items_table.item(row, column)
                 return cell.text().strip() if cell else ""
 
-            raw_weight = text_at(3).replace(",", ".")
+            raw_weight = text_at(4).replace(",", ".")
             try:
                 weight = float(raw_weight) if raw_weight else None
             except ValueError:
                 weight = None
             try:
-                quantity = int(text_at(2))
+                quantity = int(text_at(3))
             except ValueError:
                 quantity = 0
             items.append(
                 {
                     "item_number": text_at(0),
-                    "description": text_at(1),
+                    "product_code": text_at(1) or None,
+                    "description": text_at(2),
                     "quantity": quantity,
                     "weight_kg": weight,
                     "weight_needs_confirmation": weight is None,

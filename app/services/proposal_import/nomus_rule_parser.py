@@ -37,6 +37,8 @@ _EMAIL_RE = re.compile(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}")
 _PHONE_RE = re.compile(r"(?:\(?\d{2}\)?\s*)?\d{4,5}[-\s]?\d{4}")
 _WEIGHT_RE = re.compile(r"\bPESO\s*(?:TOTAL\s*)?[:=\-]?\s*(\d+(?:[.,]\d+)?)\s*KG\b", re.IGNORECASE)
 _ITEM_START_RE = re.compile(r"^(?P<number>\d{3})\s+(?P<code>\S+)\s+(?P<body>.+)$", re.IGNORECASE)
+_ITEM_ROW_RE = re.compile(r"^\d{3}\s+\S+\s+.+$", re.IGNORECASE)
+_PRODUCT_TITLE_RE = re.compile(r"^(?P<code>\d{3}(?:\.\w+)+)\s*-\s+(?P<title>.+)", re.IGNORECASE)
 _NCM_QTY_RE = re.compile(r"\b(?P<ncm>\d{8})\s+(?P<qty>\d+(?:[.,]\d+)?)\b")
 _MONEY_RE = re.compile(r"R\$\s*\d[\d.]*,\d{2}|\b\d{1,3}(?:\.\d{3})*,\d{2}\b")
 _PERCENT_RE = re.compile(r"\b\d+(?:[.,]\d+)?\s*%")
@@ -90,27 +92,27 @@ def _find_date(lines: list[str]) -> str | None:
 def _extract_client(lines: list[str]) -> str | None:
     forbidden = {"ENERTEL INDUSTRIA METALURGICA", "ENERTEL INDUSTRIA METALURGICA LTDA"}
     for index, line in enumerate(lines):
-        if not _BUDGET_RE.search(line):
-            continue
-        for candidate in lines[index + 1 : index + 8]:
-            normalized = _ascii_upper(candidate)
-            if "DADOS DO CLIENTE" in normalized:
-                break
-            if any(skip in normalized for skip in ("APARECIDA DE GOIANIA", "CNPJ", "CPF", "ORCAMENTO", "ORÇAMENTO")):
-                continue
-            compact = _clean_space(candidate)
-            if compact and len(compact) >= 3 and _ascii_upper(compact) not in forbidden:
-                return compact.upper()
-    for index, line in enumerate(lines):
         if "DADOS DO CLIENTE" not in _ascii_upper(line):
             continue
-        for candidate in lines[index + 1 : index + 5]:
+        for candidate in lines[index + 1 : index + 6]:
             normalized = _ascii_upper(candidate)
             if any(skip in normalized for skip in forbidden):
                 continue
             match = re.match(r"(.+?)\s+(?:CNPJ|CPF)\s*:", candidate, re.IGNORECASE)
             if match:
                 return _clean_space(match.group(1)).upper()
+    for index, line in enumerate(lines):
+        if not _BUDGET_RE.search(line):
+            continue
+        for candidate in lines[index + 1 : index + 8]:
+            normalized = _ascii_upper(candidate)
+            if "DADOS DO CLIENTE" in normalized:
+                break
+            if any(skip in normalized for skip in ("APARECIDA DE GOIANIA", "CNPJ", "CPF", "ORCAMENTO", "ORÇAMENTO", "VENDEDOR")):
+                continue
+            compact = _clean_space(candidate)
+            if compact and len(compact) >= 3 and _ascii_upper(compact) not in forbidden:
+                return compact.upper()
     return None
 
 
@@ -143,6 +145,46 @@ def _extract_after_label(lines: list[str], label: str, window: int = 3) -> str |
     return None
 
 
+def _extract_deadline(lines: list[str]) -> str | None:
+    for index, line in enumerate(lines):
+        if "PRAZO DE ENTREGA" not in _ascii_upper(line):
+            continue
+        match = _DEADLINE_RE.search(line)
+        if match:
+            return _clean_space(match.group(0)).upper()
+        for candidate in lines[index + 1 : index + 4]:
+            match = _DEADLINE_RE.search(candidate)
+            if match:
+                return _clean_space(match.group(0)).upper()
+    return None
+
+
+def _is_item_row(line: str) -> bool:
+    return bool(_ITEM_ROW_RE.match(line)) and not _PRODUCT_TITLE_RE.match(line)
+
+
+def _item_blocks(section: list[str]) -> list[list[str]]:
+    blocks: list[list[str]] = []
+    current: list[str] = []
+    for line in section:
+        if _PRODUCT_TITLE_RE.match(line):
+            if current:
+                blocks.append(current)
+            current = [line]
+            continue
+        if _is_item_row(line) and current and any(_is_item_row(part) for part in current):
+            blocks.append(current)
+            current = [line]
+            continue
+        if current:
+            current.append(line)
+        elif _is_item_row(line):
+            current = [line]
+    if current:
+        blocks.append(current)
+    return blocks
+
+
 def _extract_items(lines: list[str]) -> list[ProposalImportItem]:
     start = None
     end = None
@@ -155,17 +197,21 @@ def _extract_items(lines: list[str]) -> list[ProposalImportItem]:
             end = index
             break
     section = lines[start:end] if start is not None else []
-    starts = [index for index, line in enumerate(section) if _ITEM_START_RE.match(line)]
     items: list[ProposalImportItem] = []
-    for position, start_index in enumerate(starts):
-        block_end = starts[position + 1] if position + 1 < len(starts) else len(section)
-        raw_block = _clean_space(" ".join(section[start_index:block_end]))
-        first_match = _ITEM_START_RE.match(section[start_index])
+    for block in _item_blocks(section):
+        item_index = next((index for index, line in enumerate(block) if _is_item_row(line)), None)
+        if item_index is None:
+            continue
+        raw_block = _clean_space(" ".join(block))
+        first_match = _ITEM_START_RE.match(block[item_index])
         if not first_match:
             continue
         item_number = int(first_match.group("number"))
         product_code = first_match.group("code")
-        body = _clean_space(first_match.group("body") + " " + " ".join(section[start_index + 1 : block_end]))
+        title_match = _PRODUCT_TITLE_RE.match(block[0]) if block else None
+        if product_code.upper() == "N/A" and title_match:
+            product_code = title_match.group("code")
+        body = _clean_space(" ".join(block[:item_index] + [first_match.group("body")] + block[item_index + 1 :]))
         ncm_match = _NCM_QTY_RE.search(body)
         ncm = ncm_match.group("ncm") if ncm_match else None
         quantity: int | None = None
@@ -179,6 +225,7 @@ def _extract_items(lines: list[str]) -> list[ProposalImportItem]:
         weight = float(weight_match.group(1).replace(".", "").replace(",", ".")) if weight_match else None
         description = _WEIGHT_RE.sub("", description)
         description = _money_free(description)
+        description = re.sub(r"^\d{3}(?:\.\w+)+\s*-\s*", "", description)
         if not description:
             description = f"Item {item_number:03d}"
         items.append(
@@ -225,7 +272,7 @@ def parse_nomus_text(text: str) -> ProposalImportResult:
     raw_budget = _clean_space(budget_match.group(1)).upper() if budget_match else None
     proposal_number = _proposal_number(raw_budget)
     raw_date = _find_date(lines)
-    deadline_raw = _extract_after_label(lines, "PRAZO DE ENTREGA") or ""
+    deadline_raw = _extract_deadline(lines) or ""
     deadline_match = _DEADLINE_RE.search(deadline_raw)
     validity_raw = _extract_after_label(lines, "VALIDADE") or ""
     validity_match = _VALIDITY_RE.search("\n".join(lines))
