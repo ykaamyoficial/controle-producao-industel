@@ -577,6 +577,47 @@ PROFILE_DEFAULT_AREAS = {
     "operador": list(AREAS.keys()),
 }
 
+PERMISSION_LEVEL_NONE = "NONE"
+PERMISSION_LEVEL_VIEW = "VIEW"
+PERMISSION_LEVEL_EDIT = "EDIT"
+PERMISSION_LEVELS = (PERMISSION_LEVEL_NONE, PERMISSION_LEVEL_VIEW, PERMISSION_LEVEL_EDIT)
+PERMISSION_LEVEL_LABELS = {
+    PERMISSION_LEVEL_NONE: "Sem acesso",
+    PERMISSION_LEVEL_VIEW: "Visualizar",
+    PERMISSION_LEVEL_EDIT: "Visualizar e alterar",
+}
+PERMISSION_RANK = {
+    PERMISSION_LEVEL_NONE: 0,
+    PERMISSION_LEVEL_VIEW: 1,
+    PERMISSION_LEVEL_EDIT: 2,
+}
+PERMISSION_AREAS = [
+    ("dashboard", "Painel Geral", "PAINEL GERAL"),
+    ("executive_dashboard", "Dashboard Executivo", "DASHBOARD EXECUTIVO"),
+    ("control_general", "Controle Geral", "CONTROLE GERAL"),
+    ("production", "Producao", "PRODUCAO"),
+    ("galvanization", "Galvanizacao", "GALVANIZACAO"),
+    ("expedition", "Expedicao", "EXPEDICAO"),
+    ("fiscal", "Fiscal", "FISCAL"),
+    ("partials", "Parciais", "PARCIAIS"),
+    ("warehouse", "Almoxarifado", "ALMOXARIFADO"),
+    ("operational_reports", "Relatorios Operacionais", "RELATORIOS OPERACIONAIS"),
+    ("history", "Historico", "HISTORICO"),
+    ("settings", "Configuracoes", "CONFIGURACOES"),
+    ("users_permissions", "Usuarios e Permissoes", "USUARIOS_PERMISSOES"),
+]
+PERMISSION_AREA_LABELS = {key: label for key, label, _nav in PERMISSION_AREAS}
+PERMISSION_AREA_NAV = {key: nav for key, _label, nav in PERMISSION_AREAS}
+NAV_PERMISSION_KEYS = {nav: key for key, _label, nav in PERMISSION_AREAS}
+LEGACY_AREA_PERMISSION_KEYS = {
+    "CONTROLE GERAL": "control_general",
+    "PRODUCAO": "production",
+    "GALVANIZACAO": "galvanization",
+    "EXPEDICAO": "expedition",
+    "ALMOXARIFADO": "warehouse",
+}
+PERMISSION_LEGACY_AREAS = {value: key for key, value in LEGACY_AREA_PERMISSION_KEYS.items()}
+
 STATUS_LABELS = {
     "": "",
     "NAO_LIBERADO": "Nao liberado",
@@ -871,6 +912,107 @@ def user_areas(user):
 
 def user_can_admin(user):
     return bool(user and user["perfil"] == "admin")
+
+
+def permission_area_options():
+    return [
+        {"key": key, "label": label, "nav_key": nav_key}
+        for key, label, nav_key in PERMISSION_AREAS
+    ]
+
+
+def normalize_permission_area(area_key):
+    raw = str(area_key or "").strip()
+    if not raw:
+        return ""
+    if raw in PERMISSION_AREA_LABELS:
+        return raw
+    upper = raw.upper()
+    if upper in NAV_PERMISSION_KEYS:
+        return NAV_PERMISSION_KEYS[upper]
+    if upper in LEGACY_AREA_PERMISSION_KEYS:
+        return LEGACY_AREA_PERMISSION_KEYS[upper]
+    return raw
+
+
+def permission_label(area_key):
+    return PERMISSION_AREA_LABELS.get(normalize_permission_area(area_key), area_key or "")
+
+
+def permission_level_label(level):
+    return PERMISSION_LEVEL_LABELS.get(level or PERMISSION_LEVEL_NONE, "Sem acesso")
+
+
+def permission_level_rank(level):
+    return PERMISSION_RANK.get(level or PERMISSION_LEVEL_NONE, 0)
+
+
+def permission_table_exists(conn):
+    row = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'usuario_permissoes'"
+    ).fetchone()
+    return bool(row)
+
+
+def _legacy_permission_level(user, area_key):
+    if user_can_admin(user):
+        return PERMISSION_LEVEL_EDIT
+    key = normalize_permission_area(area_key)
+    legacy_area = PERMISSION_LEGACY_AREAS.get(key)
+    if legacy_area and legacy_area in user_areas(user):
+        return PERMISSION_LEVEL_EDIT
+    try:
+        profile = user["perfil"] if user else ""
+    except (KeyError, IndexError):
+        profile = ""
+    if profile == "fiscal" and key == "fiscal":
+        return PERMISSION_LEVEL_EDIT
+    return PERMISSION_LEVEL_NONE
+
+
+def user_permission_level(conn, user, area_key):
+    if not user:
+        return PERMISSION_LEVEL_NONE
+    if user_can_admin(user):
+        return PERMISSION_LEVEL_EDIT
+    key = normalize_permission_area(area_key)
+    if not key:
+        return PERMISSION_LEVEL_NONE
+    try:
+        user_id = int(user["id"])
+    except (KeyError, IndexError, TypeError, ValueError):
+        return _legacy_permission_level(user, key)
+    if permission_table_exists(conn):
+        row = conn.execute(
+            "SELECT access_level FROM usuario_permissoes WHERE usuario_id = ? AND area_key = ?",
+            (user_id, key),
+        ).fetchone()
+        if row:
+            level = row["access_level"] if hasattr(row, "keys") else row[0]
+            if level in PERMISSION_LEVELS:
+                return level
+    return _legacy_permission_level(user, key)
+
+
+def user_can_view_area(conn, user, area_key):
+    return permission_level_rank(user_permission_level(conn, user, area_key)) >= permission_level_rank(PERMISSION_LEVEL_VIEW)
+
+
+def user_can_edit_area(conn, user, area_key):
+    return permission_level_rank(user_permission_level(conn, user, area_key)) >= permission_level_rank(PERMISSION_LEVEL_EDIT)
+
+
+def profile_default_permissions(profile):
+    if profile == "admin":
+        return {key: PERMISSION_LEVEL_EDIT for key, _label, _nav in PERMISSION_AREAS}
+    permissions = {key: PERMISSION_LEVEL_NONE for key, _label, _nav in PERMISSION_AREAS}
+    for area in PROFILE_DEFAULT_AREAS.get(profile, []):
+        key = LEGACY_AREA_PERMISSION_KEYS.get(area)
+        if key:
+            permissions[key] = PERMISSION_LEVEL_EDIT
+    if profile == "fiscal":
+        permissions["fiscal"] = PERMISSION_LEVEL_EDIT
+    return permissions
 
 
 def user_can_edit_process(user):
@@ -2112,7 +2254,7 @@ class Repository:
         ).fetchone()
 
     def register_fiscal_emission(self, fiscal_processo_id, emissions, user, numero_controle="", observacao=""):
-        if not user_can_register_fiscal(user):
+        if not user_can_edit_area(self.conn, user, "fiscal"):
             raise AppError("Seu usuario nao tem permissao para registrar emissao fiscal.")
         fiscal = self.get_fiscal_process(fiscal_processo_id)
         if not fiscal:
@@ -2654,7 +2796,7 @@ class Repository:
         self.add_history(parent_id, parent["proposta"], "CONTROLE GERAL", parent["status_geral"] or "", "ENTREGUE", user, "Todas as parciais foram entregues.")
 
     def merge_expedition_partials(self, process_ids, user, automatic=False):
-        if not automatic and not user_can_access_area(user, "EXPEDICAO"):
+        if not automatic and not user_can_edit_area(self.conn, user, "expedition"):
             raise AppError("Seu usuario nao tem permissao para juntar parciais na Expedicao.")
         selected = [self.get_process(process_id) for process_id in process_ids]
         selected = [process for process in selected if process]
@@ -2800,7 +2942,7 @@ class Repository:
         ]
 
     def deliver_by_material_remanagement(self, destination_id, source_id, user, observation, item_ids=None):
-        if not user_can_access_area(user, "EXPEDICAO"):
+        if not user_can_edit_area(self.conn, user, "expedition"):
             raise AppError("Seu usuario nao tem permissao para fazer entrega por remanejamento.")
         if destination_id == source_id:
             raise AppError("A proposta entregue e a proposta origem devem ser diferentes.")
@@ -3127,7 +3269,7 @@ class Repository:
             raise
 
     def _save_process_without_commit(self, data, user, process_id=None):
-        if not user_can_edit_process(user):
+        if not user_can_edit_area(self.conn, user, "control_general"):
             raise AppError("Seu usuario nao tem permissao para cadastrar ou editar dados de processos.")
         self.validate_process(data, process_id)
         previous = self.get_process(process_id) if process_id else None
@@ -3327,7 +3469,7 @@ class Repository:
             raise AppError("Area invalida.")
         if process["status_geral"] == "CANCELADA" and area != "CONTROLE GERAL":
             raise AppError("Proposta cancelada so pode ser alterada pelo Controle Geral.")
-        if not user_can_access_area(user, area):
+        if not user_can_edit_area(self.conn, user, area):
             raise AppError(f"Seu usuario nao tem permissao para alterar status em {area.title()}.")
         if not self.area_available(process, area):
             raise AppError("Este processo ainda nao foi liberado para essa area.")
@@ -3660,7 +3802,10 @@ class Repository:
         return {int(row["processo_id"]): int(row["carga_id"]) for row in rows}
 
     def save_galvanization_load(self, driver, max_weight, expected_return_date, items, user, load_id=None):
-        if not user_can_mount_galvanization_load(user):
+        if not (
+            user_can_edit_area(self.conn, user, "galvanization")
+            or user_can_edit_area(self.conn, user, "expedition")
+        ):
             raise AppError("Seu usuario nao tem permissao para montar carga de galvanizacao.")
         driver = (driver or "").strip()
         if not driver:
@@ -3806,7 +3951,10 @@ class Repository:
         return load_id
 
     def release_galvanization_load(self, load_id, user):
-        if not user_can_mount_galvanization_load(user):
+        if not (
+            user_can_edit_area(self.conn, user, "galvanization")
+            or user_can_edit_area(self.conn, user, "expedition")
+        ):
             raise AppError("Seu usuario nao tem permissao para liberar carga de galvanizacao.")
         load = self.get_galvanization_load(load_id)
         if not load:
@@ -3849,7 +3997,10 @@ class Repository:
 
     def mark_galvanization_load_returned(self, load_id, user):
         try:
-            if not user_can_mount_galvanization_load(user):
+            if not (
+                user_can_edit_area(self.conn, user, "galvanization")
+                or user_can_edit_area(self.conn, user, "expedition")
+            ):
                 raise AppError("Seu usuario nao tem permissao para marcar retorno de carga.")
             load = self.get_galvanization_load(load_id)
             if not load:
@@ -3902,7 +4053,7 @@ class Repository:
             raise
 
     def remanage_material_to_production(self, process_id, user, observation="", destination_process=None):
-        if not user_can_access_area(user, "EXPEDICAO"):
+        if not user_can_edit_area(self.conn, user, "expedition"):
             raise AppError("Seu usuario nao tem permissao para remanejar material para producao.")
         process = self.get_process(process_id)
         if not process:

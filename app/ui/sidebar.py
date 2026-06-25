@@ -78,18 +78,8 @@ class Sidebar(QFrame):
         self.caption = caption
         layout.addWidget(caption)
 
-        visible = set(self.service.visible_areas())
-        always_visible = {
-            "HISTORICO",
-            "DASHBOARD EXECUTIVO",
-            "RELATORIOS OPERACIONAIS",
-            "CONFIGURACOES",
-            "PAINEL GERAL",
-            "PARCIAIS",
-            "FISCAL",
-        }
         for group, items in NAV_GROUPS:
-            group_buttons = [item for item in items if item[0] in always_visible or item[0] in visible]
+            group_buttons = [item for item in items if self._can_view_item(item[0])]
             if not group_buttons:
                 continue
             group_label = QLabel(group)
@@ -108,6 +98,13 @@ class Sidebar(QFrame):
                 self.buttons[key] = btn
                 layout.addWidget(btn)
         layout.addStretch()
+
+    def _can_view_item(self, key: str) -> bool:
+        if hasattr(self.service, "can_view_nav"):
+            return bool(self.service.can_view_nav(key))
+        visible = set(self.service.visible_areas()) if hasattr(self.service, "visible_areas") else set()
+        always_visible = {"PAINEL GERAL", "DASHBOARD EXECUTIVO", "FISCAL", "PARCIAIS", "RELATORIOS OPERACIONAIS", "HISTORICO", "CONFIGURACOES"}
+        return key in always_visible or key in visible
 
     def set_active(self, key: str):
         for item_key, button in self.buttons.items():

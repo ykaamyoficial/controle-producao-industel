@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from PySide6.QtCore import QObject, QThread, Signal, QTimer
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QMainWindow, QStackedWidget, QVBoxLayout, QWidget
 
 from app.services.backend_adapter import BackendService
@@ -16,7 +17,8 @@ from app.ui.settings_page import SettingsPage
 from app.ui.sidebar import Sidebar
 from app.ui.styles import app_stylesheet
 from app.version import APP_NAME, APP_VERSION
-
+from app.services.update_checker import check_for_updates
+from app.ui.update_dialog import UpdateDialog
 
 class SimplePage(QWidget):
     def __init__(self, title: str, subtitle: str, parent=None):
@@ -37,6 +39,14 @@ class SimplePage(QWidget):
         box.addStretch()
         layout.addWidget(panel)
 
+class UpdateCheckWorker(QObject):
+    finished = Signal(dict)
+
+    def run(self):
+        result = check_for_updates(timeout=8)
+        self.finished.emit(result)
+
+
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -45,6 +55,9 @@ class MainWindow(QMainWindow):
         self.sidebar_collapsed = False
         self._width_animation = None
         self._page_animation = None
+        self._update_thread = None
+        self._update_worker = None
+        self._auto_update_checked = False
         self.pages: dict[str, QWidget] = {}
         self.setWindowTitle(f"{APP_NAME} {APP_VERSION}")
         self.setWindowIcon(app_icon())
@@ -82,38 +95,85 @@ class MainWindow(QMainWindow):
         self.stack = QStackedWidget()
         content_layout.addWidget(self.stack, 1)
         self._create_pages()
-        self.select_page("PAINEL GERAL")
+        first_page = next(iter(self.pages), "")
+        if first_page:
+            self.select_page(first_page)
+            QTimer.singleShot(1500, self._start_background_update_check)
+    
+    
 
+    def _start_background_update_check(self):
+        if self._auto_update_checked:
+           return
+        self._auto_update_checked = True
+
+        self._update_thread = QThread(self)
+        self._update_worker = UpdateCheckWorker()
+        self._update_worker.moveToThread(self._update_thread)
+
+        self._update_thread.started.connect(self._update_worker.run)
+        self._update_worker.finished.connect(self._handle_background_update_result)
+        self._update_worker.finished.connect(self._update_thread.quit)
+        self._update_worker.finished.connect(self._update_worker.deleteLater)
+        self._update_thread.finished.connect(self._update_thread.deleteLater)
+        self._update_thread.finished.connect(self._clear_update_worker_refs)
+
+        self._update_thread.start()
+
+    
+
+
+    def _handle_background_update_result(self, result: dict):
+        if not result or result.get("error"):
+            return
+
+        if result.get("update_available"):
+            dialog = UpdateDialog(result, self)
+            dialog.setStyleSheet(app_stylesheet(self.service.palette))
+            dialog.exec()
+
+    def _clear_update_worker_refs(self):
+       self._update_thread = None
+       self._update_worker = None
+
+
+    
     def _create_pages(self):
-        self.pages["PAINEL GERAL"] = DashboardPage(self.service)
-        self.stack.addWidget(self.pages["PAINEL GERAL"])
+        if self._can_view("dashboard", "PAINEL GERAL"):
+            self.pages["PAINEL GERAL"] = DashboardPage(self.service)
+            self.stack.addWidget(self.pages["PAINEL GERAL"])
 
-        self.pages["DASHBOARD EXECUTIVO"] = ExecutiveDashboardPage(self.service)
-        self.stack.addWidget(self.pages["DASHBOARD EXECUTIVO"])
+        if self._can_view("executive_dashboard", "DASHBOARD EXECUTIVO"):
+            self.pages["DASHBOARD EXECUTIVO"] = ExecutiveDashboardPage(self.service)
+            self.stack.addWidget(self.pages["DASHBOARD EXECUTIVO"])
 
         for area in self.service.visible_areas():
             self.pages[area] = ProcessPage(self.service, area, area.title())
             self.stack.addWidget(self.pages[area])
 
-        self.pages["PARCIAIS"] = ProcessPage(self.service, "PARCIAIS", "Parciais e pendencias")
-        self.stack.addWidget(self.pages["PARCIAIS"])
+        if self._can_view("partials", "PARCIAIS"):
+            self.pages["PARCIAIS"] = ProcessPage(self.service, "PARCIAIS", "Parciais e pendencias")
+            self.stack.addWidget(self.pages["PARCIAIS"])
 
-        self.pages["FISCAL"] = FiscalPage(self.service)
-        self.stack.addWidget(self.pages["FISCAL"])
+        if self._can_view("fiscal", "FISCAL"):
+            self.pages["FISCAL"] = FiscalPage(self.service)
+            self.stack.addWidget(self.pages["FISCAL"])
 
-        self.pages["RELATORIOS OPERACIONAIS"] = OperationalReportsPage(self.service)
-        self.stack.addWidget(self.pages["RELATORIOS OPERACIONAIS"])
+        if self._can_view("operational_reports", "RELATORIOS OPERACIONAIS"):
+            self.pages["RELATORIOS OPERACIONAIS"] = OperationalReportsPage(self.service)
+            self.stack.addWidget(self.pages["RELATORIOS OPERACIONAIS"])
 
-        self.pages["HISTORICO"] = DataPage(
-            "Historico",
-            [
-                ("proposta", "Proposta"), ("area", "Area"), ("status_anterior", "Anterior"),
-                ("status_novo", "Novo"), ("data_hora", "Quando"), ("usuario", "Usuario"),
-                ("computador", "Computador"), ("observacao", "Observacao"),
-            ],
-            self.service.history_rows,
-        )
-        self.stack.addWidget(self.pages["HISTORICO"])
+        if self._can_view("history", "HISTORICO"):
+            self.pages["HISTORICO"] = DataPage(
+                "Historico",
+                [
+                    ("proposta", "Proposta"), ("area", "Area"), ("status_anterior", "Anterior"),
+                    ("status_novo", "Novo"), ("data_hora", "Quando"), ("usuario", "Usuario"),
+                    ("computador", "Computador"), ("observacao", "Observacao"),
+                ],
+                self.service.history_rows,
+            )
+            self.stack.addWidget(self.pages["HISTORICO"])
 
         if self.service.user_profile() == "Administrador":
             self.pages["AUDITORIA"] = DataPage(
@@ -141,8 +201,16 @@ class MainWindow(QMainWindow):
         )
         self.stack.addWidget(self.pages["RELATORIOS"])
 
-        self.pages["CONFIGURACOES"] = SettingsPage(self.service, self.apply_theme)
-        self.stack.addWidget(self.pages["CONFIGURACOES"])
+        if self._can_view("settings", "CONFIGURACOES"):
+            self.pages["CONFIGURACOES"] = SettingsPage(self.service, self.apply_theme)
+            self.stack.addWidget(self.pages["CONFIGURACOES"])
+
+    def _can_view(self, area_key: str, nav_key: str = "") -> bool:
+        if hasattr(self.service, "can_view"):
+            return bool(self.service.can_view(area_key))
+        visible = set(self.service.visible_areas()) if hasattr(self.service, "visible_areas") else set()
+        always_visible = {"PAINEL GERAL", "DASHBOARD EXECUTIVO", "FISCAL", "PARCIAIS", "RELATORIOS OPERACIONAIS", "HISTORICO", "CONFIGURACOES"}
+        return nav_key in always_visible or nav_key in visible
 
     def select_page(self, key: str):
         page = self.pages.get(key)
@@ -179,5 +247,9 @@ class MainWindow(QMainWindow):
         self._width_animation = animate_width(self.sidebar, start, end)
 
     def closeEvent(self, event):
-        self.service.close()
-        super().closeEvent(event)
+      if self._update_thread and self._update_thread.isRunning():
+           self._update_thread.quit()
+           self._update_thread.wait(1500)
+      self.service.close()
+      super().closeEvent(event)
+ 

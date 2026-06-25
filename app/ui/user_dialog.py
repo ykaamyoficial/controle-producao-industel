@@ -2,21 +2,25 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QButtonGroup,
     QCheckBox,
     QComboBox,
     QDialog,
     QFormLayout,
+    QFrame,
     QHBoxLayout,
+    QHeaderView,
+    QLabel,
     QLineEdit,
     QMessageBox,
+    QRadioButton,
+    QTableWidget,
+    QTableWidgetItem,
     QVBoxLayout,
 )
 
 from app.ui.components.modern_button import ModernButton
 from app.ui.dialog_utils import apply_large_dialog_geometry, style_dialog_from_parent
-
-
-AREAS = ["CONTROLE GERAL", "PRODUCAO", "GALVANIZACAO", "EXPEDICAO", "ALMOXARIFADO"]
 
 
 class UserEditorDialog(QDialog):
@@ -25,36 +29,61 @@ class UserEditorDialog(QDialog):
         self.service = service
         self.user_id = user_id
         self.setWindowTitle("Editar usuario" if user_id else "Novo usuario")
-        self.setMinimumWidth(560)
-        self.area_checks: dict[str, QCheckBox] = {}
+        apply_large_dialog_geometry(self, parent)
+        style_dialog_from_parent(self, parent)
+        self.permission_groups: dict[str, QButtonGroup] = {}
+        self._loading = False
         self._build()
         if user_id:
             self._load(user_id)
+        else:
+            self.apply_profile_defaults()
 
     def _build(self):
         root = QVBoxLayout(self)
         root.setContentsMargins(24, 22, 24, 20)
-        form = QFormLayout()
+        root.setSpacing(14)
+
+        data_panel = QFrame()
+        data_panel.setObjectName("Panel")
+        data_layout = QFormLayout(data_panel)
+        data_layout.setContentsMargins(16, 14, 16, 14)
+        data_layout.setSpacing(10)
         self.nome = QLineEdit()
         self.login = QLineEdit()
         self.password = QLineEdit()
         self.password.setEchoMode(QLineEdit.Password)
+        self.password.setPlaceholderText("Obrigatoria apenas para novo usuario ou troca de senha")
         self.profile = QComboBox()
         for key, label in self.service.profile_options():
             self.profile.addItem(label, key)
         self.active = QCheckBox("Usuario ativo")
         self.active.setChecked(True)
-        form.addRow("Nome *", self.nome)
-        form.addRow("Login *", self.login)
-        form.addRow("Senha", self.password)
-        form.addRow("Perfil", self.profile)
-        form.addRow("", self.active)
-        root.addLayout(form)
+        data_layout.addRow("Nome *", self.nome)
+        data_layout.addRow("Login *", self.login)
+        data_layout.addRow("Senha", self.password)
+        data_layout.addRow("Perfil", self.profile)
+        data_layout.addRow("", self.active)
+        root.addWidget(data_panel)
 
-        for area in AREAS:
-            check = QCheckBox(area.title())
-            self.area_checks[area] = check
-            root.addWidget(check)
+        permissions_title = QLabel("Permissoes por area")
+        permissions_title.setObjectName("SectionTitle")
+        root.addWidget(permissions_title)
+
+        self.permission_table = QTableWidget()
+        self.permission_table.setColumnCount(4)
+        self.permission_table.setHorizontalHeaderLabels(["Area", "Sem acesso", "Visualizar", "Visualizar e alterar"])
+        self.permission_table.verticalHeader().setVisible(False)
+        self.permission_table.setShowGrid(False)
+        self.permission_table.setAlternatingRowColors(True)
+        self.permission_table.setSelectionMode(QTableWidget.NoSelection)
+        self.permission_table.setFocusPolicy(Qt.NoFocus)
+        self.permission_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        for column in (1, 2, 3):
+            self.permission_table.horizontalHeader().setSectionResizeMode(column, QHeaderView.ResizeToContents)
+        self._build_permission_rows()
+        root.addWidget(self.permission_table, 1)
+
         self.profile.currentIndexChanged.connect(self.apply_profile_defaults)
 
         actions = QHBoxLayout()
@@ -66,27 +95,69 @@ class UserEditorDialog(QDialog):
         actions.addWidget(cancel)
         actions.addWidget(save)
         root.addLayout(actions)
-        self.apply_profile_defaults()
+
+    def _build_permission_rows(self):
+        areas = self.service.permission_area_options()
+        self.permission_table.setRowCount(len(areas))
+        for row, area in enumerate(areas):
+            key = area["key"]
+            label_item = QTableWidgetItem(area["label"])
+            label_item.setFlags(Qt.ItemIsEnabled)
+            self.permission_table.setItem(row, 0, label_item)
+            group = QButtonGroup(self)
+            group.setExclusive(True)
+            for column, level in enumerate(("NONE", "VIEW", "EDIT"), start=1):
+                radio = QRadioButton()
+                radio.setProperty("level", level)
+                radio.setToolTip(self.service.access_level_options()[column - 1][1])
+                group.addButton(radio)
+                cell = QFrame()
+                cell_layout = QHBoxLayout(cell)
+                cell_layout.setContentsMargins(0, 0, 0, 0)
+                cell_layout.setAlignment(Qt.AlignCenter)
+                cell_layout.addWidget(radio)
+                self.permission_table.setCellWidget(row, column, cell)
+            self.permission_groups[key] = group
+        self.permission_table.resizeRowsToContents()
+
+    def _set_permissions(self, permissions: dict[str, str]):
+        for key, group in self.permission_groups.items():
+            target = permissions.get(key, "NONE")
+            for button in group.buttons():
+                if button.property("level") == target:
+                    button.setChecked(True)
+                    break
+
+    def _get_permissions(self) -> dict[str, str]:
+        permissions = {}
+        for key, group in self.permission_groups.items():
+            checked = group.checkedButton()
+            permissions[key] = checked.property("level") if checked else "NONE"
+        return permissions
+
+    def _set_permissions_enabled(self, enabled: bool):
+        for group in self.permission_groups.values():
+            for button in group.buttons():
+                button.setEnabled(enabled)
 
     def _load(self, user_id: int):
+        self._loading = True
         row = self.service.get_user(user_id)
         self.nome.setText(row.get("nome", ""))
         self.login.setText(row.get("login", ""))
         idx = self.profile.findData(row.get("perfil", "consulta"))
         self.profile.setCurrentIndex(max(0, idx))
         self.active.setChecked(bool(row.get("ativo", 1)))
-        selected = {part.strip().upper() for part in (row.get("areas_acesso") or "").split(",") if part.strip()}
-        if row.get("perfil") == "admin":
-            selected = set(AREAS)
-        for area, check in self.area_checks.items():
-            check.setChecked(area in selected)
+        self._set_permissions(row.get("permissions") or {})
+        self._set_permissions_enabled(row.get("perfil") != "admin")
+        self._loading = False
 
     def apply_profile_defaults(self):
+        if self._loading:
+            return
         profile = self.profile.currentData()
-        defaults = set(self.service.profile_default_areas(profile))
-        for area, check in self.area_checks.items():
-            check.setChecked(area in defaults)
-            check.setEnabled(profile != "admin")
+        self._set_permissions(self.service.profile_default_permissions(profile))
+        self._set_permissions_enabled(profile != "admin")
 
     def save(self):
         data = {
@@ -95,7 +166,7 @@ class UserEditorDialog(QDialog):
             "password": self.password.text(),
             "perfil": self.profile.currentData(),
             "ativo": self.active.isChecked(),
-            "areas": [area for area, check in self.area_checks.items() if check.isChecked()],
+            "permissions": self._get_permissions(),
         }
         try:
             self.service.save_user(data, self.user_id)
@@ -120,13 +191,22 @@ class UserManagerDialog(QDialog):
         from PySide6.QtWidgets import QTableView
 
         root = QVBoxLayout(self)
+        root.setContentsMargins(18, 18, 18, 16)
+        root.setSpacing(12)
+        title = QLabel("Usuarios e controle de acesso")
+        title.setObjectName("SectionTitle")
+        root.addWidget(title)
+        subtitle = QLabel("Configure quem pode visualizar ou alterar cada area do sistema.")
+        subtitle.setObjectName("Caption")
+        root.addWidget(subtitle)
+
         self.model = GenericTableModel(
             [
                 ("id", "ID"),
                 ("nome", "Nome"),
                 ("login", "Login"),
                 ("perfil_label", "Perfil"),
-                ("areas_label", "Areas liberadas"),
+                ("areas_label", "Resumo de permissoes"),
                 ("ativo_label", "Ativo"),
             ]
         )
@@ -139,7 +219,10 @@ class UserManagerDialog(QDialog):
         self.table.verticalHeader().setVisible(False)
         self.table.setShowGrid(False)
         self.table.doubleClicked.connect(lambda _idx: self.edit_user())
-        root.addWidget(self.table)
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.Stretch)
+        root.addWidget(self.table, 1)
+
         actions = QHBoxLayout()
         new = ModernButton("Novo usuario", "new", accent=True)
         edit = ModernButton("Editar usuario", "edit")
@@ -167,6 +250,7 @@ class UserManagerDialog(QDialog):
     def refresh(self):
         self.model.set_rows(self.service.user_rows())
         self.table.resizeColumnsToContents()
+        self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.Stretch)
 
     def new_user(self):
         dialog = UserEditorDialog(self.service, None, self)
@@ -185,5 +269,8 @@ class UserManagerDialog(QDialog):
         user_id = self.selected_user_id()
         if not user_id:
             return
-        self.service.toggle_user(user_id)
-        self.refresh()
+        try:
+            self.service.toggle_user(user_id)
+            self.refresh()
+        except Exception as exc:
+            QMessageBox.warning(self, "Usuarios", str(exc))

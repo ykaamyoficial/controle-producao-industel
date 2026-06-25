@@ -4,6 +4,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QDialog, QFrame, QHBoxLayout, QLabel, QMessageBox, QTextEdit, QVBoxLayout
 
 from app.services.update_downloader import UpdateDownloadError, download_update as download_update_file
+from app.services.update_installer import UpdateInstallError, create_pre_update_backup, run_silent_installer
 from app.ui.components.modern_button import ModernButton
 
 
@@ -60,15 +61,38 @@ class UpdateDialog(QDialog):
         root.addLayout(footer)
 
     def download_update(self):
+        confirm = QMessageBox.question(
+            self,
+            "Atualizar sistema",
+            "O sistema vai baixar a atualizacao, validar o arquivo, criar backup do banco "
+            "e iniciar a instalacao silenciosa.\n\n"
+            "O programa sera fechado automaticamente.\n\n"
+            "Deseja continuar?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,     
+        )
+
+        if confirm != QMessageBox.Yes:
+            return  
+
         QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
-            result = download_update_file(self.update_info)
+             result = download_update_file(self.update_info)
+             create_pre_update_backup(self.update_info.get("latest_version", "nova"))
         except UpdateDownloadError as exc:
             QMessageBox.warning(
                 self,
-                "Baixar atualizacao",
+                "Atualizar sistema",
                 "Nao foi possivel baixar e validar a atualizacao.\n\n"
                 f"Detalhes: {exc}",
+            )
+            return
+        except UpdateInstallError as exc:
+            QMessageBox.warning(
+              self,
+              "Atualizar sistema",
+              "Nao foi possivel preparar a instalacao.\n\n"
+              f"Detalhes: {exc}",
             )
             return
         finally:
@@ -76,7 +100,17 @@ class UpdateDialog(QDialog):
 
         QMessageBox.information(
             self,
-            "Baixar atualizacao",
-            "Instalador baixado e validado com sucesso.\n\n"
-            f"Arquivo: {result['installer_path']}",
+            "Atualizar sistema",
+            "Atualizacao baixada, validada e backup criado com sucesso.\n\n"
+            "O sistema sera fechado e a instalacao silenciosa sera iniciada agora.",
         )
+
+        try:
+            run_silent_installer(result["installer_path"])
+        except UpdateInstallError as exc:
+            QMessageBox.warning(
+                self,
+                "Atualizar sistema",
+                "Nao foi possivel iniciar o instalador.\n\n"
+                f"Detalhes: {exc}",
+            )

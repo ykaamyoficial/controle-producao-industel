@@ -104,16 +104,46 @@ class BackendService:
         return "Administrador" if legacy.user_can_admin(self.user) else "Usuario"
 
     def visible_areas(self) -> list[str]:
-        return legacy.visible_area_names(self.user) if self.user else []
+        if not self.user:
+            return []
+        return [
+            area
+            for area in legacy.AREAS
+            if legacy.user_can_view_area(self.conn, self.user, area)
+        ]
+
+    def permission_key(self, area: str) -> str:
+        return legacy.normalize_permission_area(area)
+
+    def permission_area_options(self) -> list[dict[str, str]]:
+        return legacy.permission_area_options()
+
+    def access_level_options(self) -> list[tuple[str, str]]:
+        return [(level, legacy.permission_level_label(level)) for level in legacy.PERMISSION_LEVELS]
+
+    def permission_level(self, area_key: str) -> str:
+        return legacy.user_permission_level(self.conn, self.user, area_key)
+
+    def can_view(self, area_key: str) -> bool:
+        return bool(self.user and legacy.user_can_view_area(self.conn, self.user, area_key))
+
+    def can_edit(self, area_key: str) -> bool:
+        return bool(self.user and legacy.user_can_edit_area(self.conn, self.user, area_key))
+
+    def can_view_nav(self, nav_key: str) -> bool:
+        return self.can_view(self.permission_key(nav_key))
 
     def can_edit_process(self) -> bool:
-        return bool(self.user and legacy.user_can_edit_process(self.user))
+        return self.can_edit("control_general")
 
     def can_admin(self) -> bool:
         return bool(self.user and legacy.user_can_admin(self.user))
 
     def can_access_area(self, area: str) -> bool:
-        return bool(self.user and legacy.user_can_access_area(self.user, area))
+        return self.can_view(area)
+
+    def can_edit_area(self, area: str) -> bool:
+        return self.can_edit(area)
 
     def dashboard(self) -> dict[str, Any]:
         return dict(self.repo.dashboard())
@@ -230,7 +260,7 @@ class BackendService:
         return legacy.load_status_label(status)
 
     def can_mount_galvanization_load(self) -> bool:
-        return bool(self.user and legacy.user_can_mount_galvanization_load(self.user))
+        return self.can_edit("galvanization") or self.can_edit("expedition")
 
     def galvanization_load_candidates(self, proposal: str = "", client: str = "") -> list[dict[str, Any]]:
         proposal = proposal.strip().upper()
@@ -303,7 +333,7 @@ class BackendService:
         return self.repo.identificar_pendencia_fiscal_critica(process_id)
 
     def can_register_fiscal_emission(self) -> bool:
-        return bool(self.user and legacy.user_can_register_fiscal(self.user))
+        return self.can_edit("fiscal")
 
     def register_fiscal_emission(
         self,
@@ -434,14 +464,16 @@ class BackendService:
         for row in rows:
             data = row_to_dict(row)
             data["perfil_label"] = legacy.profile_label(row["perfil"])
-            data["areas_label"] = ", ".join(area.title() for area in legacy.user_areas(row)) or "Somente consulta"
+            data["areas_label"] = self._permission_summary(int(row["id"]))
             data["ativo_label"] = "Sim" if row["ativo"] else "Nao"
             result.append(data)
         return result
 
     def get_user(self, user_id: int) -> dict[str, Any]:
         row = self.conn.execute("SELECT * FROM usuarios WHERE id = ?", (user_id,)).fetchone()
-        return row_to_dict(row)
+        data = row_to_dict(row)
+        data["permissions"] = self.user_permissions(user_id)
+        return data
 
     def profile_options(self):
         return list(legacy.PROFILE_OPTIONS)
@@ -449,48 +481,168 @@ class BackendService:
     def profile_default_areas(self, profile: str) -> list[str]:
         return list(legacy.PROFILE_DEFAULT_AREAS.get(profile, []))
 
+    def profile_default_permissions(self, profile: str) -> dict[str, str]:
+        return dict(legacy.profile_default_permissions(profile))
+
+    def user_permissions(self, user_id: int) -> dict[str, str]:
+        defaults = {area["key"]: legacy.PERMISSION_LEVEL_NONE for area in self.permission_area_options()}
+        user_row = self.conn.execute("SELECT * FROM usuarios WHERE id = ?", (user_id,)).fetchone()
+        if user_row and legacy.user_can_admin(user_row):
+            return {area["key"]: legacy.PERMISSION_LEVEL_EDIT for area in self.permission_area_options()}
+        if legacy.permission_table_exists(self.conn):
+            rows = self.conn.execute(
+                "SELECT area_key, access_level FROM usuario_permissoes WHERE usuario_id = ?",
+                (user_id,),
+            ).fetchall()
+            for row in rows:
+                if row["area_key"] in defaults and row["access_level"] in legacy.PERMISSION_LEVELS:
+                    defaults[row["area_key"]] = row["access_level"]
+            if rows:
+                return defaults
+        if user_row:
+            for area in legacy.AREAS:
+                key = legacy.normalize_permission_area(area)
+                defaults[key] = legacy._legacy_permission_level(user_row, key)
+            if user_row["perfil"] == "fiscal":
+                defaults["fiscal"] = legacy.PERMISSION_LEVEL_EDIT
+            return defaults
+        return defaults
+
+    def _permission_summary(self, user_id: int) -> str:
+        permissions = self.user_permissions(user_id)
+        parts = []
+        for area in self.permission_area_options():
+            level = permissions.get(area["key"], legacy.PERMISSION_LEVEL_NONE)
+            if level == legacy.PERMISSION_LEVEL_EDIT:
+                parts.append(f"{area['label']}: alterar")
+            elif level == legacy.PERMISSION_LEVEL_VIEW:
+                parts.append(f"{area['label']}: visualizar")
+        return ", ".join(parts) or "Sem acesso"
+
+    def _active_admin_count(self, exclude_user_id: int | None = None) -> int:
+        params: list[Any] = []
+        where = "WHERE perfil = 'admin' AND ativo = 1"
+        if exclude_user_id is not None:
+            where += " AND id <> ?"
+            params.append(exclude_user_id)
+        row = self.conn.execute(f"SELECT COUNT(*) AS total FROM usuarios {where}", tuple(params)).fetchone()
+        return int(row["total"] or 0)
+
+    def _active_user_management_count(self, exclude_user_id: int | None = None) -> int:
+        params: list[Any] = []
+        exclude = ""
+        if exclude_user_id is not None:
+            exclude = "AND u.id <> ?"
+            params.append(exclude_user_id)
+        if legacy.permission_table_exists(self.conn):
+            row = self.conn.execute(
+                f"""
+                SELECT COUNT(DISTINCT u.id) AS total
+                FROM usuarios u
+                LEFT JOIN usuario_permissoes up
+                  ON up.usuario_id = u.id
+                 AND up.area_key = 'users_permissions'
+                 AND up.access_level = 'EDIT'
+                WHERE u.ativo = 1
+                  {exclude}
+                  AND (u.perfil = 'admin' OR up.id IS NOT NULL)
+                """,
+                tuple(params),
+            ).fetchone()
+        else:
+            row = self.conn.execute(
+                f"SELECT COUNT(*) AS total FROM usuarios u WHERE u.ativo = 1 {exclude} AND u.perfil = 'admin'",
+                tuple(params),
+            ).fetchone()
+        return int(row["total"] or 0)
+
+    def _validate_admin_safety(self, user_id: int | None, profile: str, active: int, permissions: dict[str, str]):
+        if not user_id:
+            return
+        current = self.conn.execute("SELECT id, perfil, ativo FROM usuarios WHERE id = ?", (user_id,)).fetchone()
+        if not current:
+            return
+        was_active_admin = current["perfil"] == "admin" and int(current["ativo"] or 0) == 1
+        will_be_active_admin = profile == "admin" and active == 1
+        if was_active_admin and not will_be_active_admin and self._active_admin_count(exclude_user_id=user_id) == 0:
+            raise legacy.AppError("Nao e permitido deixar o sistema sem administrador ativo.")
+        current_user_id = int(self.user["id"]) if self.user and "id" in self.user.keys() else None
+        if current_user_id == user_id:
+            user_management_level = permissions.get("users_permissions", legacy.PERMISSION_LEVEL_NONE)
+            will_manage_users = will_be_active_admin or user_management_level == legacy.PERMISSION_LEVEL_EDIT
+            if not will_manage_users and self._active_user_management_count(exclude_user_id=user_id) == 0:
+                raise legacy.AppError("Nao remova seu proprio acesso a Usuarios e Permissoes sem outro responsavel ativo.")
+
     def save_user(self, data: dict[str, Any], user_id: int | None = None):
         nome = (data.get("nome") or "").strip()
         login = (data.get("login") or "").strip()
         password = data.get("password") or ""
         profile = data.get("perfil") or "consulta"
-        areas = list(data.get("areas") or [])
         ativo = 1 if data.get("ativo", True) else 0
+        permissions = dict(data.get("permissions") or legacy.profile_default_permissions(profile))
         if profile == "admin":
-            areas = list(legacy.AREAS.keys())
+            permissions = {area["key"]: legacy.PERMISSION_LEVEL_EDIT for area in self.permission_area_options()}
+        permissions = {
+            legacy.normalize_permission_area(key): level if level in legacy.PERMISSION_LEVELS else legacy.PERMISSION_LEVEL_NONE
+            for key, level in permissions.items()
+        }
+        for area in self.permission_area_options():
+            permissions.setdefault(area["key"], legacy.PERMISSION_LEVEL_NONE)
+        areas = [
+            legacy.PERMISSION_LEGACY_AREAS[key]
+            for key, level in permissions.items()
+            if level == legacy.PERMISSION_LEVEL_EDIT and key in legacy.PERMISSION_LEGACY_AREAS
+        ]
         if not nome:
             raise legacy.AppError("Informe o nome.")
         if not login:
             raise legacy.AppError("Informe o login.")
         if not user_id and not password:
             raise legacy.AppError("Informe a senha inicial.")
-        if profile != "consulta" and not areas:
-            raise legacy.AppError("Selecione pelo menos uma area de acesso.")
+        self._validate_admin_safety(user_id, profile, ativo, permissions)
         try:
-            if user_id:
-                values = [nome, login, profile, ativo, legacy.area_csv(areas)]
-                sql = "UPDATE usuarios SET nome = ?, login = ?, perfil = ?, ativo = ?, areas_acesso = ?"
-                if password:
+            with self.conn:
+                if user_id:
+                    values = [nome, login, profile, ativo, legacy.area_csv(areas)]
+                    sql = "UPDATE usuarios SET nome = ?, login = ?, perfil = ?, ativo = ?, areas_acesso = ?"
+                    if password:
+                        salt, digest = legacy.pbkdf2_hash(password)
+                        sql += ", senha_salt = ?, senha_hash = ?"
+                        values.extend([salt, digest])
+                    sql += " WHERE id = ?"
+                    values.append(user_id)
+                    self.conn.execute(sql, tuple(values))
+                    saved_id = user_id
+                else:
                     salt, digest = legacy.pbkdf2_hash(password)
-                    sql += ", senha_salt = ?, senha_hash = ?"
-                    values.extend([salt, digest])
-                sql += " WHERE id = ?"
-                values.append(user_id)
-                self.conn.execute(sql, tuple(values))
-            else:
-                salt, digest = legacy.pbkdf2_hash(password)
-                self.conn.execute(
-                    """
-                    INSERT INTO usuarios(nome, login, senha_salt, senha_hash, perfil, ativo, criado_em, areas_acesso)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (nome, login, salt, digest, profile, ativo, legacy.now_br(), legacy.area_csv(areas)),
-                )
-            self.conn.commit()
+                    cur = self.conn.execute(
+                        """
+                        INSERT INTO usuarios(nome, login, senha_salt, senha_hash, perfil, ativo, criado_em, areas_acesso)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (nome, login, salt, digest, profile, ativo, legacy.now_br(), legacy.area_csv(areas)),
+                    )
+                    saved_id = int(cur.lastrowid)
+                if legacy.permission_table_exists(self.conn):
+                    self.conn.execute("DELETE FROM usuario_permissoes WHERE usuario_id = ?", (saved_id,))
+                    for area in self.permission_area_options():
+                        key = area["key"]
+                        self.conn.execute(
+                            """
+                            INSERT INTO usuario_permissoes(usuario_id, area_key, access_level, created_at, updated_at)
+                            VALUES (?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                            """,
+                            (saved_id, key, permissions.get(key, legacy.PERMISSION_LEVEL_NONE)),
+                        )
         except legacy.sqlite3.IntegrityError as exc:
             raise legacy.AppError("Ja existe um usuario com esse login.") from exc
 
     def toggle_user(self, user_id: int):
+        row = self.conn.execute("SELECT id, perfil, ativo FROM usuarios WHERE id = ?", (user_id,)).fetchone()
+        if not row:
+            return
+        if row["perfil"] == "admin" and int(row["ativo"] or 0) == 1 and self._active_admin_count(exclude_user_id=user_id) == 0:
+            raise legacy.AppError("Nao e permitido desativar o ultimo administrador ativo.")
         self.conn.execute("UPDATE usuarios SET ativo = CASE ativo WHEN 1 THEN 0 ELSE 1 END WHERE id = ?", (user_id,))
         self.conn.commit()
 
@@ -511,7 +663,9 @@ class BackendService:
         if not process:
             return []
         area = area or self.current_location(row_to_dict(process))[0] or "CONTROLE GERAL"
-        if area not in legacy.AREAS or not self.can_access_area(area):
+        if area not in legacy.AREAS or not self.can_view(area):
+            return []
+        if not self.can_edit(area):
             return []
         options = self.repo.next_status_options(area, process)
         actions: list[dict[str, str]] = []

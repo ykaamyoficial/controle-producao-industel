@@ -40,6 +40,7 @@ class SettingsPage(QWidget):
         grid = QGridLayout()
         grid.setSpacing(14)
         root.addLayout(grid)
+        can_edit_settings = self.service.can_edit("settings")
 
         visual = self.panel("Visual do sistema")
         self.palette_combo = QComboBox()
@@ -47,6 +48,7 @@ class SettingsPage(QWidget):
             self.palette_combo.addItem(palette["label"], key)
         self.palette_combo.setCurrentIndex(max(0, self.palette_combo.findData(self.service.palette_name)))
         apply_visual = ModernButton("Aplicar visual", "save", accent=True)
+        apply_visual.setEnabled(can_edit_settings)
         apply_visual.clicked.connect(self.apply_palette)
         visual.layout().addWidget(QLabel("Paleta de cores"))
         visual.layout().addWidget(self.palette_combo)
@@ -68,7 +70,7 @@ class SettingsPage(QWidget):
         users = self.panel("Usuarios e acesso")
         users.layout().addWidget(QLabel("Cadastre usuarios, perfis e areas que cada pessoa pode alterar."))
         manage_users = ModernButton("Usuarios e permissoes", "users", accent=True)
-        manage_users.setEnabled(self.service.user_profile() == "Administrador")
+        manage_users.setEnabled(self.service.can_edit("users_permissions"))
         manage_users.clicked.connect(self.open_users)
         users.layout().addWidget(manage_users)
         grid.addWidget(users, 1, 0)
@@ -79,6 +81,9 @@ class SettingsPage(QWidget):
         backup = ModernButton("Backup agora", "backup", accent=True)
         restore = ModernButton("Restaurar backup", "restore")
         choose = ModernButton("Escolher banco SQLite", "database")
+        backup.setEnabled(can_edit_settings)
+        restore.setEnabled(can_edit_settings)
+        choose.setEnabled(can_edit_settings)
         backup.clicked.connect(self.backup_now)
         restore.clicked.connect(self.restore_backup)
         choose.clicked.connect(self.choose_database)
@@ -117,18 +122,24 @@ class SettingsPage(QWidget):
         return frame
 
     def apply_palette(self):
+        if not self.service.can_edit("settings"):
+            QMessageBox.warning(self, "Permissao", "Seu usuario nao pode alterar configuracoes.")
+            return
         self.service.save_palette(self.palette_combo.currentData())
         if self.theme_changed:
             self.theme_changed()
         ToastNotification(self.window(), "Visual aplicado com sucesso.", "success")
 
     def open_users(self):
-        if self.service.user_profile() != "Administrador":
-            QMessageBox.warning(self, "Permissao", "Apenas administradores podem gerenciar usuarios.")
+        if not self.service.can_edit("users_permissions"):
+            QMessageBox.warning(self, "Permissao", "Seu usuario nao pode gerenciar usuarios.")
             return
         UserManagerDialog(self.service, self).exec()
 
     def backup_now(self):
+        if not self.service.can_edit("settings"):
+            QMessageBox.warning(self, "Permissao", "Seu usuario nao pode alterar configuracoes.")
+            return
         try:
             target = self.service.backup_now()
             ToastNotification(self.window(), f"Backup criado: {target}", "success")
@@ -136,6 +147,9 @@ class SettingsPage(QWidget):
             QMessageBox.warning(self, "Backup", str(exc))
 
     def restore_backup(self):
+        if not self.service.can_edit("settings"):
+            QMessageBox.warning(self, "Permissao", "Seu usuario nao pode alterar configuracoes.")
+            return
         path, _ = QFileDialog.getOpenFileName(self, "Restaurar backup", self.service.config.get("backup_dir", ""), "SQLite (*.db);;Todos (*.*)")
         if not path:
             return
@@ -148,6 +162,9 @@ class SettingsPage(QWidget):
             QMessageBox.warning(self, "Restaurar backup", str(exc))
 
     def choose_database(self):
+        if not self.service.can_edit("settings"):
+            QMessageBox.warning(self, "Permissao", "Seu usuario nao pode alterar configuracoes.")
+            return
         path, _ = QFileDialog.getSaveFileName(self, "Banco SQLite", "controle_producao.db", "SQLite (*.db);;Todos (*.*)")
         if not path:
             return

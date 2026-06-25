@@ -91,15 +91,17 @@ class ProcessPage(QWidget):
         proposal_actions.setSpacing(8)
         proposal_actions.addStretch()
         proposal_actions.addWidget(details_btn)
+        can_edit_current_area = self._can_edit_area(self.area or "")
         if self.area == "CONTROLE GERAL" and self.service.can_edit_process():
             proposal_actions.addWidget(new_btn)
-        if self.service.can_edit_process():
+        if self.area == "CONTROLE GERAL" and self.service.can_edit_process():
             proposal_actions.addWidget(edit_btn)
-        proposal_actions.addWidget(status_btn)
-        proposal_actions.addWidget(batch_btn)
-        if self.area == "EXPEDICAO" and self.service.can_access_area("EXPEDICAO"):
+        if can_edit_current_area:
+            proposal_actions.addWidget(status_btn)
+            proposal_actions.addWidget(batch_btn)
+        if self.area == "EXPEDICAO" and self._can_edit_area("EXPEDICAO"):
             proposal_actions.addWidget(remanage_btn)
-        if self.area == "GALVANIZACAO" and self.service.can_mount_galvanization_load():
+        if self.area == "GALVANIZACAO" and self._can_mount_galvanization_load():
             proposal_actions.addWidget(load_btn)
 
         field_row = QGridLayout()
@@ -163,6 +165,18 @@ class ProcessPage(QWidget):
         widget.setMinimumHeight(32)
         layout.addWidget(label, row, column)
         layout.addWidget(widget, row, column + 1)
+
+    def _can_edit_area(self, area: str) -> bool:
+        if hasattr(self.service, "can_edit_area"):
+            return bool(self.service.can_edit_area(area))
+        if hasattr(self.service, "can_access_area"):
+            return bool(self.service.can_access_area(area))
+        return True
+
+    def _can_mount_galvanization_load(self) -> bool:
+        if hasattr(self.service, "can_mount_galvanization_load"):
+            return bool(self.service.can_mount_galvanization_load())
+        return self._can_edit_area("GALVANIZACAO") or self._can_edit_area("EXPEDICAO")
 
     def refresh(self):
         self.status.blockSignals(True)
@@ -247,6 +261,9 @@ class ProcessPage(QWidget):
             self.refresh()
 
     def change_status(self):
+        if not self._can_edit_area(self.area or ""):
+            ToastNotification(self.window(), "Seu usuario tem apenas visualizacao nesta area.", "error")
+            return
         process_id = self.selected_process_id()
         if not process_id:
             ToastNotification(self.window(), "Selecione uma proposta.", "error")
@@ -254,6 +271,9 @@ class ProcessPage(QWidget):
         self.change_status_for_id(process_id)
 
     def change_status_for_id(self, process_id: int):
+        if not self._can_edit_area(self.area or ""):
+            ToastNotification(self.window(), "Seu usuario tem apenas visualizacao nesta area.", "error")
+            return
         area = self.area if self.area in self.service.visible_areas() else None
         dialog = StatusDialog(self.service, process_id, area, self)
         if dialog.exec():
@@ -261,6 +281,9 @@ class ProcessPage(QWidget):
             ToastNotification(self.window(), "Acao registrada com sucesso.", "success")
 
     def change_status_batch(self):
+        if not self._can_edit_area(self.area or ""):
+            ToastNotification(self.window(), "Seu usuario tem apenas visualizacao nesta area.", "error")
+            return
         ids = self.selected_process_ids()
         area = self.area if self.area in self.service.visible_areas() else None
         dialog = BatchStatusDialog(self.service, ids, area, self)
@@ -269,12 +292,18 @@ class ProcessPage(QWidget):
             ToastNotification(self.window(), "Acoes em lote aplicadas com sucesso.", "success")
 
     def open_galvanization_loads(self):
+        if not self._can_mount_galvanization_load():
+            ToastNotification(self.window(), "Seu usuario nao pode alterar cargas.", "error")
+            return
         ids = self.selected_process_ids()
         dialog = GalvanizationLoadManagerDialog(self.service, ids, self)
         if dialog.exec() or dialog.changed:
             self.refresh()
 
     def open_early_remanagement_delivery(self):
+        if not self._can_edit_area("EXPEDICAO"):
+            ToastNotification(self.window(), "Seu usuario nao pode registrar entrega remanejada.", "error")
+            return
         dialog = EarlyRemanagementDeliveryDialog(self.service, self)
         if dialog.exec():
             self.refresh()
@@ -291,13 +320,15 @@ class ProcessPage(QWidget):
         count = len(self.selected_process_ids()) or 1
         menu = QMenu(self)
         menu.addAction(QAction("Ver detalhes da proposta", self, triggered=self.show_details))
-        menu.addAction(QAction("Editar proposta", self, triggered=self.edit_process))
-        menu.addAction(QAction(f"Acoes da proposta ({count})", self, triggered=self.change_status))
-        menu.addAction(QAction("Acoes em lote...", self, triggered=self.change_status_batch))
+        if self.area == "CONTROLE GERAL" and self.service.can_edit_process():
+            menu.addAction(QAction("Editar proposta", self, triggered=self.edit_process))
+        if self._can_edit_area(self.area or ""):
+            menu.addAction(QAction(f"Acoes da proposta ({count})", self, triggered=self.change_status))
+            menu.addAction(QAction("Acoes em lote...", self, triggered=self.change_status_batch))
         menu.addAction(QAction("Historico da proposta", self, triggered=self.show_details))
         menu.addAction(QAction("Exportar selecao Excel", self, triggered=lambda: self.export_selected("csv")))
         menu.addAction(QAction("Exportar selecao PDF", self, triggered=lambda: self.export_selected("pdf")))
-        if self.service.can_edit_process():
+        if self.area == "CONTROLE GERAL" and self.service.can_edit_process():
             menu.addSeparator()
             menu.addAction(QAction("Duplicar proposta", self, triggered=self.duplicate_process))
         menu.exec(self.table.viewport().mapToGlobal(position))
@@ -364,12 +395,18 @@ class ProcessPage(QWidget):
         document.print_(printer)
 
     def new_process(self):
+        if not self.service.can_edit_process():
+            ToastNotification(self.window(), "Seu usuario nao pode cadastrar propostas.", "error")
+            return
         dialog = ProcessFormDialog(self.service, None, self)
         if dialog.exec():
             self.refresh()
             ToastNotification(self.window(), "Proposta criada com sucesso.", "success")
 
     def edit_process(self):
+        if not self.service.can_edit_process():
+            ToastNotification(self.window(), "Seu usuario nao pode editar propostas.", "error")
+            return
         process_id = self.selected_process_id()
         if not process_id:
             ToastNotification(self.window(), "Selecione uma proposta.", "error")
