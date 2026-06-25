@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
 from app.services.nomus_pdf_parser import NomusPdfParserError, parse_nomus_pdf as parse_nomus_pdf_legacy
 from app.services.proposal_import import import_nomus_pdf as import_nomus_pdf_hybrid
 from app.ui.components.modern_button import ModernButton
+from app.ui.table_utils import configure_wrapping_table, resize_rows_to_contents
 
 
 class ProposalImportDialog(QDialog):
@@ -137,9 +138,9 @@ class ProposalImportDialog(QDialog):
         )
         items_caption.setObjectName("Caption")
         items_panel.layout().addWidget(items_caption)
-        self.items_table = QTableWidget(0, 6)
+        self.items_table = QTableWidget(0, 7)
         self.items_table.setHorizontalHeaderLabels(
-            ["Item", "Codigo", "Descricao", "Quantidade", "Peso (kg)", "Conferencia"]
+            ["Item", "Codigo", "Descricao", "Unidade", "Quantidade", "Peso (kg)", "Conferencia"]
         )
         self.items_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
         self.items_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
@@ -147,11 +148,13 @@ class ProposalImportDialog(QDialog):
         self.items_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
         self.items_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
         self.items_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeToContents)
+        self.items_table.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeToContents)
         self.items_table.verticalHeader().setVisible(False)
         self.items_table.verticalHeader().setDefaultSectionSize(36)
         self.items_table.setAlternatingRowColors(True)
         self.items_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.items_table.setMinimumHeight(220)
+        configure_wrapping_table(self.items_table, description_columns=(2,), code_columns=(1,), min_row_height=42)
         self.items_table.itemChanged.connect(self._refresh_item_confirmation)
         items_panel.layout().addWidget(self.items_table)
         content_layout.addWidget(items_panel, 1)
@@ -238,18 +241,22 @@ class ProposalImportDialog(QDialog):
                 item.get("item_number"),
                 item.get("product_code"),
                 item.get("description"),
+                item.get("unit"),
                 item.get("quantity"),
                 "" if item.get("weight_kg") is None else f"{item['weight_kg']:g}",
                 item.get("confidence_label") or "",
             ]
             for column, value in enumerate(values):
                 cell = QTableWidgetItem(str(value or ""))
-                if column in {0, 1, 3, 4, 5}:
+                if column in {0, 1, 3, 4, 5, 6}:
                     cell.setTextAlignment(Qt.AlignCenter)
-                if column == 5:
+                else:
+                    cell.setTextAlignment(Qt.AlignTop | Qt.AlignLeft)
+                if column == 6:
                     cell.setFlags(cell.flags() & ~Qt.ItemIsEditable)
                 self.items_table.setItem(row, column, cell)
         self.items_table.blockSignals(False)
+        resize_rows_to_contents(self.items_table)
         self._refresh_item_confirmation()
         self._apply_parser_warnings(data)
         self.prepared_data = None
@@ -290,6 +297,7 @@ class ProposalImportDialog(QDialog):
                     "item_number": item.get("item_number"),
                     "product_code": item.get("product_code"),
                     "description": item.get("description"),
+                    "unit": item.get("unit"),
                     "quantity": item.get("quantity") or 0,
                     "weight_kg": item.get("weight_kg"),
                     "weight_needs_confirmation": weight_missing,
@@ -380,12 +388,12 @@ class ProposalImportDialog(QDialog):
     def _refresh_item_confirmation(self, *_args):
         self.items_table.blockSignals(True)
         for row in range(self.items_table.rowCount()):
-            weight = self.items_table.item(row, 4)
-            confirmation = self.items_table.item(row, 5)
+            weight = self.items_table.item(row, 5)
+            confirmation = self.items_table.item(row, 6)
             if confirmation is None:
                 confirmation = QTableWidgetItem()
                 confirmation.setFlags(confirmation.flags() & ~Qt.ItemIsEditable)
-                self.items_table.setItem(row, 5, confirmation)
+                self.items_table.setItem(row, 6, confirmation)
             current = confirmation.text().strip()
             confirmation.setText(current if weight and weight.text().strip() and current else ("OK" if weight and weight.text().strip() else "Peso pendente"))
             confirmation.setToolTip(
@@ -402,13 +410,13 @@ class ProposalImportDialog(QDialog):
                 cell = self.items_table.item(row, column)
                 return cell.text().strip() if cell else ""
 
-            raw_weight = text_at(4).replace(",", ".")
+            raw_weight = text_at(5).replace(",", ".")
             try:
                 weight = float(raw_weight) if raw_weight else None
             except ValueError:
                 weight = None
             try:
-                quantity = int(text_at(3))
+                quantity = int(text_at(4))
             except ValueError:
                 quantity = 0
             items.append(
@@ -416,6 +424,7 @@ class ProposalImportDialog(QDialog):
                     "item_number": text_at(0),
                     "product_code": text_at(1) or None,
                     "description": text_at(2),
+                    "unit": text_at(3) or None,
                     "quantity": quantity,
                     "weight_kg": weight,
                     "weight_needs_confirmation": weight is None,

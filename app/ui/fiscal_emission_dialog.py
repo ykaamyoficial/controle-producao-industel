@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
 from app.models.fiscal_table_model import format_number, format_weight
 from app.ui.components.modern_button import ModernButton
 from app.ui.dialog_utils import apply_large_dialog_geometry, style_dialog_from_parent
+from app.ui.table_utils import configure_wrapping_table, item_product_code, resize_rows_to_contents
 
 
 class FiscalEmissionDialog(QDialog):
@@ -75,9 +76,10 @@ class FiscalEmissionDialog(QDialog):
         field_layout.setColumnStretch(3, 3)
         root.addWidget(fields)
 
-        self.table = QTableWidget(0, 9)
+        self.table = QTableWidget(0, 10)
         self.table.setHorizontalHeaderLabels([
             "Item",
+            "Codigo",
             "Descricao",
             "Qtd. total",
             "Qtd. faturada",
@@ -92,7 +94,8 @@ class FiscalEmissionDialog(QDialog):
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.verticalHeader().setVisible(False)
         self.table.horizontalHeader().setStretchLastSection(False)
-        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        configure_wrapping_table(self.table, description_columns=(2,), code_columns=(1,), min_row_height=42)
         root.addWidget(self.table, 1)
         self._populate_items()
 
@@ -118,6 +121,7 @@ class FiscalEmissionDialog(QDialog):
             self.item_balances[fiscal_item_id] = (quantity_balance, weight_balance)
             values = [
                 item.get("numero_item") or "",
+                item_product_code(item),
                 item.get("descricao") or "",
                 format_number(item.get("quantidade_total")),
                 format_number(item.get("quantidade_faturada")),
@@ -129,8 +133,10 @@ class FiscalEmissionDialog(QDialog):
             ]
             for column, value in enumerate(values):
                 table_item = QTableWidgetItem(str(value))
-                if column not in (1,):
+                if column not in (2,):
                     table_item.setTextAlignment(Qt.AlignCenter)
+                else:
+                    table_item.setTextAlignment(Qt.AlignTop | Qt.AlignLeft)
                 self.table.setItem(row_index, column, table_item)
 
             quantity = QDoubleSpinBox()
@@ -149,15 +155,16 @@ class FiscalEmissionDialog(QDialog):
             weight.setValue(0)
             self.quantity_inputs[fiscal_item_id] = quantity
             self.weight_inputs[fiscal_item_id] = weight
-            self.table.setCellWidget(row_index, 5, quantity)
-            self.table.setCellWidget(row_index, 8, weight)
+            self.table.setCellWidget(row_index, 6, quantity)
+            self.table.setCellWidget(row_index, 9, weight)
             quantity.valueChanged.connect(
                 lambda value, current_id=fiscal_item_id: self._sync_weight_from_quantity(current_id, value)
             )
 
-        widths = (68, 280, 92, 108, 92, 108, 108, 118, 108)
+        widths = (68, 95, 340, 92, 108, 92, 108, 108, 118, 108)
         for column, width in enumerate(widths):
             self.table.setColumnWidth(column, width)
+        resize_rows_to_contents(self.table)
 
     def mark_all_pending(self):
         for item in self.items:

@@ -32,6 +32,7 @@ from app.ui.components.kpi_card import KpiCard
 from app.ui.components.modern_button import ModernButton
 from app.ui.components.modern_table import ModernTable
 from app.ui.dialog_utils import apply_large_dialog_geometry, style_dialog_from_parent
+from app.ui.table_utils import configure_wrapping_table, item_product_code, resize_rows_to_contents
 
 
 AREA_OPTIONS = [
@@ -112,6 +113,7 @@ TABLE_COLUMNS = {
         ("proposta_destino", "Destino"),
         ("cliente_destino", "Cliente destino"),
         ("numero_item", "Item"),
+        ("codigo_produto", "Codigo"),
         ("item_descricao", "Descricao"),
         ("quantidade", "Qtd."),
         ("peso_remanejado", "Peso remanej."),
@@ -437,6 +439,7 @@ class OperationalReportsPage(QWidget):
             items,
             [
                 ("numero_item", "Item"),
+                ("codigo_produto", "Codigo"),
                 ("descricao", "Descricao"),
                 ("quantidade", "Qtd."),
                 ("peso", "Peso unit."),
@@ -476,6 +479,7 @@ class OperationalReportsPage(QWidget):
                 ("proposta_origem", "Origem"),
                 ("proposta_destino", "Destino"),
                 ("numero_item", "Item"),
+                ("codigo_produto", "Codigo"),
                 ("item_descricao", "Descricao"),
                 ("quantidade", "Qtd."),
                 ("peso_remanejado", "Peso"),
@@ -606,13 +610,32 @@ class OperationalRowsDialog(QDialog):
         table.verticalHeader().setVisible(False)
         table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
         table.horizontalHeader().setStretchLastSection(True)
+        description_columns = tuple(
+            index for index, (key, label) in enumerate(columns)
+            if key in {"descricao", "item_descricao", "observacao"} or "Descricao" in label
+        )
+        code_columns = tuple(
+            index for index, (key, label) in enumerate(columns)
+            if "codigo" in key or "Codigo" in label or "Cod." in label
+        )
+        if description_columns:
+            configure_wrapping_table(
+                table,
+                description_columns=description_columns,
+                code_columns=code_columns,
+                min_row_height=42,
+            )
         for row_index, data in enumerate(rows):
             for col_index, (key, _label) in enumerate(columns):
-                value = _display_value(data.get(key))
+                value = item_product_code(data) if "codigo" in key else _display_value(data.get(key))
                 cell = QTableWidgetItem(value)
                 cell.setToolTip(value)
-                cell.setTextAlignment(Qt.AlignVCenter | Qt.AlignLeft)
+                if col_index in description_columns:
+                    cell.setTextAlignment(Qt.AlignTop | Qt.AlignLeft)
+                else:
+                    cell.setTextAlignment(Qt.AlignVCenter | Qt.AlignLeft)
                 table.setItem(row_index, col_index, cell)
+        resize_rows_to_contents(table)
         table.resizeColumnsToContents()
         root.addWidget(table, 1)
         close = ModernButton("Fechar", "clear")
@@ -710,15 +733,17 @@ class OperationalProcessReadOnlyDialog(QDialog):
     def _items_panel(self) -> QFrame:
         items = self.service.proposal_items(self.process_id)
         panel = self._panel(f"Itens da proposta ({len(items)})")
-        table = QTableWidget(len(items), 7)
-        table.setHorizontalHeaderLabels(["Item", "Descricao", "Qtd.", "Peso", "Produzido", "Galvanizado", "Entregue"])
+        table = QTableWidget(len(items), 8)
+        table.setHorizontalHeaderLabels(["Item", "Codigo", "Descricao", "Qtd.", "Peso", "Produzido", "Galvanizado", "Entregue"])
         table.setAlternatingRowColors(True)
         table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         table.verticalHeader().setVisible(False)
-        table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        configure_wrapping_table(table, description_columns=(2,), code_columns=(1,), min_row_height=42)
         for row, item in enumerate(items):
             values = [
                 item.get("numero_item"),
+                item_product_code(item),
                 item.get("descricao"),
                 item.get("quantidade"),
                 f"{float(item.get('peso') or 0):g} kg",
@@ -727,7 +752,10 @@ class OperationalProcessReadOnlyDialog(QDialog):
                 "Sim" if item.get("entregue") else "Nao",
             ]
             for col, value in enumerate(values):
-                table.setItem(row, col, QTableWidgetItem(str(value or "-")))
+                cell = QTableWidgetItem(str(value or "-"))
+                cell.setTextAlignment(Qt.AlignTop | Qt.AlignLeft if col == 2 else Qt.AlignCenter)
+                table.setItem(row, col, cell)
+        resize_rows_to_contents(table)
         panel.layout().addWidget(table)
         return panel
 

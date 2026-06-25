@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
 
 from app.ui.components.modern_button import ModernButton
 from app.ui.proposal_import_dialog import ProposalImportDialog
+from app.ui.table_utils import configure_wrapping_table, resize_rows_to_contents
 
 
 class ItemEditorDelegate(QStyledItemDelegate):
@@ -163,18 +164,20 @@ class ProcessFormDialog(QDialog):
         item_actions.addStretch()
         items_panel.layout().addLayout(item_actions)
 
-        self.items_table = QTableWidget(0, 4)
-        self.items_table.setHorizontalHeaderLabels(["Item", "Descricao", "Quantidade", "Peso unit. (kg)"])
+        self.items_table = QTableWidget(0, 5)
+        self.items_table.setHorizontalHeaderLabels(["Item", "Codigo", "Descricao", "Quantidade", "Peso unit. (kg)"])
         self.items_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        self.items_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
-        self.items_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self.items_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self.items_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
         self.items_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        self.items_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
         self.items_table.verticalHeader().setVisible(False)
         self.items_table.verticalHeader().setDefaultSectionSize(38)
         self.items_table.setItemDelegate(ItemEditorDelegate(self.items_table))
         self.items_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.items_table.setAlternatingRowColors(True)
         self.items_table.setMinimumHeight(230)
+        configure_wrapping_table(self.items_table, description_columns=(2,), code_columns=(1,), min_row_height=44)
         self.items_table.itemChanged.connect(self.update_items_total)
         items_panel.layout().addWidget(self.items_table)
         body.addWidget(items_panel, 1)
@@ -303,13 +306,14 @@ class ProcessFormDialog(QDialog):
             weight_text = "" if weight is None else f"{float(weight):g}"
             self.add_item(
                 str(item.get("item_number") or ""),
+                str(item.get("product_code") or "-"),
                 str(item.get("description") or ""),
                 str(item.get("quantity") or 1),
                 weight_text,
             )
             if weight is None:
                 pending_weights += 1
-                weight_cell = self.items_table.item(self.items_table.rowCount() - 1, 3)
+                weight_cell = self.items_table.item(self.items_table.rowCount() - 1, 4)
                 if weight_cell:
                     weight_cell.setToolTip(
                         "Peso nao informado no PDF; precisa de conferencia antes do cadastro."
@@ -347,20 +351,33 @@ class ProcessFormDialog(QDialog):
         }
         return True
 
-    def add_item(self, number: str = "", description: str = "", quantity: str = "1", weight: str = ""):
+    def add_item(
+        self,
+        number: str = "",
+        code: str = "",
+        description: str = "",
+        quantity: str = "1",
+        weight: str = "",
+    ):
         self.items_table.blockSignals(True)
         row = self.items_table.rowCount()
         self.items_table.insertRow(row)
         self.items_table.setItem(row, 0, QTableWidgetItem(number or str(row + 1)))
-        self.items_table.setItem(row, 1, QTableWidgetItem(description))
+        code_item = QTableWidgetItem(code or "-")
+        code_item.setTextAlignment(Qt.AlignCenter)
+        self.items_table.setItem(row, 1, code_item)
+        description_item = QTableWidgetItem(description)
+        description_item.setTextAlignment(Qt.AlignTop | Qt.AlignLeft)
+        self.items_table.setItem(row, 2, description_item)
         quantity_item = QTableWidgetItem(quantity or "1")
         quantity_item.setTextAlignment(Qt.AlignCenter)
-        self.items_table.setItem(row, 2, quantity_item)
+        self.items_table.setItem(row, 3, quantity_item)
         weight_item = QTableWidgetItem(weight)
         weight_item.setTextAlignment(Qt.AlignCenter)
-        self.items_table.setItem(row, 3, weight_item)
+        self.items_table.setItem(row, 4, weight_item)
         self.items_table.blockSignals(False)
         self.item_quantity.setValue(self.items_table.rowCount())
+        resize_rows_to_contents(self.items_table)
         self.update_items_total()
 
     def remove_item(self):
@@ -382,8 +399,8 @@ class ProcessFormDialog(QDialog):
         units = 0
         total_weight = 0.0
         for row in range(self.items_table.rowCount()):
-            quantity_cell = self.items_table.item(row, 2)
-            weight_cell = self.items_table.item(row, 3)
+            quantity_cell = self.items_table.item(row, 3)
+            weight_cell = self.items_table.item(row, 4)
             try:
                 quantity = max(0, int((quantity_cell.text() if quantity_cell else "1") or 1))
             except ValueError:
@@ -424,6 +441,7 @@ class ProcessFormDialog(QDialog):
             for item in loaded_items:
                 self.add_item(
                     str(item.get("numero_item") or ""),
+                    str(item.get("codigo_produto") or item.get("product_code") or "-"),
                     item.get("descricao") or "",
                     str(item.get("quantidade") or 1),
                     str(item.get("peso") or ""),
@@ -450,9 +468,9 @@ class ProcessFormDialog(QDialog):
             items = []
             for row in range(self.items_table.rowCount()):
                 number = self.items_table.item(row, 0)
-                description = self.items_table.item(row, 1)
-                quantity = self.items_table.item(row, 2)
-                weight = self.items_table.item(row, 3)
+                description = self.items_table.item(row, 2)
+                quantity = self.items_table.item(row, 3)
+                weight = self.items_table.item(row, 4)
                 items.append({
                     "numero_item": number.text().strip() if number else str(row + 1),
                     "descricao": description.text().strip() if description else "",

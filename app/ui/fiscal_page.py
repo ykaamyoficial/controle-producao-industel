@@ -35,6 +35,7 @@ from app.ui.components.modern_button import ModernButton
 from app.ui.components.modern_table import ModernTable, ProcessFilterProxy
 from app.ui.dialog_utils import apply_large_dialog_geometry, style_dialog_from_parent
 from app.ui.fiscal_emission_dialog import FiscalEmissionDialog
+from app.ui.table_utils import configure_wrapping_table, resize_rows_to_contents
 
 
 class FiscalProposalDetailDialog(QDialog):
@@ -139,6 +140,7 @@ class FiscalProposalDetailDialog(QDialog):
         layout.setContentsMargins(0, 12, 0, 0)
         columns = [
             ("numero_item", "Item"),
+            ("codigo_produto", "Codigo"),
             ("descricao", "Descricao"),
             ("quantidade_total", "Quantidade Total"),
             ("quantidade_faturada", "Quantidade Faturada"),
@@ -248,13 +250,21 @@ class FiscalProposalDetailDialog(QDialog):
             description_index = next((i for i, (key, _label) in enumerate(columns) if key == description_key), None)
             if description_index is not None:
                 table.horizontalHeader().setSectionResizeMode(description_index, QHeaderView.Stretch)
+                code_index = next((i for i, (key, _label) in enumerate(columns) if "codigo" in key), None)
+                configure_wrapping_table(
+                    table,
+                    description_columns=(description_index,),
+                    code_columns=() if code_index is None else (code_index,),
+                    min_row_height=42,
+                )
         for r, item in enumerate(rows):
             for c, (key, _label) in enumerate(columns):
                 value = self._display_value(key, item.get(key))
                 cell = QTableWidgetItem(str(value or "-"))
-                alignment = Qt.AlignVCenter | Qt.AlignLeft if key in {"descricao", "observacao"} else Qt.AlignCenter
+                alignment = Qt.AlignTop | Qt.AlignLeft if key in {"descricao", "observacao"} else Qt.AlignCenter
                 cell.setTextAlignment(alignment)
                 table.setItem(r, c, cell)
+        resize_rows_to_contents(table)
         return table
 
     def _display_value(self, key: str, value):
@@ -520,8 +530,16 @@ class FiscalPage(QWidget):
                 elif key.startswith("peso_"):
                     value = format_weight(value)
                 cell = QTableWidgetItem(str(value or "-"))
-                cell.setTextAlignment(Qt.AlignCenter if key != "observacao" and key != "descricao" else Qt.AlignVCenter | Qt.AlignLeft)
+                cell.setTextAlignment(Qt.AlignCenter if key != "observacao" and key != "descricao" else Qt.AlignTop | Qt.AlignLeft)
                 table.setItem(r, c, cell)
+        description_index = next(
+            (i for i, (key, _label) in enumerate(columns) if key in {"descricao", "observacao"}),
+            None,
+        )
+        if description_index is not None:
+            configure_wrapping_table(table, description_columns=(description_index,), min_row_height=42)
+            table.horizontalHeader().setSectionResizeMode(description_index, QHeaderView.Stretch)
+        resize_rows_to_contents(table)
         table.resizeColumnsToContents()
         layout.addWidget(table, 1)
         close = ModernButton("Fechar", "clear")

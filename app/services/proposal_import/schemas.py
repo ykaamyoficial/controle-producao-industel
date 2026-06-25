@@ -39,6 +39,7 @@ class ProposalImportItem:
     item_number: int
     product_code: str | None
     description: str
+    unit: str | None
     quantity: int | None
     ncm: str | None
     weight_kg: float | None
@@ -54,6 +55,7 @@ class ProposalImportItem:
             "item_number": self.item_number,
             "product_code": self.product_code,
             "description": self.description,
+            "unit": self.unit,
             "quantity": self.quantity,
             "ncm": self.ncm,
             "weight_kg": self.weight_kg,

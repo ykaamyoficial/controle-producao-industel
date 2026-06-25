@@ -86,7 +86,7 @@ class ModernTable(QTableView):
         self.horizontalHeader().setStretchLastSection(True)
         self.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
         self.setItemDelegate(StatusBadgeDelegate(service, self))
-        self.setWordWrap(False)
+        self.setWordWrap(True)
         self.setToolTip("Clique no icone da primeira coluna para abrir as acoes da proposta.")
         self.setMouseTracking(True)
         self.status_shortcut_enabled = True
@@ -161,10 +161,17 @@ class ModernTable(QTableView):
             "cliente_origem": 140,
             "cliente_destino": 140,
             "numero_item": 75,
+            "codigo_produto": 95,
+            "product_code": 95,
+            "descricao": 280,
             "item_descricao": 220,
             "peso_remanejado": 130,
             "proposta_reposicao": 145,
         }
+        has_long_description = any(key in {"descricao", "item_descricao", "observacao"} for key, _label in columns)
+        self.verticalHeader().setSectionResizeMode(
+            QHeaderView.ResizeToContents if has_long_description else QHeaderView.Fixed
+        )
         for index, (key, _label) in enumerate(columns):
             self.setColumnWidth(index, widths.get(key, 120))
 

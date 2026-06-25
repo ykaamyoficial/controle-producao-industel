@@ -23,7 +23,7 @@ FISCAL_REPORT_COLUMNS: dict[str, list[tuple[str, str]]] = {
     "ITENS_PENDENTES": [
         ("proposta", "Proposta"), ("cliente", "Cliente"), ("obra_site", "Obra/Site"),
         ("status_fiscal", "Status fiscal"), ("data_entrada_fiscal", "Entrada fiscal"),
-        ("numero_item", "Item"), ("descricao", "Descricao"),
+        ("numero_item", "Item"), ("codigo_produto", "Codigo"), ("descricao", "Descricao"),
         ("quantidade_total", "Qtd. total"), ("quantidade_faturada", "Qtd. faturada"),
         ("quantidade_pendente", "Qtd. pendente"), ("peso_total", "Peso total"),
         ("peso_faturado", "Peso faturado"), ("peso_pendente", "Peso pendente"),

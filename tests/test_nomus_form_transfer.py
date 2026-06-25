@@ -43,6 +43,7 @@ def reviewed_data() -> dict:
         "items": [
             {
                 "item_number": 1,
+                "product_code": "450.983",
                 "description": "VIGA METALICA I W200x15",
                 "quantity": 1,
                 "weight_kg": 69.5,
@@ -50,6 +51,7 @@ def reviewed_data() -> dict:
             },
             {
                 "item_number": 2,
+                "product_code": None,
                 "description": "TUBO 76 X 3,75 X 3000MM",
                 "quantity": 6,
                 "weight_kg": None,
@@ -89,10 +91,12 @@ class NomusFormTransferTests(unittest.TestCase):
         self.assertEqual(self.form.fields["obra_site"].text(), "1101013505 - SP1FJ")
         self.assertEqual(self.form.fields["data_entrada"].text(), "2026-06-08")
         self.assertEqual(self.form.items_table.rowCount(), 2)
-        self.assertEqual(self.form.items_table.item(0, 2).text(), "1")
-        self.assertEqual(self.form.items_table.item(1, 2).text(), "6")
-        self.assertEqual(self.form.items_table.item(0, 3).text(), "69.5")
-        self.assertEqual(self.form.items_table.item(1, 3).text(), "")
+        self.assertEqual(self.form.items_table.item(0, 1).text(), "450.983")
+        self.assertEqual(self.form.items_table.item(1, 1).text(), "-")
+        self.assertEqual(self.form.items_table.item(0, 3).text(), "1")
+        self.assertEqual(self.form.items_table.item(1, 3).text(), "6")
+        self.assertEqual(self.form.items_table.item(0, 4).text(), "69.5")
+        self.assertEqual(self.form.items_table.item(1, 4).text(), "")
         self.assertEqual(self.service.save_calls, [])
         self.assertEqual(self.form.import_metadata["hash_sha256"], "a" * 64)
         self.assert_database_unchanged()

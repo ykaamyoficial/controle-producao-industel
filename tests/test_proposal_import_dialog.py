@@ -57,7 +57,7 @@ class ProposalImportDialogTests(unittest.TestCase):
         self.assertEqual(self.dialog.items_table.rowCount(), 2)
         self.assertFalse(self.dialog.fields["client"].isReadOnly())
         self.assertEqual(self.dialog.items_table.item(0, 1).text(), "450.983")
-        self.assertEqual(self.dialog.items_table.item(1, 5).text(), "Peso pendente")
+        self.assertEqual(self.dialog.items_table.item(1, 6).text(), "Peso pendente")
 
     def test_validates_in_memory_without_service_or_database(self):
         self.assertTrue(self.dialog.validate_import())
@@ -74,7 +74,7 @@ class ProposalImportDialogTests(unittest.TestCase):
 
     def test_manual_correction_is_reflected_in_prepared_data(self):
         self.dialog.fields["client"].setText("CLIENTE CONFERIDO")
-        self.dialog.items_table.item(1, 4).setText("125,5")
+        self.dialog.items_table.item(1, 5).setText("125,5")
         self.assertTrue(self.dialog.validate_import())
         self.assertEqual(self.dialog.prepared_data["client"], "CLIENTE CONFERIDO")
         self.assertEqual(self.dialog.prepared_data["items"][1]["weight_kg"], 125.5)

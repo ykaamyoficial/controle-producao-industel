@@ -5,8 +5,9 @@ import json
 import os
 import tempfile
 import unittest
+from pathlib import Path
 
-from app.services.proposal_import import import_nomus_from_text
+from app.services.proposal_import import import_nomus_from_text, import_nomus_pdf
 from app.services.proposal_import.proposal_ai_extractor import FakeProposalAIExtractor
 
 
@@ -72,6 +73,45 @@ PRAZO DE ENTREGA:
 ITEM CÓD PROD CLIENTE DESCRIÇÃO DO PRODUTO NCM QTD IPI ICMS DIFAL PREÇO UNITÁRIO SUB-TOTAL
 001 N/A TUBO 76 X 3,75 X 3000MM 73089010 6 0% 0% 0% R$ 550,00 R$ 3.300,00
 TOTAL R$ 3.300,00
+"""
+
+
+CP_04843_TEXT = """
+INDUSTEL TELECOM LTDA PROPOSTA: CP 04843
+CNPJ: 05.052.617/0001-74 - Inscricao Estadual: 103515240
+E-mail: industel@industeltelecom.com.br Aparecida de Goiania, 29/01/2026
+Dados do cliente OBRA/SITE: 5400108649
+EQUATORIAL PIAUI DISTRIBUIDORA DE ENERGIA S.A DANIELE P. DA SILVA
+CNPJ/CPF: 06.840.748/0001-89 - I.E.: 193013835
+1 - OBJETO :
+Item Produto NCM Unidade Qtde Valor IPI SubTotal (R$)
+300.7 - VIGA PBR-1 COM PERFIL LAMINADO R$
+001 132310001 GALV. A FOGO. - COD.SAP-132310001 73089010 UNIDADE 220 0 R$ 55.000,00
+300.9 - VIGA MET. SUP. EQUIPAMENTO R$
+002 132310002 BARRAMENTO ACO CARBONO GALV. A FOGO 73089010 UNIDADE 200 0 R$ 26.380,00
+6 - PRAZO DE ENTREGA :
+16/03/2026
+TOTAL DESTA PROPOSTA : R$ 830.568,10
+"""
+
+
+PD_SIMPLE_TEXT = """
+INDUSTEL TELECOM PROPOSTA: CP 05237
+05.052.617/0001-74
+industel@industeltelecom.com.br Aparecida de Goiania - GO, 15/06/2026
+Dados do cliente OBRA/SITE: 5400118109
+EQUATORIAL ENERGIA - CEEE DANIELE P. DA SILVA
+CNPJ/CPF: 08.467.115/0001-00 - I.E.: 963156659
+Itens do pedido
+Pedido de
+Item Produto Descricao Unidade Qtde
+Compra - Cliente
+PERFIL METALICO FORMATO L PECA W17-8 DIM. L 9,5 X 170 MM ABAS 76
+001 300.25 X 102MM GALV. A FOGO CODIGO SAP 134140012 UNIDADE 50 N/A
+PERFIL L W-17-60 DIM. 64X64X6,4X1925MM SENDO 1 PECA ESQUERDA E 1
+002 1166 PECA DIREITA GALV.A FOGO COD SAP: 134140070 UNIDADE 100 N/A
+1 - PRAZO DE ENTREGA :
+O prazo para entrega dos materiais sera 03/07/2026
 """
 
 
@@ -143,6 +183,63 @@ class HybridNomusImportTests(unittest.TestCase):
         self.assertNotRegex(serialized, r"\b1\.920,00\b|\b2\.920,00\b|\b3\.300,00\b")
         keys = set(all_keys(result))
         self.assertFalse(any(key in keys for key in {"price", "value_amount", "subtotal", "tax", "payment", "currency"}))
+
+    def test_extracts_complete_cp_proposal_model(self):
+        result = import_nomus_from_text(CP_04843_TEXT).to_dict()
+        self.assertEqual(result["raw_budget_number"]["value"], "CP 04843")
+        self.assertEqual(result["proposal_number"]["value"], "CP04843")
+        self.assertEqual(result["client"]["value"], "EQUATORIAL PIAUI DISTRIBUIDORA DE ENERGIA S.A")
+        self.assertEqual(result["site"]["value"], "5400108649")
+        self.assertEqual(result["delivery_deadline_raw"]["value"], "16/03/2026")
+        self.assertEqual(result["items"][0]["quantity"], 220)
+        self.assertEqual(result["items"][0]["unit"], "UNIDADE")
+        self.assertIsNone(result["items"][0]["weight_kg"])
+
+    def test_extracts_simple_pd_order_model(self):
+        result = import_nomus_from_text(PD_SIMPLE_TEXT).to_dict()
+        self.assertEqual(result["proposal_number"]["value"], "CP05237")
+        self.assertEqual(result["client"]["value"], "EQUATORIAL ENERGIA - CEEE")
+        self.assertEqual(result["site"]["value"], "5400118109")
+        self.assertEqual(result["delivery_deadline_raw"]["value"], "03/07/2026")
+        self.assertEqual(len(result["items"]), 2)
+        self.assertEqual(result["items"][0]["product_code"], "300.25")
+        self.assertEqual(result["items"][0]["quantity"], 50)
+        self.assertEqual(result["items"][0]["unit"], "UNIDADE")
+        self.assertIsNone(result["items"][0]["weight_kg"])
+
+    def test_real_local_proposal_models_when_available(self):
+        base = Path(__file__).resolve().parents[1] / "modelos Propostas"
+        expected = {
+            "CP 04843.pdf": ("CP04843", "EQUATORIAL PIAUI DISTRIBUIDORA DE ENERGIA S.A", "5400108649", 4),
+            "CP 05252.pdf": ("CP05252", "MNS ENGENHARIA", "MTCMX001 - MTCZN13 - WINITY - CLARO", 9),
+            "CP 05242.pdf": ("CP05242", "MNS ENGENHARIA", "SITE - 66010031 - SN - NVUMI", 7),
+            "CP 05234.pdf": ("CP05234", "MNS ENGENHARIA", "6105001101 - 5G - BSA025", 4),
+            "PD 04044 (1).pdf": ("CP05237", "EQUATORIAL ENERGIA - CEEE", "5400118109", 3),
+            "PD 04045 (1).pdf": ("CP05239", "MNS ENGENHARIA", None, 1),
+            "PD 04048 (1).pdf": ("CP05240", "ENERWATT ENGENHARIA", "NOVA VENEZA", 2),
+            "PD 04049 (1).pdf": ("CP05244", "EQUATORIAL ALAGOAS", "5400118978", 5),
+            "PD 04050 (1).pdf": ("CP05245", "EQUATORIAL ENERGIA - CEEE", "5400118632", 1),
+            "PD 04052 (1).pdf": ("CP05225", "ENERWATT ENGENHARIA", None, 1),
+            "PD 04054 (1).pdf": ("CP05250", "EQUATORIAL GOIAS DIST. DE", "7000049432", 1),
+            "PD 04055 (1).pdf": ("CP05251", "EQUATORIAL PARÁ DISTRIBUIDORA", "7000049434", 1),
+            "PD 04057 (1).pdf": ("CP05237", "EQUATORIAL ENERGIA - CEEE", "5400118109", 3),
+            "PD 04060 (1).pdf": ("CP05262", "ENERGY SYSTEN CONSTRUÇÕES E", None, 1),
+            "PD 04068 (1).pdf": ("CP05252", "MNS ENGENHARIA", "MTCMX001 - MTCZN13 - WINITY - CLARO", 9),
+            "PD 04069 (1).pdf": ("CP05266", "MNS ENGENHARIA", None, 2),
+        }
+        missing = [name for name in expected if not (base / name).is_file()]
+        if missing:
+            self.skipTest(f"PDFs reais locais ausentes: {', '.join(missing)}")
+        for name, (proposal, client, site, item_count) in expected.items():
+            with self.subTest(pdf=name):
+                result = import_nomus_pdf(base / name).to_dict()
+                self.assertEqual(result["proposal_number"]["value"], proposal)
+                self.assertEqual(result["client"]["value"], client)
+                self.assertEqual(result["site"]["value"], site)
+                self.assertEqual(len(result["items"]), item_count)
+                serialized = json.dumps(result, ensure_ascii=False).upper()
+                for forbidden in FORBIDDEN_TEXT:
+                    self.assertNotIn(forbidden, serialized)
 
     def test_fake_ai_cannot_override_safe_rule_or_inject_financial_data(self):
         ai = FakeProposalAIExtractor(

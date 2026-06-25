@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
 
 from app.ui.components.modern_button import ModernButton
 from app.ui.dialog_utils import apply_large_dialog_geometry, style_dialog_from_parent
+from app.ui.table_utils import configure_wrapping_table, item_product_code, resize_rows_to_contents
 
 
 class ItemSelectionDialog(QDialog):
@@ -44,16 +45,18 @@ class ItemSelectionDialog(QDialog):
         heading.setStyleSheet("font-size: 18px; font-weight: 800;")
         caption = QLabel("Marque os itens que fazem parte desta movimentacao.")
         caption.setObjectName("Caption")
-        self.table = QTableWidget(0, 5)
-        self.table.setHorizontalHeaderLabels(["Selecionar", "Item", "Descricao", "Qtd.", "Peso total (kg)"])
+        self.table = QTableWidget(0, 6)
+        self.table.setHorizontalHeaderLabels(["Selecionar", "Item", "Codigo", "Descricao", "Qtd.", "Peso total (kg)"])
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setAlternatingRowColors(True)
         self.table.horizontalHeader().setStretchLastSection(False)
         self.table.setColumnWidth(0, 90)
         self.table.setColumnWidth(1, 90)
-        self.table.setColumnWidth(2, 390)
-        self.table.setColumnWidth(3, 70)
-        self.table.setColumnWidth(4, 120)
+        self.table.setColumnWidth(2, 95)
+        self.table.setColumnWidth(3, 430)
+        self.table.setColumnWidth(4, 70)
+        self.table.setColumnWidth(5, 120)
+        configure_wrapping_table(self.table, description_columns=(3,), code_columns=(2,), min_row_height=42)
         self.table.itemChanged.connect(self._update_summary)
         self.summary = QLabel("0 item(ns) | 0 kg")
         self.summary.setStyleSheet("font-weight: 700;")
@@ -108,17 +111,23 @@ class ItemSelectionDialog(QDialog):
             check.setData(Qt.UserRole, int(item["id"]))
             self.table.setItem(row, 0, check)
             self.table.setItem(row, 1, QTableWidgetItem(str(item.get("numero_item") or "")))
-            self.table.setItem(row, 2, QTableWidgetItem(item.get("descricao") or ""))
+            code = QTableWidgetItem(item_product_code(item))
+            code.setTextAlignment(Qt.AlignCenter)
+            self.table.setItem(row, 2, code)
+            description = QTableWidgetItem(item.get("descricao") or "")
+            description.setTextAlignment(Qt.AlignTop | Qt.AlignLeft)
+            self.table.setItem(row, 3, description)
             quantity = int(item.get("quantidade") or 1)
             quantity_cell = QTableWidgetItem(str(quantity))
             quantity_cell.setTextAlignment(Qt.AlignCenter)
-            self.table.setItem(row, 3, quantity_cell)
+            self.table.setItem(row, 4, quantity_cell)
             total_weight = quantity * float(item.get("peso") or 0)
             weight = QTableWidgetItem(f"{total_weight:g}")
             weight.setTextAlignment(Qt.AlignCenter)
             weight.setData(Qt.UserRole, total_weight)
-            self.table.setItem(row, 4, weight)
+            self.table.setItem(row, 5, weight)
         self.table.blockSignals(False)
+        resize_rows_to_contents(self.table)
         self._update_summary()
 
     def _set_all(self, checked: bool):
@@ -135,8 +144,8 @@ class ItemSelectionDialog(QDialog):
         missing_weight = False
         for row in range(self.table.rowCount()):
             if self.table.item(row, 0).checkState() == Qt.Checked:
-                count += int(self.table.item(row, 3).text() or 0)
-                row_weight = float(self.table.item(row, 4).data(Qt.UserRole) or 0)
+                count += int(self.table.item(row, 4).text() or 0)
+                row_weight = float(self.table.item(row, 5).data(Qt.UserRole) or 0)
                 weight += row_weight
                 missing_weight = missing_weight or row_weight <= 0
         request_manual_weight = self.mode == "production" and count > 0 and missing_weight
@@ -157,7 +166,7 @@ class ItemSelectionDialog(QDialog):
             return
         selected_missing_weight = any(
             self.table.item(row, 0).checkState() == Qt.Checked
-            and float(self.table.item(row, 4).data(Qt.UserRole) or 0) <= 0
+            and float(self.table.item(row, 5).data(Qt.UserRole) or 0) <= 0
             for row in range(self.table.rowCount())
         )
         if self.mode == "production" and selected_missing_weight:

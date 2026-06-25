@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
 
 from app.ui.components.modern_button import ModernButton
 from app.ui.dialog_utils import apply_large_dialog_geometry, style_dialog_from_parent
+from app.ui.table_utils import configure_wrapping_table, item_product_code, resize_rows_to_contents
 
 
 def display_weight(value) -> str:
@@ -403,8 +404,8 @@ class GalvanizationLoadManagerDialog(QDialog):
             [125, 155, 95, 105, 85, 60],
         )
         self.proposal_items = self._detail_table(
-            ["Item", "Descricao", "Qtd.", "Peso unit.", "Peso total", "Produzido", "Galvanizado"],
-            [65, 210, 60, 90, 90, 85, 95],
+            ["Item", "Codigo", "Descricao", "Qtd.", "Peso unit.", "Peso total", "Produzido", "Galvanizado"],
+            [65, 95, 280, 60, 90, 90, 85, 95],
         )
         details.addWidget(self.load_proposals, 2, 0)
         details.addWidget(self.proposal_items, 2, 1)
@@ -525,6 +526,10 @@ class GalvanizationLoadManagerDialog(QDialog):
         table.setMinimumHeight(165)
         for col, width in enumerate(widths):
             table.setColumnWidth(col, width)
+        description_columns = tuple(i for i, header in enumerate(headers) if "Descricao" in header)
+        code_columns = tuple(i for i, header in enumerate(headers) if "Codigo" in header or "Cod." in header)
+        if description_columns:
+            configure_wrapping_table(table, description_columns=description_columns, code_columns=code_columns, min_row_height=42)
         return table
 
     def load(self):
@@ -623,14 +628,15 @@ class GalvanizationLoadManagerDialog(QDialog):
             quantity = int(data.get("quantidade") or 1)
             unit_weight = float(data.get("peso") or 0)
             values = [
-                data.get("numero_item"), data.get("descricao"), quantity, display_weight(unit_weight),
+                data.get("numero_item"), item_product_code(data), data.get("descricao"), quantity, display_weight(unit_weight),
                 display_weight(quantity * unit_weight), "Sim" if data.get("produzido") else "Nao",
                 "Sim" if data.get("galvanizado") else "Nao",
             ]
             for col, value in enumerate(values):
                 item = QTableWidgetItem(str(value or ""))
-                item.setTextAlignment(Qt.AlignCenter if col != 1 else Qt.AlignVCenter | Qt.AlignLeft)
+                item.setTextAlignment(Qt.AlignTop | Qt.AlignLeft if col == 2 else Qt.AlignCenter)
                 self.proposal_items.setItem(row, col, item)
+        resize_rows_to_contents(self.proposal_items)
 
     def selected_load_id(self) -> int | None:
         return self._selected_load_id(True)

@@ -16,6 +16,7 @@ FORBIDDEN_FINANCIAL_TERMS = (
     "R$",
     "PRECO UNITARIO",
     "PREÇO UNITÁRIO",
+    "VALOR",
     "SUB-TOTAL",
     "SUBTOTAL",
     "TOTAL",
@@ -27,21 +28,43 @@ FORBIDDEN_FINANCIAL_TERMS = (
     "CONDIÇÃO DE PAGAMENTO",
 )
 
-_BUDGET_RE = re.compile(r"\bOR[ÇC]AMENTO\s*:\s*(ETCP\s*\d+)\b", re.IGNORECASE)
+_BUDGET_RE = re.compile(r"\bOR.?AMENTO\s*:\s*(ETCP\s*\d+)\b", re.IGNORECASE)
+_PROPOSAL_RE = re.compile(r"\bPROPOSTA\s*:\s*(CP\s*\d+)\b", re.IGNORECASE)
 _DATE_RE = re.compile(r"\b(\d{2}/\d{2}/\d{4})\b")
-_SITE_RE = re.compile(r"DADOS\s+DA\s+OBRA\s*:\s*(.+)", re.IGNORECASE)
+_SITE_RE = re.compile(r"(?:DADOS\s+DA\s+OBRA|OBRA/SITE)\s*:\s*(.+)", re.IGNORECASE)
 _DEADLINE_RE = re.compile(r"\b(\d+)\s+DIAS?\b", re.IGNORECASE)
-_VALIDITY_RE = re.compile(r"\bVALIDADE(?:\s+DO\s+OR[ÇC]AMENTO)?\s*:?\s*(\d+\s+DIAS?)\b", re.IGNORECASE)
-_DOC_RE = re.compile(r"\b(?:CNPJ|CPF)\s*:?\s*([0-9./-]{11,18})\b", re.IGNORECASE)
+_VALIDITY_RE = re.compile(r"\bVALIDADE(?:\s+DO\s+OR.?AMENTO|\s+DA\s+PROPOSTA)?\s*:?\s*(.+)", re.IGNORECASE)
+_DOC_RE = re.compile(r"\b(?:CNPJ|CPF|CNPJ/CPF)\s*:?\s*([0-9./-]{11,18})\b", re.IGNORECASE)
 _EMAIL_RE = re.compile(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}")
 _PHONE_RE = re.compile(r"(?:\(?\d{2}\)?\s*)?\d{4,5}[-\s]?\d{4}")
 _WEIGHT_RE = re.compile(r"\bPESO\s*(?:TOTAL\s*)?[:=\-]?\s*(\d+(?:[.,]\d+)?)\s*KG\b", re.IGNORECASE)
 _ITEM_START_RE = re.compile(r"^(?P<number>\d{3})\s+(?P<code>\S+)\s+(?P<body>.+)$", re.IGNORECASE)
 _ITEM_ROW_RE = re.compile(r"^\d{3}\s+\S+\s+.+$", re.IGNORECASE)
 _PRODUCT_TITLE_RE = re.compile(r"^(?P<code>\d{3}(?:\.\w+)+)\s*-\s+(?P<title>.+)", re.IGNORECASE)
+_SIMPLE_ITEM_RE = re.compile(
+    r"^(?P<number>\d{3})\s+(?P<code>\S+)\s+(?P<body>.+?)\s+"
+    r"(?P<unit>UNIDADE|UN|PC|PECA|PEÇA)\s+(?P<qty>\d+(?:[.,]\d+)?)\s+(?:N/A|.+)?$",
+    re.IGNORECASE,
+)
 _NCM_QTY_RE = re.compile(r"\b(?P<ncm>\d{8})\s+(?P<qty>\d+(?:[.,]\d+)?)\b")
 _MONEY_RE = re.compile(r"R\$\s*\d[\d.]*,\d{2}|\b\d{1,3}(?:\.\d{3})*,\d{2}\b")
 _PERCENT_RE = re.compile(r"\b\d+(?:[.,]\d+)?\s*%")
+_NULL_RE = re.compile(r"\bNULL\b", re.IGNORECASE)
+
+_ISSUER_TERMS = (
+    "INDUSTEL TELECOM",
+    "INDUSTEL TELECOM LTDA",
+    "ENERTEL INDUSTRIA METALURGICA",
+    "ENERTEL INDUSTRIA METALURGICA LTDA",
+)
+_CLIENT_TRAILING_NAMES = (
+    " DANIELE ",
+    " PEDRO ",
+    " LUANA ",
+    " ISADORA ",
+    " SILVIO ",
+    " PATRICIA ",
+)
 
 
 def _field(value, confidence: float = 0.0, needs_confirmation: bool = True, source: str = "rule"):
@@ -62,7 +85,29 @@ def _money_free(value: str) -> str:
     cleaned = _PERCENT_RE.sub("", cleaned)
     for term in FORBIDDEN_FINANCIAL_TERMS:
         cleaned = re.sub(re.escape(term), "", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(re.escape(_ascii_upper(term)), "", cleaned, flags=re.IGNORECASE)
     return _clean_space(cleaned)
+
+
+def _non_financial_raw(value: str) -> str:
+    parts: list[str] = []
+    for token in _clean_space(value).split():
+        normalized = _ascii_upper(token)
+        if normalized in {"R$", "IPI", "ICMS", "DIFAL"}:
+            continue
+        if _MONEY_RE.fullmatch(token) or _PERCENT_RE.fullmatch(token):
+            continue
+        parts.append(token)
+    return _money_free(" ".join(parts))
+
+
+def _normalize_raw_number(raw: str | None) -> str | None:
+    if not raw:
+        return None
+    upper = _clean_space(raw).upper()
+    prefix = "ETCP" if "ETCP" in upper else "CP"
+    digits = re.sub(r"\D", "", upper)
+    return f"{prefix} {int(digits):05d}" if digits else None
 
 
 def _proposal_number(raw_budget_number: str | None) -> str | None:
@@ -89,30 +134,66 @@ def _find_date(lines: list[str]) -> str | None:
     return None
 
 
+def _clean_client_candidate(candidate: str | None) -> str | None:
+    value = _clean_space(candidate or "")
+    if not value:
+        return None
+    normalized_initial = _ascii_upper(value)
+    if normalized_initial.startswith(("CNPJ", "CPF", "CNPJ/CPF", "DADOS DA OBRA", "OBRA/SITE")):
+        return None
+    value = re.sub(r"\s+(?:CNPJ|CPF|CNPJ/CPF)\s*:.*$", "", value, flags=re.IGNORECASE)
+    value = re.sub(r"\s+[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}.*$", "", value)
+    normalized = f" {_ascii_upper(value)} "
+    for marker in _CLIENT_TRAILING_NAMES:
+        if marker in normalized:
+            value = value[: normalized.index(marker)].strip()
+            normalized = f" {_ascii_upper(value)} "
+            break
+    value = _clean_space(value).upper()
+    if not value:
+        return None
+    if any(term == value or term in _ascii_upper(value) for term in _ISSUER_TERMS):
+        return None
+    return value
+
+
 def _extract_client(lines: list[str]) -> str | None:
-    forbidden = {"ENERTEL INDUSTRIA METALURGICA", "ENERTEL INDUSTRIA METALURGICA LTDA"}
     for index, line in enumerate(lines):
         if "DADOS DO CLIENTE" not in _ascii_upper(line):
             continue
-        for candidate in lines[index + 1 : index + 6]:
+        for candidate in lines[index + 1 : index + 7]:
             normalized = _ascii_upper(candidate)
-            if any(skip in normalized for skip in forbidden):
-                continue
-            match = re.match(r"(.+?)\s+(?:CNPJ|CPF)\s*:", candidate, re.IGNORECASE)
+            if any(stop in normalized for stop in ("DADOS DA OBRA", "OBRA/SITE", "ENDERECO", "ENDEREÇO", "TELEFONE", "COMPRADOR")):
+                break
+            match = re.match(r"(.+?)\s+(?:CNPJ|CPF|CNPJ/CPF)\s*:", candidate, re.IGNORECASE)
             if match:
-                return _clean_space(match.group(1)).upper()
+                return _clean_client_candidate(match.group(1))
+            if "CNPJ/CPF" in normalized and index + 1 < len(lines):
+                previous = _clean_client_candidate(lines[index + 1])
+                if previous:
+                    return previous
+            compact = _clean_client_candidate(candidate)
+            if compact:
+                return compact
+        for candidate in reversed(lines[max(0, index - 5) : index]):
+            normalized = _ascii_upper(candidate)
+            if any(skip in normalized for skip in ("APARECIDA DE GOIANIA", "VENDEDOR", "ORCAMENTO", "PROPOSTA", "EMAIL", "TELEFONE", "COMPRADOR")):
+                continue
+            compact = _clean_client_candidate(candidate)
+            if compact:
+                return compact
     for index, line in enumerate(lines):
-        if not _BUDGET_RE.search(line):
+        if not (_BUDGET_RE.search(line) or _PROPOSAL_RE.search(line)):
             continue
         for candidate in lines[index + 1 : index + 8]:
             normalized = _ascii_upper(candidate)
             if "DADOS DO CLIENTE" in normalized:
                 break
-            if any(skip in normalized for skip in ("APARECIDA DE GOIANIA", "CNPJ", "CPF", "ORCAMENTO", "ORÇAMENTO", "VENDEDOR")):
+            if any(skip in normalized for skip in ("APARECIDA DE GOIANIA", "CNPJ", "CPF", "ORCAMENTO", "VENDEDOR")):
                 continue
-            compact = _clean_space(candidate)
-            if compact and len(compact) >= 3 and _ascii_upper(compact) not in forbidden:
-                return compact.upper()
+            compact = _clean_client_candidate(candidate)
+            if compact:
+                return compact
     return None
 
 
@@ -121,10 +202,13 @@ def _extract_site(lines: list[str]) -> str | None:
         match = _SITE_RE.search(line)
         if match:
             value = _clean_space(match.group(1))
-            if value:
+            if value and not _NULL_RE.search(value):
                 return value.upper()
-        if "DADOS DA OBRA" in _ascii_upper(line) and index + 1 < len(lines):
-            return _clean_space(lines[index + 1]).upper()
+        normalized = _ascii_upper(line)
+        if any(label in normalized for label in ("DADOS DA OBRA", "OBRA/SITE")) and index + 1 < len(lines):
+            candidate = _clean_space(lines[index + 1])
+            if candidate and not _NULL_RE.search(candidate):
+                return candidate.upper()
     return None
 
 
@@ -152,10 +236,20 @@ def _extract_deadline(lines: list[str]) -> str | None:
         match = _DEADLINE_RE.search(line)
         if match:
             return _clean_space(match.group(0)).upper()
-        for candidate in lines[index + 1 : index + 4]:
+        date_match = _DATE_RE.search(line)
+        if date_match:
+            return date_match.group(1)
+        if _NULL_RE.search(line):
+            return None
+        for candidate in lines[index + 1 : index + 5]:
+            if _NULL_RE.search(candidate):
+                return None
             match = _DEADLINE_RE.search(candidate)
             if match:
                 return _clean_space(match.group(0)).upper()
+            date_match = _DATE_RE.search(candidate)
+            if date_match:
+                return date_match.group(1)
     return None
 
 
@@ -186,6 +280,10 @@ def _item_blocks(section: list[str]) -> list[list[str]]:
 
 
 def _extract_items(lines: list[str]) -> list[ProposalImportItem]:
+    return _extract_budget_items(lines) or _extract_simple_order_items(lines)
+
+
+def _extract_budget_items(lines: list[str]) -> list[ProposalImportItem]:
     start = None
     end = None
     for index, line in enumerate(lines):
@@ -193,7 +291,7 @@ def _extract_items(lines: list[str]) -> list[ProposalImportItem]:
         if start is None and "DESCRICAO DO PRODUTO" in normalized and "QTD" in normalized:
             start = index + 1
             continue
-        if start is not None and any(term in normalized for term in ("TOTAL", "CONDICAO DE PAGAMENTO", "CONDIÇÃO DE PAGAMENTO")):
+        if start is not None and any(term in normalized for term in ("TOTAL", "CONDICAO DE PAGAMENTO", "CONDIÇÃO DE PAGAMENTO", "OBSERVACOES")):
             end = index
             break
     section = lines[start:end] if start is not None else []
@@ -233,15 +331,65 @@ def _extract_items(lines: list[str]) -> list[ProposalImportItem]:
                 item_number=item_number,
                 product_code=product_code if product_code.upper() != "N/A" else None,
                 description=description.upper(),
+                unit=None,
                 quantity=quantity,
                 ncm=ncm,
                 weight_kg=weight,
                 weight_extracted_from_text=weight is not None,
                 weight_needs_confirmation=weight is None,
-                raw_text=_money_free(raw_block),
+                raw_text=_non_financial_raw(raw_block),
                 confidence=0.86 if ncm and quantity is not None else 0.55,
                 weight_confidence=0.95 if weight is not None else 0.0,
                 needs_confirmation=quantity is None or weight is None,
+            )
+        )
+    return items
+
+
+def _extract_simple_order_items(lines: list[str]) -> list[ProposalImportItem]:
+    start = None
+    end = None
+    for index, line in enumerate(lines):
+        normalized = _ascii_upper(line)
+        if start is None and "ITEM PRODUTO" in normalized and "QTDE" in normalized:
+            start = index + 1
+            continue
+        if start is not None and any(term in normalized for term in ("PRAZO DE ENTREGA", "TERMO DE CONFERENCIA", "TERMO DE CONFERÊNCIA", "TOTAL")):
+            end = index
+            break
+    section = lines[start:end] if start is not None else []
+    items: list[ProposalImportItem] = []
+    pending_description: list[str] = []
+    for line in section:
+        match = _SIMPLE_ITEM_RE.match(line)
+        if not match:
+            pending_description.append(line)
+            continue
+        item_number = int(match.group("number"))
+        product_code = match.group("code")
+        body = _clean_space(" ".join(pending_description + [match.group("body")]))
+        pending_description = []
+        weight_match = _WEIGHT_RE.search(body)
+        weight = float(weight_match.group(1).replace(".", "").replace(",", ".")) if weight_match else None
+        body = _WEIGHT_RE.sub("", body)
+        description = _money_free(body) or f"Item {item_number:03d}"
+        unit = _clean_space(match.group("unit")).upper()
+        quantity = int(float(match.group("qty").replace(",", ".")))
+        items.append(
+            ProposalImportItem(
+                item_number=item_number,
+                product_code=product_code if product_code.upper() != "N/A" else None,
+                description=description.upper(),
+                unit=unit,
+                quantity=quantity,
+                ncm=None,
+                weight_kg=weight,
+                weight_extracted_from_text=weight is not None,
+                weight_needs_confirmation=weight is None,
+                raw_text=_non_financial_raw(" ".join([description, unit, str(quantity)])),
+                confidence=0.82 if quantity else 0.55,
+                weight_confidence=0.95 if weight is not None else 0.0,
+                needs_confirmation=weight is None,
             )
         )
     return items
@@ -261,7 +409,9 @@ def _warnings(result_fields: dict[str, ProposalImportField], items: list[Proposa
         warnings.append(ProposalImportWarning("items", "Nenhum item operacional foi identificado."))
     if any(item.weight_needs_confirmation for item in items):
         warnings.append(ProposalImportWarning("item_weight", "Existem itens sem peso explicitamente informado em kg."))
-    if result_fields["delivery_deadline_days"].value is not None:
+    if result_fields["delivery_deadline_raw"].value is None:
+        warnings.append(ProposalImportWarning("deadline_missing", "Prazo nao identificado; precisa confirmacao."))
+    elif result_fields["delivery_deadline_days"].value is not None:
         warnings.append(ProposalImportWarning("deadline", "Prazo relativo precisa de confirmacao humana."))
     return warnings
 
@@ -269,11 +419,14 @@ def _warnings(result_fields: dict[str, ProposalImportField], items: list[Proposa
 def parse_nomus_text(text: str) -> ProposalImportResult:
     lines = [_clean_space(line) for line in (text or "").splitlines() if _clean_space(line)]
     budget_match = _BUDGET_RE.search(text or "")
-    raw_budget = _clean_space(budget_match.group(1)).upper() if budget_match else None
+    proposal_match = _PROPOSAL_RE.search(text or "")
+    raw_budget = _normalize_raw_number(
+        budget_match.group(1) if budget_match else (proposal_match.group(1) if proposal_match else None)
+    )
     proposal_number = _proposal_number(raw_budget)
     raw_date = _find_date(lines)
-    deadline_raw = _extract_deadline(lines) or ""
-    deadline_match = _DEADLINE_RE.search(deadline_raw)
+    deadline_raw = _extract_deadline(lines)
+    deadline_match = _DEADLINE_RE.search(deadline_raw or "")
     validity_raw = _extract_after_label(lines, "VALIDADE") or ""
     validity_match = _VALIDITY_RE.search("\n".join(lines))
     client = _extract_client(lines)
@@ -295,8 +448,8 @@ def parse_nomus_text(text: str) -> ProposalImportResult:
         "buyer_phone": _field(phone_match.group(0) if phone_match else None, 0.55 if phone_match else 0.0, phone_match is None),
         "site": _field(site, 0.95 if site else 0.0, site is None),
         "delivery_deadline_days": _field(int(deadline_match.group(1)) if deadline_match else None, 0.93 if deadline_match else 0.0, True),
-        "delivery_deadline_raw": _field(_clean_space(deadline_match.group(0)).upper() if deadline_match else None, 0.93 if deadline_match else 0.0, True),
-        "budget_validity": _field(_clean_space(validity_match.group(1)).upper() if validity_match else (_money_free(validity_raw) or None), 0.7 if validity_match or validity_raw else 0.0, not bool(validity_match or validity_raw)),
+        "delivery_deadline_raw": _field(_clean_space(deadline_raw).upper() if deadline_raw else None, 0.93 if deadline_raw else 0.0, True),
+        "budget_validity": _field(_money_free(validity_match.group(1)).upper() if validity_match else (_money_free(validity_raw) or None), 0.7 if validity_match or validity_raw else 0.0, not bool(validity_match or validity_raw)),
         "operational_notes": _field(_money_free(notes or "") or None, 0.55 if notes else 0.0, False),
     }
     return ProposalImportResult(

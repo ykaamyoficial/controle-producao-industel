@@ -22,6 +22,7 @@ from app.ui.dialog_utils import apply_large_dialog_geometry, style_dialog_from_p
 from app.ui.icons import make_icon
 from app.ui.process_form_dialog import ProcessFormDialog
 from app.ui.status_dialog import StatusDialog
+from app.ui.table_utils import configure_wrapping_table, item_product_code, resize_rows_to_contents
 
 
 class ProcessDetailDialog(QDialog):
@@ -91,15 +92,16 @@ class ProcessDetailDialog(QDialog):
         self.items_summary = QLabel("0 item(ns)")
         self.items_summary.setObjectName("Caption")
         items_panel.layout().addWidget(self.items_summary)
-        self.items_table = QTableWidget(0, 8)
-        self.items_table.setHorizontalHeaderLabels(["Item", "Descricao", "Qtd.", "Peso unit.", "Processo", "Produzido", "Galvanizado", "Entregue"])
+        self.items_table = QTableWidget(0, 9)
+        self.items_table.setHorizontalHeaderLabels(["Item", "Codigo", "Descricao", "Qtd.", "Peso unit.", "Processo", "Produzido", "Galvanizado", "Entregue"])
         self.items_table.verticalHeader().setVisible(False)
         self.items_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.items_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.items_table.setAlternatingRowColors(True)
-        self.items_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
-        for col, width in enumerate((70, 250, 65, 90, 120, 90, 100, 90)):
+        self.items_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        for col, width in enumerate((70, 90, 320, 65, 90, 120, 90, 100, 90)):
             self.items_table.setColumnWidth(col, width)
+        configure_wrapping_table(self.items_table, description_columns=(2,), code_columns=(1,), min_row_height=42)
         self.items_table.setMinimumHeight(150)
         self.items_table.setMaximumHeight(240)
         items_panel.layout().addWidget(self.items_table)
@@ -173,7 +175,7 @@ class ProcessDetailDialog(QDialog):
         process_names = {row.get("id"): row.get("proposta") for row in self.service.process_partials(self.process_id)}
         for row, item in enumerate(items):
             values = [
-                item.get("numero_item"), item.get("descricao"), item.get("quantidade") or 1,
+                item.get("numero_item"), item_product_code(item), item.get("descricao"), item.get("quantidade") or 1,
                 f"{float(item.get('peso') or 0):g} kg",
                 process_names.get(item.get("processo_atual_id"), "-"),
                 "Sim" if item.get("produzido") else "Nao",
@@ -182,10 +184,11 @@ class ProcessDetailDialog(QDialog):
             ]
             for col, value in enumerate(values):
                 cell = QTableWidgetItem(str(value or ""))
-                cell.setTextAlignment(Qt.AlignCenter if col != 1 else Qt.AlignVCenter | Qt.AlignLeft)
+                cell.setTextAlignment(Qt.AlignTop | Qt.AlignLeft if col == 2 else Qt.AlignCenter)
                 self.items_table.setItem(row, col, cell)
+        resize_rows_to_contents(self.items_table)
         visible_rows = min(max(len(items), 2), 6)
-        self.items_table.setFixedHeight(58 + visible_rows * 30)
+        self.items_table.setFixedHeight(68 + visible_rows * 46)
 
     def load_status(self):
         self.clear_panel_content(self.status_panel)

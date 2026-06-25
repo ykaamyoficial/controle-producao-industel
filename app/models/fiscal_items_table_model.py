@@ -10,6 +10,7 @@ from app.models.fiscal_table_model import fiscal_status_label, format_number, fo
 class FiscalItemsTableModel(QAbstractTableModel):
     columns = [
         ("numero_item", "Item"),
+        ("codigo_produto", "Codigo"),
         ("descricao", "Descricao"),
         ("quantidade_total", "Qtd. total"),
         ("quantidade_faturada", "Qtd. faturada"),
@@ -60,6 +61,8 @@ class FiscalItemsTableModel(QAbstractTableModel):
         if role == Qt.TextAlignmentRole:
             if key.startswith("quantidade_") or key.startswith("peso_"):
                 return Qt.AlignVCenter | Qt.AlignRight
+            if key == "descricao":
+                return Qt.AlignTop | Qt.AlignLeft
             return Qt.AlignVCenter | Qt.AlignLeft
         return None
 
