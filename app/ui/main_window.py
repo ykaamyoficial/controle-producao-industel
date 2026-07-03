@@ -18,7 +18,10 @@ from app.ui.sidebar import Sidebar
 from app.ui.styles import app_stylesheet
 from app.version import APP_NAME, APP_VERSION
 from app.services.update_checker import check_for_updates
+from app.services.app_logging import get_logger
 from app.ui.update_dialog import UpdateDialog
+
+log = get_logger("main_window")
 
 class SimplePage(QWidget):
     def __init__(self, title: str, subtitle: str, parent=None):
@@ -125,6 +128,8 @@ class MainWindow(QMainWindow):
 
     def _handle_background_update_result(self, result: dict):
         if not result or result.get("error"):
+            if result and result.get("error"):
+                log.warning("Verificacao automatica indisponivel | tipo=%s | detalhe=%s", result.get("error_kind"), result.get("error"))
             return
 
         if result.get("update_available"):
@@ -247,9 +252,14 @@ class MainWindow(QMainWindow):
         self._width_animation = animate_width(self.sidebar, start, end)
 
     def closeEvent(self, event):
+      log.info("Fechamento solicitado")
       if self._update_thread and self._update_thread.isRunning():
+           self._update_thread.requestInterruption()
            self._update_thread.quit()
-           self._update_thread.wait(1500)
-      self.service.close()
+           if not self._update_thread.wait(3000):
+               log.warning("Thread de atualizacao nao encerrou dentro do prazo")
+      try:
+          self.service.close()
+      except Exception:
+          log.exception("Falha ao fechar conexao do sistema")
       super().closeEvent(event)
- 

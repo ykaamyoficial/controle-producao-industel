@@ -13,10 +13,13 @@ from app.services.app_paths import (
     get_database_path,
 )
 from app.services.migration_runner import apply_migrations
+from app.services.app_logging import get_logger
+from app.services.sqlite_safety import create_daily_backup, inspect_database, require_healthy_database, safe_backup
 
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 APP_DIR = ROOT_DIR / "app"
+log = get_logger("backend")
 
 
 def _load_config_example() -> dict[str, Any]:
@@ -66,11 +69,18 @@ class BackendService:
 
     def __init__(self):
         self.config = load_app_config()
+        db_path = Path(self.config["db_path"])
+        if db_path.exists() and db_path.stat().st_size > 0:
+            require_healthy_database(db_path)
+            safe_backup(db_path, self.config["backup_dir"], "antes_migracao")
         self.conn = legacy.db_connect(self.config["db_path"])
         apply_migrations(self.conn)
         legacy.initialize_database(self.conn)
         self.repo = legacy.Repository(self.conn)
         self.user = None
+        if db_path.exists() and db_path.stat().st_size > 0:
+            create_daily_backup(db_path, self.config["backup_dir"])
+        log.info("Backend inicializado | banco=%s", self.config["db_path"])
 
     @property
     def palettes(self):
@@ -434,8 +444,18 @@ class BackendService:
     def choose_database(self, path: str):
         if not path:
             return
+        candidate = Path(path)
+        current = Path(self.config["db_path"])
+        if candidate.exists():
+            require_healthy_database(candidate, require_schema=True)
+        if current.exists():
+            safe_backup(current, self.config["backup_dir"], "antes_trocar_banco")
         self.config["db_path"] = path
         save_app_config(self.config)
+        log.info("Troca de banco preparada | anterior=%s | novo=%s", current, candidate)
+
+    def database_health(self):
+        return inspect_database(self.config["db_path"], require_schema=True)
 
     def restore_backup(self, backup_path: str):
         if not backup_path:

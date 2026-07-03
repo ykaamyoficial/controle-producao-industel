@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-from PyInstaller.utils.hooks import collect_submodules
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 hiddenimports = ['hmac', 'hashlib', 'secrets', 'json', 'sqlite3', 'datetime', 'pathlib', 'shutil']
 hiddenimports += collect_submodules('PySide6.QtWidgets')
@@ -9,6 +9,8 @@ hiddenimports += collect_submodules('PySide6.QtPrintSupport')
 hiddenimports += collect_submodules('pdfplumber')
 hiddenimports += collect_submodules('pdfminer')
 hiddenimports += collect_submodules('PIL')
+hiddenimports += collect_submodules('certifi')
+certifi_datas = collect_data_files('certifi')
 
 
 a = Analysis(
@@ -19,7 +21,7 @@ a = Analysis(
         ('app\\assets', 'app\\assets'),
         ('app\\migrations', 'app\\migrations'),
         ('app\\config\\controle_producao_config.example.json', 'app\\config'),
-    ],
+    ] + certifi_datas,
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},

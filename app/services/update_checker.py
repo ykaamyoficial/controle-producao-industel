@@ -5,12 +5,14 @@ import re
 from dataclasses import dataclass
 from typing import Any, Callable
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
 
+from app.services.app_logging import get_logger
+from app.services.network_diagnostics import classify_network_error, fetch_json, friendly_network_message
 from app.version import APP_VERSION
 
 
 RELEASES_API_URL = "https://api.github.com/repos/ykaamyoficial/controle-producao-industel-releases/releases/latest"
+log = get_logger("updates.checker")
 
 
 class UpdateCheckError(RuntimeError):
@@ -43,9 +45,7 @@ def is_newer_version(latest: str, current: str) -> bool:
 
 
 def _default_fetch_json(url: str, timeout: int = 10) -> dict[str, Any]:
-    request = Request(url, headers={"Accept": "application/vnd.github+json", "User-Agent": "ControleProducaoIndustel"})
-    with urlopen(request, timeout=timeout) as response:
-        return json.loads(response.read().decode("utf-8"))
+    return fetch_json(url, timeout)
 
 
 def parse_github_release(payload: dict[str, Any], current_version: str = APP_VERSION) -> dict[str, Any]:
@@ -87,6 +87,8 @@ def check_for_updates(
         payload = fetch(url, timeout)
         return parse_github_release(payload, current_version=current_version)
     except (HTTPError, URLError, TimeoutError, OSError, json.JSONDecodeError, UpdateCheckError) as exc:
+        kind = classify_network_error(exc)
+        log.exception("Verificacao de atualizacao falhou | tipo=%s | url=%s", kind, url)
         return {
             "update_available": False,
             "current_version": current_version,
@@ -95,4 +97,6 @@ def check_for_updates(
             "release_notes": "",
             "assets": [],
             "error": str(exc),
+            "error_kind": kind,
+            "user_message": friendly_network_message(kind),
         }

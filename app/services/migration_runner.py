@@ -7,6 +7,11 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+from app.services.app_logging import get_logger
+
+
+log = get_logger("migrations")
+
 
 MIGRATION_PATTERN = re.compile(r"^(?P<version>\d{3,})_(?P<name>[a-z0-9_]+)\.sql$")
 
@@ -138,6 +143,7 @@ def apply_migrations(
                 f"Falha ao aplicar migracao {migration.version:03d}_{migration.name}."
             ) from exc
         completed.append(migration.version)
+        log.info("Migracao aplicada | versao=%03d | nome=%s", migration.version, migration.name)
     return completed
 
 

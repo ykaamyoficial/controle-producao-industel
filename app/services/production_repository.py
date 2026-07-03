@@ -15,6 +15,12 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from xml.sax.saxutils import escape
 
+from app.services.app_logging import get_logger
+from app.services.sqlite_safety import is_network_path, require_healthy_database, safe_backup
+
+
+log = get_logger("repository")
+
 
 APP_NAME = "Controle de Producao Industel"
 APP_VERSION = "1.0.0"
@@ -1085,12 +1091,18 @@ def verify_password(password, salt_hex, digest_hex):
 
 
 def db_connect(path):
-    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    db_path = Path(path)
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    if db_path.exists() and db_path.stat().st_size > 0:
+        require_healthy_database(db_path)
     conn = sqlite3.connect(path, timeout=30)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
+    journal_mode = "DELETE" if is_network_path(path) else "WAL"
+    conn.execute(f"PRAGMA journal_mode={journal_mode}")
     conn.execute("PRAGMA foreign_keys=ON")
     conn.execute("PRAGMA busy_timeout=30000")
+    conn.execute("PRAGMA synchronous=FULL" if is_network_path(path) else "PRAGMA synchronous=NORMAL")
+    log.info("Banco aberto | path=%s | journal_mode=%s | rede=%s", db_path, journal_mode, is_network_path(path))
     return conn
 
 
@@ -1424,18 +1436,7 @@ def backup_database(config, reason="auto"):
     if not db_path.exists():
         return None
     backup_dir = Path(config["backup_dir"])
-    backup_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    target = backup_dir / f"controle_producao_{reason}_{stamp}.db"
-    source = sqlite3.connect(str(db_path), timeout=30)
-    try:
-        destination = sqlite3.connect(str(target))
-        try:
-            source.backup(destination)
-        finally:
-            destination.close()
-    finally:
-        source.close()
+    target = safe_backup(db_path, backup_dir, reason)
     backups = sorted(backup_dir.glob("controle_producao_*.db"), key=lambda p: p.stat().st_mtime, reverse=True)
     keep = int(config.get("backup_keep", 20))
     for old in backups[keep:]:
@@ -1451,7 +1452,8 @@ def validate_database_file(path):
     if not path.exists() or not path.is_file():
         raise AppError("Arquivo de backup nao encontrado.")
     try:
-        conn = sqlite3.connect(str(path))
+        require_healthy_database(path)
+        conn = sqlite3.connect(str(path), timeout=8)
         try:
             integrity = conn.execute("PRAGMA integrity_check").fetchone()[0]
             if integrity != "ok":

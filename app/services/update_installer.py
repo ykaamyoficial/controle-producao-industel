@@ -1,14 +1,13 @@
 from __future__ import annotations
 
-import os
 import sqlite3
 import subprocess
 import sys
-from datetime import datetime
+from contextlib import closing
 from pathlib import Path
-from shutil import copy2
 
 from app.services.app_paths import get_app_data_dir
+from app.services.sqlite_safety import safe_backup
 
 
 class UpdateInstallError(RuntimeError):
@@ -28,7 +27,7 @@ def _validate_sqlite_database(db_path: Path) -> None:
         return
 
     try:
-        with sqlite3.connect(str(db_path)) as conn:
+        with closing(sqlite3.connect(str(db_path))) as conn:
             integrity = conn.execute("PRAGMA integrity_check").fetchone()
             if not integrity or integrity[0] != "ok":
                 raise UpdateInstallError(f"Banco com integrity_check invalido: {integrity}")
@@ -45,24 +44,12 @@ def create_pre_update_backup(target_version: str) -> Path | None:
     if not db_path.exists():
         return None
 
-    _validate_sqlite_database(db_path)
-
     destination_dir = _backup_dir()
-    destination_dir.mkdir(parents=True, exist_ok=True)
-
-    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     safe_version = str(target_version or "nova").replace(".", "_")
-    backup_path = destination_dir / f"controle_producao_pre_update_{safe_version}_{stamp}.db"
-
     try:
-        copy2(db_path, backup_path)
-    except OSError as exc:
+        backup_path = safe_backup(db_path, destination_dir, f"pre_update_{safe_version}")
+    except Exception as exc:
         raise UpdateInstallError(f"Nao foi possivel criar backup antes da atualizacao: {exc}") from exc
-
-    if not backup_path.exists() or backup_path.stat().st_size <= 0:
-        raise UpdateInstallError("Backup pre-atualizacao nao foi criado corretamente.")
-
-    _validate_sqlite_database(backup_path)
     return backup_path
 
 

@@ -1,11 +1,17 @@
 from __future__ import annotations
 
 from datetime import datetime
+import os
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication, QFileDialog, QComboBox, QFrame, QGridLayout, QLabel, QMessageBox, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QFileDialog, QComboBox, QFrame, QGridLayout, QLabel, QMessageBox, QVBoxLayout, QWidget
 
-from app.services.update_checker import check_for_updates
+from app.services.app_logging import get_logger
+from app.services.app_paths import get_diagnostics_dir, get_logs_dir
+from app.services.network_diagnostics import diagnose_update_endpoint
+from app.services.sqlite_safety import inspect_database, recover_database
+from app.services.support_diagnostics import export_diagnostic_zip
+from app.services.update_checker import RELEASES_API_URL, check_for_updates
+from app.ui.background_worker import start_worker
 from app.ui.components.kpi_card import KpiCard
 from app.ui.components.modern_button import ModernButton
 from app.ui.components.toast_notification import ToastNotification
@@ -14,11 +20,15 @@ from app.ui.user_dialog import UserManagerDialog
 from app.version import APP_CHANNEL, APP_VERSION
 
 
+log = get_logger("settings")
+
+
 class SettingsPage(QWidget):
     def __init__(self, service, theme_changed=None, parent=None):
         super().__init__(parent)
         self.service = service
         self.theme_changed = theme_changed
+        self._worker_threads = []
         self._build()
 
     def _build(self):
@@ -108,6 +118,22 @@ class SettingsPage(QWidget):
         identity.layout().addWidget(QLabel(f"Empresa configurada: {self.service.company}"))
         identity.layout().addWidget(QLabel("Logo e icones profissionais foram copiados para app/assets e ficam separados da versao antiga."))
         grid.addWidget(identity, 2, 1)
+
+        support = self.panel("Suporte e diagnostico")
+        support.layout().addWidget(QLabel("Valide banco, atualizacao e logs sem interromper o trabalho."))
+        integrity = ModernButton("Verificar integridade do banco", "database")
+        test_update = ModernButton("Testar servidor de atualizacao", "refresh")
+        open_logs = ModernButton("Abrir pasta de logs", "folder")
+        export_zip = ModernButton("Exportar pacote de diagnostico", "download", accent=True)
+        recover = ModernButton("Tentar recuperar banco corrompido", "restore")
+        integrity.clicked.connect(self.check_database_integrity)
+        test_update.clicked.connect(self.test_update_server)
+        open_logs.clicked.connect(self.open_logs_folder)
+        export_zip.clicked.connect(self.export_diagnostics)
+        recover.clicked.connect(self.recover_damaged_database)
+        for button in (integrity, test_update, open_logs, export_zip, recover):
+            support.layout().addWidget(button)
+        grid.addWidget(support, 3, 0, 1, 2)
         root.addStretch()
 
     def panel(self, title: str):
@@ -140,11 +166,11 @@ class SettingsPage(QWidget):
         if not self.service.can_edit("settings"):
             QMessageBox.warning(self, "Permissao", "Seu usuario nao pode alterar configuracoes.")
             return
-        try:
-            target = self.service.backup_now()
-            ToastNotification(self.window(), f"Backup criado: {target}", "success")
-        except Exception as exc:
-            QMessageBox.warning(self, "Backup", str(exc))
+        self._run_background(
+            self.service.backup_now,
+            lambda target: ToastNotification(self.window(), f"Backup criado: {target}", "success"),
+            lambda exc: QMessageBox.warning(self, "Backup", str(exc)),
+        )
 
     def restore_backup(self):
         if not self.service.can_edit("settings"):
@@ -155,38 +181,40 @@ class SettingsPage(QWidget):
             return
         if QMessageBox.question(self, "Restaurar backup", "O banco atual sera substituido. Deseja continuar?") != QMessageBox.Yes:
             return
-        try:
-            safety = self.service.restore_backup(path)
-            ToastNotification(self.window(), f"Backup restaurado. Copia anterior: {safety}", "success")
-        except Exception as exc:
-            QMessageBox.warning(self, "Restaurar backup", str(exc))
+        self._run_background(
+            lambda: self.service.restore_backup(path),
+            lambda safety: ToastNotification(self.window(), f"Backup restaurado. Copia anterior: {safety}", "success"),
+            lambda exc: QMessageBox.warning(self, "Restaurar backup", str(exc)),
+        )
 
     def choose_database(self):
         if not self.service.can_edit("settings"):
             QMessageBox.warning(self, "Permissao", "Seu usuario nao pode alterar configuracoes.")
             return
-        path, _ = QFileDialog.getSaveFileName(self, "Banco SQLite", "controle_producao.db", "SQLite (*.db);;Todos (*.*)")
+        path, _ = QFileDialog.getOpenFileName(self, "Selecionar banco SQLite", "", "SQLite (*.db);;Todos (*.*)")
         if not path:
             return
-        self.service.choose_database(path)
-        QMessageBox.information(self, "Banco SQLite", "Reabra o sistema para usar o novo banco.")
+        self._run_background(
+            lambda: self.service.choose_database(path),
+            lambda _result: QMessageBox.information(self, "Banco SQLite", "Banco validado e configurado. Reabra o sistema para concluir a troca."),
+            lambda exc: QMessageBox.warning(self, "Banco SQLite", str(exc)),
+        )
 
     def check_updates(self):
-        QApplication.setOverrideCursor(Qt.WaitCursor)
-        try:
-            result = check_for_updates()
-        finally:
-            QApplication.restoreOverrideCursor()
+        self._run_background(check_for_updates, self._handle_update_result, self._handle_update_error)
+
+    def _handle_update_result(self, result):
 
         checked_at = datetime.now().strftime("%d/%m/%Y %H:%M")
         self.last_update_check.setText(f"Ultima verificacao: {checked_at}")
 
         if result.get("error"):
+            log.error("Verificacao manual falhou | detalhe=%s", result.get("error"))
             QMessageBox.warning(
                 self,
                 "Atualizacoes",
-                "Nao foi possivel verificar atualizacoes agora.\n\n"
-                f"Detalhes: {result.get('error')}",
+                "Nao foi possivel verificar atualizacoes agora. Verifique a internet, data/hora "
+                "do computador ou bloqueio do antivirus. O sistema continuara funcionando normalmente.",
             )
             return
 
@@ -201,3 +229,73 @@ class SettingsPage(QWidget):
             f"Versao instalada: {result.get('current_version', APP_VERSION)}\n"
             f"Ultima versao: {result.get('latest_version', APP_VERSION)}",
         )
+
+    def _handle_update_error(self, exc):
+        log.exception("Falha inesperada na verificacao manual", exc_info=(type(exc), exc, exc.__traceback__))
+        QMessageBox.warning(self, "Atualizacoes", "Nao foi possivel verificar atualizacoes agora. O sistema continuara funcionando normalmente.")
+
+    def check_database_integrity(self):
+        db_path = self.service.config.get("db_path", "")
+        self._run_background(
+            lambda: inspect_database(db_path, require_schema=True),
+            self._show_database_health,
+            lambda exc: QMessageBox.warning(self, "Integridade do banco", str(exc)),
+        )
+
+    def _show_database_health(self, health):
+        if health.integrity_ok and health.foreign_key_errors == 0:
+            QMessageBox.information(self, "Integridade do banco", "Banco integro e pronto para uso.")
+        else:
+            QMessageBox.critical(self, "Integridade do banco", "O banco apresentou inconsistencias e nao deve ser usado. Consulte os logs e restaure um backup valido.")
+
+    def test_update_server(self):
+        self._run_background(
+            lambda: diagnose_update_endpoint(RELEASES_API_URL),
+            self._show_update_diagnostic,
+            lambda exc: QMessageBox.warning(self, "Servidor de atualizacao", str(exc)),
+        )
+
+    def _show_update_diagnostic(self, result):
+        if result.get("update_url") and result.get("certificate"):
+            QMessageBox.information(self, "Servidor de atualizacao", "Internet, URL e certificado de seguranca validados com sucesso.")
+        else:
+            QMessageBox.warning(self, "Servidor de atualizacao", "A conexao nao foi concluida. Verifique internet, proxy, antivirus e data/hora do Windows. Detalhes foram registrados no log.")
+
+    def open_logs_folder(self):
+        get_logs_dir().mkdir(parents=True, exist_ok=True)
+        os.startfile(str(get_logs_dir()))
+
+    def export_diagnostics(self):
+        db_path = self.service.config.get("db_path", "")
+        self._run_background(
+            lambda: export_diagnostic_zip(db_path),
+            lambda path: QMessageBox.information(self, "Diagnostico", f"Pacote criado em:\n{path}"),
+            lambda exc: QMessageBox.warning(self, "Diagnostico", str(exc)),
+        )
+
+    def recover_damaged_database(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Selecionar banco corrompido", "", "SQLite (*.db);;Todos (*.*)")
+        if not path:
+            return
+        if QMessageBox.question(
+            self,
+            "Recuperacao segura",
+            "O banco original sera preservado. A recuperacao criara somente uma nova copia e um relatorio. Continuar?",
+        ) != QMessageBox.Yes:
+            return
+        self._run_background(
+            lambda: recover_database(path, get_diagnostics_dir() / "recovery"),
+            self._show_recovery_result,
+            lambda exc: QMessageBox.warning(self, "Recuperacao", str(exc)),
+        )
+
+    def _show_recovery_result(self, result):
+        if result.get("success"):
+            QMessageBox.information(self, "Recuperacao", f"Copia recuperada criada em:\n{result.get('recovered')}\n\nValide a copia antes de seleciona-la.")
+        else:
+            QMessageBox.warning(self, "Recuperacao", f"A recuperacao automatica nao foi possivel. O original foi preservado e um relatorio foi criado em:\n{result.get('report')}")
+
+    def _run_background(self, operation, on_success, on_error):
+        thread = start_worker(self, operation, on_success, on_error)
+        self._worker_threads.append(thread)
+        thread.finished.connect(lambda target=thread: self._worker_threads.remove(target) if target in self._worker_threads else None)

@@ -5,13 +5,17 @@ import re
 from pathlib import Path
 from typing import Any, Callable
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
 
+from app.services.app_logging import get_logger
 from app.services.app_paths import get_updates_dir
+from app.services.network_diagnostics import classify_network_error, download_bytes as secure_download_bytes
 
 
 class UpdateDownloadError(RuntimeError):
     pass
+
+
+log = get_logger("updates.downloader")
 
 
 def sha256_file(path: Path) -> str:
@@ -47,9 +51,7 @@ def expected_sha256(update_info: dict[str, Any], sha_text: str | None = None) ->
 
 
 def _default_download(url: str, timeout: int = 30) -> bytes:
-    request = Request(url, headers={"User-Agent": "ControleProducaoIndustel"})
-    with urlopen(request, timeout=timeout) as response:
-        return response.read()
+    return secure_download_bytes(url, timeout)
 
 
 def _asset_url(asset: dict[str, Any]) -> str:
@@ -99,14 +101,17 @@ def download_update(
         expected_hash = expected_sha256(update_info, sha_text)
         calculated_hash = sha256_file(installer_path)
     except (HTTPError, URLError, TimeoutError, OSError) as exc:
-        raise UpdateDownloadError(f"Falha ao baixar atualizacao: {exc}") from exc
+        kind = classify_network_error(exc)
+        log.exception("Download da atualizacao falhou | tipo=%s", kind)
+        raise UpdateDownloadError("Nao foi possivel baixar a atualizacao agora. Consulte o Diagnostico do sistema.") from exc
 
     if calculated_hash.lower() != expected_hash.lower():
         try:
             installer_path.unlink(missing_ok=True)
         except OSError:
             pass
-        raise UpdateDownloadError("Hash SHA-256 invalido. O instalador baixado foi descartado.")
+        log.error("Hash SHA-256 invalido | esperado=%s | calculado=%s", expected_hash, calculated_hash)
+        raise UpdateDownloadError("A atualizacao baixada nao passou na verificacao de seguranca e foi descartada.")
 
     return {
         "installer_path": str(installer_path),

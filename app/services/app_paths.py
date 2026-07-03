@@ -48,6 +48,21 @@ def get_updates_dir() -> Path:
     return get_app_data_dir() / "updates"
 
 
+def get_logs_dir() -> Path:
+    override = os.environ.get("CONTROLE_PRODUCAO_LOG_DIR")
+    if override:
+        return Path(override)
+    if is_packaged():
+        app_data = os.environ.get("APPDATA")
+        if app_data:
+            return Path(app_data) / "ControleProducao" / "logs"
+    return get_app_data_dir() / "logs"
+
+
+def get_diagnostics_dir() -> Path:
+    return get_app_data_dir() / "diagnostics"
+
+
 def get_config_example_path() -> Path:
     if is_packaged():
         base_dir = Path(getattr(sys, "_MEIPASS", Path(sys.executable).resolve().parent))
@@ -59,4 +74,6 @@ def ensure_app_data_dirs() -> None:
     get_app_data_dir().mkdir(parents=True, exist_ok=True)
     get_backup_dir().mkdir(parents=True, exist_ok=True)
     get_updates_dir().mkdir(parents=True, exist_ok=True)
+    get_logs_dir().mkdir(parents=True, exist_ok=True)
+    get_diagnostics_dir().mkdir(parents=True, exist_ok=True)
     get_config_path().parent.mkdir(parents=True, exist_ok=True)

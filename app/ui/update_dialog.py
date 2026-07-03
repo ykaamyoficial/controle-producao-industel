@@ -1,17 +1,19 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication, QDialog, QFrame, QHBoxLayout, QLabel, QMessageBox, QTextEdit, QVBoxLayout
+from PySide6.QtWidgets import QDialog, QFrame, QHBoxLayout, QLabel, QMessageBox, QTextEdit, QVBoxLayout
 
 from app.services.update_downloader import UpdateDownloadError, download_update as download_update_file
 from app.services.update_installer import UpdateInstallError, create_pre_update_backup, run_silent_installer
 from app.ui.components.modern_button import ModernButton
+from app.ui.background_worker import start_worker
 
 
 class UpdateDialog(QDialog):
     def __init__(self, update_info: dict, parent=None):
         super().__init__(parent)
         self.update_info = update_info
+        self._worker_thread = None
         self.setWindowTitle("Nova versao disponivel")
         self.setMinimumSize(560, 420)
         self._build()
@@ -52,9 +54,9 @@ class UpdateDialog(QDialog):
 
         footer = QHBoxLayout()
         footer.addStretch()
-        download = ModernButton("Baixar atualizacao", "download", accent=True)
-        download.clicked.connect(self.download_update)
-        footer.addWidget(download, alignment=Qt.AlignRight)
+        self.download_button = ModernButton("Baixar atualizacao", "download", accent=True)
+        self.download_button.clicked.connect(self.download_update)
+        footer.addWidget(self.download_button, alignment=Qt.AlignRight)
         close = ModernButton("Fechar", "close")
         close.clicked.connect(self.accept)
         footer.addWidget(close, alignment=Qt.AlignRight)
@@ -75,19 +77,34 @@ class UpdateDialog(QDialog):
         if confirm != QMessageBox.Yes:
             return  
 
-        QApplication.setOverrideCursor(Qt.WaitCursor)
-        try:
-             result = download_update_file(self.update_info)
-             create_pre_update_backup(self.update_info.get("latest_version", "nova"))
-        except UpdateDownloadError as exc:
+        self.download_button.setEnabled(False)
+        self.download_button.setText("Preparando atualizacao...")
+        self._worker_thread = start_worker(
+            self,
+            self._prepare_update,
+            self._update_ready,
+            self._update_failed,
+        )
+
+    def _prepare_update(self):
+        result = download_update_file(self.update_info)
+        backup = create_pre_update_backup(self.update_info.get("latest_version", "nova"))
+        result["backup_path"] = str(backup) if backup else None
+        return result
+
+    def _update_failed(self, exc):
+        self.download_button.setEnabled(True)
+        self.download_button.setText("Baixar atualizacao")
+        if isinstance(exc, UpdateDownloadError):
             QMessageBox.warning(
                 self,
                 "Atualizar sistema",
                 "Nao foi possivel baixar e validar a atualizacao.\n\n"
-                f"Detalhes: {exc}",
+                "Verifique internet, data/hora do computador, proxy ou bloqueio do antivirus. "
+                "O sistema continuara funcionando normalmente.",
             )
             return
-        except UpdateInstallError as exc:
+        if isinstance(exc, UpdateInstallError):
             QMessageBox.warning(
               self,
               "Atualizar sistema",
@@ -95,9 +112,11 @@ class UpdateDialog(QDialog):
               f"Detalhes: {exc}",
             )
             return
-        finally:
-            QApplication.restoreOverrideCursor()
+        QMessageBox.warning(self, "Atualizar sistema", "Nao foi possivel preparar a atualizacao. Consulte os logs tecnicos.")
 
+    def _update_ready(self, result):
+        self.download_button.setEnabled(True)
+        self.download_button.setText("Baixar atualizacao")
         QMessageBox.information(
             self,
             "Atualizar sistema",
