@@ -3,7 +3,19 @@ from __future__ import annotations
 from datetime import datetime
 import os
 
-from PySide6.QtWidgets import QFileDialog, QComboBox, QFrame, QGridLayout, QLabel, QMessageBox, QVBoxLayout, QWidget
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import (
+    QFileDialog,
+    QComboBox,
+    QFrame,
+    QGridLayout,
+    QLabel,
+    QMessageBox,
+    QScrollArea,
+    QSizePolicy,
+    QVBoxLayout,
+    QWidget,
+)
 
 from app.services.app_logging import get_logger
 from app.services.app_paths import get_diagnostics_dir, get_logs_dir
@@ -12,7 +24,6 @@ from app.services.sqlite_safety import inspect_database, recover_database
 from app.services.support_diagnostics import export_diagnostic_zip
 from app.services.update_checker import RELEASES_API_URL, check_for_updates
 from app.ui.background_worker import start_worker
-from app.ui.components.kpi_card import KpiCard
 from app.ui.components.modern_button import ModernButton
 from app.ui.components.toast_notification import ToastNotification
 from app.ui.update_dialog import UpdateDialog
@@ -47,9 +58,23 @@ class SettingsPage(QWidget):
         header_layout.addWidget(subtitle)
         root.addWidget(header)
 
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        content = QWidget()
+        content.setObjectName("SettingsContent")
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(0, 0, 4, 8)
+        content_layout.setSpacing(0)
         grid = QGridLayout()
         grid.setSpacing(14)
-        root.addLayout(grid)
+        grid.setColumnStretch(0, 1)
+        grid.setColumnStretch(1, 1)
+        content_layout.addLayout(grid)
+        content_layout.addStretch()
+        scroll.setWidget(content)
+        root.addWidget(scroll, 1)
         can_edit_settings = self.service.can_edit("settings")
 
         visual = self.panel("Visual do sistema")
@@ -63,6 +88,7 @@ class SettingsPage(QWidget):
         visual.layout().addWidget(QLabel("Paleta de cores"))
         visual.layout().addWidget(self.palette_combo)
         visual.layout().addWidget(apply_visual)
+        visual.setMinimumHeight(190)
         grid.addWidget(visual, 0, 0)
 
         system_info = self.panel("Informacoes do sistema")
@@ -75,6 +101,7 @@ class SettingsPage(QWidget):
         refresh = ModernButton("Atualizar pagina atual", "refresh")
         refresh.clicked.connect(lambda: self.window().refresh_current() if hasattr(self.window(), "refresh_current") else None)
         system_info.layout().addWidget(refresh)
+        system_info.setMinimumHeight(190)
         grid.addWidget(system_info, 0, 1)
 
         users = self.panel("Usuarios e acesso")
@@ -83,6 +110,8 @@ class SettingsPage(QWidget):
         manage_users.setEnabled(self.service.can_edit("users_permissions"))
         manage_users.clicked.connect(self.open_users)
         users.layout().addWidget(manage_users)
+        users.layout().addStretch()
+        users.setMinimumHeight(170)
         grid.addWidget(users, 1, 0)
 
         data = self.panel("Banco de dados e backup")
@@ -101,6 +130,7 @@ class SettingsPage(QWidget):
         data.layout().addWidget(backup)
         data.layout().addWidget(restore)
         data.layout().addWidget(choose)
+        data.setMinimumHeight(210)
         grid.addWidget(data, 1, 1)
 
         updates = self.panel("Atualizacoes")
@@ -112,11 +142,16 @@ class SettingsPage(QWidget):
         check_updates = ModernButton("Verificar atualizacoes", "refresh", accent=True)
         check_updates.clicked.connect(self.check_updates)
         updates.layout().addWidget(check_updates)
+        updates.setMinimumHeight(190)
         grid.addWidget(updates, 2, 0)
 
         identity = self.panel("Identidade")
         identity.layout().addWidget(QLabel(f"Empresa configurada: {self.service.company}"))
-        identity.layout().addWidget(QLabel("Logo e icones profissionais foram copiados para app/assets e ficam separados da versao antiga."))
+        identity_text = QLabel("Logo e icones profissionais foram copiados para app/assets e ficam separados da versao antiga.")
+        identity_text.setWordWrap(True)
+        identity.layout().addWidget(identity_text)
+        identity.layout().addStretch()
+        identity.setMinimumHeight(190)
         grid.addWidget(identity, 2, 1)
 
         support = self.panel("Suporte e diagnostico")
@@ -131,14 +166,23 @@ class SettingsPage(QWidget):
         open_logs.clicked.connect(self.open_logs_folder)
         export_zip.clicked.connect(self.export_diagnostics)
         recover.clicked.connect(self.recover_damaged_database)
-        for button in (integrity, test_update, open_logs, export_zip, recover):
-            support.layout().addWidget(button)
+        support_actions = QWidget()
+        support_grid = QGridLayout(support_actions)
+        support_grid.setContentsMargins(0, 0, 0, 0)
+        support_grid.setHorizontalSpacing(10)
+        support_grid.setVerticalSpacing(8)
+        for index, button in enumerate((integrity, test_update, open_logs, export_zip, recover)):
+            button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            support_grid.addWidget(button, index // 2, index % 2)
+        support.layout().addWidget(support_actions)
+        support.layout().addStretch()
+        support.setMinimumHeight(220)
         grid.addWidget(support, 3, 0, 1, 2)
-        root.addStretch()
 
     def panel(self, title: str):
         frame = QFrame()
         frame.setObjectName("Panel")
+        frame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
         layout = QVBoxLayout(frame)
         layout.setContentsMargins(18, 16, 18, 16)
         layout.setSpacing(10)

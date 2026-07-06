@@ -45,8 +45,11 @@ def inspect_database(path: str | Path, *, require_schema: bool = False, timeout:
     if not readable:
         return DatabaseHealth(str(db_path), True, False, writable, False, 0, "Sem permissao de leitura.")
     try:
-        uri = db_path.resolve().as_uri() + "?mode=ro"
-        with closing(sqlite3.connect(uri, uri=True, timeout=timeout)) as conn:
+        # SQLite URI authorities do not support Windows UNC hosts (file://server/...).
+        # Open the native path and force query_only instead, which works for local and
+        # shared paths without writing during diagnostics.
+        with closing(sqlite3.connect(str(db_path), timeout=timeout)) as conn:
+            conn.execute("PRAGMA query_only=ON")
             integrity_rows = conn.execute("PRAGMA integrity_check").fetchall()
             integrity_ok = len(integrity_rows) == 1 and str(integrity_rows[0][0]).lower() == "ok"
             foreign_errors = len(conn.execute("PRAGMA foreign_key_check").fetchall())

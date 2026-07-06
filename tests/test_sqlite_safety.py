@@ -90,6 +90,23 @@ class SQLiteSafetyTests(unittest.TestCase):
         self.assertTrue(is_network_path(r"\\SERVIDOR\dados\controle.db"))
         self.assertFalse(is_network_path(r"C:\dados\controle.db"))
 
+    def test_unc_validation_uses_native_path_not_sqlite_uri(self):
+        path = Path(r"\\SERVIDOR\dados\controle.db")
+        connection = unittest.mock.MagicMock()
+        integrity_cursor = unittest.mock.MagicMock()
+        integrity_cursor.fetchall.return_value = [("ok",)]
+        foreign_cursor = unittest.mock.MagicMock()
+        foreign_cursor.fetchall.return_value = []
+        connection.execute.side_effect = [unittest.mock.MagicMock(), integrity_cursor, foreign_cursor]
+        with patch.object(Path, "exists", return_value=True), patch.object(Path, "is_file", return_value=True), patch.object(
+            Path, "parent", new_callable=unittest.mock.PropertyMock, return_value=Path(r"\\SERVIDOR\dados")
+        ), patch("app.services.sqlite_safety.os.access", return_value=True), patch(
+            "app.services.sqlite_safety.sqlite3.connect", return_value=connection
+        ) as connect:
+            health = inspect_database(path)
+        connect.assert_called_once_with(str(path), timeout=8)
+        self.assertTrue(health.integrity_ok)
+
     def test_database_in_exclusive_use_returns_unhealthy_instead_of_hanging(self):
         path = self._healthy_db()
         blocker = sqlite3.connect(path, timeout=0.1)

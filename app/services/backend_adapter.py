@@ -702,6 +702,7 @@ class BackendService:
                 add("STATUS", "Pausar producao", "pause", "PARADO")
             if any(status in options for status in ("FINALIZADO", "FINALIZADO_PARCIAL")):
                 add("REGISTER_PRODUCTION", "Registrar producao", "status")
+            add("EDIT_ITEM_WEIGHTS", "Informar pesos dos itens", "edit")
             return actions
 
         if area == "GALVANIZACAO":
@@ -800,6 +801,16 @@ class BackendService:
 
     def proposal_items(self, process_id: int, pending_production: bool = False, pending_delivery: bool = False) -> list[dict[str, Any]]:
         return [row_to_dict(row) for row in self.repo.list_proposal_items(process_id, pending_production, pending_delivery)]
+
+    def update_item_weights(self, process_id: int, weights: dict[int, float]) -> int:
+        if not self.user:
+            raise legacy.AppError("Usuario nao autenticado.")
+        if not self.can_edit("PRODUCAO"):
+            raise legacy.AppError("Seu usuario nao pode alterar dados da Producao.")
+        if not weights:
+            return 0
+        legacy.backup_database(self.config, "antes_pesos_itens")
+        return self.repo.update_item_weights(process_id, weights, self.user)
 
     def item_progress(self, process_id: int) -> dict[str, Any]:
         return self.repo.item_progress(process_id)

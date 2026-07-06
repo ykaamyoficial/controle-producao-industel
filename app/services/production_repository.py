@@ -2480,6 +2480,82 @@ class Repository:
         assignments = ", ".join(f"{key} = ?" for key in updates)
         self.conn.execute(f"UPDATE processos SET {assignments} WHERE id = ?", tuple(updates.values()) + (process_id,))
 
+    def update_item_weights(self, process_id, weights, user):
+        process = self.get_process(process_id)
+        if not process:
+            raise AppError("Proposta nao encontrada.")
+        available = {int(row["id"]): row for row in self.list_proposal_items(process_id)}
+        normalized = {}
+        for item_id, raw_weight in (weights or {}).items():
+            try:
+                item_id = int(item_id)
+                weight = self.to_float(raw_weight)
+            except (TypeError, ValueError) as exc:
+                raise AppError("Informe pesos validos usando virgula ou ponto.") from exc
+            if item_id not in available:
+                raise AppError("Um dos itens nao pertence a proposta selecionada.")
+            if weight is None:
+                continue
+            if weight < 0:
+                raise AppError("O peso do item nao pode ser negativo.")
+            previous = float(available[item_id]["peso"] or 0)
+            if abs(previous - weight) > 0.000001:
+                normalized[item_id] = (previous, weight)
+        if not normalized:
+            return 0
+
+        main_id = self.process_main_id(process)
+        try:
+            self.conn.execute("BEGIN IMMEDIATE")
+            for item_id, (previous, weight) in normalized.items():
+                self.conn.execute(
+                    "UPDATE proposta_itens SET peso = ?, atualizado_em = ?, atualizado_por = ? WHERE id = ?",
+                    (weight, now_br(), user["login"], item_id),
+                )
+                self.add_audit("proposta_item", item_id, "ATUALIZAR_PESO", "peso", previous, weight, user)
+
+            main_total = float(
+                self.conn.execute(
+                    "SELECT COALESCE(SUM(quantidade * peso), 0) FROM proposta_itens WHERE processo_principal_id = ?",
+                    (main_id,),
+                ).fetchone()[0]
+                or 0
+            )
+            previous_main_weight = float(self.get_process(main_id)["peso"] or 0)
+            self.conn.execute(
+                "UPDATE processos SET peso = ?, atualizado_em = ?, atualizado_por = ? WHERE id = ?",
+                (main_total, now_br(), user["login"], main_id),
+            )
+            if self.is_partial_process(process):
+                partial_total = float(
+                    self.conn.execute(
+                        "SELECT COALESCE(SUM(quantidade * peso), 0) FROM proposta_itens WHERE processo_atual_id = ?",
+                        (process_id,),
+                    ).fetchone()[0]
+                    or 0
+                )
+                self.conn.execute(
+                    "UPDATE processos SET peso = ?, atualizado_em = ?, atualizado_por = ? WHERE id = ?",
+                    (partial_total, now_br(), user["login"], process_id),
+                )
+            self.add_audit("processo", main_id, "RECALCULAR_PESO", "peso", previous_main_weight, main_total, user)
+            changed_numbers = ", ".join(str(available[item_id]["numero_item"]) for item_id in normalized)
+            current_status = process["status_producao"] or ""
+            self.add_history(
+                process_id,
+                process["proposta"],
+                "PRODUCAO",
+                current_status,
+                current_status,
+                user,
+                f"Pesos dos itens atualizados: {changed_numbers}. Peso total recalculado: {main_total:g} kg.",
+            )
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
+        return len(normalized)
+
     def item_progress(self, process_id):
         process = self.get_process(process_id)
         if not process:

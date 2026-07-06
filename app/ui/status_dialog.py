@@ -8,6 +8,7 @@ from app.ui.components.modern_button import ModernButton
 from app.ui.galvanization_load_dialog import GalvanizationLoadManagerDialog
 from app.ui.icons import make_icon
 from app.ui.item_selection_dialog import ItemSelectionDialog
+from app.ui.item_weight_dialog import ItemWeightDialog
 
 
 class StatusDialog(QDialog):
@@ -85,6 +86,11 @@ class StatusDialog(QDialog):
                 return
             if action_id == "REGISTER_PRODUCTION":
                 self._register_production()
+                return
+            if action_id == "EDIT_ITEM_WEIGHTS":
+                dialog = ItemWeightDialog(self.service, self.process_id, self)
+                if dialog.exec():
+                    self.accept()
                 return
             if action_id == "REGISTER_DELIVERY":
                 self._register_delivery()
