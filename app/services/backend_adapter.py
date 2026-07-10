@@ -21,6 +21,44 @@ ROOT_DIR = Path(__file__).resolve().parents[2]
 APP_DIR = ROOT_DIR / "app"
 log = get_logger("backend")
 
+THEME_ALIASES = {
+    "aurora": "claro",
+    "aurora professional": "claro",
+    "aurora profissional": "claro",
+    "energia": "claro",
+    "verde operacional": "claro",
+    "grafite": "escuro",
+    "grafite alto contraste": "escuro",
+    "pulso": "escuro",
+    "pulso executivo": "escuro",
+}
+
+OFFICIAL_COLOR_PALETTES = {
+    "claro": {
+        **legacy.COLOR_PALETTES["aurora"],
+        "label": "Claro",
+    },
+    "escuro": {
+        **legacy.COLOR_PALETTES["grafite"],
+        "label": "Escuro",
+        "bg": "#0f172a",
+        "surface": "#172033",
+        "surface_alt": "#24324a",
+        "text": "#f8fafc",
+        "muted": "#dbeafe",
+        "border": "#475569",
+        "accent": "#38bdf8",
+        "accent_hover": "#7dd3fc",
+        "accent_text": "#0f172a",
+    },
+}
+
+
+def normalize_palette_name(name: str | None) -> str:
+    normalized = (name or "claro").strip().lower()
+    normalized = THEME_ALIASES.get(normalized, normalized)
+    return normalized if normalized in OFFICIAL_COLOR_PALETTES else "claro"
+
 
 def _load_config_example() -> dict[str, Any]:
     example_path = get_config_example_path()
@@ -44,10 +82,9 @@ def load_app_config() -> dict[str, Any]:
         data["backup_dir"] = str(get_backup_dir())
     data.setdefault("backup_keep", 20)
     data.setdefault("company", "Industel")
-    data.setdefault("color_palette", "aurora")
+    data.setdefault("color_palette", "claro")
     data.setdefault("saved_reports", legacy.DEFAULT_REPORT_DEFINITIONS)
-    if data["color_palette"] not in legacy.COLOR_PALETTES:
-        data["color_palette"] = "aurora"
+    data["color_palette"] = normalize_palette_name(data.get("color_palette"))
     save_app_config(data)
     return data
 
@@ -84,15 +121,15 @@ class BackendService:
 
     @property
     def palettes(self):
-        return legacy.COLOR_PALETTES
+        return OFFICIAL_COLOR_PALETTES
 
     @property
     def palette_name(self) -> str:
-        return self.config.get("color_palette", "aurora")
+        return normalize_palette_name(self.config.get("color_palette"))
 
     @property
     def palette(self):
-        return self.palettes.get(self.palette_name, self.palettes["aurora"])
+        return self.palettes.get(self.palette_name, self.palettes["claro"])
 
     @property
     def company(self) -> str:
@@ -430,10 +467,16 @@ class BackendService:
         return list(self.config.get("saved_reports", []))
 
     def save_palette(self, palette_name: str):
+        palette_name = normalize_palette_name(palette_name)
         if palette_name not in self.palettes:
             raise legacy.AppError("Paleta invalida.")
         self.config["color_palette"] = palette_name
         save_app_config(self.config)
+
+    def toggle_palette(self) -> str:
+        next_palette = "escuro" if self.palette_name == "claro" else "claro"
+        self.save_palette(next_palette)
+        return next_palette
 
     def backup_now(self):
         target = legacy.backup_database(self.config, "manual")
@@ -678,6 +721,122 @@ class BackendService:
             return []
         return self.repo.next_status_options(area, row)
 
+    def administrative_status_options(self, area: str) -> list[str]:
+        if area not in legacy.AREAS:
+            return []
+        ordered = legacy.STATUS_FLOW_ORDER.get(area, [])
+        available = set(self.list_status(area))
+        ordered_options = [status for status in ordered if status in available]
+        remaining = sorted(available - set(ordered_options))
+        return ordered_options + remaining
+
+    def administrative_correction(
+        self,
+        process_id: int,
+        new_area: str,
+        new_status: str,
+        justification: str,
+    ):
+        if not self.user:
+            raise legacy.AppError("Usuario nao autenticado.")
+        if not self.can_admin():
+            raise legacy.AppError("Apenas administradores podem aplicar correcao administrativa.")
+
+        new_area = (new_area or "").strip().upper()
+        new_status = legacy.normalize_status(new_status or "")
+        justification = (justification or "").strip()
+        if new_area not in legacy.AREAS:
+            raise legacy.AppError("Nova area invalida.")
+        if not new_status:
+            raise legacy.AppError("Informe o novo status.")
+        if new_status not in self.list_status(new_area):
+            raise legacy.AppError("Status invalido para a nova area.")
+        if not justification:
+            raise legacy.AppError("Informe a justificativa da correcao.")
+
+        process = self.repo.get_process(process_id)
+        if not process:
+            raise legacy.AppError("Processo nao encontrado.")
+        previous = row_to_dict(process)
+        previous_area, previous_area_label, previous_status = self.current_location(previous)
+        previous_area = previous_area or new_area
+        previous_area_label = previous_area_label or previous_area.title()
+        previous_status = previous_status or self.status_for_area(previous, previous_area) or ""
+
+        column = legacy.AREAS[new_area]["column"]
+        old_target_status = legacy.normalize_status(previous.get(column) or "")
+        if previous_area == new_area and old_target_status == new_status:
+            raise legacy.AppError("A area e o status selecionados ja estao aplicados.")
+
+        now = legacy.now_br()
+        updates: dict[str, Any] = {
+            column: new_status,
+            "atualizado_em": now,
+            "atualizado_por": self.user["login"],
+        }
+
+        # Manual corrections must make the selected stage become the current visible
+        # stage. Clearing downstream stage statuses prevents an old later-stage status
+        # from continuing to pull the proposal forward visually.
+        flow_order = ("CONTROLE GERAL", "PRODUCAO", "GALVANIZACAO", "EXPEDICAO")
+        if new_area in flow_order:
+            for downstream_area in flow_order[flow_order.index(new_area) + 1:]:
+                downstream_column = legacy.AREAS[downstream_area]["column"]
+                if downstream_column != column:
+                    updates[downstream_column] = ""
+
+        date_column = legacy.AREAS[new_area]["date_columns"].get(new_status)
+        if date_column:
+            updates[date_column] = legacy.today_br()
+        observation_column = legacy.AREAS[new_area]["observation_column"]
+        updates[observation_column] = justification
+
+        preview = dict(previous)
+        preview.update(updates)
+        general_status = self.repo.general_status_for(new_area, new_status, preview)
+        if general_status:
+            updates["status_geral"] = general_status
+            preview["status_geral"] = general_status
+        updates.update(self.repo.flow_state_updates(preview))
+
+        assignments = ", ".join(f"{key} = ?" for key in updates)
+        history_note = (
+            "CORREÇÃO ADMINISTRATIVA\n"
+            f"Area anterior: {previous_area_label}\n"
+            f"Status anterior: {self.area_status_label(previous_area, previous_status) if previous_status else '-'}\n"
+            f"Nova area: {new_area.title()}\n"
+            f"Novo status: {self.area_status_label(new_area, new_status)}\n"
+            f"Justificativa: {justification}"
+        )
+        try:
+            self.conn.execute(
+                f"UPDATE processos SET {assignments} WHERE id = ?",
+                tuple(updates.values()) + (process_id,),
+            )
+            self.conn.execute(
+                """
+                INSERT INTO historico_status(
+                    processo_id, proposta, area, status_anterior, status_novo,
+                    data_hora, usuario, computador, observacao
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    process_id,
+                    previous.get("proposta") or "",
+                    new_area,
+                    previous_status,
+                    new_status,
+                    now,
+                    self.user["login"],
+                    legacy.socket.gethostname(),
+                    history_note,
+                ),
+            )
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
+
     def process_actions(self, process_id: int, area: str | None = None) -> list[dict[str, str]]:
         process = self.repo.get_process(process_id)
         if not process:
@@ -695,6 +854,11 @@ class BackendService:
 
         if area == "PRODUCAO":
             current_production = process["status_producao"] or ""
+            flow_summary = self.repo.item_flow_summary(process_id)
+            if flow_summary["undefined_count"]:
+                add("DEFINE_ITEM_FLOW", "Definir fluxo dos itens pendentes", "settings")
+            else:
+                add("DEFINE_ITEM_FLOW", "Definir fluxo dos itens", "settings")
             if "INICIADO" in options:
                 label = "Retomar producao" if current_production == "PARADO" else "Iniciar producao"
                 add("STATUS", label, "production", "INICIADO")
@@ -811,6 +975,20 @@ class BackendService:
             return 0
         legacy.backup_database(self.config, "antes_pesos_itens")
         return self.repo.update_item_weights(process_id, weights, self.user)
+
+    def item_flow_summary(self, process_id: int) -> dict[str, Any]:
+        return self.repo.item_flow_summary(process_id)
+
+    def item_no_production_reasons(self) -> list[tuple[str, str]]:
+        return [(key, legacy.ITEM_NO_PRODUCTION_LABELS[key]) for key in ("pronta_entrega", "comprado_terceiro", "terceirizado", "outro")]
+
+    def update_item_flow(self, process_id: int, definitions: list[dict[str, Any]], origin: str = "Producao") -> int:
+        if not self.user:
+            raise legacy.AppError("Usuario nao autenticado.")
+        if not self.can_edit("PRODUCAO"):
+            raise legacy.AppError("Seu usuario nao pode definir fluxo dos itens.")
+        legacy.backup_database(self.config, "antes_fluxo_itens")
+        return self.repo.update_item_flow(process_id, definitions, self.user, origin)
 
     def item_progress(self, process_id: int) -> dict[str, Any]:
         return self.repo.item_progress(process_id)

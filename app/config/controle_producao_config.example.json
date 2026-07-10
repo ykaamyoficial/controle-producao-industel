@@ -3,6 +3,6 @@
   "backup_dir": "app/data/backups",
   "backup_keep": 20,
   "company": "Industel",
-  "color_palette": "aurora",
+  "color_palette": "claro",
   "saved_reports": []
 }

@@ -2,12 +2,14 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QAbstractItemView, QApplication, QComboBox, QDialog, QFrame, QGridLayout, QHBoxLayout,
+    QAbstractItemView, QComboBox, QDialog, QFrame, QGridLayout, QHBoxLayout,
     QHeaderView, QLineEdit, QLabel, QMessageBox, QScrollArea, QSpinBox,
     QStyledItemDelegate, QTableWidget, QTableWidgetItem, QTextEdit, QVBoxLayout, QWidget,
 )
 
 from app.ui.components.modern_button import ModernButton
+from app.ui.dialog_utils import apply_large_dialog_geometry, style_dialog_from_parent
+from app.ui.item_flow_dialog import FLOW_OPTIONS
 from app.ui.proposal_import_dialog import ProposalImportDialog
 from app.ui.table_utils import configure_wrapping_table, resize_rows_to_contents
 
@@ -33,19 +35,22 @@ class ProcessFormDialog(QDialog):
         self.import_metadata: dict | None = None
         self.is_partial = False
         self.items_locked = False
+        self.reason_options = [("", "-")]
         self.setWindowTitle("Proposta")
-        self.setMinimumSize(680, 540)
-        screen = parent.screen() if parent and hasattr(parent, "screen") else QApplication.primaryScreen()
-        available = screen.availableGeometry() if screen else None
-        if available:
-            dialog_width = min(900, max(680, int(available.width() * 0.78)))
-            dialog_height = min(690, max(540, int(available.height() * 0.88)))
-            self.setMaximumHeight(max(540, available.height() - 20))
-            self.resize(dialog_width, dialog_height)
-        else:
-            self.resize(860, 650)
+        apply_large_dialog_geometry(self, parent)
+        style_dialog_from_parent(self, parent)
         self.fields: dict[str, QLineEdit | QTextEdit | QComboBox] = {}
         self._build()
+        if hasattr(self.service, "item_no_production_reasons"):
+            self.reason_options = [("", "-")] + self.service.item_no_production_reasons()
+        else:
+            self.reason_options = [
+                ("", "-"),
+                ("pronta_entrega", "Pronta entrega"),
+                ("comprado_terceiro", "Comprado de terceiro"),
+                ("terceirizado", "Terceirizado"),
+                ("outro", "Outro"),
+            ]
         if process_id:
             self._load(process_id)
         elif self.initial_data:
@@ -164,20 +169,27 @@ class ProcessFormDialog(QDialog):
         item_actions.addStretch()
         items_panel.layout().addLayout(item_actions)
 
-        self.items_table = QTableWidget(0, 5)
-        self.items_table.setHorizontalHeaderLabels(["Item", "Codigo", "Descricao", "Quantidade", "Peso unit. (kg)"])
+        self.items_table = QTableWidget(0, 9)
+        self.items_table.setHorizontalHeaderLabels([
+            "Item", "Codigo", "Descricao", "Quantidade", "Peso unit. (kg)",
+            "Produzir", "Motivo", "Galvanizar", "Obs. fluxo",
+        ])
         self.items_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
         self.items_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
         self.items_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
         self.items_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
         self.items_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        self.items_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeToContents)
+        self.items_table.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeToContents)
+        self.items_table.horizontalHeader().setSectionResizeMode(7, QHeaderView.ResizeToContents)
+        self.items_table.horizontalHeader().setSectionResizeMode(8, QHeaderView.Stretch)
         self.items_table.verticalHeader().setVisible(False)
         self.items_table.verticalHeader().setDefaultSectionSize(38)
         self.items_table.setItemDelegate(ItemEditorDelegate(self.items_table))
         self.items_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.items_table.setAlternatingRowColors(True)
         self.items_table.setMinimumHeight(230)
-        configure_wrapping_table(self.items_table, description_columns=(2,), code_columns=(1,), min_row_height=44)
+        configure_wrapping_table(self.items_table, description_columns=(2,), code_columns=(1,), min_row_height=48)
         self.items_table.itemChanged.connect(self.update_items_total)
         items_panel.layout().addWidget(self.items_table)
         body.addWidget(items_panel, 1)
@@ -351,6 +363,20 @@ class ProcessFormDialog(QDialog):
         }
         return True
 
+    def _flow_combo(self, value: str = "indefinido") -> QComboBox:
+        combo = QComboBox()
+        for data, label in FLOW_OPTIONS:
+            combo.addItem(label, data)
+        combo.setCurrentIndex(max(0, combo.findData(value or "indefinido")))
+        return combo
+
+    def _reason_combo(self, value: str = "") -> QComboBox:
+        combo = QComboBox()
+        for data, label in self.reason_options:
+            combo.addItem(label, data)
+        combo.setCurrentIndex(max(0, combo.findData(value or "")))
+        return combo
+
     def add_item(
         self,
         number: str = "",
@@ -358,6 +384,10 @@ class ProcessFormDialog(QDialog):
         description: str = "",
         quantity: str = "1",
         weight: str = "",
+        produce: str = "indefinido",
+        reason: str = "",
+        galvanize: str = "indefinido",
+        flow_note: str = "",
     ):
         self.items_table.blockSignals(True)
         row = self.items_table.rowCount()
@@ -375,6 +405,12 @@ class ProcessFormDialog(QDialog):
         weight_item = QTableWidgetItem(weight)
         weight_item.setTextAlignment(Qt.AlignCenter)
         self.items_table.setItem(row, 4, weight_item)
+        self.items_table.setCellWidget(row, 5, self._flow_combo(produce))
+        self.items_table.setCellWidget(row, 6, self._reason_combo(reason))
+        self.items_table.setCellWidget(row, 7, self._flow_combo(galvanize))
+        note = QLineEdit(flow_note)
+        note.setPlaceholderText("Opcional")
+        self.items_table.setCellWidget(row, 8, note)
         self.items_table.blockSignals(False)
         self.item_quantity.setValue(self.items_table.rowCount())
         resize_rows_to_contents(self.items_table)
@@ -445,6 +481,10 @@ class ProcessFormDialog(QDialog):
                     item.get("descricao") or "",
                     str(item.get("quantidade") or 1),
                     str(item.get("peso") or ""),
+                    str(item.get("produzir_internamente") or "indefinido"),
+                    str(item.get("motivo_nao_produzir") or ""),
+                    str(item.get("precisa_galvanizacao") or "indefinido"),
+                    str(item.get("observacao_fluxo_item") or ""),
                 )
         self.item_quantity.setValue(self.items_table.rowCount())
         editable_items = not self.is_partial and not self.items_locked
@@ -468,14 +508,24 @@ class ProcessFormDialog(QDialog):
             items = []
             for row in range(self.items_table.rowCount()):
                 number = self.items_table.item(row, 0)
+                code = self.items_table.item(row, 1)
                 description = self.items_table.item(row, 2)
                 quantity = self.items_table.item(row, 3)
                 weight = self.items_table.item(row, 4)
+                produce = self.items_table.cellWidget(row, 5)
+                reason = self.items_table.cellWidget(row, 6)
+                galvanize = self.items_table.cellWidget(row, 7)
+                flow_note = self.items_table.cellWidget(row, 8)
                 items.append({
                     "numero_item": number.text().strip() if number else str(row + 1),
+                    "codigo_produto": code.text().strip() if code else "",
                     "descricao": description.text().strip() if description else "",
                     "quantidade": quantity.text().strip() if quantity else "1",
                     "peso": weight.text().strip() if weight else "",
+                    "produzir_internamente": produce.currentData() if isinstance(produce, QComboBox) else "indefinido",
+                    "motivo_nao_produzir": reason.currentData() if isinstance(reason, QComboBox) else "",
+                    "precisa_galvanizacao": galvanize.currentData() if isinstance(galvanize, QComboBox) else "indefinido",
+                    "observacao_fluxo_item": flow_note.text().strip() if isinstance(flow_note, QLineEdit) else "",
                 })
             data["itens"] = items
         try:

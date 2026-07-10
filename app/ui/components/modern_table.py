@@ -26,7 +26,7 @@ class StatusBadgeDelegate(QStyledItemDelegate):
 
     def paint(self, painter: QPainter, option: QStyleOptionViewItem, index):
         key = index.data(Qt.UserRole + 1)
-        if key == "status_icon":
+        if key in {"status_icon", "fiscal_action"}:
             raw = index.data(Qt.UserRole + 2) or "status"
             painter.save()
             if option.state & QStyle.State_Selected:
@@ -101,6 +101,7 @@ class ModernTable(QTableView):
         columns = getattr(source, "columns", [])
         widths = {
             "status_icon": 44,
+            "fiscal_action": 44,
             "id": 54,
             "tipo_processo": 86,
             "cliente": 150,

@@ -35,8 +35,70 @@ def app_stylesheet(palette: dict) -> str:
         background: {bg};
         border: 0;
     }}
+    QAbstractScrollArea {{
+        background: {surface};
+        border: 1px solid {border};
+    }}
+    QAbstractScrollArea::viewport {{
+        background: {surface};
+    }}
     QWidget#DashboardContent {{
         background: {bg};
+    }}
+    QWidget#FiscalPage, QWidget#FiscalTabPage, QWidget#FiscalTabContent {{
+        background: {bg};
+    }}
+    QFrame#HintBar {{
+        background: {surface};
+        border: 1px solid {border};
+        {radius(14)}
+    }}
+    QLabel#HintLabel {{
+        background: {surface};
+        color: {muted};
+        border: 1px solid {border};
+        {radius(12)}
+        padding: 8px 10px;
+        font-size: 11px;
+    }}
+    QTabWidget {{
+        background: {bg};
+        border: 0;
+    }}
+    QTabWidget::pane {{
+        background: {surface};
+        border: 1px solid {border};
+        {radius(14)}
+        top: -1px;
+    }}
+    QTabWidget#ModernTabs::pane {{
+        background: {surface};
+        border: 1px solid {border};
+        {radius(14)}
+    }}
+    QTabBar {{
+        background: {bg};
+        border: 0;
+    }}
+    QTabBar::tab {{
+        background: {surface_alt};
+        color: {muted};
+        border: 1px solid {border};
+        border-bottom: 0;
+        border-top-left-radius: 10px;
+        border-top-right-radius: 10px;
+        padding: 8px 14px;
+        margin-right: 4px;
+    }}
+    QTabBar::tab:selected {{
+        background: {surface};
+        color: {text};
+        border-color: {border};
+        font-weight: 700;
+    }}
+    QTabBar::tab:hover {{
+        background: {surface};
+        color: {text};
     }}
     QFrame#Sidebar {{
         background: {surface};
@@ -118,6 +180,24 @@ def app_stylesheet(palette: dict) -> str:
         background: {accent_hover};
         border-color: {accent_hover};
     }}
+    QPushButton#ThemeToggleButton {{
+        background: {surface_alt};
+        color: {text};
+        border: 1px solid {border};
+        text-align: left;
+        padding: 8px 12px;
+        {radius(12)}
+        font-weight: 700;
+    }}
+    QPushButton#ThemeToggleButton:hover {{
+        background: {accent};
+        color: {accent_text};
+        border-color: {accent};
+    }}
+    QPushButton#ThemeToggleButton:pressed {{
+        background: {accent_hover};
+        color: {accent_text};
+    }}
     QFrame#TopBar, QFrame#FilterBar, QFrame#Card, QFrame#KpiCard, QFrame#Panel {{
         background: {surface};
         border: 1px solid {border};
@@ -182,6 +262,44 @@ def app_stylesheet(palette: dict) -> str:
     QComboBox::drop-down {{
         border: 0;
         width: 24px;
+    }}
+    QComboBox QAbstractItemView {{
+        background: {surface};
+        color: {text};
+        border: 1px solid {border};
+        selection-background-color: {accent};
+        selection-color: {accent_text};
+        outline: 0;
+    }}
+    QMenu {{
+        background: {surface};
+        color: {text};
+        border: 1px solid {border};
+        border-radius: 9px;
+        padding: 5px;
+    }}
+    QMenu::item {{
+        padding: 7px 18px;
+        border-radius: 7px;
+    }}
+    QMenu::item:selected {{
+        background: {accent};
+        color: {accent_text};
+    }}
+    QCheckBox {{
+        color: {text};
+        spacing: 7px;
+    }}
+    QCheckBox::indicator {{
+        width: 15px;
+        height: 15px;
+        border: 1px solid {border};
+        border-radius: 4px;
+        background: {surface};
+    }}
+    QCheckBox::indicator:checked {{
+        background: {accent};
+        border-color: {accent};
     }}
     QTableView, QTableWidget {{
         background: {surface};
@@ -288,29 +406,93 @@ def area_color(area: str, palette: dict) -> str:
     return colors.get(area, palette["accent"])
 
 
+STATUS_BADGE_COLORS = {
+    "claro": {
+        "neutral": "#64748B",
+        "waiting": "#2563EB",
+        "progress": "#EA580C",
+        "attention": "#CA8A04",
+        "done": "#16A34A",
+        "final_done": "#0F766E",
+        "danger": "#DC2626",
+        "location_production": "#047857",
+        "location_galvanization": "#7C3AED",
+        "location_expedition": "#C2410C",
+        "location_grouped": "#0369A1",
+    },
+    "escuro": {
+        "neutral": "#CBD5E1",
+        "waiting": "#60A5FA",
+        "progress": "#FB923C",
+        "attention": "#FACC15",
+        "done": "#4ADE80",
+        "final_done": "#2DD4BF",
+        "danger": "#FB7185",
+        "location_production": "#34D399",
+        "location_galvanization": "#A78BFA",
+        "location_expedition": "#FB923C",
+        "location_grouped": "#38BDF8",
+    },
+}
+
+STATUS_CATEGORY_BY_STATUS = {
+    "NAO_LIBERADO": "neutral",
+    "LIBERADO_PRODUCAO": "waiting",
+    "CANCELADA": "danger",
+    "NAO_INICIADO": "waiting",
+    "ITEM_PENDENTE_FABRICACAO": "attention",
+    "INICIADO": "progress",
+    "PARADO": "danger",
+    "FINALIZADO_PARCIAL": "attention",
+    "FINALIZADO": "done",
+    "AGUARDANDO_ENVIO": "waiting",
+    "DISPONIVEL_PARCIAL": "attention",
+    "EM_CARGA": "progress",
+    "ENVIADO_GALVANIZACAO": "progress",
+    "AGUARDANDO_LIBERACAO": "waiting",
+    "LIBERADA_PARA_ENVIO": "progress",
+    "RETORNADA_GALVANIZACAO": "done",
+    "RETORNOU_GALVANIZACAO": "done",
+    "RETORNOU_PARCIAL": "attention",
+    "EM_SEPARACAO": "waiting",
+    "AGUARDANDO_SEPARACAO_PARCIAL": "attention",
+    "SEPARACAO_INICIADA": "progress",
+    "SEPARADO": "done",
+    "ENTREGUE_PARCIAL": "attention",
+    "ENTREGUE": "final_done",
+    "AGUARDANDO_CONFIRMACAO": "waiting",
+    "SEM_PARAFUSOS": "danger",
+    "ALMOXARIFADO_ENTREGUE": "final_done",
+    "ALMOXARIFADO_ENTREGUE_PARCIAL": "attention",
+    "FALTA_EMITIR_NOTA_FISCAL": "danger",
+    "NOTA_FISCAL_PARCIAL": "attention",
+    "NOTA_FISCAL_EMITIDA": "done",
+    "FISCAL_CANCELADO": "danger",
+    "PENDENTE": "attention",
+    "PARCIAL": "attention",
+    "FATURADO": "done",
+    "CANCELADO": "danger",
+}
+
+LOCATION_STATUS_CATEGORY_BY_STATUS = {
+    "EM_PRODUCAO": "location_production",
+    "EM_GALVANIZACAO": "location_galvanization",
+    "EM_EXPEDICAO": "location_expedition",
+    "UNIFICADA_PRINCIPAL": "location_grouped",
+}
+
+
 def status_color(status: str, palette: dict, area: str = "") -> tuple[str, str]:
     status = legacy.normalize_status(status or "")
     dark_theme = _is_dark(palette.get("bg", "#ffffff"))
-    if "CANCEL" in status or status in {"PARADO", "PRODUCAO_CANCELADA"}:
-        color = palette["danger"]
-    elif "PENDENTE" in status or "PARCIAL" in status:
-        color = palette["warning"]
-    elif "ENTREGUE" in status or status in {
-        "FINALIZADO", "RETORNOU_GALVANIZACAO", "SEPARADO", "UNIFICADA_PRINCIPAL",
-        "NOTA_FISCAL_EMITIDA", "FATURADO",
-    }:
-        color = palette["success"]
-    elif status in {"FALTA_EMITIR_NOTA_FISCAL", "PENDENTE"}:
-        color = palette["danger"]
-    elif status in {"NOTA_FISCAL_PARCIAL", "PARCIAL"}:
-        color = palette["warning"]
-    elif status in {"NAO_LIBERADO", "NAO_INICIADO", "AGUARDANDO_CONFIRMACAO", "NAO_DEFINIDO"}:
-        color = palette["muted"]
-    elif status in {"EM_CARGA", "ENVIADO_GALVANIZACAO"}:
-        color = palette["secondary"]
-    else:
-        color = area_color(area, palette)
-    color = _tone(color, dark_theme)
+    theme_key = "escuro" if dark_theme else "claro"
+    colors = STATUS_BADGE_COLORS[theme_key]
+    category = (
+        LOCATION_STATUS_CATEGORY_BY_STATUS.get(status)
+        or STATUS_CATEGORY_BY_STATUS.get(status)
+        or "neutral"
+    )
+    color = colors[category]
     return color, _contrast_text(color)
 
 

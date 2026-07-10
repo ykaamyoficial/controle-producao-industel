@@ -188,7 +188,7 @@ class UserManagerDialog(QDialog):
     def _build(self):
         from app.models.generic_table_model import GenericTableModel
         from app.ui.components.modern_table import ProcessFilterProxy
-        from PySide6.QtWidgets import QTableView
+        from PySide6.QtWidgets import QAbstractItemView, QTableView
 
         root = QVBoxLayout(self)
         root.setContentsMargins(18, 18, 18, 16)
@@ -206,7 +206,6 @@ class UserManagerDialog(QDialog):
                 ("nome", "Nome"),
                 ("login", "Login"),
                 ("perfil_label", "Perfil"),
-                ("areas_label", "Resumo de permissoes"),
                 ("ativo_label", "Ativo"),
             ]
         )
@@ -218,26 +217,31 @@ class UserManagerDialog(QDialog):
         self.table.setAlternatingRowColors(True)
         self.table.verticalHeader().setVisible(False)
         self.table.setShowGrid(False)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.doubleClicked.connect(lambda _idx: self.edit_user())
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
-        self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         root.addWidget(self.table, 1)
 
         actions = QHBoxLayout()
         new = ModernButton("Novo usuario", "new", accent=True)
-        edit = ModernButton("Editar usuario", "edit")
+        self.edit_btn = ModernButton("Editar usuario", "edit")
         toggle = ModernButton("Ativar/Inativar", "status")
         close = ModernButton("Fechar", "clear")
         new.clicked.connect(self.new_user)
-        edit.clicked.connect(self.edit_user)
+        self.edit_btn.clicked.connect(self.edit_user)
         toggle.clicked.connect(self.toggle_user)
         close.clicked.connect(self.accept)
         actions.addWidget(new)
-        actions.addWidget(edit)
+        actions.addWidget(self.edit_btn)
         actions.addWidget(toggle)
         actions.addStretch()
         actions.addWidget(close)
         root.addLayout(actions)
+        self.table.selectionModel().selectionChanged.connect(self._update_action_state)
+        self._update_action_state()
 
     def selected_user_id(self):
         selected = self.table.selectionModel().selectedRows()
@@ -247,10 +251,17 @@ class UserManagerDialog(QDialog):
         index = self.proxy.mapToSource(selected[0])
         return int(self.model.rows[index.row()]["id"])
 
+    def _has_selection(self) -> bool:
+        return bool(self.table.selectionModel().selectedRows())
+
+    def _update_action_state(self):
+        self.edit_btn.setEnabled(self._has_selection())
+
     def refresh(self):
         self.model.set_rows(self.service.user_rows())
         self.table.resizeColumnsToContents()
-        self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self._update_action_state()
 
     def new_user(self):
         dialog = UserEditorDialog(self.service, None, self)

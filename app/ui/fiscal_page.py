@@ -136,6 +136,7 @@ class FiscalProposalDetailDialog(QDialog):
 
     def _items_tab(self) -> QWidget:
         tab = QWidget()
+        tab.setObjectName("FiscalTabPage")
         layout = QVBoxLayout(tab)
         layout.setContentsMargins(0, 12, 0, 0)
         columns = [
@@ -156,6 +157,7 @@ class FiscalProposalDetailDialog(QDialog):
 
     def _emissions_tab(self) -> QWidget:
         tab = QWidget()
+        tab.setObjectName("FiscalTabPage")
         layout = QVBoxLayout(tab)
         layout.setContentsMargins(0, 12, 0, 0)
         columns = [
@@ -172,6 +174,7 @@ class FiscalProposalDetailDialog(QDialog):
 
     def _history_tab(self) -> QWidget:
         tab = QWidget()
+        tab.setObjectName("FiscalTabPage")
         layout = QVBoxLayout(tab)
         layout.setContentsMargins(0, 12, 0, 0)
         columns = [
@@ -202,8 +205,10 @@ class FiscalProposalDetailDialog(QDialog):
 
     def _scroll_tab(self) -> QScrollArea:
         scroll = QScrollArea()
+        scroll.setObjectName("FiscalTabScroll")
         scroll.setWidgetResizable(True)
         content = QWidget()
+        content.setObjectName("FiscalTabContent")
         layout = QVBoxLayout(content)
         layout.setContentsMargins(0, 12, 0, 0)
         layout.setSpacing(12)
@@ -300,6 +305,7 @@ class FiscalProposalDetailDialog(QDialog):
 class FiscalPage(QWidget):
     def __init__(self, service, parent=None):
         super().__init__(parent)
+        self.setObjectName("FiscalPage")
         self.service = service
         self.model = FiscalProcessTableModel()
         self.proxy = ProcessFilterProxy(self)
@@ -315,9 +321,11 @@ class FiscalPage(QWidget):
         shell.setSpacing(0)
         tabs = QTabWidget()
         tabs.setObjectName("ModernTabs")
+        self.tabs = tabs
         shell.addWidget(tabs, 1)
 
         tracking = QWidget()
+        tracking.setObjectName("FiscalTabPage")
         root = QVBoxLayout(tracking)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(12)
@@ -392,7 +400,7 @@ class FiscalPage(QWidget):
         root.addWidget(self.table, 1)
 
         hint = QLabel("Dica: use o botao direito do mouse ou a coluna Acoes para ver itens, resumo, historico e emissoes.")
-        hint.setObjectName("Caption")
+        hint.setObjectName("HintLabel")
         root.addWidget(hint)
 
         self.search.textChanged.connect(lambda text: self.proxy.setFilterRegularExpression(QRegularExpression(text)))
@@ -449,7 +457,8 @@ class FiscalPage(QWidget):
             return
         source_index = self.proxy.mapToSource(index)
         key = self.model.columns[source_index.column()][0]
-        if key == "acoes":
+        if key in {"acoes", "fiscal_action"}:
+            self.table.selectRow(index.row())
             point = self.table.visualRect(index).bottomRight()
             self.open_actions_menu(self.selected_fiscal_row(), self.table.viewport().mapToGlobal(point))
 
@@ -491,6 +500,9 @@ class FiscalPage(QWidget):
     def build_actions_menu(self, row: dict) -> QMenu:
         menu = QMenu(self)
         menu.addAction(QAction("Detalhes da Proposta", self, triggered=lambda: self.show_fiscal_details(row)))
+        status = str(row.get("status_fiscal") or "").strip().upper()
+        if self.service.can_register_fiscal_emission() and status not in {"NOTA_FISCAL_EMITIDA", "FISCAL_CANCELADO"}:
+            menu.addAction(QAction("Registrar emissao fiscal", self, triggered=self.register_emission))
         return menu
 
     def show_fiscal_details(self, row: dict):
@@ -569,6 +581,7 @@ class FiscalPage(QWidget):
 
     def _build_report_tab(self) -> QWidget:
         tab = QWidget()
+        tab.setObjectName("FiscalTabPage")
         root = QVBoxLayout(tab)
         root.setContentsMargins(0, 12, 0, 0)
         root.setSpacing(12)

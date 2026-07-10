@@ -26,6 +26,8 @@ class LargeDialogGeometryTests(unittest.TestCase):
         self.assertGreaterEqual(dialog.minimumHeight(), 650)
         self.assertGreaterEqual(dialog.width(), 1100)
         self.assertGreaterEqual(dialog.height(), 650)
+        self.assertGreaterEqual(dialog.width(), int(parent.width() * 0.90))
+        self.assertGreaterEqual(dialog.height(), int(parent.height() * 0.86))
         self.assertIn("rgb(1, 2, 3)", dialog.styleSheet())
 
 

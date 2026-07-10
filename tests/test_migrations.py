@@ -34,14 +34,14 @@ class MigrationSafetyTests(unittest.TestCase):
     def test_fresh_database_migrates_once_and_initializes(self):
         db_path = self.temp_dir / "fresh.db"
         with self.connect(db_path) as conn:
-            self.assertEqual(apply_migrations(conn), [1, 2, 3, 4, 5])
+            self.assertEqual(apply_migrations(conn), [1, 2, 3, 4, 5, 6])
             self.assertEqual(apply_migrations(conn), [])
             production_repository.initialize_database(conn)
             self.assert_integrity(conn)
             versions = conn.execute(
                 "SELECT version FROM schema_migrations ORDER BY version"
             ).fetchall()
-            self.assertEqual([row[0] for row in versions], [1, 2, 3, 4, 5])
+            self.assertEqual([row[0] for row in versions], [1, 2, 3, 4, 5, 6])
             self.assertTrue(all(item["applied"] for item in migration_status(conn)))
 
     def test_copy_of_current_database_migrates_without_data_loss(self):

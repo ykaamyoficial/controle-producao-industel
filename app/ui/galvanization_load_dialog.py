@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -13,7 +13,9 @@ from PySide6.QtWidgets import (
     QInputDialog,
     QLabel,
     QLineEdit,
+    QMenu,
     QMessageBox,
+    QTabWidget,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -21,6 +23,8 @@ from PySide6.QtWidgets import (
 
 from app.ui.components.modern_button import ModernButton
 from app.ui.dialog_utils import apply_large_dialog_geometry, style_dialog_from_parent
+from app.ui.icons import make_icon
+from app.ui.styles import status_color
 from app.ui.table_utils import configure_wrapping_table, item_product_code, resize_rows_to_contents
 
 
@@ -322,6 +326,240 @@ class GalvanizationLoadDialog(QDialog):
         self.accept()
 
 
+class GalvanizationLoadDetailsDialog(QDialog):
+    def __init__(self, service, load_id: int, parent=None):
+        super().__init__(parent)
+        self.service = service
+        self.load_id = load_id
+        self.load_data = self.service.get_galvanization_load_dict(load_id)
+        self.proposals = self.service.galvanization_load_items(load_id)
+        self.items_by_process: dict[int, list[dict]] = {}
+        for proposal in self.proposals:
+            process_id = int(proposal.get("processo_id") or 0)
+            self.items_by_process[process_id] = self.service.galvanization_load_proposal_items(load_id, process_id)
+        self.setWindowTitle(f"Detalhes da carga {load_id}")
+        apply_large_dialog_geometry(self, parent)
+        style_dialog_from_parent(self, parent)
+        self._build()
+
+    def _build(self):
+        root = QVBoxLayout(self)
+        root.setContentsMargins(22, 20, 22, 18)
+        root.setSpacing(12)
+
+        status = self.load_data.get("status") or ""
+        status_label = self.service.load_status_label(status)
+        header = QFrame()
+        header.setObjectName("FilterBar")
+        header_layout = QGridLayout(header)
+        header_layout.setContentsMargins(14, 12, 14, 12)
+        title = QLabel(f"Carga {self.load_id} | {status_label}")
+        title.setObjectName("FilterTitle")
+        subtitle = QLabel(
+            f"Motorista: {self.load_data.get('motorista') or '-'} | "
+            f"Peso: {display_weight(self.load_data.get('peso_total')) or '0'} kg | "
+            f"{len(self.proposals)} proposta(s)"
+        )
+        subtitle.setObjectName("Caption")
+        header_layout.addWidget(title, 0, 0)
+        header_layout.addWidget(subtitle, 1, 0)
+        root.addWidget(header)
+
+        self.tabs = QTabWidget()
+        self.tabs.setObjectName("ModernTabs")
+        self.tabs.addTab(self._summary_tab(), "Resumo")
+        self.tabs.addTab(self._proposals_tab(), "Propostas")
+        self.tabs.addTab(self._items_tab(), "Itens da carga")
+        root.addWidget(self.tabs, 1)
+
+        footer = QHBoxLayout()
+        close = ModernButton("Fechar", "clear")
+        close.clicked.connect(self.accept)
+        footer.addStretch()
+        footer.addWidget(close)
+        root.addLayout(footer)
+
+    def _summary_tab(self):
+        tab = QFrame()
+        tab.setObjectName("FiscalTabPage")
+        layout = QGridLayout(tab)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setHorizontalSpacing(12)
+        layout.setVerticalSpacing(12)
+
+        proposal_count = len(self.proposals)
+        item_count = sum(sum(int(item.get("quantidade") or 1) for item in items) for items in self.items_by_process.values())
+        total_sent = sum(float(proposal.get("peso_enviado") or 0) for proposal in self.proposals)
+        total_registered = sum(float(proposal.get("peso_total_proposta") or 0) for proposal in self.proposals)
+        cards = [
+            ("Status", self.service.load_status_label(self.load_data.get("status") or "")),
+            ("Motorista", self.load_data.get("motorista") or "-"),
+            ("Propostas", str(proposal_count)),
+            ("Itens", str(item_count)),
+            ("Peso enviado", f"{display_weight(total_sent) or '0'} kg"),
+            ("Peso cadastrado", f"{display_weight(total_registered) or '0'} kg"),
+            ("Prev. retorno", self.load_data.get("data_prevista_retorno") or "-"),
+            ("Retorno", self.load_data.get("data_retorno") or "-"),
+        ]
+        for index, (label, value) in enumerate(cards):
+            card = QFrame()
+            card.setObjectName("KpiCard")
+            card_layout = QVBoxLayout(card)
+            card_layout.setContentsMargins(14, 10, 14, 10)
+            title = QLabel(label)
+            title.setObjectName("Caption")
+            content = QLabel(str(value))
+            content.setObjectName("KpiValue")
+            card_layout.addWidget(title)
+            card_layout.addWidget(content)
+            layout.addWidget(card, index // 4, index % 4)
+        for col in range(4):
+            layout.setColumnStretch(col, 1)
+        layout.setRowStretch(3, 1)
+        return tab
+
+    def _proposals_tab(self):
+        tab = QFrame()
+        tab.setObjectName("FiscalTabPage")
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setSpacing(10)
+
+        layout.addWidget(QLabel("Propostas da carga"))
+        self.proposals_table = self._table(
+            ["Proposta", "Cliente", "Obra/Site", "Peso total", "Peso enviado", "Envio", "Itens"],
+            [130, 180, 220, 95, 105, 85, 70],
+        )
+        layout.addWidget(self.proposals_table, 1)
+        layout.addWidget(QLabel("Itens da proposta selecionada"))
+        self.proposal_items_table = self._table(
+            ["Item", "Codigo", "Descricao", "Qtd.", "Peso unit.", "Peso total", "Produzido", "Galvanizado"],
+            [65, 100, 340, 65, 90, 90, 85, 95],
+        )
+        layout.addWidget(self.proposal_items_table, 1)
+        self._fill_proposals()
+        self.proposals_table.itemSelectionChanged.connect(self._fill_selected_proposal_items)
+        if self.proposals_table.rowCount():
+            self.proposals_table.selectRow(0)
+        else:
+            self._fill_selected_proposal_items()
+        return tab
+
+    def _items_tab(self):
+        tab = QFrame()
+        tab.setObjectName("FiscalTabPage")
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setSpacing(10)
+        layout.addWidget(QLabel("Itens consolidados da carga"))
+        self.all_items_table = self._table(
+            ["Proposta", "Item", "Codigo", "Descricao", "Qtd.", "Peso unit.", "Peso total", "Produzido", "Precisa galv."],
+            [120, 65, 100, 360, 65, 90, 90, 85, 95],
+        )
+        layout.addWidget(self.all_items_table, 1)
+        self._fill_all_items()
+        return tab
+
+    def _table(self, headers: list[str], widths: list[int]) -> QTableWidget:
+        table = QTableWidget(0, len(headers))
+        table.setHorizontalHeaderLabels(headers)
+        table.verticalHeader().setVisible(False)
+        table.setSelectionBehavior(QTableWidget.SelectRows)
+        table.setSelectionMode(QTableWidget.SingleSelection)
+        table.setEditTriggers(QTableWidget.NoEditTriggers)
+        table.setAlternatingRowColors(True)
+        table.horizontalHeader().setStretchLastSection(True)
+        for col, width in enumerate(widths):
+            table.setColumnWidth(col, width)
+        description_columns = tuple(i for i, header in enumerate(headers) if "Descricao" in header)
+        code_columns = tuple(i for i, header in enumerate(headers) if "Codigo" in header or "Cod." in header)
+        if description_columns:
+            configure_wrapping_table(table, description_columns=description_columns, code_columns=code_columns, min_row_height=42)
+        return table
+
+    def _set_table_rows(self, table: QTableWidget, rows: list[list], ids: list[int] | None = None):
+        table.setRowCount(0)
+        for row_values in rows:
+            row = table.rowCount()
+            table.insertRow(row)
+            for col, value in enumerate(row_values):
+                item = QTableWidgetItem(str(value or ""))
+                if ids and col == 0:
+                    item.setData(Qt.UserRole, ids[row])
+                item.setTextAlignment(Qt.AlignTop | Qt.AlignLeft if "Descricao" in table.horizontalHeaderItem(col).text() else Qt.AlignCenter)
+                table.setItem(row, col, item)
+        resize_rows_to_contents(table)
+
+    def _fill_proposals(self):
+        rows = []
+        ids = []
+        for proposal in self.proposals:
+            process_id = int(proposal.get("processo_id") or 0)
+            item_rows = self.items_by_process.get(process_id, [])
+            rows.append([
+                proposal.get("proposta"),
+                proposal.get("cliente"),
+                proposal.get("obra_site") or "-",
+                display_weight(proposal.get("peso_total_proposta")),
+                display_weight(proposal.get("peso_enviado")),
+                "Parcial" if proposal.get("parcial") else "Completo",
+                sum(int(item.get("quantidade") or 1) for item in item_rows),
+            ])
+            ids.append(process_id)
+        self._set_table_rows(self.proposals_table, rows, ids)
+
+    def _fill_selected_proposal_items(self):
+        selected = self.proposals_table.selectionModel().selectedRows()
+        if not selected:
+            self.proposal_items_table.setRowCount(0)
+            return
+        process_id = int(self.proposals_table.item(selected[0].row(), 0).data(Qt.UserRole))
+        rows = [self._item_row(item) for item in self.items_by_process.get(process_id, [])]
+        if not rows:
+            self.proposal_items_table.setRowCount(0)
+            self.proposal_items_table.insertRow(0)
+            message = QTableWidgetItem("Esta proposta nao possui itens cadastrados individualmente.")
+            message.setTextAlignment(Qt.AlignCenter)
+            self.proposal_items_table.setItem(0, 0, message)
+            self.proposal_items_table.setSpan(0, 0, 1, self.proposal_items_table.columnCount())
+            return
+        self._set_table_rows(self.proposal_items_table, rows)
+
+    def _fill_all_items(self):
+        rows = []
+        for proposal in self.proposals:
+            process_id = int(proposal.get("processo_id") or 0)
+            for item in self.items_by_process.get(process_id, []):
+                quantity = int(item.get("quantidade") or 1)
+                unit_weight = float(item.get("peso") or 0)
+                rows.append([
+                    proposal.get("proposta"),
+                    item.get("numero_item"),
+                    item_product_code(item),
+                    item.get("descricao"),
+                    quantity,
+                    display_weight(unit_weight),
+                    display_weight(quantity * unit_weight),
+                    "Sim" if item.get("produzido") else "Nao",
+                    "Sim" if str(item.get("precisa_galvanizacao") or "").lower() == "sim" else "Nao",
+                ])
+        self._set_table_rows(self.all_items_table, rows)
+
+    def _item_row(self, data: dict) -> list:
+        quantity = int(data.get("quantidade") or 1)
+        unit_weight = float(data.get("peso") or 0)
+        return [
+            data.get("numero_item"),
+            item_product_code(data),
+            data.get("descricao"),
+            quantity,
+            display_weight(unit_weight),
+            display_weight(quantity * unit_weight),
+            "Sim" if data.get("produzido") else "Nao",
+            "Sim" if data.get("galvanizado") else "Nao",
+        ]
+
+
 class GalvanizationLoadManagerDialog(QDialog):
     def __init__(self, service, preselected_ids: list[int] | None = None, parent=None):
         super().__init__(parent)
@@ -379,39 +617,17 @@ class GalvanizationLoadManagerDialog(QDialog):
         filter_layout.setColumnStretch(5, 1)
         root.addWidget(filters)
 
-        self.table = QTableWidget(0, 9)
-        self.table.setHorizontalHeaderLabels(["Carga", "Status", "Motorista", "Peso", "Propostas", "Prev. retorno", "Retorno", "Criada em", "Usuario"])
+        self.table = QTableWidget(0, 10)
+        self.table.setHorizontalHeaderLabels(["Acao", "Carga", "Status", "Motorista", "Peso", "Propostas", "Prev. retorno", "Retorno", "Criada em", "Usuario"])
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setSelectionMode(QTableWidget.SingleSelection)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.table.setAlternatingRowColors(True)
         self.table.horizontalHeader().setStretchLastSection(True)
-        for col, width in enumerate((70, 175, 160, 90, 95, 115, 115, 150, 110)):
+        for col, width in enumerate((54, 70, 215, 140, 90, 95, 115, 115, 150, 110)):
             self.table.setColumnWidth(col, width)
         root.addWidget(self.table, 2)
-
-        details = QGridLayout()
-        details.setHorizontalSpacing(12)
-        details.setVerticalSpacing(6)
-        self.load_detail_title = QLabel("Selecione uma carga para visualizar seu conteudo")
-        self.load_detail_title.setStyleSheet("font-weight: 800;")
-        details.addWidget(self.load_detail_title, 0, 0, 1, 2)
-        details.addWidget(QLabel("Propostas da carga"), 1, 0)
-        details.addWidget(QLabel("Itens da proposta selecionada"), 1, 1)
-        self.load_proposals = self._detail_table(
-            ["Proposta", "Cliente", "Peso total", "Peso enviado", "Envio", "Itens"],
-            [125, 155, 95, 105, 85, 60],
-        )
-        self.proposal_items = self._detail_table(
-            ["Item", "Codigo", "Descricao", "Qtd.", "Peso unit.", "Peso total", "Produzido", "Galvanizado"],
-            [65, 95, 280, 60, 90, 90, 85, 95],
-        )
-        details.addWidget(self.load_proposals, 2, 0)
-        details.addWidget(self.proposal_items, 2, 1)
-        details.setColumnStretch(0, 1)
-        details.setColumnStretch(1, 1)
-        root.addLayout(details, 1)
 
         buttons = QHBoxLayout()
         new = ModernButton("Nova carga", "new", accent=True)
@@ -434,9 +650,8 @@ class GalvanizationLoadManagerDialog(QDialog):
         buttons.addStretch()
         buttons.addWidget(close)
         root.addLayout(buttons)
-        self.table.itemSelectionChanged.connect(self.load_selected_details)
-        self.table.cellDoubleClicked.connect(lambda *_args: self.load_selected_details())
-        self.load_proposals.itemSelectionChanged.connect(self.load_selected_proposal_items)
+        self.table.cellClicked.connect(self.handle_table_click)
+        self.table.cellDoubleClicked.connect(self.open_load_details_from_row)
         self.load_search.textChanged.connect(self.load)
         self.load_status.currentIndexChanged.connect(self.load)
         self.load_driver.textChanged.connect(self.load)
@@ -501,36 +716,34 @@ class GalvanizationLoadManagerDialog(QDialog):
             filtered.append(row)
         return filtered
 
-    def _style_status_item(self, item: QTableWidgetItem, row_data: dict):
+    def _status_badge_widget(self, row_data: dict, label: str) -> QLabel:
         status = row_data.get("status") or ""
         if self._is_load_overdue(row_data):
-            color = self.service.palette["danger"]
-        elif status == "RETORNADA_GALVANIZACAO":
-            color = self.service.palette["success"]
-        elif status == "LIBERADA_PARA_ENVIO":
-            color = self.service.palette["accent"]
+            color = self.service.palette.get("danger", "#dc2626")
+            foreground = "#ffffff"
         else:
-            color = self.service.palette["warning"]
-        item.setBackground(QColor(color))
-        item.setForeground(QColor(self.service.palette["accent_text"]))
+            color, foreground = status_color(status, self.service.palette, "GALVANIZACAO")
+        badge = QLabel(label or "-")
+        badge.setAlignment(Qt.AlignCenter)
+        badge.setToolTip(label or "-")
+        badge.setMinimumHeight(22)
+        badge.setStyleSheet(
+            f"background: {color}; color: {foreground}; border-radius: 9px; "
+            "padding: 2px 6px; font-weight: 800;"
+        )
+        return badge
 
-    def _detail_table(self, headers: list[str], widths: list[int]) -> QTableWidget:
-        table = QTableWidget(0, len(headers))
-        table.setHorizontalHeaderLabels(headers)
-        table.verticalHeader().setVisible(False)
-        table.setSelectionBehavior(QTableWidget.SelectRows)
-        table.setSelectionMode(QTableWidget.SingleSelection)
-        table.setEditTriggers(QTableWidget.NoEditTriggers)
-        table.setAlternatingRowColors(True)
-        table.horizontalHeader().setStretchLastSection(True)
-        table.setMinimumHeight(165)
-        for col, width in enumerate(widths):
-            table.setColumnWidth(col, width)
-        description_columns = tuple(i for i, header in enumerate(headers) if "Descricao" in header)
-        code_columns = tuple(i for i, header in enumerate(headers) if "Codigo" in header or "Cod." in header)
-        if description_columns:
-            configure_wrapping_table(table, description_columns=description_columns, code_columns=code_columns, min_row_height=42)
-        return table
+    def _load_status_visual(self, row_data: dict) -> tuple[str, str, str]:
+        status = row_data.get("status") or ""
+        if self._is_load_overdue(row_data):
+            return "clear", "Carga atrasada: revisar retorno da galvanizacao.", self.service.palette.get("danger", "#dc2626")
+        if status == "AGUARDANDO_LIBERACAO":
+            return "history", "Carga aguardando liberacao.", self.service.palette.get("warning", "#d97706")
+        if status == "LIBERADA_PARA_ENVIO":
+            return "load", "Carga liberada para envio.", self.service.palette.get("accent", "#0078d4")
+        if status == "RETORNADA_GALVANIZACAO":
+            return "status", "Carga retornada da galvanizacao.", self.service.palette.get("success", "#16a34a")
+        return "load", self.service.load_status_label(status), self.service.palette.get("muted", "#64748b")
 
     def load(self):
         selected_id = self._selected_load_id(False)
@@ -538,6 +751,13 @@ class GalvanizationLoadManagerDialog(QDialog):
         for row_data in self._filtered_loads(self.service.galvanization_loads()):
             row = self.table.rowCount()
             self.table.insertRow(row)
+            icon_name, tooltip, icon_color = self._load_status_visual(row_data)
+            action_item = QTableWidgetItem("")
+            action_item.setIcon(make_icon(icon_name, icon_color, 18))
+            action_item.setToolTip(tooltip)
+            action_item.setData(Qt.UserRole, row_data["id"])
+            action_item.setTextAlignment(Qt.AlignCenter)
+            self.table.setItem(row, 0, action_item)
             values = [
                 row_data.get("id"),
                 "Atrasada" if self._is_load_overdue(row_data) else self.service.load_status_label(row_data.get("status") or ""),
@@ -553,14 +773,13 @@ class GalvanizationLoadManagerDialog(QDialog):
                 item = QTableWidgetItem(str(value or ""))
                 item.setData(Qt.UserRole, row_data["id"])
                 item.setTextAlignment(Qt.AlignCenter)
-                self.table.setItem(row, col, item)
+                self.table.setItem(row, col + 1, item)
                 if col == 1:
-                    self._style_status_item(item, row_data)
+                    self.table.setCellWidget(row, col + 1, self._status_badge_widget(row_data, str(value or "")))
             if selected_id == int(row_data["id"]):
                 self.table.selectRow(row)
         if self.table.rowCount() and not self.table.selectionModel().hasSelection():
             self.table.selectRow(0)
-        self.load_selected_details()
 
     def _selected_load_id(self, warn: bool = True) -> int | None:
         selected = self.table.selectionModel().selectedRows()
@@ -571,72 +790,56 @@ class GalvanizationLoadManagerDialog(QDialog):
         return int(self.table.item(selected[0].row(), 0).data(Qt.UserRole))
 
     def load_selected_details(self):
-        load_id = self._selected_load_id(False)
-        self.load_proposals.blockSignals(True)
-        self.load_proposals.setRowCount(0)
-        self.proposal_items.setRowCount(0)
-        if not load_id:
-            self.load_detail_title.setText("Selecione uma carga para visualizar seu conteudo")
-            self.load_proposals.blockSignals(False)
-            return
-        load = self.service.get_galvanization_load_dict(load_id)
-        proposals = self.service.galvanization_load_items(load_id)
-        self.load_detail_title.setText(
-            f"Carga {load_id} | {self.service.load_status_label(load.get('status') or '')} | "
-            f"{len(proposals)} proposta(s)"
-        )
-        for data in proposals:
-            process_id = int(data["processo_id"])
-            item_rows = self.service.galvanization_load_proposal_items(load_id, process_id)
-            row = self.load_proposals.rowCount()
-            self.load_proposals.insertRow(row)
-            values = [
-                data.get("proposta"), data.get("cliente"), display_weight(data.get("peso_total_proposta")),
-                display_weight(data.get("peso_enviado")), "Parcial" if data.get("parcial") else "Completo",
-                sum(int(item.get("quantidade") or 1) for item in item_rows),
-            ]
-            for col, value in enumerate(values):
-                item = QTableWidgetItem(str(value or ""))
-                item.setData(Qt.UserRole, process_id)
-                item.setTextAlignment(Qt.AlignCenter)
-                self.load_proposals.setItem(row, col, item)
-        self.load_proposals.blockSignals(False)
-        if self.load_proposals.rowCount():
-            self.load_proposals.selectRow(0)
-        else:
-            self.load_selected_proposal_items()
+        self.show_load_details()
 
-    def load_selected_proposal_items(self):
-        self.proposal_items.clearSpans()
-        self.proposal_items.setRowCount(0)
-        load_id = self._selected_load_id(False)
-        selected = self.load_proposals.selectionModel().selectedRows()
-        if not load_id or not selected:
+    def handle_table_click(self, row: int, column: int):
+        self.table.selectRow(row)
+        if column == 0:
+            self.open_actions_menu_for_row(row)
+
+    def open_load_details_from_row(self, row: int, _column: int = 0):
+        self.table.selectRow(row)
+        self.show_load_details()
+
+    def action_menu_for_load(self, load_id: int) -> QMenu:
+        load = self.service.get_galvanization_load_dict(load_id)
+        status = load.get("status") or ""
+        menu = QMenu(self)
+        details_action = QAction(make_icon("search", self.service.palette.get("accent", "#0078d4")), "Detalhes da carga", self)
+        details_action.triggered.connect(lambda: self.show_load_details(load_id))
+        menu.addAction(details_action)
+        if status == "AGUARDANDO_LIBERACAO":
+            edit_action = QAction(make_icon("edit", self.service.palette.get("accent", "#0078d4")), "Editar carga", self)
+            release_action = QAction(make_icon("status", self.service.palette.get("success", "#16a34a")), "Liberar carga", self)
+            edit_action.triggered.connect(lambda: self.edit_load(load_id))
+            release_action.triggered.connect(lambda: self.release_load(load_id))
+            menu.addAction(edit_action)
+            menu.addAction(release_action)
+        elif status == "LIBERADA_PARA_ENVIO":
+            return_action = QAction(make_icon("load", self.service.palette.get("warning", "#d97706")), "Marcar retorno", self)
+            return_action.triggered.connect(lambda: self.return_load(load_id))
+            menu.addAction(return_action)
+        menu.addSeparator()
+        refresh_action = QAction(make_icon("refresh", self.service.palette.get("accent", "#0078d4")), "Atualizar", self)
+        refresh_action.triggered.connect(self.load)
+        menu.addAction(refresh_action)
+        return menu
+
+    def open_actions_menu_for_row(self, row: int):
+        item = self.table.item(row, 0)
+        if not item:
             return
-        process_id = int(self.load_proposals.item(selected[0].row(), 0).data(Qt.UserRole))
-        item_rows = self.service.galvanization_load_proposal_items(load_id, process_id)
-        if not item_rows:
-            self.proposal_items.insertRow(0)
-            message = QTableWidgetItem("Esta proposta nao possui itens cadastrados individualmente.")
-            message.setTextAlignment(Qt.AlignCenter)
-            self.proposal_items.setItem(0, 0, message)
-            self.proposal_items.setSpan(0, 0, 1, self.proposal_items.columnCount())
+        load_id = int(item.data(Qt.UserRole))
+        menu = self.action_menu_for_load(load_id)
+        rect = self.table.visualItemRect(item)
+        menu.exec(self.table.viewport().mapToGlobal(rect.bottomLeft()))
+
+    def show_load_details(self, load_id: int | None = None):
+        load_id = load_id or self._selected_load_id(True)
+        if not load_id:
             return
-        for data in item_rows:
-            row = self.proposal_items.rowCount()
-            self.proposal_items.insertRow(row)
-            quantity = int(data.get("quantidade") or 1)
-            unit_weight = float(data.get("peso") or 0)
-            values = [
-                data.get("numero_item"), item_product_code(data), data.get("descricao"), quantity, display_weight(unit_weight),
-                display_weight(quantity * unit_weight), "Sim" if data.get("produzido") else "Nao",
-                "Sim" if data.get("galvanizado") else "Nao",
-            ]
-            for col, value in enumerate(values):
-                item = QTableWidgetItem(str(value or ""))
-                item.setTextAlignment(Qt.AlignTop | Qt.AlignLeft if col == 2 else Qt.AlignCenter)
-                self.proposal_items.setItem(row, col, item)
-        resize_rows_to_contents(self.proposal_items)
+        dialog = GalvanizationLoadDetailsDialog(self.service, load_id, parent=self)
+        dialog.exec()
 
     def selected_load_id(self) -> int | None:
         return self._selected_load_id(True)
@@ -648,8 +851,8 @@ class GalvanizationLoadManagerDialog(QDialog):
             self.preselected_ids = []
             self.load()
 
-    def edit_load(self):
-        load_id = self.selected_load_id()
+    def edit_load(self, load_id: int | None = None):
+        load_id = load_id or self.selected_load_id()
         if not load_id:
             return
         load = self.service.get_galvanization_load_dict(load_id)
@@ -661,8 +864,8 @@ class GalvanizationLoadManagerDialog(QDialog):
             self.changed = True
             self.load()
 
-    def release_load(self):
-        load_id = self.selected_load_id()
+    def release_load(self, load_id: int | None = None):
+        load_id = load_id or self.selected_load_id()
         if not load_id:
             return
         if QMessageBox.question(self, "Liberar carga", f"Liberar a carga {load_id} para envio?") != QMessageBox.Yes:
@@ -676,8 +879,8 @@ class GalvanizationLoadManagerDialog(QDialog):
         self.load()
         QMessageBox.information(self, "Liberar carga", f"Carga {load_id} liberada para envio.")
 
-    def return_load(self):
-        load_id = self.selected_load_id()
+    def return_load(self, load_id: int | None = None):
+        load_id = load_id or self.selected_load_id()
         if not load_id:
             return
         if QMessageBox.question(

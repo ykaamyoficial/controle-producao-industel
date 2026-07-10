@@ -21,6 +21,32 @@ def fiscal_status_label(status: str) -> str:
     return FISCAL_STATUS_LABELS.get((status or "").strip().upper(), status or "-")
 
 
+def fiscal_action_icon(row: dict[str, Any]) -> str:
+    status = str(row.get("status_fiscal") or "").strip().upper()
+    if int(row.get("pendencia_critica") or 0):
+        return "fiscal_critical"
+    if str(row.get("status_expedicao") or "").strip().upper() == "ENTREGUE" and status != "NOTA_FISCAL_EMITIDA":
+        return "fiscal_blocked"
+    if status == "NOTA_FISCAL_EMITIDA":
+        return "fiscal_done"
+    if status == "NOTA_FISCAL_PARCIAL":
+        return "fiscal_partial"
+    return "fiscal_pending"
+
+
+def fiscal_action_tooltip(row: dict[str, Any]) -> str:
+    status = str(row.get("status_fiscal") or "").strip().upper()
+    if int(row.get("pendencia_critica") or 0):
+        return "Pendência fiscal crítica"
+    if str(row.get("status_expedicao") or "").strip().upper() == "ENTREGUE" and status != "NOTA_FISCAL_EMITIDA":
+        return "Proposta entregue sem nota fiscal"
+    if status == "NOTA_FISCAL_EMITIDA":
+        return "Nota fiscal emitida"
+    if status == "NOTA_FISCAL_PARCIAL":
+        return "Nota fiscal emitida parcialmente"
+    return "Falta emitir nota fiscal"
+
+
 def format_number(value: Any) -> str:
     try:
         number = float(value or 0)
@@ -37,6 +63,7 @@ def format_weight(value: Any) -> str:
 
 class FiscalProcessTableModel(QAbstractTableModel):
     columns = [
+        ("fiscal_action", ""),
         ("proposta", "Proposta"),
         ("cliente", "Cliente"),
         ("status_fiscal", "Status Fiscal"),
@@ -69,6 +96,8 @@ class FiscalProcessTableModel(QAbstractTableModel):
         key, _label = self.columns[index.column()]
         value = row.get(key)
         if role in (Qt.DisplayRole, Qt.EditRole):
+            if key == "fiscal_action":
+                return ""
             if key == "acoes":
                 return "..."
             if key == "status_fiscal":
@@ -88,6 +117,8 @@ class FiscalProcessTableModel(QAbstractTableModel):
         if role == Qt.UserRole + 1:
             return key
         if role == Qt.UserRole + 2:
+            if key == "fiscal_action":
+                return fiscal_action_icon(row)
             if key == "acoes":
                 return ""
             if key == "pendencia_critica" and int(value or 0):
@@ -97,8 +128,12 @@ class FiscalProcessTableModel(QAbstractTableModel):
             return row.get("status_fiscal") if key == "status_fiscal" else value
         if role == Qt.UserRole + 3:
             return "FISCAL"
+        if role == Qt.ToolTipRole:
+            if key == "fiscal_action":
+                return fiscal_action_tooltip(row)
+            return self.data(index, Qt.DisplayRole)
         if role == Qt.TextAlignmentRole:
-            if key == "acoes":
+            if key in {"acoes", "fiscal_action"}:
                 return Qt.AlignCenter
             return Qt.AlignVCenter | Qt.AlignLeft
         return None

@@ -48,12 +48,14 @@ NAV_LABELS = {key: label for key, label, _icon in NAV_ITEMS}
 class Sidebar(QFrame):
     page_selected = Signal(str)
     collapse_requested = Signal()
+    theme_toggle_requested = Signal()
 
     def __init__(self, service, parent=None):
         super().__init__(parent)
         self.service = service
         self.buttons: dict[str, QPushButton] = {}
         self.group_labels: list[QLabel] = []
+        self.collapsed = False
         self.setObjectName("Sidebar")
         self.setMinimumWidth(236)
         self.setMaximumWidth(236)
@@ -99,6 +101,14 @@ class Sidebar(QFrame):
                 layout.addWidget(btn)
         layout.addStretch()
 
+        self.theme_button = QPushButton()
+        self.theme_button.setObjectName("ThemeToggleButton")
+        self.theme_button.setMinimumHeight(38)
+        self.theme_button.setIconSize(QSize(18, 18))
+        self.theme_button.clicked.connect(self.theme_toggle_requested.emit)
+        layout.addWidget(self.theme_button)
+        self.update_theme_button()
+
     def _can_view_item(self, key: str) -> bool:
         if hasattr(self.service, "can_view_nav"):
             return bool(self.service.can_view_nav(key))
@@ -113,6 +123,7 @@ class Sidebar(QFrame):
             button.style().polish(button)
 
     def set_collapsed(self, collapsed: bool):
+        self.collapsed = collapsed
         width = 76 if collapsed else 236
         self.setMinimumWidth(width)
         self.setMaximumWidth(width)
@@ -122,3 +133,13 @@ class Sidebar(QFrame):
             label.setVisible(not collapsed)
         for key, button in self.buttons.items():
             button.setText("" if collapsed else NAV_LABELS[key])
+        self.update_theme_button()
+
+    def update_theme_button(self):
+        current_palette = getattr(self.service, "palette_name", "claro")
+        target_dark = current_palette == "claro"
+        label = "Tema escuro" if target_dark else "Tema claro"
+        icon_name = "moon" if target_dark else "sun"
+        self.theme_button.setText("" if self.collapsed else label)
+        self.theme_button.setIcon(make_icon(icon_name, self.service.palette["accent"]))
+        self.theme_button.setToolTip(f"Alternar para {label.lower()}")

@@ -6,12 +6,12 @@ from PySide6.QtWidgets import QApplication, QDialog
 def apply_large_dialog_geometry(
     dialog: QDialog,
     parent=None,
-    width_ratio: float = 0.85,
-    height_ratio: float = 0.80,
+    width_ratio: float = 0.94,
+    height_ratio: float = 0.90,
     minimum_width: int = 1100,
     minimum_height: int = 650,
 ) -> None:
-    """Apply the standard geometry for detail dialogs with large tables."""
+    """Apply the standard geometry for content-heavy dialogs."""
     dialog.setMinimumSize(minimum_width, minimum_height)
     dialog.setSizeGripEnabled(True)
 

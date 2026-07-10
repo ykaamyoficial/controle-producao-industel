@@ -200,6 +200,12 @@ class SettingsPage(QWidget):
             self.theme_changed()
         ToastNotification(self.window(), "Visual aplicado com sucesso.", "success")
 
+    def refresh(self):
+        if hasattr(self, "palette_combo"):
+            index = self.palette_combo.findData(self.service.palette_name)
+            if index >= 0:
+                self.palette_combo.setCurrentIndex(index)
+
     def open_users(self):
         if not self.service.can_edit("users_permissions"):
             QMessageBox.warning(self, "Permissao", "Seu usuario nao pode gerenciar usuarios.")

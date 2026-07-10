@@ -35,7 +35,7 @@ class TableColumnOrderTests(unittest.TestCase):
     def test_fiscal_table_shows_status_immediately_after_client(self):
         keys = [key for key, _label in FiscalProcessTableModel.columns]
 
-        self.assertEqual(keys[:3], ["proposta", "cliente", "status_fiscal"])
+        self.assertEqual(keys[:4], ["fiscal_action", "proposta", "cliente", "status_fiscal"])
         self.assertIn("pendencia_critica", keys)
         self.assertLess(keys.index("pendencia_critica"), keys.index("acoes"))
 
@@ -54,6 +54,7 @@ class TableColumnOrderTests(unittest.TestCase):
         self.assertEqual(
             keys,
             [
+                "fiscal_action",
                 "proposta",
                 "cliente",
                 "status_fiscal",

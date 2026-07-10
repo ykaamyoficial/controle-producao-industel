@@ -29,6 +29,13 @@ ICON_SYMBOLS = {
     "next": "next",
     "previous": "prev",
     "download": "download",
+    "moon": "moon",
+    "sun": "sun",
+    "fiscal_pending": "fiscal_pending",
+    "fiscal_partial": "fiscal_partial",
+    "fiscal_done": "fiscal_done",
+    "fiscal_critical": "fiscal_critical",
+    "fiscal_blocked": "fiscal_blocked",
 }
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
@@ -147,6 +154,33 @@ def make_icon(name: str, color: str = "#2563eb", size: int = 20) -> QIcon:
         painter.drawRoundedRect(QRectF(w * .28, w * .16, w * .44, w * .68), 3, 3)
         painter.drawLine(QPointF(w * .38, w * .38), QPointF(w * .62, w * .38))
         painter.drawLine(QPointF(w * .38, w * .52), QPointF(w * .62, w * .52))
+    elif shape == "fiscal_pending":
+        painter.drawRoundedRect(QRectF(w * .24, w * .12, w * .46, w * .70), 3, 3)
+        painter.drawLine(QPointF(w * .36, w * .34), QPointF(w * .58, w * .34))
+        painter.drawLine(QPointF(w * .36, w * .48), QPointF(w * .58, w * .48))
+        painter.drawEllipse(QRectF(w * .62, w * .60, w * .20, w * .20))
+    elif shape == "fiscal_partial":
+        painter.drawRoundedRect(QRectF(w * .24, w * .12, w * .46, w * .70), 3, 3)
+        painter.drawLine(QPointF(w * .36, w * .34), QPointF(w * .58, w * .34))
+        painter.drawLine(QPointF(w * .36, w * .48), QPointF(w * .58, w * .48))
+        painter.drawLine(QPointF(w * .68, w * .58), QPointF(w * .68, w * .72))
+        painter.drawPoint(QPointF(w * .68, w * .80))
+    elif shape == "fiscal_done":
+        painter.drawRoundedRect(QRectF(w * .24, w * .12, w * .46, w * .70), 3, 3)
+        painter.drawLine(QPointF(w * .35, w * .50), QPointF(w * .45, w * .62))
+        painter.drawLine(QPointF(w * .45, w * .62), QPointF(w * .72, w * .32))
+    elif shape == "fiscal_critical":
+        path = QPainterPath(QPointF(w * .50, w * .14))
+        path.lineTo(QPointF(w * .84, w * .78))
+        path.lineTo(QPointF(w * .16, w * .78))
+        path.closeSubpath()
+        painter.drawPath(path)
+        painter.drawLine(QPointF(w * .50, w * .34), QPointF(w * .50, w * .56))
+        painter.drawPoint(QPointF(w * .50, w * .68))
+    elif shape == "fiscal_blocked":
+        painter.drawRoundedRect(QRectF(w * .24, w * .12, w * .46, w * .70), 3, 3)
+        painter.drawEllipse(QRectF(w * .48, w * .48, w * .34, w * .34))
+        painter.drawLine(QPointF(w * .54, w * .76), QPointF(w * .76, w * .54))
     elif shape == "chart":
         painter.drawLine(QPointF(w * .22, w * .74), QPointF(w * .78, w * .74))
         painter.drawLine(QPointF(w * .28, w * .70), QPointF(w * .42, w * .48))
@@ -171,6 +205,20 @@ def make_icon(name: str, color: str = "#2563eb", size: int = 20) -> QIcon:
         painter.drawLine(QPointF(w * .32, w * .45), QPointF(w * .50, w * .64))
         painter.drawLine(QPointF(w * .68, w * .45), QPointF(w * .50, w * .64))
         painter.drawLine(QPointF(w * .25, w * .78), QPointF(w * .75, w * .78))
+    elif shape == "moon":
+        path = QPainterPath()
+        path.addEllipse(QRectF(w * .22, w * .16, w * .58, w * .68))
+        cut = QPainterPath()
+        cut.addEllipse(QRectF(w * .42, w * .08, w * .48, w * .62))
+        painter.drawPath(path.subtracted(cut))
+    elif shape == "sun":
+        painter.drawEllipse(QRectF(w * .34, w * .34, w * .32, w * .32))
+        for angle in range(0, 360, 45):
+            painter.save()
+            painter.translate(w / 2, w / 2)
+            painter.rotate(angle)
+            painter.drawLine(QPointF(0, -w * .42), QPointF(0, -w * .30))
+            painter.restore()
     else:
         painter.drawEllipse(QRectF(w * .30, w * .30, w * .40, w * .40))
 

@@ -9,13 +9,17 @@ from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QPushButton, QTabWidget
 
 from app.services.migration_runner import apply_migrations
 from app.services.production_repository import Repository, initialize_database
+from app.services.backend_adapter import OFFICIAL_COLOR_PALETTES
+from app.models.fiscal_table_model import FiscalProcessTableModel
 from app.ui.dashboard_page import DashboardPage
 from app.ui.fiscal_page import FiscalPage, FiscalProposalDetailDialog
 from app.ui.sidebar import Sidebar
+from app.ui.styles import app_stylesheet
 
 
 PALETTE = {
@@ -309,7 +313,31 @@ class FiscalReadOnlyPageTests(unittest.TestCase):
 
         self.assertGreater(page.model.rowCount(), 0)
         self.assertFalse(hasattr(page, "items_table"))
+        self.assertEqual(page.model.columns[0][0], "fiscal_action")
         self.assertEqual(page.model.columns[-1][0], "acoes")
+
+    def test_fiscal_dark_theme_styles_cover_tabs_tables_and_footer(self):
+        dark_palette = OFFICIAL_COLOR_PALETTES["escuro"]
+        css = app_stylesheet(dark_palette)
+
+        self.assertIn("QTabWidget::pane", css)
+        self.assertIn("QTabBar::tab", css)
+        self.assertIn("QAbstractScrollArea::viewport", css)
+        self.assertIn("QTableView::viewport", css)
+        self.assertIn("QLabel#HintLabel", css)
+        self.assertIn(dark_palette["bg"], css)
+        self.assertIn(dark_palette["surface"], css)
+
+        self.service.palette = dark_palette
+        page = FiscalPage(self.service)
+        page.setStyleSheet(css)
+        tabs = page.findChild(QTabWidget, "ModernTabs")
+
+        self.assertEqual(page.objectName(), "FiscalPage")
+        self.assertIsNotNone(tabs)
+        self.assertTrue(all(tabs.widget(index).objectName() == "FiscalTabPage" for index in range(tabs.count())))
+        self.assertIn("QTabWidget::pane", page.styleSheet())
+        self.assertIn("QLabel#HintLabel", page.styleSheet())
 
     def test_fiscal_details_dialog_groups_summary_items_emissions_history_and_alerts(self):
         fiscal_id = self.create_fiscal_process(
@@ -336,6 +364,42 @@ class FiscalReadOnlyPageTests(unittest.TestCase):
 
     def test_fiscal_context_menu_uses_single_proposal_details_entry(self):
         self.create_fiscal_process("CP02007M")
+        page = FiscalPage(self.service)
+        page.refresh()
+        row = page.model.rows[0]
+        menu = page.build_actions_menu(row)
+
+        self.assertEqual([action.text() for action in menu.actions()], ["Detalhes da Proposta", "Registrar emissao fiscal"])
+
+    def test_fiscal_action_column_uses_specific_icons_and_tooltips(self):
+        self.create_fiscal_process("CP02007I", status_fiscal="FALTA_EMITIR_NOTA_FISCAL")
+        self.create_fiscal_process("CP02007P", status_fiscal="NOTA_FISCAL_PARCIAL")
+        self.create_fiscal_process("CP02007E", status_fiscal="NOTA_FISCAL_EMITIDA")
+        self.create_fiscal_process("CP02007C", status_fiscal="FALTA_EMITIR_NOTA_FISCAL", expedition_status="ENTREGUE")
+        model = FiscalProcessTableModel([dict(row) for row in self.repo.list_fiscal_processes()])
+        action_column = [key for key, _label in model.columns].index("fiscal_action")
+        by_proposal = {row["proposta"]: row_index for row_index, row in enumerate(model.rows)}
+
+        self.assertEqual(model.data(model.index(by_proposal["CP02007I"], action_column), Qt.UserRole + 2), "fiscal_pending")
+        self.assertEqual(model.data(model.index(by_proposal["CP02007P"], action_column), Qt.UserRole + 2), "fiscal_partial")
+        self.assertEqual(model.data(model.index(by_proposal["CP02007E"], action_column), Qt.UserRole + 2), "fiscal_done")
+        self.assertEqual(model.data(model.index(by_proposal["CP02007C"], action_column), Qt.UserRole + 2), "fiscal_critical")
+        self.assertEqual(model.data(model.index(by_proposal["CP02007C"], action_column), Qt.ToolTipRole), "Pendência fiscal crítica")
+
+    def test_clicking_fiscal_action_column_opens_actions_menu(self):
+        self.create_fiscal_process("CP02007A")
+        page = FiscalPage(self.service)
+        page.refresh()
+        opened = []
+        page.open_actions_menu = lambda row, _pos: opened.append(row["proposta"])
+
+        action_index = page.proxy.index(0, 0)
+        page.handle_tracking_click(action_index)
+
+        self.assertEqual(opened, [page.model.rows[0]["proposta"]])
+
+    def test_fiscal_action_menu_hides_emission_for_emitted_status(self):
+        self.create_fiscal_process("CP02007F", status_fiscal="NOTA_FISCAL_EMITIDA")
         page = FiscalPage(self.service)
         page.refresh()
         row = page.model.rows[0]

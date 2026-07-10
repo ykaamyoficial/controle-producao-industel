@@ -87,6 +87,7 @@ class MainWindow(QMainWindow):
         self.sidebar = Sidebar(self.service)
         self.sidebar.page_selected.connect(self.select_page)
         self.sidebar.collapse_requested.connect(self.toggle_sidebar)
+        self.sidebar.theme_toggle_requested.connect(self.toggle_theme)
         main.addWidget(self.sidebar)
 
         content = QWidget()
@@ -236,6 +237,7 @@ class MainWindow(QMainWindow):
         self.setStyleSheet(app_stylesheet(self.service.palette))
         current = self.stack.currentWidget()
         self.sidebar.setStyleSheet("")
+        self.sidebar.update_theme_button()
         for page in self.pages.values():
             page.style().unpolish(page)
             page.style().polish(page)
@@ -243,6 +245,10 @@ class MainWindow(QMainWindow):
             current.refresh()
         if current:
             self._page_animation = fade_in(current)
+
+    def toggle_theme(self):
+        self.service.toggle_palette()
+        self.apply_theme()
 
     def toggle_sidebar(self):
         start = self.sidebar.width()

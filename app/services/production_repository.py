@@ -32,6 +32,16 @@ DATE_FMT = "%d/%m/%Y"
 DATETIME_FMT = "%d/%m/%Y %H:%M:%S"
 FONT_FAMILY = "Arial"
 
+ITEM_FLOW_VALUES = {"sim", "nao", "indefinido"}
+ITEM_FLOW_UNDEFINED = "indefinido"
+ITEM_NO_PRODUCTION_REASONS = {"pronta_entrega", "comprado_terceiro", "terceirizado", "outro"}
+ITEM_NO_PRODUCTION_LABELS = {
+    "pronta_entrega": "Pronta entrega",
+    "comprado_terceiro": "Comprado de terceiro",
+    "terceirizado": "Terceirizado",
+    "outro": "Outro",
+}
+
 
 COLOR_PALETTES = {
     "aurora": {
@@ -790,6 +800,40 @@ def normalize_stockroom_need(value):
     return aliases.get(text, "NAO_DEFINIDO")
 
 
+def normalize_item_flow_value(value):
+    text = (value or ITEM_FLOW_UNDEFINED).strip().lower()
+    text = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii")
+    aliases = {
+        "s": "sim",
+        "sim": "sim",
+        "yes": "sim",
+        "y": "sim",
+        "n": "nao",
+        "nao": "nao",
+        "no": "nao",
+        "indefinido": ITEM_FLOW_UNDEFINED,
+        "nao_definido": ITEM_FLOW_UNDEFINED,
+        "": ITEM_FLOW_UNDEFINED,
+    }
+    return aliases.get(text, ITEM_FLOW_UNDEFINED)
+
+
+def normalize_item_no_production_reason(value):
+    text = (value or "").strip().lower().replace(" ", "_").replace("-", "_")
+    text = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii")
+    aliases = {
+        "pronta_entrega": "pronta_entrega",
+        "pronto_entrega": "pronta_entrega",
+        "comprado_terceiro": "comprado_terceiro",
+        "compra_terceiro": "comprado_terceiro",
+        "terceiro": "comprado_terceiro",
+        "terceirizado": "terceirizado",
+        "outro": "outro",
+        "": "",
+    }
+    return aliases.get(text, "")
+
+
 def status_label(status):
     status = normalize_status(status)
     return STATUS_LABELS.get(status, status.replace("_", " ").title())
@@ -1247,12 +1291,26 @@ def initialize_database(conn):
             processo_principal_id INTEGER NOT NULL,
             processo_atual_id INTEGER NOT NULL,
             numero_item TEXT NOT NULL,
+            codigo_produto TEXT,
             descricao TEXT,
             quantidade INTEGER NOT NULL DEFAULT 1,
             peso REAL NOT NULL DEFAULT 0,
             produzido INTEGER NOT NULL DEFAULT 0,
             galvanizado INTEGER NOT NULL DEFAULT 0,
             entregue INTEGER NOT NULL DEFAULT 0,
+            produzir_internamente TEXT NOT NULL DEFAULT 'indefinido'
+                CHECK (produzir_internamente IN ('sim', 'nao', 'indefinido')),
+            motivo_nao_produzir TEXT
+                CHECK (
+                    motivo_nao_produzir IS NULL
+                    OR motivo_nao_produzir = ''
+                    OR motivo_nao_produzir IN ('pronta_entrega', 'comprado_terceiro', 'terceirizado', 'outro')
+                ),
+            precisa_galvanizacao TEXT NOT NULL DEFAULT 'indefinido'
+                CHECK (precisa_galvanizacao IN ('sim', 'nao', 'indefinido')),
+            observacao_fluxo_item TEXT,
+            fluxo_definido_por TEXT,
+            fluxo_definido_em TEXT,
             entregue_em TEXT,
             atualizado_em TEXT,
             atualizado_por TEXT,
@@ -1320,8 +1378,25 @@ def initialize_database(conn):
         if column not in process_columns:
             conn.execute(f"ALTER TABLE processos ADD COLUMN {column} {ddl}")
     item_columns = {row["name"] for row in conn.execute("PRAGMA table_info(proposta_itens)").fetchall()}
-    if "quantidade" not in item_columns:
-        conn.execute("ALTER TABLE proposta_itens ADD COLUMN quantidade INTEGER NOT NULL DEFAULT 1")
+    item_column_defaults = {
+        "codigo_produto": "TEXT",
+        "quantidade": "INTEGER NOT NULL DEFAULT 1",
+        "produzir_internamente": "TEXT NOT NULL DEFAULT 'indefinido'",
+        "motivo_nao_produzir": "TEXT",
+        "precisa_galvanizacao": "TEXT NOT NULL DEFAULT 'indefinido'",
+        "observacao_fluxo_item": "TEXT",
+        "fluxo_definido_por": "TEXT",
+        "fluxo_definido_em": "TEXT",
+    }
+    for column, ddl in item_column_defaults.items():
+        if column not in item_columns:
+            conn.execute(f"ALTER TABLE proposta_itens ADD COLUMN {column} {ddl}")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS ix_proposta_itens_fluxo_producao ON proposta_itens(produzir_internamente)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS ix_proposta_itens_fluxo_galvanizacao ON proposta_itens(precisa_galvanizacao)"
+    )
     conn.execute(
         """
         UPDATE processos
@@ -2427,6 +2502,7 @@ class Repository:
             params.append(process["id"])
         if pending_production:
             where.append("produzido = 0")
+            where.append("COALESCE(produzir_internamente, 'indefinido') <> 'nao'")
         if pending_delivery:
             where.extend(["produzido = 1", "entregue = 0"])
         return self.conn.execute(
@@ -2461,20 +2537,50 @@ class Repository:
             weight = self.to_float(item.get("peso", "")) or 0
             if weight < 0:
                 raise AppError("O peso do item nao pode ser negativo.")
-            normalized.append((number, (item.get("descricao") or "").strip(), quantity, weight))
+            code = (item.get("codigo_produto") or item.get("product_code") or item.get("codigo") or "").strip()
+            produce = normalize_item_flow_value(item.get("produzir_internamente"))
+            galvanize = normalize_item_flow_value(item.get("precisa_galvanizacao"))
+            reason = normalize_item_no_production_reason(item.get("motivo_nao_produzir"))
+            if produce == "nao" and not reason:
+                raise AppError("Informe o motivo quando o item nao sera produzido internamente.")
+            if produce != "nao":
+                reason = ""
+            note = (item.get("observacao_fluxo_item") or "").strip()
+            normalized.append((number, code, (item.get("descricao") or "").strip(), quantity, weight, produce, reason, galvanize, note))
         self.conn.execute("DELETE FROM proposta_itens WHERE processo_principal_id = ?", (process_id,))
-        for number, description, quantity, weight in normalized:
+        for number, code, description, quantity, weight, produce, reason, galvanize, note in normalized:
+            produced_initial = 1 if produce == "nao" else 0
             self.conn.execute(
                 """
                 INSERT INTO proposta_itens(
-                    processo_principal_id, processo_atual_id, numero_item, descricao, quantidade, peso,
-                    produzido, galvanizado, entregue, atualizado_em, atualizado_por
-                ) VALUES (?, ?, ?, ?, ?, ?, 0, 0, 0, ?, ?)
+                    processo_principal_id, processo_atual_id, numero_item, codigo_produto,
+                    descricao, quantidade, peso, produzido, galvanizado, entregue,
+                    produzir_internamente, motivo_nao_produzir, precisa_galvanizacao,
+                    observacao_fluxo_item, fluxo_definido_por, fluxo_definido_em,
+                    atualizado_em, atualizado_por
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (process_id, process_id, number, description, quantity, weight, now_br(), user["login"]),
+                (
+                    process_id,
+                    process_id,
+                    number,
+                    code,
+                    description,
+                    quantity,
+                    weight,
+                    produced_initial,
+                    produce,
+                    reason,
+                    galvanize,
+                    note,
+                    user["login"] if produce != ITEM_FLOW_UNDEFINED or galvanize != ITEM_FLOW_UNDEFINED else None,
+                    now_br() if produce != ITEM_FLOW_UNDEFINED or galvanize != ITEM_FLOW_UNDEFINED else None,
+                    now_br(),
+                    user["login"],
+                ),
             )
-        total_weight = sum(item[2] * item[3] for item in normalized)
-        updates = {"quantidade_itens": sum(item[2] for item in normalized)}
+        total_weight = sum(item[3] * item[4] for item in normalized)
+        updates = {"quantidade_itens": sum(item[3] for item in normalized)}
         if normalized and total_weight > 0:
             updates["peso"] = total_weight
         assignments = ", ".join(f"{key} = ?" for key in updates)
@@ -2555,6 +2661,160 @@ class Repository:
             self.conn.rollback()
             raise
         return len(normalized)
+
+    def item_flow_summary(self, process_id):
+        items = self.list_proposal_items(process_id)
+        total = len(items)
+        undefined = []
+        needs_galv = []
+        no_internal = []
+        for row in items:
+            produce = normalize_item_flow_value(row["produzir_internamente"] if "produzir_internamente" in row.keys() else "")
+            galvanize = normalize_item_flow_value(row["precisa_galvanizacao"] if "precisa_galvanizacao" in row.keys() else "")
+            if produce == ITEM_FLOW_UNDEFINED or galvanize == ITEM_FLOW_UNDEFINED:
+                undefined.append(row)
+            if galvanize == "sim":
+                needs_galv.append(row)
+            if produce == "nao":
+                no_internal.append(row)
+        return {
+            "total": total,
+            "undefined_count": len(undefined),
+            "needs_galvanization_count": len(needs_galv),
+            "no_internal_production_count": len(no_internal),
+        }
+
+    def validate_item_flow_ready_for_production_close(self, process_id):
+        summary = self.item_flow_summary(process_id)
+        if summary["total"] and summary["undefined_count"]:
+            undefined_items = []
+            for row in self.list_proposal_items(process_id):
+                produce = normalize_item_flow_value(row["produzir_internamente"] if "produzir_internamente" in row.keys() else "")
+                galvanize = normalize_item_flow_value(row["precisa_galvanizacao"] if "precisa_galvanizacao" in row.keys() else "")
+                if produce == ITEM_FLOW_UNDEFINED or galvanize == ITEM_FLOW_UNDEFINED:
+                    label = row["numero_item"] or str(row["id"])
+                    description = (row["descricao"] or "").strip()
+                    undefined_items.append(f"{label} - {description}" if description else str(label))
+            item_text = "; ".join(undefined_items[:8])
+            if len(undefined_items) > 8:
+                item_text += f"; +{len(undefined_items) - 8} item(ns)"
+            raise AppError(
+                "Existem itens sem definicao de fluxo. "
+                f"Itens pendentes: {item_text}. "
+                "Use 'Definir fluxo dos itens' antes de concluir a producao."
+            )
+        return summary
+
+    def item_galvanization_required_weight(self, process_id):
+        process = self.get_process(process_id)
+        if not process:
+            return 0.0
+        main_id = self.process_main_id(process)
+        scope = "processo_principal_id = ? AND COALESCE(precisa_galvanizacao, 'indefinido') = 'sim'"
+        params = [main_id]
+        if self.is_partial_process(process):
+            scope += " AND processo_atual_id = ?"
+            params.append(process["id"])
+        row = self.conn.execute(
+            f"SELECT COALESCE(SUM(quantidade * peso), 0) AS peso FROM proposta_itens WHERE {scope}",
+            tuple(params),
+        ).fetchone()
+        return float(row["peso"] or 0)
+
+    def update_item_flow(self, process_id, definitions, user, origin="Producao"):
+        process = self.get_process(process_id)
+        if not process:
+            raise AppError("Proposta nao encontrada.")
+        available = {int(row["id"]): row for row in self.list_proposal_items(process_id)}
+        normalized = []
+        for definition in definitions or []:
+            try:
+                item_id = int(definition.get("id"))
+            except (TypeError, ValueError) as exc:
+                raise AppError("Item invalido na definicao de fluxo.") from exc
+            if item_id not in available:
+                raise AppError("Um dos itens nao pertence a proposta selecionada.")
+            produce = normalize_item_flow_value(definition.get("produzir_internamente"))
+            galvanize = normalize_item_flow_value(definition.get("precisa_galvanizacao"))
+            reason = normalize_item_no_production_reason(definition.get("motivo_nao_produzir"))
+            if produce == "nao" and not reason:
+                raise AppError("Informe o motivo para itens que nao serao produzidos internamente.")
+            if produce != "nao":
+                reason = ""
+            note = (definition.get("observacao_fluxo_item") or "").strip()
+            row = available[item_id]
+            previous = (
+                normalize_item_flow_value(row["produzir_internamente"] if "produzir_internamente" in row.keys() else ""),
+                normalize_item_no_production_reason(row["motivo_nao_produzir"] if "motivo_nao_produzir" in row.keys() else ""),
+                normalize_item_flow_value(row["precisa_galvanizacao"] if "precisa_galvanizacao" in row.keys() else ""),
+                (row["observacao_fluxo_item"] if "observacao_fluxo_item" in row.keys() else "") or "",
+            )
+            current = (produce, reason, galvanize, note)
+            if previous != current:
+                normalized.append((item_id, row, previous, current))
+        if not normalized:
+            return 0
+
+        timestamp = now_br()
+        main_id = self.process_main_id(process)
+        try:
+            self.conn.execute("BEGIN IMMEDIATE")
+            for item_id, row, previous, current in normalized:
+                produce, reason, galvanize, note = current
+                produced_value = int(row["produzido"] or 0)
+                if produce == "nao":
+                    produced_value = 1
+                elif previous[0] == "nao" and normalize_status(process["status_producao"] or "") not in CLOSED_PRODUCTION_STATUS:
+                    produced_value = 0
+                self.conn.execute(
+                    """
+                    UPDATE proposta_itens
+                    SET produzir_internamente = ?, motivo_nao_produzir = ?,
+                        precisa_galvanizacao = ?, observacao_fluxo_item = ?,
+                        fluxo_definido_por = ?, fluxo_definido_em = ?,
+                        produzido = ?, atualizado_em = ?, atualizado_por = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        produce,
+                        reason,
+                        galvanize,
+                        note,
+                        user["login"],
+                        timestamp,
+                        produced_value,
+                        timestamp,
+                        user["login"],
+                        item_id,
+                    ),
+                )
+                item_label = row["numero_item"] or str(item_id)
+                previous_text = f"prod={previous[0]}; galv={previous[2]}; motivo={previous[1] or '-'}"
+                current_text = f"prod={produce}; galv={galvanize}; motivo={reason or '-'}"
+                history_note = (
+                    "DEFINICAO DE FLUXO DO ITEM"
+                    f" | Origem: {origin}"
+                    f" | Item: {item_label}"
+                    f" | Descricao: {(row['descricao'] or '')[:120]}"
+                    f" | Antes: {previous_text}"
+                    f" | Depois: {current_text}"
+                )
+                if note:
+                    history_note += f" | Observacao: {note}"
+                self.add_history(
+                    main_id,
+                    process["proposta"],
+                    "PRODUCAO",
+                    previous_text,
+                    current_text,
+                    user,
+                    history_note,
+                )
+            self.conn.commit()
+            return len(normalized)
+        except Exception:
+            self.conn.rollback()
+            raise
 
     def item_progress(self, process_id):
         process = self.get_process(process_id)
@@ -3592,6 +3852,13 @@ class Repository:
         if observation.strip():
             updates[observation_column] = observation.strip()
         updates.update(self.cascade_updates(area, new_status, process))
+        item_flow_summary = None
+        if area == "PRODUCAO" and new_status in CLOSED_PRODUCTION_STATUS:
+            item_flow_summary = self.validate_item_flow_ready_for_production_close(process_id)
+            if item_flow_summary["total"] and item_flow_summary["needs_galvanization_count"] == 0:
+                updates["status_galvanizacao"] = ""
+                if not process["status_expedicao"]:
+                    updates["status_expedicao"] = "EM_SEPARACAO"
         if area == "ALMOXARIFADO":
             if new_status == "SEM_PARAFUSOS":
                 updates["necessita_almoxarifado"] = "NAO"
@@ -3601,6 +3868,14 @@ class Repository:
             preview = {key: process[key] for key in process.keys()}
             preview.update(updates)
             geral = self.general_status_for(area, new_status, preview)
+            if (
+                area == "PRODUCAO"
+                and new_status in CLOSED_PRODUCTION_STATUS
+                and item_flow_summary
+                and item_flow_summary["total"]
+                and item_flow_summary["needs_galvanization_count"] == 0
+            ):
+                geral = "EM_EXPEDICAO"
             if geral:
                 updates["status_geral"] = geral
         preview = {key: process[key] for key in process.keys()}
@@ -3652,6 +3927,7 @@ class Repository:
                 UPDATE proposta_itens
                 SET produzido = 1, atualizado_em = ?, atualizado_por = ?
                 WHERE processo_atual_id = ? AND entregue = 0
+                  AND COALESCE(produzir_internamente, 'indefinido') <> 'nao'
                 """,
                 (now_br(), user["login"], process_id),
             )
@@ -3700,7 +3976,12 @@ class Repository:
                     )
             else:
                 self.conn.execute(
-                    "UPDATE proposta_itens SET produzido = 1, processo_atual_id = ?, atualizado_em = ?, atualizado_por = ? WHERE processo_principal_id = ? AND entregue = 0",
+                    """
+                    UPDATE proposta_itens
+                    SET produzido = 1, processo_atual_id = ?, atualizado_em = ?, atualizado_por = ?
+                    WHERE processo_principal_id = ? AND entregue = 0
+                      AND COALESCE(produzir_internamente, 'indefinido') <> 'nao'
+                    """,
                     (process_id, now_br(), user["login"], process_id),
                 )
                 progress = self.item_progress(process_id)
@@ -3792,6 +4073,7 @@ class Repository:
             for row in rows
             if self.visible_for_area(row, "GALVANIZACAO")
             and (row["status_galvanizacao"] or "") not in blocked
+            and self.item_flow_summary(row["id"])["needs_galvanization_count"] > 0
         ]
 
     def create_galvanization_load(self, driver, max_weight, expected_return_date, items, user):
@@ -3833,6 +4115,7 @@ class Repository:
                 """
                 SELECT * FROM proposta_itens
                 WHERE processo_principal_id = ? AND processo_atual_id = ?
+                  AND COALESCE(precisa_galvanizacao, 'indefinido') = 'sim'
                 ORDER BY CAST(numero_item AS INTEGER), numero_item, id
                 """,
                 (main_id, process_id),
@@ -3841,6 +4124,7 @@ class Repository:
             """
             SELECT * FROM proposta_itens
             WHERE processo_principal_id = ? AND processo_atual_id = ?
+              AND COALESCE(precisa_galvanizacao, 'indefinido') = 'sim'
             ORDER BY CAST(numero_item AS INTEGER), numero_item, id
             """,
             (main_id, process_id),
@@ -3919,14 +4203,23 @@ class Repository:
                 raise AppError(f"Processo {item['process_id']} nao encontrado.")
             if not self.area_available(process, "GALVANIZACAO"):
                 raise AppError(f"A proposta {process['proposta']} ainda nao esta liberada para galvanizacao.")
+            flow_summary = self.item_flow_summary(process["id"])
+            if flow_summary["undefined_count"]:
+                raise AppError(
+                    f"A proposta {process['proposta']} possui itens sem definicao de fluxo e nao pode ser enviada para galvanizacao."
+                )
+            if flow_summary["needs_galvanization_count"] == 0:
+                raise AppError(f"A proposta {process['proposta']} nao possui itens que precisam de galvanizacao.")
             sent_weight = self.to_float(item.get("peso_enviado", ""))
             proposal_weight = process["peso"] or 0
+            galvanization_weight = self.item_galvanization_required_weight(process["id"])
+            eligible_weight = galvanization_weight or proposal_weight
             if sent_weight is None:
-                sent_weight = proposal_weight
+                sent_weight = eligible_weight
             if sent_weight <= 0:
                 raise AppError(f"Informe um peso enviado maior que zero para a proposta {process['proposta']}.")
-            if proposal_weight and sent_weight > proposal_weight:
-                raise AppError(f"O peso enviado da proposta {process['proposta']} e maior que o peso cadastrado.")
+            if eligible_weight and sent_weight > eligible_weight:
+                raise AppError(f"O peso enviado da proposta {process['proposta']} e maior que o peso dos itens destinados a galvanizacao.")
             duplicate_load = self.conn.execute(
                 """
                 SELECT c.id, c.status
@@ -3941,7 +4234,7 @@ class Repository:
             ).fetchone()
             if duplicate_load:
                 raise AppError(f"A proposta {process['proposta']} ja esta na carga {duplicate_load['id']} em andamento.")
-            partial = 1 if proposal_weight and sent_weight < proposal_weight else 0
+            partial = 1 if eligible_weight and sent_weight < eligible_weight else 0
             total_weight += sent_weight
             normalized.append((process, sent_weight, partial, (item.get("observacao") or "").strip()))
         if max_weight is not None and total_weight > max_weight:

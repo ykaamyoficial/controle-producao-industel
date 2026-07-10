@@ -8,7 +8,6 @@ from typing import Any
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QAbstractItemView,
-    QApplication,
     QDialog,
     QFileDialog,
     QFrame,
@@ -29,6 +28,7 @@ from PySide6.QtWidgets import (
 from app.services.nomus_pdf_parser import NomusPdfParserError, parse_nomus_pdf as parse_nomus_pdf_legacy
 from app.services.proposal_import import import_nomus_pdf as import_nomus_pdf_hybrid
 from app.ui.components.modern_button import ModernButton
+from app.ui.dialog_utils import apply_large_dialog_geometry, style_dialog_from_parent
 from app.ui.table_utils import configure_wrapping_table, resize_rows_to_contents
 
 
@@ -46,8 +46,8 @@ class ProposalImportDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Conferir proposta Nomus")
         self.setModal(True)
-        self.resize(980, 700)
-        self.setMinimumSize(780, 580)
+        apply_large_dialog_geometry(self, parent)
+        style_dialog_from_parent(self, parent)
         self.source_path: Path | None = None
         self.parser_warnings: list[str] = []
         self.field_confidence: dict[str, dict[str, Any]] = {}

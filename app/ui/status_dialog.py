@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from PySide6.QtWidgets import (
-    QComboBox, QDialog, QFrame, QHBoxLayout, QLabel, QMessageBox, QTextEdit, QVBoxLayout,
+    QComboBox, QDialog, QFrame, QFormLayout, QHBoxLayout, QLabel, QMessageBox, QTextEdit, QVBoxLayout,
 )
 
 from app.ui.components.modern_button import ModernButton
 from app.ui.galvanization_load_dialog import GalvanizationLoadManagerDialog
 from app.ui.icons import make_icon
+from app.ui.item_flow_dialog import ItemFlowDialog
 from app.ui.item_selection_dialog import ItemSelectionDialog
 from app.ui.item_weight_dialog import ItemWeightDialog
 
@@ -92,6 +93,11 @@ class StatusDialog(QDialog):
                 if dialog.exec():
                     self.accept()
                 return
+            if action_id == "DEFINE_ITEM_FLOW":
+                dialog = ItemFlowDialog(self.service, self.process_id, self, origin="Producao")
+                if dialog.exec():
+                    self.accept()
+                return
             if action_id == "REGISTER_DELIVERY":
                 self._register_delivery()
                 return
@@ -110,6 +116,20 @@ class StatusDialog(QDialog):
             QMessageBox.warning(self, "Acao da proposta", str(exc))
 
     def _register_production(self):
+        summary = self.service.item_flow_summary(self.process_id)
+        if summary.get("undefined_count"):
+            answer = QMessageBox.question(
+                self,
+                "Fluxo dos itens",
+                "Existem itens sem definicao de fluxo. Deseja definir agora antes de registrar a producao?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.Yes,
+            )
+            if answer == QMessageBox.Yes:
+                dialog = ItemFlowDialog(self.service, self.process_id, self, origin="Producao")
+                if dialog.exec():
+                    self.accept()
+            return
         available = self.service.proposal_items(self.process_id, pending_production=True)
         options = self.service.next_status_options("PRODUCAO", self.process_id)
         if not available:
@@ -179,21 +199,42 @@ class StatusDialog(QDialog):
 
 
 class ManualStatusDialog(QDialog):
-    """Restricted sequential correction tool for administrators."""
+    """Administrative correction tool for explicit, audited flow repairs."""
 
     def __init__(self, service, process_id: int, area: str | None, parent=None):
         super().__init__(parent)
         self.service = service
         self.process_id = process_id
-        process = service.get_process_dict(process_id)
-        self.area = area or service.current_location(process)[0] or "CONTROLE GERAL"
+        self.process = service.get_process_dict(process_id)
+        current_area, current_area_label, current_status = service.current_location(self.process)
+        self.current_area = current_area or area or "CONTROLE GERAL"
+        self.current_area_label = current_area_label or self.current_area.title()
+        self.current_status = current_status or service.status_for_area(self.process, self.current_area)
+        self.area = area or self.current_area
         self.setWindowTitle("Correcao administrativa")
-        self.setMinimumWidth(520)
+        self.setMinimumWidth(620)
         root = QVBoxLayout(self)
         root.setContentsMargins(24, 22, 24, 20)
-        warning = QLabel("Uso administrativo. Toda correcao fica registrada no historico.")
+        root.setSpacing(12)
+        warning = QLabel("Uso administrativo. Esta acao altera manualmente o fluxo e fica registrada no historico.")
         warning.setWordWrap(True)
         warning.setStyleSheet("font-weight: 700;")
+
+        current_frame = QFrame()
+        current_frame.setObjectName("Card")
+        current_layout = QFormLayout(current_frame)
+        current_layout.setContentsMargins(14, 12, 14, 12)
+        current_layout.setSpacing(8)
+        current_layout.addRow("Area atual", QLabel(self.current_area_label or "-"))
+        current_layout.addRow(
+            "Status atual",
+            QLabel(
+                service.area_status_label(self.current_area, self.current_status)
+                if self.current_status
+                else "-"
+            ),
+        )
+
         self.area_combo = QComboBox()
         for area_name in service.visible_areas():
             self.area_combo.addItem(area_name.title(), area_name)
@@ -201,26 +242,34 @@ class ManualStatusDialog(QDialog):
         self.status_combo = QComboBox()
         self.reason = QTextEdit()
         self.reason.setPlaceholderText("Justificativa obrigatoria")
+        self.reason.setMinimumHeight(94)
         save = ModernButton("Aplicar correcao", "status", accent=True)
         cancel = ModernButton("Cancelar", "clear")
         save.clicked.connect(self.save)
         cancel.clicked.connect(self.reject)
         self.area_combo.currentIndexChanged.connect(self.load_status)
         root.addWidget(warning)
-        root.addWidget(QLabel("Area"))
+        root.addWidget(current_frame)
+        root.addWidget(QLabel("Nova area"))
         root.addWidget(self.area_combo)
-        root.addWidget(QLabel("Proxima situacao permitida"))
+        root.addWidget(QLabel("Novo status"))
         root.addWidget(self.status_combo)
         root.addWidget(QLabel("Justificativa"))
         root.addWidget(self.reason)
-        root.addWidget(save)
-        root.addWidget(cancel)
+        footer = QHBoxLayout()
+        footer.addStretch()
+        footer.addWidget(cancel)
+        footer.addWidget(save)
+        root.addLayout(footer)
         self.load_status()
 
     def load_status(self):
         area = self.area_combo.currentData()
         self.status_combo.clear()
-        for status in self.service.next_status_options(area, self.process_id):
+        options = self.service.administrative_status_options(area)
+        if not options:
+            options = self.service.next_status_options(area, self.process_id)
+        for status in options:
             self.status_combo.addItem(
                 make_icon(status, self.service.palette["accent"]),
                 self.service.area_status_label(area, status),
@@ -234,10 +283,23 @@ class ManualStatusDialog(QDialog):
             return
         status = self.status_combo.currentData()
         if not status:
+            QMessageBox.warning(self, "Correcao administrativa", "Informe o novo status.")
+            return
+        answer = QMessageBox.question(
+            self,
+            "Correcao administrativa",
+            "Esta ação altera manualmente o fluxo da proposta e ficará registrada no histórico. Deseja continuar?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
             return
         try:
-            self.service.update_status(
-                self.process_id, self.area_combo.currentData(), status, f"Correcao administrativa: {reason}"
+            self.service.administrative_correction(
+                self.process_id,
+                self.area_combo.currentData(),
+                status,
+                reason,
             )
             self.accept()
         except Exception as exc:
