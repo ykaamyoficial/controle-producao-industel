@@ -23,7 +23,7 @@ def main():
     window = MainWindow()
     if not window.start():
         return 0
-    window.show()
+    window.showMaximized()
     return app.exec()
 
 

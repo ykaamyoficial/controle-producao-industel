@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 
 from app.ui.process_form_dialog import ProcessFormDialog
 
@@ -89,7 +89,7 @@ class NomusFormTransferTests(unittest.TestCase):
         self.assertEqual(self.form.fields["proposta"].text(), "CP05228")
         self.assertEqual(self.form.fields["cliente"].text(), "MNS ENGENHARIA")
         self.assertEqual(self.form.fields["obra_site"].text(), "1101013505 - SP1FJ")
-        self.assertEqual(self.form.fields["data_entrada"].text(), "2026-06-08")
+        self.assertEqual(self.form.fields["data_entrada"].text(), "08/06/2026")
         self.assertEqual(self.form.items_table.rowCount(), 2)
         self.assertEqual(self.form.items_table.item(0, 1).text(), "450.983")
         self.assertEqual(self.form.items_table.item(1, 1).text(), "-")
@@ -101,17 +101,42 @@ class NomusFormTransferTests(unittest.TestCase):
         self.assertEqual(self.form.import_metadata["hash_sha256"], "a" * 64)
         self.assert_database_unchanged()
 
-    def test_relative_deadline_is_not_transferred(self):
+    def test_relative_deadline_is_calculated_and_transferred(self):
         self.assertTrue(self.form.apply_import_data(reviewed_data()))
-        self.assertEqual(self.form.fields["prazo_entrega"].text(), "")
-        self.assertIn("7 DIAS", self.form.import_notice.text())
+        self.assertEqual(self.form.fields["prazo_entrega"].text(), "15/06/2026")
+        self.assertNotIn("nao foi transferido", self.form.import_notice.text())
 
     def test_confirmed_deadline_is_transferred(self):
         data = reviewed_data()
         data["delivery_deadline_raw"] = "2026-06-15"
         data["delivery_deadline_needs_confirmation"] = False
         self.assertTrue(self.form.apply_import_data(data))
-        self.assertEqual(self.form.fields["prazo_entrega"].text(), "2026-06-15")
+        self.assertEqual(self.form.fields["prazo_entrega"].text(), "15/06/2026")
+
+    def test_site_is_optional_when_transferring_imported_data(self):
+        data = reviewed_data()
+        data["site"] = ""
+        self.assertTrue(self.form.apply_import_data(data))
+        self.assertEqual(self.form.fields["obra_site"].text(), "")
+        self.assertEqual(self.form.fields["proposta"].text(), "CP05228")
+
+    def test_open_nomus_preview_transfers_prepared_data_to_form(self):
+        class FakeImportDialog:
+            def __init__(self, parent=None):
+                self.prepared_data = reviewed_data()
+
+            def exec(self):
+                return QDialog.Accepted
+
+        with patch("app.ui.process_form_dialog.ProposalImportDialog", FakeImportDialog):
+            self.form.open_nomus_preview()
+
+        self.assertEqual(self.form.fields["proposta"].text(), "CP05228")
+        self.assertEqual(self.form.fields["cliente"].text(), "MNS ENGENHARIA")
+        self.assertEqual(self.form.fields["data_entrada"].text(), "08/06/2026")
+        self.assertEqual(self.form.fields["prazo_entrega"].text(), "15/06/2026")
+        self.assertEqual(self.form.items_table.rowCount(), 2)
+        self.assertEqual(self.service.save_calls, [])
 
     def test_missing_required_data_prevents_transfer(self):
         data = reviewed_data()

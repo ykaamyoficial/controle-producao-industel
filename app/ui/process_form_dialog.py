@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta
+import re
+
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QAbstractItemView, QComboBox, QDialog, QFrame, QGridLayout, QHBoxLayout,
@@ -233,7 +236,6 @@ class ProcessFormDialog(QDialog):
         required = {
             "proposal_number": "Proposta",
             "client": "Cliente",
-            "site": "Obra/Site",
             "proposal_date": "Data da proposta",
         }
         missing = [label for key, label in required.items() if not str(data.get(key) or "").strip()]
@@ -259,6 +261,8 @@ class ProcessFormDialog(QDialog):
         conflicts: list[str] = []
         for source, target in field_map.items():
             value = str(data.get(source) or "").strip()
+            if source == "proposal_date":
+                value = self._format_date_for_display(value)
             if not value:
                 continue
             incoming[target] = value
@@ -270,13 +274,17 @@ class ProcessFormDialog(QDialog):
                     conflicts.append(f"{target.replace('_', ' ').title()}: '{current}' sera substituido por '{value}'")
 
         deadline = str(data.get("delivery_deadline_raw") or "").strip()
-        deadline_pending = bool(data.get("delivery_deadline_needs_confirmation"))
-        if deadline and not deadline_pending:
-            incoming["prazo_entrega"] = deadline
+        deadline_display, deadline_pending = self._deadline_for_registration(
+            deadline,
+            data.get("proposal_date"),
+            bool(data.get("delivery_deadline_needs_confirmation")),
+        )
+        if deadline_display and not deadline_pending:
+            incoming["prazo_entrega"] = deadline_display
             current_deadline = self.fields["prazo_entrega"].text().strip()
-            if current_deadline and current_deadline != deadline:
+            if current_deadline and current_deadline != deadline_display:
                 conflicts.append(
-                    f"Prazo Entrega: '{current_deadline}' sera substituido por '{deadline}'"
+                    f"Prazo Entrega: '{current_deadline}' sera substituido por '{deadline_display}'"
                 )
 
         if self.items_table.rowCount():
@@ -362,6 +370,61 @@ class ProcessFormDialog(QDialog):
             ),
         }
         return True
+
+    @staticmethod
+    def _format_date_for_display(value: str) -> str:
+        text = str(value or "").strip()
+        if not text:
+            return ""
+        for pattern in ("%Y-%m-%d", "%d/%m/%Y"):
+            try:
+                return datetime.strptime(text, pattern).strftime("%d/%m/%Y")
+            except ValueError:
+                pass
+        return text
+
+    @classmethod
+    def _deadline_for_registration(
+        cls,
+        deadline: str,
+        proposal_date: str,
+        pending: bool,
+    ) -> tuple[str, bool]:
+        calculated = cls._calculate_relative_deadline(deadline, proposal_date)
+        if calculated:
+            return calculated, False
+        display = cls._format_date_for_display(deadline)
+        return display, bool(pending and not cls._is_definitive_date(display))
+
+    @classmethod
+    def _calculate_relative_deadline(cls, deadline: str, proposal_date: str) -> str:
+        match = re.fullmatch(r"(\d+)\s*DIAS?", str(deadline or "").strip(), flags=re.IGNORECASE)
+        if not match:
+            return ""
+        base_date = cls._parse_date_value(proposal_date)
+        if not base_date:
+            return ""
+        return (base_date + timedelta(days=int(match.group(1)))).strftime("%d/%m/%Y")
+
+    @staticmethod
+    def _parse_date_value(value: str):
+        text = str(value or "").strip()
+        for pattern in ("%Y-%m-%d", "%d/%m/%Y"):
+            try:
+                return datetime.strptime(text, pattern).date()
+            except ValueError:
+                pass
+        return None
+
+    @staticmethod
+    def _is_definitive_date(value: str) -> bool:
+        for pattern in ("%Y-%m-%d", "%d/%m/%Y"):
+            try:
+                datetime.strptime(str(value or "").strip(), pattern)
+                return True
+            except ValueError:
+                pass
+        return False
 
     def _flow_combo(self, value: str = "indefinido") -> QComboBox:
         combo = QComboBox()

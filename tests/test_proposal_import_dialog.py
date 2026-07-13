@@ -86,6 +86,20 @@ class ProposalImportDialogTests(unittest.TestCase):
         self.assertIsNone(self.dialog.prepared_data)
         self.assertEqual(self.dialog.fields["client"].property("validationState"), "error")
 
+    def test_site_is_optional_and_dates_are_displayed_in_brazilian_format(self):
+        self.dialog.fields["site"].clear()
+        self.dialog.fields["proposal_date"].setText("08/06/2026")
+        self.assertTrue(self.dialog.validate_import())
+        self.assertEqual(self.dialog.prepared_data["site"], "")
+        self.assertEqual(self.dialog.prepared_data["proposal_date"], "08/06/2026")
+
+    def test_relative_deadline_is_calculated_from_proposal_date(self):
+        self.dialog.fields["proposal_date"].setText("08/06/2026")
+        self.dialog.fields["delivery_deadline_raw"].setText("10 DIAS")
+        self.assertTrue(self.dialog.validate_import())
+        self.assertEqual(self.dialog.prepared_data["delivery_deadline_raw"], "18/06/2026")
+        self.assertFalse(self.dialog.prepared_data["delivery_deadline_needs_confirmation"])
+
     def test_interface_and_prepared_result_have_no_financial_content(self):
         visible_labels = " ".join(
             label.text() for label in self.dialog.findChildren(QLabel)
@@ -165,6 +179,8 @@ class ProposalImportDialogTests(unittest.TestCase):
             dialog = ProposalImportDialog(pdf_path=self.pdf_path)
         try:
             self.assertEqual(dialog.fields["client"].property("validationState"), "warning")
+            self.assertEqual(dialog.fields["proposal_date"].text(), "20/06/2026")
+            self.assertEqual(dialog.fields["delivery_deadline_raw"].text(), "27/06/2026")
             self.assertIn("baixa confianca", dialog.alerts_label.text().lower())
         finally:
             dialog.close()
@@ -184,7 +200,14 @@ class ProposalImportDialogTests(unittest.TestCase):
                 self.assertEqual(dialog.fields["proposal_number"].text(), proposal)
                 self.assertEqual(dialog.fields["client"].text(), client)
                 self.assertEqual(dialog.fields["site"].text(), site)
-                self.assertEqual(dialog.fields["delivery_deadline_raw"].text(), deadline)
+                expected_deadline = (
+                    ProposalImportDialog._calculate_relative_deadline(
+                        deadline,
+                        dialog.fields["proposal_date"].text(),
+                    )
+                    or deadline
+                )
+                self.assertEqual(dialog.fields["delivery_deadline_raw"].text(), expected_deadline)
                 self.assertEqual(dialog.items_table.item(0, 4).text(), first_weight)
                 prepared = json.dumps(dialog.collect_data(), ensure_ascii=False).upper()
                 for forbidden in FORBIDDEN_TEXT:

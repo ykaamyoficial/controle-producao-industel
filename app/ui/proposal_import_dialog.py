@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 import hashlib
 from pathlib import Path
+import re
 from typing import Any
 
 from PySide6.QtCore import Qt
@@ -29,6 +30,7 @@ from app.services.nomus_pdf_parser import NomusPdfParserError, parse_nomus_pdf a
 from app.services.proposal_import import import_nomus_pdf as import_nomus_pdf_hybrid
 from app.ui.components.modern_button import ModernButton
 from app.ui.dialog_utils import apply_large_dialog_geometry, style_dialog_from_parent
+from app.ui.proposal_import_viewmodel import ImportVisualModel, build_import_visual_model
 from app.ui.table_utils import configure_wrapping_table, resize_rows_to_contents
 
 
@@ -38,7 +40,6 @@ class ProposalImportDialog(QDialog):
     REQUIRED_FIELDS = {
         "proposal_number": "Numero da proposta",
         "client": "Cliente",
-        "site": "Obra/Site",
         "proposal_date": "Data da proposta",
     }
 
@@ -51,6 +52,9 @@ class ProposalImportDialog(QDialog):
         self.source_path: Path | None = None
         self.parser_warnings: list[str] = []
         self.field_confidence: dict[str, dict[str, Any]] = {}
+        self.import_visual: ImportVisualModel | None = None
+        self._initial_field_values: dict[str, str] = {}
+        self._initial_item_values: dict[tuple[int, int], str] = {}
         self.loaded_with_fallback = False
         self.prepared_data: dict[str, Any] | None = None
         self.fields: dict[str, QLineEdit] = {}
@@ -87,6 +91,18 @@ class ProposalImportDialog(QDialog):
         self.path_field.setPlaceholderText("Selecione uma proposta Nomus em PDF")
         source_row.addWidget(self.path_field, 1)
         source_panel.layout().addLayout(source_row)
+        self.import_summary_label = QLabel("Aguardando PDF para conferencia.")
+        self.import_summary_label.setObjectName("Caption")
+        self.import_summary_label.setWordWrap(True)
+        self.import_summary_label.setToolTip(
+            "A conferencia e obrigatoria. Nada e salvo ate o cadastro ser confirmado manualmente."
+        )
+        self.import_details_label = QLabel("")
+        self.import_details_label.setObjectName("Caption")
+        self.import_details_label.setWordWrap(True)
+        self.import_details_label.hide()
+        source_panel.layout().addWidget(self.import_summary_label)
+        source_panel.layout().addWidget(self.import_details_label)
         root.addWidget(source_panel)
 
         scroll = QScrollArea()
@@ -104,7 +120,7 @@ class ProposalImportDialog(QDialog):
         definitions = [
             ("proposal_number", "Numero da proposta *"),
             ("client", "Cliente *"),
-            ("site", "Obra/Site *"),
+            ("site", "Obra/Site"),
             ("proposal_date", "Data da proposta *"),
             ("delivery_deadline_raw", "Prazo"),
             ("purchase_order", "Pedido/OC"),
@@ -123,6 +139,7 @@ class ProposalImportDialog(QDialog):
             message.hide()
             self.fields[key] = field
             self.field_messages[key] = message
+            field.textEdited.connect(lambda _text, current_key=key: self._mark_field_reviewed(current_key))
             box_layout.addWidget(label)
             box_layout.addWidget(field)
             box_layout.addWidget(message)
@@ -207,6 +224,9 @@ class ProposalImportDialog(QDialog):
 
     def load_pdf(self, path: str | Path) -> bool:
         self.loaded_with_fallback = False
+        self.import_visual = None
+        self._initial_field_values.clear()
+        self._initial_item_values.clear()
         try:
             data = self._hybrid_preview_data(path)
         except Exception as hybrid_exc:
@@ -226,12 +246,18 @@ class ProposalImportDialog(QDialog):
                     f"Revise os dados manualmente.\n\nDetalhe: {legacy_exc or hybrid_exc}",
                 )
                 return False
+        data = self._normalize_preview_dates(data)
         self.source_path = Path(path)
         self.path_field.setText(str(self.source_path))
         for key, field in self.fields.items():
-            field.setText(str(data.get(key) or ""))
+            field.setText(self._display_field_value(key, data.get(key)))
             self._set_field_state(field, self.field_messages[key], "", "")
-        self.parser_warnings = list(data.get("warnings") or [])
+            field.setToolTip("")
+        self._initial_field_values = {
+            key: field.text().strip()
+            for key, field in self.fields.items()
+        }
+        self.parser_warnings = [self._safe_warning_for_payload(warning) for warning in (data.get("warnings") or [])]
         self.items_table.blockSignals(True)
         self.items_table.setRowCount(0)
         for item in data.get("items") or []:
@@ -256,8 +282,14 @@ class ProposalImportDialog(QDialog):
                     cell.setFlags(cell.flags() & ~Qt.ItemIsEditable)
                 self.items_table.setItem(row, column, cell)
         self.items_table.blockSignals(False)
+        self._initial_item_values = {
+            (row, column): (self.items_table.item(row, column).text().strip() if self.items_table.item(row, column) else "")
+            for row in range(self.items_table.rowCount())
+            for column in range(self.items_table.columnCount())
+        }
         resize_rows_to_contents(self.items_table)
         self._refresh_item_confirmation()
+        self._apply_visual_metadata()
         self._apply_parser_warnings(data)
         self.prepared_data = None
         self.validation_result.clear()
@@ -276,9 +308,16 @@ class ProposalImportDialog(QDialog):
         return value if isinstance(value, dict) else {}
 
     def _hybrid_preview_data(self, path: str | Path) -> dict[str, Any]:
-        result = import_nomus_pdf_hybrid(path).to_dict()
+        hybrid_result = import_nomus_pdf_hybrid(path)
+        standard_result = getattr(hybrid_result, "standard_result", None)
+        result = hybrid_result.to_dict()
+        self.import_visual = build_import_visual_model(
+            result,
+            standard_result=standard_result,
+            used_fallback=False,
+        )
         warnings = [
-            warning.get("message", "")
+            self._safe_warning_for_payload(warning.get("message", ""))
             for warning in result.get("warnings") or []
             if isinstance(warning, dict) and warning.get("message")
         ]
@@ -335,7 +374,10 @@ class ProposalImportDialog(QDialog):
 
     def _legacy_preview_data(self, path: str | Path) -> dict[str, Any]:
         self.field_confidence = {}
-        return parse_nomus_pdf_legacy(path).to_dict()
+        data = parse_nomus_pdf_legacy(path).to_dict()
+        data["warnings"] = [self._safe_warning_for_payload(warning) for warning in (data.get("warnings") or [])]
+        self.import_visual = build_import_visual_model(data, used_fallback=True)
+        return data
 
     def _apply_parser_warnings(self, data: dict[str, Any]):
         for key in self.REQUIRED_FIELDS:
@@ -365,10 +407,45 @@ class ProposalImportDialog(QDialog):
         if self.loaded_with_fallback:
             self.validation_result.setObjectName("ValidationWarning")
             self.validation_result.setText("Leitor anterior usado como fallback; revise os dados antes de continuar.")
+        visual_warnings = self.import_visual.warnings if self.import_visual else []
+        warnings = visual_warnings or self.parser_warnings
         self.alerts_label.setText(
-            "\n".join(f"- {warning}" for warning in self.parser_warnings)
+            "\n".join(f"- {warning}" for warning in warnings)
             or "Nenhum alerta informado pelo leitor."
         )
+
+    def _apply_visual_metadata(self):
+        if not self.import_visual:
+            self.import_summary_label.setText("Importacao preparada para conferencia.")
+            self.import_details_label.hide()
+            return
+        self.import_summary_label.setText(self.import_visual.summary)
+        if self.import_visual.details:
+            self.import_details_label.setText(self.import_visual.details)
+            self.import_details_label.show()
+        else:
+            self.import_details_label.hide()
+        for key, visual in self.import_visual.fields.items():
+            field = self.fields.get(key)
+            message = self.field_messages.get(key)
+            if not field or not message:
+                continue
+            field.setToolTip(visual.tooltip)
+            if key == "delivery_deadline_raw" and self._is_definitive_date(field.text().strip()):
+                continue
+            if visual.needs_review:
+                self._set_field_state(field, message, "warning", visual.message)
+        for row, visual in self.import_visual.items.items():
+            if row >= self.items_table.rowCount():
+                continue
+            confirmation = self.items_table.item(row, 6)
+            if confirmation:
+                confirmation.setText(visual.label)
+                confirmation.setToolTip(visual.tooltip)
+            for column in range(self.items_table.columnCount()):
+                cell = self.items_table.item(row, column)
+                if cell and visual.tooltip:
+                    cell.setToolTip(visual.tooltip)
 
     @staticmethod
     def _set_field_state(field: QWidget, label: QLabel, state: str, message: str):
@@ -395,13 +472,64 @@ class ProposalImportDialog(QDialog):
                 confirmation.setFlags(confirmation.flags() & ~Qt.ItemIsEditable)
                 self.items_table.setItem(row, 6, confirmation)
             current = confirmation.text().strip()
-            confirmation.setText(current if weight and weight.text().strip() and current else ("OK" if weight and weight.text().strip() else "Peso pendente"))
+            initial = self.import_visual.items.get(row) if self.import_visual else None
+            default_text = initial.label if initial else ("OK" if weight and weight.text().strip() else "Peso pendente")
+            if weight and weight.text().strip() and current == "Peso pendente":
+                default_text = "OK"
+            confirmation.setText(current if current and current != "Peso pendente" else default_text)
             confirmation.setToolTip(
-                "Peso explicitamente informado ou corrigido."
-                if weight and weight.text().strip()
-                else "O PDF nao informou peso em kg para este item."
+                (initial.tooltip if initial else "")
+                or (
+                    "Peso explicitamente informado ou corrigido."
+                    if weight and weight.text().strip()
+                    else "O documento nao informou peso em kg para este item."
+                )
             )
         self.items_table.blockSignals(False)
+
+    def _mark_field_reviewed(self, key: str):
+        field = self.fields.get(key)
+        if not field:
+            return
+        previous = self._initial_field_values.get(key, "")
+        current = field.text().strip()
+        if self._normalize_review_value(previous) == self._normalize_review_value(current):
+            return
+        message = self.field_messages.get(key)
+        if message and not message.isVisible():
+            self._set_field_state(field, message, "warning", "Revisado nesta conferencia.")
+        current_tip = field.toolTip().strip()
+        reviewed_tip = "Campo ajustado manualmente nesta conferencia."
+        if reviewed_tip not in current_tip:
+            field.setToolTip((current_tip + "\n" if current_tip else "") + reviewed_tip)
+
+    @staticmethod
+    def _normalize_review_value(value: str) -> str:
+        return " ".join(str(value or "").strip().upper().split())
+
+    @staticmethod
+    def _safe_warning_for_payload(warning: Any) -> str:
+        text = str(warning or "").strip()
+        if not text:
+            return ""
+        blocked = (
+            "R$",
+            "PRECO",
+            "PREÇO",
+            "VALOR UNITARIO",
+            "VALOR UNITÁRIO",
+            "SUBTOTAL",
+            "ICMS",
+            "IPI",
+            "DIFAL",
+            "FRETE",
+            "PAGAMENTO",
+            "DESCONTO",
+        )
+        upper = text.upper()
+        if any(term in upper for term in blocked):
+            return "Conteudo comercial descartado pela camada de seguranca."
+        return text
 
     def collect_data(self) -> dict[str, Any]:
         items = []
@@ -431,6 +559,14 @@ class ProposalImportDialog(QDialog):
                 }
             )
         deadline = self.fields["delivery_deadline_raw"].text().strip()
+        proposal_date = self.fields["proposal_date"].text().strip()
+        deadline, deadline_needs_confirmation, deadline_warning = self._deadline_for_payload(
+            deadline,
+            proposal_date,
+        )
+        warnings = list(self.parser_warnings)
+        if deadline_warning and deadline_warning not in warnings:
+            warnings.append(deadline_warning)
         return {
             "source": "nomus_pdf",
             "source_file_name": self.source_path.name if self.source_path else None,
@@ -438,13 +574,13 @@ class ProposalImportDialog(QDialog):
             "proposal_number": self.fields["proposal_number"].text().strip().upper(),
             "client": self.fields["client"].text().strip(),
             "site": self.fields["site"].text().strip(),
-            "proposal_date": self.fields["proposal_date"].text().strip(),
+            "proposal_date": proposal_date,
             "delivery_deadline_raw": deadline,
-            "delivery_deadline_needs_confirmation": bool(deadline and not self._is_iso_date(deadline)),
+            "delivery_deadline_needs_confirmation": deadline_needs_confirmation,
             "purchase_order": self.fields["purchase_order"].text().strip() or None,
             "lot": self.fields["lot"].text().strip() or None,
             "items": items,
-            "warnings": list(self.parser_warnings),
+            "warnings": warnings,
         }
 
     def _source_file_sha256(self) -> str | None:
@@ -457,12 +593,84 @@ class ProposalImportDialog(QDialog):
         return digest.hexdigest()
 
     @staticmethod
-    def _is_iso_date(value: str) -> bool:
-        try:
-            datetime.strptime(value, "%Y-%m-%d")
-            return True
-        except ValueError:
-            return False
+    def _format_date_for_display(value: Any) -> str:
+        text = str(value or "").strip()
+        if not text:
+            return ""
+        for pattern in ("%Y-%m-%d", "%d/%m/%Y"):
+            try:
+                return datetime.strptime(text, pattern).strftime("%d/%m/%Y")
+            except ValueError:
+                pass
+        return text
+
+    @classmethod
+    def _display_field_value(cls, key: str, value: Any) -> str:
+        if key in {"proposal_date", "delivery_deadline_raw"}:
+            return cls._format_date_for_display(value)
+        return str(value or "")
+
+    @classmethod
+    def _normalize_preview_dates(cls, data: dict[str, Any]) -> dict[str, Any]:
+        normalized = dict(data)
+        proposal_date = cls._format_date_for_display(normalized.get("proposal_date"))
+        deadline = str(normalized.get("delivery_deadline_raw") or "").strip()
+        deadline_value, deadline_pending, deadline_warning = cls._deadline_for_payload(
+            deadline,
+            proposal_date,
+        )
+        normalized["proposal_date"] = proposal_date
+        normalized["delivery_deadline_raw"] = deadline_value
+        normalized["delivery_deadline_needs_confirmation"] = deadline_pending
+        if deadline_warning:
+            warnings = list(normalized.get("warnings") or [])
+            if deadline_warning not in warnings:
+                warnings.append(deadline_warning)
+            normalized["warnings"] = warnings
+        return normalized
+
+    @staticmethod
+    def _is_definitive_date(value: str) -> bool:
+        for pattern in ("%Y-%m-%d", "%d/%m/%Y"):
+            try:
+                datetime.strptime(value, pattern)
+                return True
+            except ValueError:
+                pass
+        return False
+
+    @classmethod
+    def _deadline_for_payload(cls, deadline: str, proposal_date: str) -> tuple[str, bool, str]:
+        calculated = cls._calculate_relative_deadline(deadline, proposal_date)
+        if calculated:
+            return (
+                calculated,
+                False,
+                f"Prazo '{deadline}' calculado a partir da data da proposta: {calculated}.",
+            )
+        display = cls._format_date_for_display(deadline)
+        return display, bool(display and not cls._is_definitive_date(display)), ""
+
+    @classmethod
+    def _calculate_relative_deadline(cls, deadline: Any, proposal_date: Any) -> str:
+        text = str(deadline or "").strip()
+        match = re.fullmatch(r"(\d+)\s*DIAS?", text, flags=re.IGNORECASE)
+        if not match:
+            return ""
+        base_date = cls._parse_date_value(proposal_date)
+        if not base_date:
+            return ""
+        return (base_date + timedelta(days=int(match.group(1)))).strftime("%d/%m/%Y")
+
+    @staticmethod
+    def _parse_date_value(value: Any):
+        text = str(value or "").strip()
+        for pattern in ("%Y-%m-%d", "%d/%m/%Y"):
+            try:
+                return datetime.strptime(text, pattern).date()
+            except ValueError:
+                pass
+        return None
 
     def validate_import(self) -> bool:
         data = self.collect_data()
@@ -475,9 +683,9 @@ class ProposalImportDialog(QDialog):
                 state = "error"
                 message = "Campo obrigatorio."
                 errors.append(f"{title} nao preenchido.")
-            elif key == "proposal_date" and not self._is_iso_date(value):
+            elif key == "proposal_date" and not self._is_definitive_date(value):
                 state = "error"
-                message = "Use a data no formato AAAA-MM-DD."
+                message = "Use a data no formato DD/MM/AAAA."
                 errors.append("Data da proposta invalida.")
             self._set_field_state(self.fields[key], self.field_messages[key], state, message)
 
