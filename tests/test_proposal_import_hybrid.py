@@ -193,6 +193,8 @@ class HybridNomusImportTests(unittest.TestCase):
         self.assertEqual(result["delivery_deadline_raw"]["value"], "16/03/2026")
         self.assertEqual(result["items"][0]["quantity"], 220)
         self.assertEqual(result["items"][0]["unit"], "UNIDADE")
+        self.assertNotIn("PROD. CLIENTE", result["items"][0]["description"])
+        self.assertTrue(result["items"][0]["description"].startswith("300.7 - VIGA PBR-1"))
         self.assertIsNone(result["items"][0]["weight_kg"])
 
     def test_extracts_simple_pd_order_model(self):
@@ -205,6 +207,8 @@ class HybridNomusImportTests(unittest.TestCase):
         self.assertEqual(result["items"][0]["product_code"], "300.25")
         self.assertEqual(result["items"][0]["quantity"], 50)
         self.assertEqual(result["items"][0]["unit"], "UNIDADE")
+        self.assertNotIn("COMPRA - CLIENTE", result["items"][0]["description"])
+        self.assertTrue(result["items"][0]["description"].startswith("PERFIL METALICO"))
         self.assertIsNone(result["items"][0]["weight_kg"])
 
     def test_real_local_proposal_models_when_available(self):
@@ -237,6 +241,18 @@ class HybridNomusImportTests(unittest.TestCase):
                 self.assertEqual(result["client"]["value"], client)
                 self.assertEqual(result["site"]["value"], site)
                 self.assertEqual(len(result["items"]), item_count)
+                if name == "CP 04843.pdf":
+                    self.assertNotIn("PROD. CLIENTE", result["items"][0]["description"])
+                    self.assertTrue(result["items"][0]["description"].startswith("300.7 - VIGA PBR-1"))
+                    self.assertIn("GALV. A FOGO", result["items"][0]["description"])
+                    self.assertIn("8,13", result["items"][2]["description"])
+                    self.assertIn("101,6 X 43,7", result["items"][2]["description"])
+                    self.assertIn("9,53MM", result["items"][3]["description"])
+                    self.assertIn("254,0MM X 66,68MM", result["items"][3]["description"])
+                    self.assertIn("COMPRIMENTO DE 6000MM", result["items"][3]["description"])
+                if name == "PD 04069 (1).pdf":
+                    self.assertNotIn("COMPRA - CLIENTE", result["items"][0]["description"])
+                    self.assertTrue(result["items"][0]["description"].startswith("PERFIL U DOBRADO"))
                 serialized = json.dumps(result, ensure_ascii=False).upper()
                 for forbidden in FORBIDDEN_TEXT:
                     self.assertNotIn(forbidden, serialized)

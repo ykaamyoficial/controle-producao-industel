@@ -7,6 +7,10 @@ from typing import Any
 
 
 _INVISIBLE_CHARS_RE = re.compile(r"[\u200b\u200c\u200d\ufeff]")
+_DESCRIPTION_PREFIX_NOISE_RE = re.compile(
+    r"^\s*(?:(?:PEDIDO\s+DE\s+)?COMPRA\s*(?:[-–—:]|\s+)\s*CLIENTE|PROD\.?\s+CLIENTE)\b\s*(?:\(\s*\))?\s*[-–—:]?\s*(?:0\s+)?",
+    re.IGNORECASE,
+)
 
 
 class NormalizationError(ValueError):
@@ -32,7 +36,9 @@ def normalize_identifier(value: Any) -> str | None:
 
 
 def normalize_description(value: Any) -> str:
-    return normalize_text(value)
+    text = normalize_text(value)
+    cleaned = _DESCRIPTION_PREFIX_NOISE_RE.sub("", text)
+    return cleaned.lstrip(" -:\t|").rstrip(" \t|")
 
 
 def normalize_decimal(value: Any) -> Decimal | None:

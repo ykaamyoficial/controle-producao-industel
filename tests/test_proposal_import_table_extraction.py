@@ -70,6 +70,66 @@ class ProposalImportTableExtractionTests(unittest.TestCase):
             "450.830.1 - PORTAO PARA PEDESTRE EM CHAPA 1.20X2.40M - COM BATENTE - DENTRO - ANTI-HORARIO GALV. A FOGO.",
         )
 
+    def test_description_removes_purchase_order_client_prefix(self):
+        description = join_description_fragments(
+            [
+                "COMPRA - CLIENTE PERFIL U DOBRADO #4.8X70X200X70X1000MM",
+                "PARA FIX. DE SKID EM CAMPO GALV. A FOGO.",
+            ]
+        )
+        self.assertEqual(
+            description,
+            "PERFIL U DOBRADO #4.8X70X200X70X1000MM PARA FIX. DE SKID EM CAMPO GALV. A FOGO.",
+        )
+
+    def test_description_removes_product_client_prefix(self):
+        description = join_description_fragments(
+            [
+                "PROD. CLIENTE () 300.7 - VIGA PBR-1 COM PERFIL LAMINADO",
+                "GALV. A FOGO.",
+            ]
+        )
+        self.assertEqual(
+            description,
+            "300.7 - VIGA PBR-1 COM PERFIL LAMINADO GALV. A FOGO.",
+        )
+
+    def test_description_removes_product_client_prefix_with_zero_column_noise(self):
+        description = join_description_fragments(
+            [
+                "PROD. CLIENTE 0 300.7 - VIGA PBR-1 COM PERFIL LAMINADO 73089010",
+            ]
+        )
+        self.assertEqual(
+            description,
+            "300.7 - VIGA PBR-1 COM PERFIL LAMINADO 73089010",
+        )
+
+    def test_table_import_removes_purchase_order_client_prefix(self):
+        rows = [
+            ["ITEM", "CODIGO", "DESCRICAO DO PRODUTO", "UNIDADE", "QTDE", "PESO"],
+            [
+                "001",
+                "450.993",
+                "COMPRA - CLIENTE PERFIL U DOBRADO #4.8X70X200X70X1000MM PARA FIX. DE SKID EM CAMPO GALV. A FOGO.",
+                "UNIDADE",
+                "1",
+                "",
+            ],
+        ]
+        result = rows_to_table_result(
+            rows,
+            NomusCurrentTemplate.table_definition,
+            method="unit_rows",
+        )
+        self.assertEqual(result.item_count, 1)
+        self.assertEqual(result.items[0].product_code, "450.993")
+        self.assertEqual(
+            result.items[0].description,
+            "PERFIL U DOBRADO #4.8X70X200X70X1000MM PARA FIX. DE SKID EM CAMPO GALV. A FOGO.",
+        )
+        self.assertNotIn("COMPRA - CLIENTE", result.items[0].description)
+
     def test_reconstructs_table_rows_without_financial_columns(self):
         rows = [
             ["ITEM", "CODIGO", "DESCRICAO DO PRODUTO", "UNIDADE", "QTDE", "PESO", "VALOR"],

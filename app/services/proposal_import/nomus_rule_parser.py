@@ -4,6 +4,7 @@ import re
 import unicodedata
 from datetime import datetime
 
+from .normalizers import normalize_description
 from .schemas import (
     ProposalImportField,
     ProposalImportItem,
@@ -46,8 +47,20 @@ _SIMPLE_ITEM_RE = re.compile(
     r"(?P<unit>UNIDADE|UN|PC|PECA|PEÇA)\s+(?P<qty>\d+(?:[.,]\d+)?)\s+(?:N/A|.+)?$",
     re.IGNORECASE,
 )
-_NCM_QTY_RE = re.compile(r"\b(?P<ncm>\d{8})\s+(?P<qty>\d+(?:[.,]\d+)?)\b")
+_NCM_QTY_RE = re.compile(r"(?<!\d)(?P<ncm>\d{8})(?!\d)\s+(?P<qty>\d+(?:[.,]\d+)?)(?![,\w])")
+_STANDALONE_NCM_RE = re.compile(r"(?<!\d)\d{8}(?!\d)")
+_NCM_TABLE_TAIL_RE = re.compile(
+    r"(?<!\d)(?P<ncm>\d{8})(?!\d)\s+"
+    r"(?P<unit>UNIDADE|UN|PC|PECA|PEÇA)\s+"
+    r"(?P<qty>\d+(?:[.,]\d+)?)"
+    r"(?:\s+\d[\d.]*(?:[.,]\d+)?)?"
+    r"(?:\s+\d+)?"
+    r"(?:\s+R\$\s*\d[\d.]*,\d{2})?",
+    re.IGNORECASE,
+)
 _MONEY_RE = re.compile(r"R\$\s*\d[\d.]*,\d{2}|\b\d{1,3}(?:\.\d{3})*,\d{2}\b")
+_MONEY_WITH_CURRENCY_RE = re.compile(r"R\$\s*\d[\d.]*,\d{2}", re.IGNORECASE)
+_TRAILING_DECIMAL_VALUE_RE = re.compile(r"(?:^|\s)\d{1,3}(?:\.\d{3})*,\d{2}\s*$")
 _PERCENT_RE = re.compile(r"\b\d+(?:[.,]\d+)?\s*%")
 _NULL_RE = re.compile(r"\bNULL\b", re.IGNORECASE)
 
@@ -64,6 +77,18 @@ _CLIENT_TRAILING_NAMES = (
     " ISADORA ",
     " SILVIO ",
     " PATRICIA ",
+)
+
+_ITEM_DESCRIPTION_FOOTER_TERMS = (
+    "TOTAL DESTA PROPOSTA",
+    "TOTAL",
+    "IMPOSTOS",
+    "CONDICOES PAGAMENTO",
+    "CONDICOES DO NEGOCIO",
+    "PRAZO DE ENTREGA",
+    "TRANSPORTE DOS MATERIAIS",
+    "VALIDADE DA PROPOSTA",
+    "OBSERVACOES GERAIS",
 )
 
 
@@ -86,6 +111,21 @@ def _money_free(value: str) -> str:
     for term in FORBIDDEN_FINANCIAL_TERMS:
         cleaned = re.sub(re.escape(term), "", cleaned, flags=re.IGNORECASE)
         cleaned = re.sub(re.escape(_ascii_upper(term)), "", cleaned, flags=re.IGNORECASE)
+    return _clean_space(cleaned)
+
+
+def _description_money_free(value: str) -> str:
+    cleaned = _MONEY_WITH_CURRENCY_RE.sub("", value or "")
+    cleaned = _PERCENT_RE.sub("", cleaned)
+    for term in FORBIDDEN_FINANCIAL_TERMS:
+        if term in {"VALOR", "TOTAL"}:
+            continue
+        cleaned = re.sub(re.escape(term), "", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(re.escape(_ascii_upper(term)), "", cleaned, flags=re.IGNORECASE)
+    previous = None
+    while previous != cleaned:
+        previous = cleaned
+        cleaned = _TRAILING_DECIMAL_VALUE_RE.sub("", cleaned)
     return _clean_space(cleaned)
 
 
@@ -310,19 +350,19 @@ def _extract_budget_items(lines: list[str]) -> list[ProposalImportItem]:
         if product_code.upper() == "N/A" and title_match:
             product_code = title_match.group("code")
         body = _clean_space(" ".join(block[:item_index] + [first_match.group("body")] + block[item_index + 1 :]))
-        ncm_match = _NCM_QTY_RE.search(body)
+        ncm_match = _NCM_TABLE_TAIL_RE.search(body) or _NCM_QTY_RE.search(body)
         ncm = ncm_match.group("ncm") if ncm_match else None
         quantity: int | None = None
         if ncm_match:
             quantity_raw = ncm_match.group("qty").replace(",", ".")
             quantity = int(float(quantity_raw))
-            description = body[: ncm_match.start()]
+            description = _remove_ncm_table_tail(body)
         else:
             description = body
         weight_match = _WEIGHT_RE.search(body)
         weight = float(weight_match.group(1).replace(".", "").replace(",", ".")) if weight_match else None
         description = _WEIGHT_RE.sub("", description)
-        description = _money_free(description)
+        description = normalize_description(_description_money_free(description))
         description = re.sub(r"^\d{3}(?:\.\w+)+\s*-\s*", "", description)
         if not description:
             description = f"Item {item_number:03d}"
@@ -346,6 +386,14 @@ def _extract_budget_items(lines: list[str]) -> list[ProposalImportItem]:
     return items
 
 
+def _remove_ncm_table_tail(value: str) -> str:
+    """Remove table columns after NCM without cutting wrapped description text."""
+    cleaned = _NCM_TABLE_TAIL_RE.sub(" ", value)
+    cleaned = _NCM_QTY_RE.sub(" ", cleaned)
+    cleaned = _STANDALONE_NCM_RE.sub(" ", cleaned)
+    return _clean_space(cleaned)
+
+
 def _extract_simple_order_items(lines: list[str]) -> list[ProposalImportItem]:
     start = None
     end = None
@@ -359,8 +407,116 @@ def _extract_simple_order_items(lines: list[str]) -> list[ProposalImportItem]:
             break
     section = lines[start:end] if start is not None else []
     items: list[ProposalImportItem] = []
+    for block in _simple_item_blocks(section):
+        block = _truncate_item_block_at_footer(block)
+        item_index = next((index for index, line in enumerate(block) if _SIMPLE_ITEM_RE.match(line)), None)
+        if item_index is None:
+            continue
+        match = _SIMPLE_ITEM_RE.match(block[item_index])
+        if not match:
+            continue
+        item = _simple_item_from_match(match, block, item_index)
+        if item:
+            items.append(item)
+    return items
+
+
+def _simple_item_blocks(section: list[str]) -> list[list[str]]:
+    blocks: list[list[str]] = []
     pending_description: list[str] = []
+    current: list[str] = []
+    current_has_item = False
+    current_started_from_product_title = False
+
     for line in section:
+        if not line:
+            continue
+        if _PRODUCT_TITLE_RE.match(line):
+            if current:
+                blocks.append(current)
+            current = [line]
+            current_has_item = False
+            current_started_from_product_title = True
+            pending_description = []
+            continue
+
+        if _SIMPLE_ITEM_RE.match(line):
+            if current and current_has_item:
+                blocks.append(current)
+                current = []
+                current_started_from_product_title = False
+            if current:
+                current.append(line)
+            else:
+                current = pending_description + [line]
+                pending_description = []
+                current_started_from_product_title = False
+            current_has_item = True
+            continue
+
+        if current:
+            if current_has_item:
+                if current_started_from_product_title:
+                    current.append(line)
+                else:
+                    blocks.append(current)
+                    current = []
+                    current_has_item = False
+                    current_started_from_product_title = False
+                    pending_description = [line]
+            else:
+                current.append(line)
+        else:
+            pending_description.append(line)
+
+    if current:
+        blocks.append(current)
+    return blocks
+
+
+def _simple_item_from_match(match: re.Match[str], block: list[str], item_index: int) -> ProposalImportItem | None:
+    item_number = int(match.group("number"))
+    product_code = match.group("code")
+    body = _clean_space(" ".join(block[:item_index] + [match.group("body")] + block[item_index + 1 :]))
+    weight_match = _WEIGHT_RE.search(body)
+    weight = float(weight_match.group(1).replace(".", "").replace(",", ".")) if weight_match else None
+    body = _WEIGHT_RE.sub("", body)
+    body = _remove_ncm_table_tail(body)
+    description = normalize_description(_description_money_free(body)) or f"Item {item_number:03d}"
+    unit = _clean_space(match.group("unit")).upper()
+    quantity = int(float(match.group("qty").replace(",", ".")))
+    return ProposalImportItem(
+        item_number=item_number,
+        product_code=product_code if product_code.upper() != "N/A" else None,
+        description=description.upper(),
+        unit=unit,
+        quantity=quantity,
+        ncm=None,
+        weight_kg=weight,
+        weight_extracted_from_text=weight is not None,
+        weight_needs_confirmation=weight is None,
+        raw_text=_non_financial_raw(" ".join([description, unit, str(quantity)])),
+        confidence=0.82 if quantity else 0.55,
+        weight_confidence=0.95 if weight is not None else 0.0,
+        needs_confirmation=weight is None,
+    )
+
+
+def _truncate_item_block_at_footer(block: list[str]) -> list[str]:
+    result: list[str] = []
+    for line in block:
+        normalized = _ascii_upper(line)
+        if any(term in normalized for term in _ITEM_DESCRIPTION_FOOTER_TERMS):
+            break
+        result.append(line)
+    return result
+
+
+def _extract_simple_order_items_legacy(lines: list[str]) -> list[ProposalImportItem]:
+    """Kept as reference for older one-line formats not covered by block parsing."""
+    items: list[ProposalImportItem] = []
+    pending_description: list[str] = []
+    for line in lines:
         match = _SIMPLE_ITEM_RE.match(line)
         if not match:
             pending_description.append(line)
@@ -372,7 +528,8 @@ def _extract_simple_order_items(lines: list[str]) -> list[ProposalImportItem]:
         weight_match = _WEIGHT_RE.search(body)
         weight = float(weight_match.group(1).replace(".", "").replace(",", ".")) if weight_match else None
         body = _WEIGHT_RE.sub("", body)
-        description = _money_free(body) or f"Item {item_number:03d}"
+        body = _remove_ncm_table_tail(body)
+        description = normalize_description(_description_money_free(body)) or f"Item {item_number:03d}"
         unit = _clean_space(match.group("unit")).upper()
         quantity = int(float(match.group("qty").replace(",", ".")))
         items.append(

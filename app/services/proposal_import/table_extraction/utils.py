@@ -10,6 +10,10 @@ from .models import FINANCIAL_HEADER_TERMS, FINANCIAL_TEXT_TERMS
 
 _MONEY_RE = re.compile(r"R\$\s*\d[\d.]*,\d{2}|\b\d{1,3}(?:\.\d{3})*,\d{2}\b")
 _PERCENT_RE = re.compile(r"\b\d+(?:[.,]\d+)?\s*%")
+_DESCRIPTION_PREFIX_NOISE_RE = re.compile(
+    r"^\s*(?:(?:PEDIDO\s+DE\s+)?COMPRA\s*(?:[-–—:]|\s+)\s*CLIENTE|PROD\.?\s+CLIENTE)\b\s*(?:\(\s*\))?\s*[-–—:]?\s*(?:0\s+)?",
+    re.IGNORECASE,
+)
 
 
 def ascii_upper(value: object) -> str:
@@ -65,7 +69,12 @@ def join_description_fragments(parts: list[object]) -> str:
 def _description_fragment(value: object) -> str:
     text = str(value or "").replace("\xa0", " ")
     text = " ".join(text.split()).strip(" \t|")
-    return text
+    return _strip_description_prefix_noise(text)
+
+
+def _strip_description_prefix_noise(value: str) -> str:
+    cleaned = _DESCRIPTION_PREFIX_NOISE_RE.sub("", value)
+    return cleaned.lstrip(" -:\t|").rstrip(" \t|")
 
 
 def _append_description_fragment(current: str, fragment: str) -> str:
