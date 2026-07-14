@@ -5,7 +5,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.ui.components.modern_button import ModernButton
-from app.ui.galvanization_load_dialog import GalvanizationLoadManagerDialog
+from app.ui.galvanization_load_dialog import GalvanizationLoadManagerDialog, GalvanizationReturnDialog
 from app.ui.icons import make_icon
 from app.ui.item_flow_dialog import ItemFlowDialog
 from app.ui.item_selection_dialog import ItemSelectionDialog
@@ -85,6 +85,9 @@ class StatusDialog(QDialog):
                 if dialog.exec() or dialog.changed:
                     self.accept()
                 return
+            if action_id == "REGISTER_GALVANIZATION_RETURN":
+                self._register_galvanization_return()
+                return
             if action_id == "REGISTER_PRODUCTION":
                 self._register_production()
                 return
@@ -114,6 +117,27 @@ class StatusDialog(QDialog):
             self.accept()
         except Exception as exc:
             QMessageBox.warning(self, "Acao da proposta", str(exc))
+
+    def _register_galvanization_return(self):
+        active_loads = [
+            row for row in self.service.process_loads(self.process_id)
+            if (row.get("status") or "") in ("LIBERADA_PARA_ENVIO", "RETORNO_PARCIAL")
+        ]
+        if not active_loads:
+            QMessageBox.information(
+                self,
+                "Retorno da galvanizacao",
+                "Esta proposta nao possui carga ativa liberada para retorno.",
+            )
+            return
+        if len(active_loads) > 1:
+            dialog = GalvanizationLoadManagerDialog(self.service, [self.process_id], self)
+            if dialog.exec() or dialog.changed:
+                self.accept()
+            return
+        dialog = GalvanizationReturnDialog(self.service, int(active_loads[0]["id"]), self)
+        if dialog.exec():
+            self.accept()
 
     def _register_production(self):
         summary = self.service.item_flow_summary(self.process_id)

@@ -451,6 +451,7 @@ STATUS_CATEGORY_BY_STATUS = {
     "ENVIADO_GALVANIZACAO": "progress",
     "AGUARDANDO_LIBERACAO": "waiting",
     "LIBERADA_PARA_ENVIO": "progress",
+    "RETORNO_PARCIAL": "warning",
     "RETORNADA_GALVANIZACAO": "done",
     "RETORNOU_GALVANIZACAO": "done",
     "RETORNOU_PARCIAL": "attention",

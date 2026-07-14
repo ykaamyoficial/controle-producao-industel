@@ -75,6 +75,42 @@ class ItemWeightTests(unittest.TestCase):
         self.assertIn("Informar pesos dos itens", [action["label"] for action in production])
         self.assertNotIn("Informar pesos dos itens", [action["label"] for action in expedition])
 
+    def test_galvanization_actions_include_return_when_process_has_active_load(self):
+        self.conn.execute(
+            """
+            UPDATE processos
+            SET status_galvanizacao = 'ENVIADO_GALVANIZACAO'
+            WHERE id = ?
+            """,
+            (self.process_id,),
+        )
+        load_id = self.conn.execute(
+            """
+            INSERT INTO cargas_galvanizacao(
+                status, motorista, peso_total, criado_em, criado_por, computador
+            )
+            VALUES ('LIBERADA_PARA_ENVIO', 'Motorista', 10, '10/07/2026 08:00:00', 'admin', 'TESTE')
+            """
+        ).lastrowid
+        self.conn.execute(
+            """
+            INSERT INTO cargas_galvanizacao_itens(
+                carga_id, processo_id, proposta, cliente, peso_total_proposta, peso_enviado, parcial
+            )
+            VALUES (?, ?, 'CP99001', 'Cliente Teste', 10, 10, 0)
+            """,
+            (load_id, self.process_id),
+        )
+        self.conn.commit()
+        service = BackendService.__new__(BackendService)
+        service.user = ADMIN
+        service.conn = self.conn
+        service.repo = self.repo
+
+        actions = service.process_actions(self.process_id, "GALVANIZACAO")
+
+        self.assertIn("Registrar retorno da galvanizacao", [action["label"] for action in actions])
+
     def test_updates_weights_total_history_and_does_not_change_status(self):
         before_status = self.repo.get_process(self.process_id)["status_producao"]
         changed = self.repo.update_item_weights(self.process_id, {self.item_1: "2,5", self.item_2: "4.25"}, ADMIN)

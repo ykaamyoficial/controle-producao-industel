@@ -160,8 +160,8 @@ class GalvanizationLoadManagerDialogTests(unittest.TestCase):
 
         self.assertIn("Editar carga", waiting_actions)
         self.assertIn("Liberar carga", waiting_actions)
-        self.assertNotIn("Marcar retorno", waiting_actions)
-        self.assertIn("Marcar retorno", sent_actions)
+        self.assertNotIn("Registrar retorno", waiting_actions)
+        self.assertIn("Registrar retorno", sent_actions)
         self.assertNotIn("Editar carga", sent_actions)
         self.assertEqual(returned_actions, ["Detalhes da carga", "Atualizar"])
 

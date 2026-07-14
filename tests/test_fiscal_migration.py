@@ -50,7 +50,7 @@ class FiscalMigrationTests(unittest.TestCase):
 
     def test_fiscal_migration_runs_on_fresh_database(self):
         with self.connect(self.temp_dir / "fresh.db") as conn:
-            self.assertEqual(apply_migrations(conn), [1, 2, 3, 4, 5, 6])
+            self.assertEqual(apply_migrations(conn), [1, 2, 3, 4, 5, 6, 7])
             self.assertEqual(apply_migrations(conn), [])
             production_repository.initialize_database(conn)
             applied = {

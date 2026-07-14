@@ -98,6 +98,8 @@ def save_app_config(config: dict[str, Any]):
 def row_to_dict(row: Any) -> dict[str, Any]:
     if row is None:
         return {}
+    if isinstance(row, dict):
+        return dict(row)
     return {key: row[key] for key in row.keys()}
 
 
@@ -327,8 +329,17 @@ class BackendService:
     def galvanization_load_items(self, load_id: int) -> list[dict[str, Any]]:
         return [row_to_dict(row) for row in self.repo.list_galvanization_load_items(load_id)]
 
+    def galvanization_available_weight_info(self, process_id: int, load_id: int | None = None) -> dict[str, Any]:
+        return self.repo.galvanization_available_weight_info(process_id, exclude_load_id=load_id)
+
     def galvanization_load_proposal_items(self, load_id: int, process_id: int) -> list[dict[str, Any]]:
         return [row_to_dict(row) for row in self.repo.list_galvanization_load_proposal_items(load_id, process_id)]
+
+    def galvanization_return_proposals(self, load_id: int) -> list[dict[str, Any]]:
+        return [row_to_dict(row) for row in self.repo.list_galvanization_return_proposals(load_id)]
+
+    def galvanization_return_items(self, load_id: int, process_id: int) -> list[dict[str, Any]]:
+        return [row_to_dict(row) for row in self.repo.list_galvanization_return_items(load_id, process_id)]
 
     def get_galvanization_load_dict(self, load_id: int) -> dict[str, Any]:
         return row_to_dict(self.repo.get_galvanization_load(load_id))
@@ -354,6 +365,11 @@ class BackendService:
         if not self.user:
             raise legacy.AppError("Usuario nao autenticado.")
         self.repo.mark_galvanization_load_returned(load_id, self.user)
+
+    def register_galvanization_partial_return(self, load_id: int, returned_items: list[dict[str, Any]], observation: str = "") -> int:
+        if not self.user:
+            raise legacy.AppError("Usuario nao autenticado.")
+        return self.repo.register_galvanization_partial_return(load_id, returned_items, self.user, observation)
 
     def fiscal_rows(self, filters: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         return [row_to_dict(row) for row in self.repo.list_fiscal_processes(filters)]
@@ -872,6 +888,13 @@ class BackendService:
         if area == "GALVANIZACAO":
             if (process["status_galvanizacao"] or "") in ("AGUARDANDO_ENVIO", "DISPONIVEL_PARCIAL"):
                 add("MANAGE_LOAD", "Adicionar a uma carga", "load")
+            if (process["status_galvanizacao"] or "") in ("ENVIADO_GALVANIZACAO", "RETORNOU_PARCIAL"):
+                active_loads = [
+                    row for row in self.process_loads(process_id)
+                    if (row.get("status") or "") in ("LIBERADA_PARA_ENVIO", "RETORNO_PARCIAL")
+                ]
+                if active_loads:
+                    add("REGISTER_GALVANIZATION_RETURN", "Registrar retorno da galvanizacao", "load")
             return actions
 
         labels = {

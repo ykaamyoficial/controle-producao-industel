@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QTabWidget,
     QTableWidget,
     QTableWidgetItem,
+    QTextEdit,
     QVBoxLayout,
 )
 
@@ -33,6 +34,13 @@ def display_weight(value) -> str:
         return ""
     number = float(value)
     return str(int(number)) if number.is_integer() else f"{number:.2f}"
+
+
+def parse_weight(value):
+    text = str(value or "").strip().replace(",", ".")
+    if not text:
+        return None
+    return float(text)
 
 
 def parse_date(value):
@@ -171,13 +179,17 @@ class GalvanizationLoadDialog(QDialog):
         self.max_weight.setText(display_weight(load.get("peso_maximo")))
         self.expected_return.setText(load.get("data_prevista_retorno") or "")
         for row in self.service.galvanization_load_items(self.load_id):
+            weight_info = self.service.galvanization_available_weight_info(int(row["processo_id"]), self.load_id)
             self.items[int(row["processo_id"])] = {
                 "process_id": row["processo_id"],
                 "proposta": row["proposta"],
                 "cliente": row["cliente"],
-                "peso_total": row["peso_total_proposta"] or 0,
+                "peso_total": row["peso_total_proposta"] or weight_info.get("peso_produzido_elegivel") or 0,
                 "peso_enviado": row["peso_enviado"] or 0,
                 "observacao": row["observacao"] or "",
+                "peso_disponivel_envio": weight_info.get("peso_disponivel_envio") or row["peso_total_proposta"] or 0,
+                "peso_ja_enviado": weight_info.get("peso_ja_enviado") or 0,
+                "origem_peso": weight_info.get("origem_peso") or "",
             }
 
     def load_candidates(self):
@@ -193,7 +205,7 @@ class GalvanizationLoadDialog(QDialog):
             values = [
                 row_data.get("proposta"),
                 row_data.get("cliente"),
-                display_weight(row_data.get("peso")),
+                display_weight(row_data.get("peso_sugerido") if row_data.get("peso_sugerido") not in (None, "") else row_data.get("peso")),
                 self.service.area_status_label("GALVANIZACAO", row_data.get("status_galvanizacao") or ""),
             ]
             for col, value in enumerate(values):
@@ -226,24 +238,51 @@ class GalvanizationLoadDialog(QDialog):
         process = self.service.get_process_dict(process_id)
         if not process:
             return
-        sent_weight = process.get("peso") or 0
+        weight_info = self.service.galvanization_available_weight_info(process_id, self.load_id)
+        sent_weight = weight_info.get("peso_sugerido") or 0
         if prompt:
+            origin = str(weight_info.get("origem_peso") or "").replace("_", " ")
             value, ok = QInputDialog.getText(
                 self,
                 "Peso enviado",
-                f"Peso enviado da proposta {process['proposta']}:\nPeso total cadastrado: {display_weight(process.get('peso')) or 'sem peso'}",
+                (
+                    f"Peso enviado da proposta {process['proposta']}:\n"
+                    f"Produzido para galvanizacao: {display_weight(weight_info.get('peso_produzido_elegivel')) or '0'} kg\n"
+                    f"Ja enviado: {display_weight(weight_info.get('peso_ja_enviado')) or '0'} kg\n"
+                    f"Disponivel: {display_weight(weight_info.get('peso_disponivel_envio')) or '0'} kg\n"
+                    f"Origem: {origin}"
+                ),
                 text=display_weight(sent_weight),
             )
             if not ok:
                 return
             sent_weight = value
+        try:
+            sent_weight_number = parse_weight(sent_weight)
+        except ValueError:
+            QMessageBox.warning(self, "Peso enviado", "Peso deve ser numerico.")
+            return
+        available = float(weight_info.get("peso_disponivel_envio") or 0)
+        if sent_weight_number is None or sent_weight_number <= 0:
+            QMessageBox.warning(self, "Peso enviado", "Informe um peso enviado maior que zero.")
+            return
+        if available and sent_weight_number > available:
+            QMessageBox.warning(
+                self,
+                "Peso enviado",
+                f"O peso informado ultrapassa o saldo disponivel para galvanizacao ({display_weight(available)} kg).",
+            )
+            return
         self.items[process_id] = {
             "process_id": process_id,
             "proposta": process.get("proposta"),
             "cliente": process.get("cliente"),
-            "peso_total": process.get("peso") or 0,
-            "peso_enviado": sent_weight or 0,
-            "observacao": "",
+            "peso_total": weight_info.get("peso_produzido_elegivel") or 0,
+            "peso_enviado": sent_weight_number or 0,
+            "observacao": f"Origem peso: {weight_info.get('origem_peso')}",
+            "peso_disponivel_envio": available,
+            "peso_ja_enviado": weight_info.get("peso_ja_enviado") or 0,
+            "origem_peso": weight_info.get("origem_peso") or "",
         }
 
     def edit_selected_weight(self):
@@ -262,7 +301,23 @@ class GalvanizationLoadDialog(QDialog):
                 text=display_weight(item["peso_enviado"]),
             )
             if ok:
-                item["peso_enviado"] = value
+                try:
+                    new_weight = parse_weight(value)
+                except ValueError:
+                    QMessageBox.warning(self, "Peso enviado", "Peso deve ser numerico.")
+                    continue
+                available = float(item.get("peso_disponivel_envio") or item.get("peso_total") or 0)
+                if new_weight is None or new_weight <= 0:
+                    QMessageBox.warning(self, "Peso enviado", "Informe um peso enviado maior que zero.")
+                    continue
+                if available and new_weight > available:
+                    QMessageBox.warning(
+                        self,
+                        "Peso enviado",
+                        f"O peso informado ultrapassa o saldo disponivel para galvanizacao ({display_weight(available)} kg).",
+                    )
+                    continue
+                item["peso_enviado"] = new_weight
         self.refresh_load_table()
 
     def remove_selected(self):
@@ -276,7 +331,13 @@ class GalvanizationLoadDialog(QDialog):
         for process_id, item_data in self.items.items():
             row = self.load_table.rowCount()
             self.load_table.insertRow(row)
-            partial = bool(float(item_data.get("peso_total") or 0) and float(item_data.get("peso_enviado") or 0) < float(item_data.get("peso_total") or 0))
+            try:
+                reference_weight = parse_weight(item_data.get("peso_disponivel_envio") or item_data.get("peso_total") or 0) or 0
+                sent_weight = parse_weight(item_data.get("peso_enviado") or 0) or 0
+            except ValueError:
+                reference_weight = 0
+                sent_weight = 0
+            partial = bool(reference_weight and sent_weight < reference_weight)
             values = [
                 item_data.get("proposta"),
                 item_data.get("cliente"),
@@ -293,7 +354,7 @@ class GalvanizationLoadDialog(QDialog):
 
     def update_totals(self):
         try:
-            total = sum(float(str(item.get("peso_enviado") or "0").replace(",", ".")) for item in self.items.values())
+            total = sum(parse_weight(item.get("peso_enviado") or "0") or 0 for item in self.items.values())
         except ValueError:
             self.total.setText("Total da carga: peso invalido")
             return
@@ -560,6 +621,233 @@ class GalvanizationLoadDetailsDialog(QDialog):
         ]
 
 
+class GalvanizationReturnDialog(QDialog):
+    def __init__(self, service, load_id: int, parent=None):
+        super().__init__(parent)
+        self.service = service
+        self.load_id = load_id
+        self.load_data = service.get_galvanization_load_dict(load_id)
+        self.current_process_id: int | None = None
+        self.setWindowTitle("Registrar retorno da galvanizacao")
+        apply_large_dialog_geometry(self, parent)
+        style_dialog_from_parent(self, parent)
+        self._build()
+        self.load_proposals()
+
+    def _build(self):
+        root = QVBoxLayout(self)
+        root.setContentsMargins(22, 18, 22, 18)
+        root.setSpacing(12)
+
+        title = QLabel(f"Carga {self.load_id} | {self.service.load_status_label(self.load_data.get('status') or '')}")
+        title.setObjectName("PageTitle")
+        subtitle = QLabel(
+            "Selecione as propostas ou abra uma proposta para registrar o retorno por item. "
+            "Somente o saldo retornado seguira para Expedição/Fiscal."
+        )
+        subtitle.setObjectName("PageSubtitle")
+        root.addWidget(title)
+        root.addWidget(subtitle)
+
+        self.tabs = QTabWidget()
+        self.proposals_table = QTableWidget(0, 8)
+        self.proposals_table.setHorizontalHeaderLabels([
+            "Retornar",
+            "Proposta",
+            "Cliente",
+            "Peso enviado",
+            "Peso retornado",
+            "Peso pendente",
+            "Itens pend.",
+            "Observacao",
+        ])
+        self.proposals_table.verticalHeader().setVisible(False)
+        self.proposals_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.proposals_table.setSelectionMode(QTableWidget.SingleSelection)
+        self.proposals_table.setAlternatingRowColors(True)
+        self.proposals_table.horizontalHeader().setStretchLastSection(True)
+        for col, width in enumerate((72, 130, 180, 110, 110, 110, 90, 260)):
+            self.proposals_table.setColumnWidth(col, width)
+        self.proposals_table.cellDoubleClicked.connect(self.open_items_from_row)
+        self.tabs.addTab(self.proposals_table, "Propostas da carga")
+
+        self.items_table = QTableWidget(0, 10)
+        self.items_table.setHorizontalHeaderLabels([
+            "Retornar",
+            "Item",
+            "Codigo",
+            "Descricao",
+            "Qtd. enviada",
+            "Qtd. retornada",
+            "Saldo qtd.",
+            "Qtd. agora",
+            "Peso pend.",
+            "Status",
+        ])
+        self.items_table.verticalHeader().setVisible(False)
+        self.items_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.items_table.setAlternatingRowColors(True)
+        self.items_table.horizontalHeader().setStretchLastSection(True)
+        for col, width in enumerate((72, 70, 110, 360, 105, 115, 95, 105, 100, 130)):
+            self.items_table.setColumnWidth(col, width)
+        configure_wrapping_table(self.items_table)
+        self.tabs.addTab(self.items_table, "Itens da proposta")
+        root.addWidget(self.tabs, 1)
+
+        self.observation = QTextEdit()
+        self.observation.setPlaceholderText("Observacao do retorno")
+        self.observation.setFixedHeight(72)
+        root.addWidget(self.observation)
+
+        buttons = QHBoxLayout()
+        self.summary = QLabel("Nenhum retorno selecionado.")
+        cancel = ModernButton("Cancelar", "clear")
+        confirm = ModernButton("Confirmar retorno", "status", accent=True)
+        cancel.clicked.connect(self.reject)
+        confirm.clicked.connect(self.confirm_return)
+        buttons.addWidget(self.summary)
+        buttons.addStretch()
+        buttons.addWidget(cancel)
+        buttons.addWidget(confirm)
+        root.addLayout(buttons)
+
+    def _check_item(self, checked=False, user_data=None) -> QTableWidgetItem:
+        item = QTableWidgetItem("")
+        item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsUserCheckable | Qt.ItemIsSelectable)
+        item.setCheckState(Qt.Checked if checked else Qt.Unchecked)
+        if user_data is not None:
+            item.setData(Qt.UserRole, user_data)
+        item.setTextAlignment(Qt.AlignCenter)
+        return item
+
+    def load_proposals(self):
+        self.proposals_table.setRowCount(0)
+        for data in self.service.galvanization_return_proposals(self.load_id):
+            row = self.proposals_table.rowCount()
+            self.proposals_table.insertRow(row)
+            pending_weight = float(data.get("peso_pendente") or 0)
+            pending_items = int(data.get("itens_pendentes") or 0)
+            check = self._check_item(False, data)
+            check.setFlags(check.flags() if pending_weight > 0 or pending_items > 0 else Qt.ItemIsEnabled)
+            self.proposals_table.setItem(row, 0, check)
+            values = [
+                data.get("proposta"),
+                data.get("cliente"),
+                display_weight(data.get("peso_enviado")),
+                display_weight(data.get("peso_retornado")),
+                display_weight(data.get("peso_pendente")),
+                data.get("itens_pendentes"),
+                data.get("observacao"),
+            ]
+            for col, value in enumerate(values, start=1):
+                item = QTableWidgetItem(str(value or ""))
+                item.setData(Qt.UserRole, data)
+                if col in (3, 4, 5, 6):
+                    item.setTextAlignment(Qt.AlignCenter)
+                self.proposals_table.setItem(row, col, item)
+        if self.proposals_table.rowCount():
+            self.proposals_table.selectRow(0)
+
+    def open_items_from_row(self, row: int, _column: int = 0):
+        item = self.proposals_table.item(row, 0)
+        if not item:
+            return
+        data = item.data(Qt.UserRole)
+        self.current_process_id = int(data["processo_id"])
+        self.load_items(self.current_process_id)
+        self.tabs.setCurrentWidget(self.items_table)
+
+    def load_items(self, process_id: int):
+        self.items_table.setRowCount(0)
+        for data in self.service.galvanization_return_items(self.load_id, process_id):
+            row = self.items_table.rowCount()
+            self.items_table.insertRow(row)
+            pending_qty = float(data.get("quantidade_pendente") or 0)
+            pending_weight = float(data.get("peso_pendente") or 0)
+            check = self._check_item(False, data)
+            check.setFlags(check.flags() if pending_qty > 0 else Qt.ItemIsEnabled)
+            self.items_table.setItem(row, 0, check)
+            values = [
+                data.get("numero_item"),
+                data.get("codigo_produto") or "-",
+                data.get("descricao"),
+                display_weight(data.get("quantidade_enviada")),
+                display_weight(data.get("quantidade_retornada")),
+                display_weight(pending_qty),
+                display_weight(pending_qty),
+                display_weight(pending_weight),
+                self.service.load_status_label(data.get("status_retorno") or ""),
+            ]
+            for col, value in enumerate(values, start=1):
+                table_item = QTableWidgetItem(str(value or ""))
+                table_item.setData(Qt.UserRole, data)
+                if col == 7:
+                    table_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsEditable)
+                else:
+                    table_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+                if col != 3:
+                    table_item.setTextAlignment(Qt.AlignCenter)
+                self.items_table.setItem(row, col, table_item)
+        resize_rows_to_contents(self.items_table)
+
+    def _proposal_full_return_items(self) -> dict[int, dict]:
+        selected = {}
+        for row in range(self.proposals_table.rowCount()):
+            check = self.proposals_table.item(row, 0)
+            if not check or check.checkState() != Qt.Checked:
+                continue
+            data = check.data(Qt.UserRole)
+            for detail in self.service.galvanization_return_items(self.load_id, int(data["processo_id"])):
+                pending_qty = float(detail.get("quantidade_pendente") or 0)
+                if pending_qty > 0:
+                    selected[int(detail["id"])] = {
+                        "detail_id": int(detail["id"]),
+                        "quantidade_retornada": pending_qty,
+                    }
+        return selected
+
+    def _selected_item_returns(self) -> dict[int, dict]:
+        selected = {}
+        for row in range(self.items_table.rowCount()):
+            check = self.items_table.item(row, 0)
+            if not check or check.checkState() != Qt.Checked:
+                continue
+            data = check.data(Qt.UserRole)
+            quantity_item = self.items_table.item(row, 7)
+            quantity = parse_weight(quantity_item.text() if quantity_item else "")
+            if quantity is None:
+                quantity = float(data.get("quantidade_pendente") or 0)
+            selected[int(data["id"])] = {
+                "detail_id": int(data["id"]),
+                "quantidade_retornada": quantity,
+            }
+        return selected
+
+    def confirm_return(self):
+        selected = self._proposal_full_return_items()
+        selected.update(self._selected_item_returns())
+        if not selected:
+            QMessageBox.warning(self, "Retorno da galvanizacao", "Selecione propostas ou itens para registrar retorno.")
+            return
+        if QMessageBox.question(
+            self,
+            "Confirmar retorno",
+            "Registrar retorno da galvanizacao somente para os itens selecionados?",
+        ) != QMessageBox.Yes:
+            return
+        try:
+            self.service.register_galvanization_partial_return(
+                self.load_id,
+                list(selected.values()),
+                self.observation.toPlainText().strip(),
+            )
+        except Exception as exc:
+            QMessageBox.critical(self, "Retorno da galvanizacao", str(exc))
+            return
+        QMessageBox.information(self, "Retorno da galvanizacao", "Retorno registrado com sucesso.")
+        self.accept()
+
+
 class GalvanizationLoadManagerDialog(QDialog):
     def __init__(self, service, preselected_ids: list[int] | None = None, parent=None):
         super().__init__(parent)
@@ -589,6 +877,7 @@ class GalvanizationLoadManagerDialog(QDialog):
         self.load_status.addItem("Todos", "")
         self.load_status.addItem("Aguardando liberacao", "AGUARDANDO_LIBERACAO")
         self.load_status.addItem("Enviada", "LIBERADA_PARA_ENVIO")
+        self.load_status.addItem("Retorno parcial", "RETORNO_PARCIAL")
         self.load_status.addItem("Retornada", "RETORNADA_GALVANIZACAO")
         self.load_status.addItem("Atrasada", "__ATRASADA__")
         self.load_driver = QLineEdit()
@@ -633,7 +922,7 @@ class GalvanizationLoadManagerDialog(QDialog):
         new = ModernButton("Nova carga", "new", accent=True)
         edit = ModernButton("Editar carga", "edit")
         release = ModernButton("Liberar carga", "save")
-        returned = ModernButton("Marcar retorno", "load")
+        returned = ModernButton("Registrar retorno", "load")
         refresh = ModernButton("Atualizar", "search")
         close = ModernButton("Fechar", "clear")
         new.clicked.connect(self.new_load)
@@ -741,6 +1030,8 @@ class GalvanizationLoadManagerDialog(QDialog):
             return "history", "Carga aguardando liberacao.", self.service.palette.get("warning", "#d97706")
         if status == "LIBERADA_PARA_ENVIO":
             return "load", "Carga liberada para envio.", self.service.palette.get("accent", "#0078d4")
+        if status == "RETORNO_PARCIAL":
+            return "history", "Carga com retorno parcial.", self.service.palette.get("warning", "#d97706")
         if status == "RETORNADA_GALVANIZACAO":
             return "status", "Carga retornada da galvanizacao.", self.service.palette.get("success", "#16a34a")
         return "load", self.service.load_status_label(status), self.service.palette.get("muted", "#64748b")
@@ -815,8 +1106,8 @@ class GalvanizationLoadManagerDialog(QDialog):
             release_action.triggered.connect(lambda: self.release_load(load_id))
             menu.addAction(edit_action)
             menu.addAction(release_action)
-        elif status == "LIBERADA_PARA_ENVIO":
-            return_action = QAction(make_icon("load", self.service.palette.get("warning", "#d97706")), "Marcar retorno", self)
+        elif status in ("LIBERADA_PARA_ENVIO", "RETORNO_PARCIAL"):
+            return_action = QAction(make_icon("load", self.service.palette.get("warning", "#d97706")), "Registrar retorno", self)
             return_action.triggered.connect(lambda: self.return_load(load_id))
             menu.addAction(return_action)
         menu.addSeparator()
@@ -883,17 +1174,11 @@ class GalvanizationLoadManagerDialog(QDialog):
         load_id = load_id or self.selected_load_id()
         if not load_id:
             return
-        if QMessageBox.question(
-            self,
-            "Retorno da carga",
-            f"Marcar a carga {load_id} como retornada da galvanizacao?\n\nAs propostas dessa carga serao marcadas como retornadas.",
-        ) != QMessageBox.Yes:
+        load = self.service.get_galvanization_load_dict(load_id)
+        if load and load.get("status") not in ("LIBERADA_PARA_ENVIO", "RETORNO_PARCIAL"):
+            QMessageBox.warning(self, "Retorno da carga", "Somente cargas enviadas ou com retorno parcial podem receber retorno.")
             return
-        try:
-            self.service.mark_galvanization_load_returned(load_id)
-        except Exception as exc:
-            QMessageBox.critical(self, "Retorno da carga", str(exc))
-            return
-        self.changed = True
-        self.load()
-        QMessageBox.information(self, "Retorno da carga", f"Carga {load_id} marcada como retornada.")
+        dialog = GalvanizationReturnDialog(self.service, load_id, parent=self)
+        if dialog.exec():
+            self.changed = True
+            self.load()
