@@ -185,6 +185,37 @@ class ProposalImportDialogTests(unittest.TestCase):
         finally:
             dialog.close()
 
+    def test_prepared_api_payload_displays_field_values_instead_of_metadata_dicts(self):
+        payload = {
+            "source": "nomus_api",
+            "proposal_number": {"value": "CP04934", "confidence": 1.0, "needs_confirmation": False, "source": "nomus_api"},
+            "client": {"value": "ELETRO ENERGIA", "confidence": 0.95, "needs_confirmation": False, "source": "nomus_api"},
+            "site": {"value": None, "confidence": 0.0, "needs_confirmation": True, "source": "nomus_api"},
+            "proposal_date": {"value": None, "confidence": 0.0, "needs_confirmation": False, "source": "nomus_api"},
+            "delivery_deadline_raw": {"value": None, "confidence": 0.0, "needs_confirmation": False, "source": "nomus_api"},
+            "items": [
+                {
+                    "item_number": 1,
+                    "product_code": "1100.7",
+                    "description": "SUPORTE OPERACIONAL",
+                    "unit": "UNIDADE",
+                    "quantity": 1,
+                    "weight_kg": 12.5,
+                    "weight_needs_confirmation": False,
+                }
+            ],
+            "warnings": [],
+        }
+
+        dialog = ProposalImportDialog(initial_data=payload, allow_pdf_selection=False)
+        try:
+            self.assertEqual(dialog.fields["proposal_number"].text(), "CP04934")
+            self.assertEqual(dialog.fields["client"].text(), "ELETRO ENERGIA")
+            self.assertNotIn("{'value'", dialog.fields["proposal_number"].text())
+            self.assertEqual(dialog.items_table.item(0, 5).text(), "12.5")
+        finally:
+            dialog.close()
+
     def test_real_nomus_pdfs_load_expected_operational_fields(self):
         expected = {
             "CP 05252.pdf": ("CP05252", "MNS ENGENHARIA", "MTCMX001 - MTCZN13 - WINITY - CLARO", "10 DIAS", "63"),

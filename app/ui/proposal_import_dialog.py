@@ -43,13 +43,24 @@ class ProposalImportDialog(QDialog):
         "proposal_date": "Data da proposta",
     }
 
-    def __init__(self, parent=None, pdf_path: str | Path | None = None):
+    def __init__(
+        self,
+        parent=None,
+        pdf_path: str | Path | None = None,
+        initial_data: dict[str, Any] | None = None,
+        standard_result: Any | None = None,
+        source_label: str | None = None,
+        allow_pdf_selection: bool = True,
+    ):
         super().__init__(parent)
         self.setWindowTitle("Conferir proposta Nomus")
         self.setModal(True)
         apply_large_dialog_geometry(self, parent)
         style_dialog_from_parent(self, parent)
         self.source_path: Path | None = None
+        self.import_source = "nomus_pdf"
+        self.source_label_text = source_label or "Arquivo analisado"
+        self.allow_pdf_selection = allow_pdf_selection
         self.parser_warnings: list[str] = []
         self.field_confidence: dict[str, dict[str, Any]] = {}
         self.import_visual: ImportVisualModel | None = None
@@ -62,6 +73,8 @@ class ProposalImportDialog(QDialog):
         self._build()
         if pdf_path:
             self.load_pdf(pdf_path)
+        elif initial_data is not None:
+            self.load_prepared_payload(initial_data, standard_result=standard_result, source_label=source_label)
 
     def _build(self):
         root = QVBoxLayout(self)
@@ -79,12 +92,13 @@ class ProposalImportDialog(QDialog):
         heading_box.addWidget(heading)
         heading_box.addWidget(caption)
         heading_row.addLayout(heading_box, 1)
-        select_button = ModernButton("Selecionar PDF", "pdf", accent=True)
-        select_button.clicked.connect(self.select_pdf)
-        heading_row.addWidget(select_button, alignment=Qt.AlignTop)
+        self.select_button = ModernButton("Selecionar PDF", "pdf", accent=True)
+        self.select_button.clicked.connect(self.select_pdf)
+        self.select_button.setVisible(self.allow_pdf_selection)
+        heading_row.addWidget(self.select_button, alignment=Qt.AlignTop)
         root.addLayout(heading_row)
 
-        source_panel = self._section("Arquivo analisado")
+        source_panel = self._section(self.source_label_text)
         source_row = QHBoxLayout()
         self.path_field = QLineEdit()
         self.path_field.setReadOnly(True)
@@ -224,6 +238,7 @@ class ProposalImportDialog(QDialog):
 
     def load_pdf(self, path: str | Path) -> bool:
         self.loaded_with_fallback = False
+        self.import_source = "nomus_pdf"
         self.import_visual = None
         self._initial_field_values.clear()
         self._initial_item_values.clear()
@@ -261,26 +276,7 @@ class ProposalImportDialog(QDialog):
         self.items_table.blockSignals(True)
         self.items_table.setRowCount(0)
         for item in data.get("items") or []:
-            row = self.items_table.rowCount()
-            self.items_table.insertRow(row)
-            values = [
-                item.get("item_number"),
-                item.get("product_code"),
-                item.get("description"),
-                item.get("unit"),
-                item.get("quantity"),
-                "" if item.get("weight_kg") is None else f"{item['weight_kg']:g}",
-                item.get("confidence_label") or "",
-            ]
-            for column, value in enumerate(values):
-                cell = QTableWidgetItem(str(value or ""))
-                if column in {0, 1, 3, 4, 5, 6}:
-                    cell.setTextAlignment(Qt.AlignCenter)
-                else:
-                    cell.setTextAlignment(Qt.AlignTop | Qt.AlignLeft)
-                if column == 6:
-                    cell.setFlags(cell.flags() & ~Qt.ItemIsEditable)
-                self.items_table.setItem(row, column, cell)
+            self._add_preview_item(item)
         self.items_table.blockSignals(False)
         self._initial_item_values = {
             (row, column): (self.items_table.item(row, column).text().strip() if self.items_table.item(row, column) else "")
@@ -295,10 +291,101 @@ class ProposalImportDialog(QDialog):
         self.validation_result.clear()
         return True
 
+    def load_prepared_payload(
+        self,
+        data: dict[str, Any],
+        *,
+        standard_result: Any | None = None,
+        source_label: str | None = None,
+    ) -> bool:
+        """Load already-normalized operational data without saving anything."""
+        self.loaded_with_fallback = False
+        self.source_path = None
+        self.import_source = str(data.get("source") or "nomus_api")
+        self.import_visual = build_import_visual_model(
+            data,
+            standard_result=standard_result,
+            used_fallback=False,
+        )
+        self._initial_field_values.clear()
+        self._initial_item_values.clear()
+        normalized = self._normalize_preview_dates(data)
+        self.field_confidence = {
+            key: self._field_meta(normalized, key)
+            for key in (
+                "proposal_number",
+                "client",
+                "site",
+                "proposal_date",
+                "delivery_deadline_raw",
+            )
+        }
+        self.path_field.setText(source_label or "Nomus API")
+        for key, field in self.fields.items():
+            field.setText(self._display_field_value(key, normalized.get(key)))
+            self._set_field_state(field, self.field_messages[key], "", "")
+            field.setToolTip("")
+        self._initial_field_values = {
+            key: field.text().strip()
+            for key, field in self.fields.items()
+        }
+        self.parser_warnings = [
+            self._safe_warning_for_payload(
+                warning.get("message", "") if isinstance(warning, dict) else warning
+            )
+            for warning in (normalized.get("warnings") or [])
+        ]
+        self.items_table.blockSignals(True)
+        self.items_table.setRowCount(0)
+        for item in normalized.get("items") or []:
+            self._add_preview_item(item)
+        self.items_table.blockSignals(False)
+        self._initial_item_values = {
+            (row, column): (self.items_table.item(row, column).text().strip() if self.items_table.item(row, column) else "")
+            for row in range(self.items_table.rowCount())
+            for column in range(self.items_table.columnCount())
+        }
+        resize_rows_to_contents(self.items_table)
+        self._refresh_item_confirmation()
+        self._apply_visual_metadata()
+        self._apply_parser_warnings(normalized)
+        self.prepared_data = None
+        self.validation_result.clear()
+        return True
+
+    def _add_preview_item(self, item: dict[str, Any]):
+        row = self.items_table.rowCount()
+        self.items_table.insertRow(row)
+        weight = item.get("weight_kg")
+        values = [
+            item.get("item_number"),
+            item.get("product_code"),
+            item.get("description"),
+            item.get("unit"),
+            item.get("quantity"),
+            "" if weight is None else f"{float(weight):g}",
+            item.get("confidence_label") or "",
+        ]
+        for column, value in enumerate(values):
+            cell = QTableWidgetItem(str(value or ""))
+            if column in {0, 1, 3, 4, 5, 6}:
+                cell.setTextAlignment(Qt.AlignCenter)
+            else:
+                cell.setTextAlignment(Qt.AlignTop | Qt.AlignLeft)
+            if column == 6:
+                cell.setFlags(cell.flags() & ~Qt.ItemIsEditable)
+            self.items_table.setItem(row, column, cell)
+
     @staticmethod
     def _field_value(data: dict[str, Any], key: str) -> Any:
         value = data.get(key)
         if isinstance(value, dict):
+            return value.get("value")
+        return value
+
+    @staticmethod
+    def _unwrap_import_value(value: Any) -> Any:
+        if isinstance(value, dict) and "value" in value:
             return value.get("value")
         return value
 
@@ -568,7 +655,7 @@ class ProposalImportDialog(QDialog):
         if deadline_warning and deadline_warning not in warnings:
             warnings.append(deadline_warning)
         return {
-            "source": "nomus_pdf",
+            "source": self.import_source,
             "source_file_name": self.source_path.name if self.source_path else None,
             "source_file_sha256": self._source_file_sha256(),
             "proposal_number": self.fields["proposal_number"].text().strip().upper(),
@@ -606,6 +693,7 @@ class ProposalImportDialog(QDialog):
 
     @classmethod
     def _display_field_value(cls, key: str, value: Any) -> str:
+        value = cls._unwrap_import_value(value)
         if key in {"proposal_date", "delivery_deadline_raw"}:
             return cls._format_date_for_display(value)
         return str(value or "")
@@ -613,8 +701,8 @@ class ProposalImportDialog(QDialog):
     @classmethod
     def _normalize_preview_dates(cls, data: dict[str, Any]) -> dict[str, Any]:
         normalized = dict(data)
-        proposal_date = cls._format_date_for_display(normalized.get("proposal_date"))
-        deadline = str(normalized.get("delivery_deadline_raw") or "").strip()
+        proposal_date = cls._format_date_for_display(cls._unwrap_import_value(normalized.get("proposal_date")))
+        deadline = str(cls._unwrap_import_value(normalized.get("delivery_deadline_raw")) or "").strip()
         deadline_value, deadline_pending, deadline_warning = cls._deadline_for_payload(
             deadline,
             proposal_date,

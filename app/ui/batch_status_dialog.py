@@ -159,13 +159,8 @@ class BatchStatusDialog(QDialog):
         status_filter = self.status_filter.currentData() if hasattr(self, "status_filter") else ""
         if status_filter:
             rows = [row for row in rows if self.service.status_for_area(row, area) == status_filter]
-        rows = sorted(
-            rows,
-            key=lambda row: (
-                self.service.area_status_label(area, self.service.status_for_area(row, area)).lower(),
-                str(row.get("proposta") or "").lower(),
-            ),
-        )
+        if hasattr(self.service, "sort_process_rows"):
+            rows = self.service.sort_process_rows(area, rows)
         self._fill_table(self.candidates, rows, area)
 
     def _fill_table(self, table: QTableWidget, rows: list[dict], area: str):

@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
 from app.ui.components.modern_button import ModernButton
 from app.ui.dialog_utils import apply_large_dialog_geometry, style_dialog_from_parent
 from app.ui.item_flow_dialog import FLOW_OPTIONS
+from app.ui.nomus_api_import_dialog import NomusApiImportDialog
 from app.ui.proposal_import_dialog import ProposalImportDialog
 from app.ui.table_utils import configure_wrapping_table, resize_rows_to_contents
 
@@ -83,6 +84,14 @@ class ProcessFormDialog(QDialog):
             import_button.setToolTip("Abrir conferencia sem gravar dados no cadastro")
             import_button.clicked.connect(self.open_nomus_preview)
             heading_row.addWidget(import_button)
+            api_import_button = ModernButton("Importar do Nomus", "search")
+            api_import_button.setToolTip("Buscar dados operacionais na API Nomus para conferencia")
+            api_import_button.clicked.connect(self.open_nomus_api_preview)
+            api_enabled, api_reason = self._nomus_api_import_available()
+            api_import_button.setEnabled(api_enabled)
+            if api_reason:
+                api_import_button.setToolTip(api_reason)
+            heading_row.addWidget(api_import_button)
         caption = QLabel("Preencha os dados gerais e organize os itens que compoem a proposta.")
         caption.setObjectName("Caption")
         self.import_notice = QLabel("")
@@ -231,6 +240,37 @@ class ProcessFormDialog(QDialog):
         if dialog.exec() == QDialog.Accepted and dialog.prepared_data:
             self.apply_import_data(dialog.prepared_data)
 
+    def open_nomus_api_preview(self):
+        lookup = NomusApiImportDialog(self)
+        if lookup.exec() != QDialog.Accepted or not lookup.preview_payload:
+            return
+        preview = ProposalImportDialog(
+            self,
+            initial_data=lookup.preview_payload,
+            standard_result=lookup.standard_result,
+            source_label="Origem dos dados",
+            allow_pdf_selection=False,
+        )
+        if preview.exec() == QDialog.Accepted and preview.prepared_data:
+            self.apply_import_data(preview.prepared_data)
+
+    def _nomus_api_import_available(self) -> tuple[bool, str]:
+        if hasattr(self.service, "can_edit_process") and not self.service.can_edit_process():
+            return False, "Seu usuario pode visualizar, mas nao importar/cadastrar propostas."
+        try:
+            from app.services.nomus_api_config import NomusApiConfigStore
+
+            settings = NomusApiConfigStore().load_settings()
+        except Exception:
+            return False, "Configure a integracao Nomus nas Configuracoes antes de usar a importacao."
+        if not settings.enabled:
+            return False, "A integracao Nomus esta desativada nas Configuracoes."
+        if not settings.base_url:
+            return False, "Configure a URL da API Nomus antes de importar."
+        if not settings.api_key_configured:
+            return False, "Configure a chave da API Nomus antes de importar."
+        return True, ""
+
     def apply_import_data(self, data: dict, confirm_overwrite=None) -> bool:
         """Transfer reviewed operational data without saving the process."""
         required = {
@@ -319,6 +359,9 @@ class ProcessFormDialog(QDialog):
         for target, value in incoming.items():
             self.fields[target].setText(value)
 
+        source = str(data.get("source") or "nomus_pdf").lower()
+        source_name = "Nomus API" if source == "nomus_api" else "PDF"
+
         self.items_table.setRowCount(0)
         pending_weights = 0
         for item in items:
@@ -336,7 +379,7 @@ class ProcessFormDialog(QDialog):
                 weight_cell = self.items_table.item(self.items_table.rowCount() - 1, 4)
                 if weight_cell:
                     weight_cell.setToolTip(
-                        "Peso nao informado no PDF; precisa de conferencia antes do cadastro."
+                        f"Peso nao informado no {source_name}; precisa de conferencia antes do cadastro."
                     )
 
         if pending_weights:
@@ -344,7 +387,7 @@ class ProcessFormDialog(QDialog):
         else:
             self.update_items_total()
 
-        notices = ["Dados do PDF apenas preenchidos no formulario; clique em Salvar para cadastrar."]
+        notices = [f"Dados do {source_name} apenas preenchidos no formulario; clique em Salvar para cadastrar."]
         if deadline_pending:
             notices.append(
                 f"Prazo '{deadline}' nao foi transferido porque ainda precisa de confirmacao."
@@ -358,17 +401,20 @@ class ProcessFormDialog(QDialog):
             )
         self.import_notice.setText(" ".join(notices))
         self.import_notice.show()
-        self.import_metadata = {
-            "origem": "NOMUS_PDF",
-            "nome_arquivo": str(data.get("source_file_name") or "").strip(),
-            "hash_sha256": str(data.get("source_file_sha256") or "").strip().lower(),
-            "observacao": "; ".join(
-                part for part in (
-                    f"Prazo relativo pendente: {deadline}" if deadline_pending else "",
-                    f"Itens sem peso confirmado: {pending_weights}" if pending_weights else "",
-                ) if part
-            ),
-        }
+        if source == "nomus_pdf":
+            self.import_metadata = {
+                "origem": "NOMUS_PDF",
+                "nome_arquivo": str(data.get("source_file_name") or "").strip(),
+                "hash_sha256": str(data.get("source_file_sha256") or "").strip().lower(),
+                "observacao": "; ".join(
+                    part for part in (
+                        f"Prazo relativo pendente: {deadline}" if deadline_pending else "",
+                        f"Itens sem peso confirmado: {pending_weights}" if pending_weights else "",
+                    ) if part
+                ),
+            }
+        else:
+            self.import_metadata = None
         return True
 
     @staticmethod

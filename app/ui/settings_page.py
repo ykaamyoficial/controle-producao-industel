@@ -26,6 +26,7 @@ from app.services.update_checker import RELEASES_API_URL, check_for_updates
 from app.ui.background_worker import start_worker
 from app.ui.components.modern_button import ModernButton
 from app.ui.components.toast_notification import ToastNotification
+from app.ui.nomus_api_settings_dialog import NomusApiSettingsDialog
 from app.ui.update_dialog import UpdateDialog
 from app.ui.user_dialog import UserManagerDialog
 from app.version import APP_CHANNEL, APP_VERSION
@@ -154,6 +155,21 @@ class SettingsPage(QWidget):
         identity.setMinimumHeight(190)
         grid.addWidget(identity, 2, 1)
 
+        if self.service.can_admin():
+            nomus = self.panel("Integracao Nomus")
+            nomus_text = QLabel("Configure a chave REST do Nomus para preparar a importacao oficial por API.")
+            nomus_text.setWordWrap(True)
+            open_nomus = ModernButton("Configurar API Nomus", "settings", accent=True)
+            open_nomus.clicked.connect(self.open_nomus_api_settings)
+            nomus.layout().addWidget(nomus_text)
+            nomus.layout().addWidget(open_nomus)
+            nomus.layout().addStretch()
+            nomus.setMinimumHeight(170)
+            grid.addWidget(nomus, 3, 0, 1, 2)
+            support_row = 4
+        else:
+            support_row = 3
+
         support = self.panel("Suporte e diagnostico")
         support.layout().addWidget(QLabel("Valide banco, atualizacao e logs sem interromper o trabalho."))
         integrity = ModernButton("Verificar integridade do banco", "database")
@@ -177,7 +193,7 @@ class SettingsPage(QWidget):
         support.layout().addWidget(support_actions)
         support.layout().addStretch()
         support.setMinimumHeight(220)
-        grid.addWidget(support, 3, 0, 1, 2)
+        grid.addWidget(support, support_row, 0, 1, 2)
 
     def panel(self, title: str):
         frame = QFrame()
@@ -211,6 +227,12 @@ class SettingsPage(QWidget):
             QMessageBox.warning(self, "Permissao", "Seu usuario nao pode gerenciar usuarios.")
             return
         UserManagerDialog(self.service, self).exec()
+
+    def open_nomus_api_settings(self):
+        if not self.service.can_admin():
+            QMessageBox.warning(self, "Permissao", "Apenas administradores podem configurar a integracao Nomus.")
+            return
+        NomusApiSettingsDialog(self).exec()
 
     def backup_now(self):
         if not self.service.can_edit("settings"):

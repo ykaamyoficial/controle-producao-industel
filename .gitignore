@@ -39,6 +39,7 @@ backup/
 !.env.example
 *.local
 app/config/controle_producao_config.json
+app/data/
 app/data/backups/
 
 # Arquivos gerados

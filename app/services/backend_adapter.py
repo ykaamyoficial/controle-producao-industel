@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from app.services import production_repository as legacy
+from app.services.status_sorting import sort_fiscal_rows, sort_process_rows
 from app.services.app_paths import (
     ensure_app_data_dirs,
     get_backup_dir,
@@ -235,7 +236,10 @@ class BackendService:
             load_ids = self.repo.current_galvanization_load_ids(row["id"] for row in result)
             for row in result:
                 row["carga_galvanizacao"] = load_ids.get(int(row["id"]))
-        return result
+        return sort_process_rows(area, result)
+
+    def sort_process_rows(self, area: str | None, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return sort_process_rows(area, rows)
 
     def process_visible_in_area(self, process: dict[str, Any] | Any, area: str) -> bool:
         if area == "CONTROLE GERAL":
@@ -372,7 +376,7 @@ class BackendService:
         return self.repo.register_galvanization_partial_return(load_id, returned_items, self.user, observation)
 
     def fiscal_rows(self, filters: dict[str, Any] | None = None) -> list[dict[str, Any]]:
-        return [row_to_dict(row) for row in self.repo.list_fiscal_processes(filters)]
+        return sort_fiscal_rows(row_to_dict(row) for row in self.repo.list_fiscal_processes(filters))
 
     def fiscal_items(self, fiscal_processo_id: int) -> list[dict[str, Any]]:
         return [row_to_dict(row) for row in self.repo.list_fiscal_items(fiscal_processo_id)]
