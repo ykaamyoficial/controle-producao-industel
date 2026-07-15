@@ -2712,7 +2712,7 @@ class Repository:
         if not process:
             return 0.0
         main_id = self.process_main_id(process)
-        scope = "processo_principal_id = ? AND COALESCE(precisa_galvanizacao, 'indefinido') = 'sim'"
+        scope = f"processo_principal_id = ? AND {self._galvanization_item_flow_condition(process)}"
         params = [main_id]
         if self.is_partial_process(process):
             scope += " AND processo_atual_id = ?"
@@ -2722,6 +2722,45 @@ class Repository:
             tuple(params),
         ).fetchone()
         return float(row["peso"] or 0)
+
+    def _legacy_galvanization_defaults_apply(self, process) -> bool:
+        """Treat undefined item flow as produced + galvanization only for proposals already in Galvanizacao.
+
+        This keeps older proposals that were already waiting for load mounting visible after the item-flow
+        feature was introduced, without relaxing the normal Produção validation for new proposals.
+        """
+        status = (process["status_galvanizacao"] or "") if process and "status_galvanizacao" in process.keys() else ""
+        general = (process["status_geral"] or "") if process and "status_geral" in process.keys() else ""
+        return general == "EM_GALVANIZACAO" and status in {
+            "AGUARDANDO_ENVIO",
+            "AGUARDANDO_MONTAGEM",
+            "DISPONIVEL_PARCIAL",
+            "EM_CARGA",
+            "ENVIADO_GALVANIZACAO",
+            "RETORNO_PARCIAL",
+            "RETORNOU_PARCIAL",
+        }
+
+    def _galvanization_item_flow_condition(self, process) -> str:
+        if self._legacy_galvanization_defaults_apply(process):
+            return "COALESCE(precisa_galvanizacao, 'indefinido') IN ('sim', 'indefinido')"
+        return "COALESCE(precisa_galvanizacao, 'indefinido') = 'sim'"
+
+    def _galvanization_item_count_for_process(self, process) -> int:
+        if not process:
+            return 0
+        main_id = self.process_main_id(process)
+        row = self.conn.execute(
+            f"""
+            SELECT COUNT(*) AS total
+            FROM proposta_itens
+            WHERE processo_principal_id = ?
+              AND processo_atual_id = ?
+              AND {self._galvanization_item_flow_condition(process)}
+            """,
+            (main_id, process["id"]),
+        ).fetchone()
+        return int(row["total"] or 0)
 
     def galvanization_sent_weight(self, process_id, exclude_load_id=None):
         params = [process_id]
@@ -2750,9 +2789,9 @@ class Repository:
         scope = """
             processo_principal_id = ?
             AND processo_atual_id = ?
-            AND COALESCE(precisa_galvanizacao, 'indefinido') = 'sim'
+            AND {flow_condition}
             AND COALESCE(produzido, 0) = 1
-        """
+        """.format(flow_condition=self._galvanization_item_flow_condition(process))
         row = self.conn.execute(
             f"""
             SELECT
@@ -2765,7 +2804,7 @@ class Repository:
             (main_id, process_id),
         ).fetchone()
         all_galvanization_row = self.conn.execute(
-            """
+            f"""
             SELECT
                 COUNT(*) AS total_itens,
                 COALESCE(SUM(CASE WHEN COALESCE(peso, 0) > 0 THEN quantidade * peso ELSE 0 END), 0) AS peso_itens,
@@ -2773,7 +2812,7 @@ class Repository:
             FROM proposta_itens
             WHERE processo_principal_id = ?
               AND processo_atual_id = ?
-              AND COALESCE(precisa_galvanizacao, 'indefinido') = 'sim'
+              AND {self._galvanization_item_flow_condition(process)}
             """,
             (main_id, process_id),
         ).fetchone()
@@ -4173,7 +4212,7 @@ class Repository:
                 continue
             if (row["status_galvanizacao"] or "") in blocked:
                 continue
-            if self.item_flow_summary(row["id"])["needs_galvanization_count"] <= 0:
+            if self._galvanization_item_count_for_process(row) <= 0:
                 continue
             data = {key: row[key] for key in row.keys()}
             data.update(self.galvanization_available_weight_info(row["id"]))
@@ -4218,19 +4257,19 @@ class Repository:
         main_id = self.process_main_id(process)
         if self.is_partial_process(process):
             return self.conn.execute(
-                """
+                f"""
                 SELECT * FROM proposta_itens
                 WHERE processo_principal_id = ? AND processo_atual_id = ?
-                  AND COALESCE(precisa_galvanizacao, 'indefinido') = 'sim'
+                  AND {self._galvanization_item_flow_condition(process)}
                 ORDER BY CAST(numero_item AS INTEGER), numero_item, id
                 """,
                 (main_id, process_id),
             ).fetchall()
         return self.conn.execute(
-            """
+            f"""
             SELECT * FROM proposta_itens
             WHERE processo_principal_id = ? AND processo_atual_id = ?
-              AND COALESCE(precisa_galvanizacao, 'indefinido') = 'sim'
+              AND {self._galvanization_item_flow_condition(process)}
             ORDER BY CAST(numero_item AS INTEGER), numero_item, id
             """,
             (main_id, process_id),
@@ -4244,10 +4283,10 @@ class Repository:
         if not rows:
             main_id = self.process_main_id(process)
             rows = self.conn.execute(
-                """
+                f"""
                 SELECT * FROM proposta_itens
                 WHERE processo_principal_id = ? AND processo_atual_id = ?
-                  AND COALESCE(precisa_galvanizacao, 'indefinido') = 'sim'
+                  AND {self._galvanization_item_flow_condition(process)}
                 ORDER BY CAST(numero_item AS INTEGER), numero_item, id
                 """,
                 (main_id, process_id),
@@ -4467,11 +4506,11 @@ class Repository:
             if not self.area_available(process, "GALVANIZACAO"):
                 raise AppError(f"A proposta {process['proposta']} ainda nao esta liberada para galvanizacao.")
             flow_summary = self.item_flow_summary(process["id"])
-            if flow_summary["undefined_count"]:
+            if flow_summary["undefined_count"] and not self._legacy_galvanization_defaults_apply(process):
                 raise AppError(
                     f"A proposta {process['proposta']} possui itens sem definicao de fluxo e nao pode ser enviada para galvanizacao."
                 )
-            if flow_summary["needs_galvanization_count"] == 0:
+            if self._galvanization_item_count_for_process(process) == 0:
                 raise AppError(f"A proposta {process['proposta']} nao possui itens que precisam de galvanizacao.")
             weight_info = self.galvanization_available_weight_info(process["id"], exclude_load_id=load_id)
             sent_weight = self.to_float(item.get("peso_enviado", ""))

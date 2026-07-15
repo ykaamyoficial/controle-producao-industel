@@ -166,8 +166,8 @@ class DashboardPage(QWidget):
             f"QFrame#DashboardPanel {{ background: {self.tokens['surface']}; border: 1px solid {self.tokens['border']}; border-radius: 16px; }}"
         )
         shadow = QGraphicsDropShadowEffect(panel)
-        shadow.setBlurRadius(14)
-        shadow.setOffset(0, 3)
+        shadow.setBlurRadius(20)
+        shadow.setOffset(0, 1)
         shadow.setColor(QColor(self.tokens["shadow"]))
         panel.setGraphicsEffect(shadow)
         layout = QVBoxLayout(panel)

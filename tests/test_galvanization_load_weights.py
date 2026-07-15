@@ -177,3 +177,28 @@ class GalvanizationLoadWeightTests(unittest.TestCase):
         ids = {int(row["id"]) for row in self.repo.list_galvanization_load_candidates()}
 
         self.assertNotIn(process_id, ids)
+
+    def test_legacy_galvanization_process_with_undefined_flow_is_candidate(self):
+        process_id = self.create_process("CPLOAD010", weight=1000)
+        item_id = self.add_item(
+            process_id,
+            "1",
+            quantity=10,
+            weight=100,
+            produced=1,
+            galvanize="indefinido",
+            produce="indefinido",
+        )
+
+        candidate = self.candidate_by_id(process_id)
+        load_id = self.repo.save_galvanization_load("Motorista", "", "", [{"process_id": process_id}], ADMIN)
+        load_item = self.repo.list_galvanization_load_items(load_id)[0]
+        linked_items = self.repo.list_galvanization_load_proposal_items(load_id, process_id)
+
+        self.assertEqual(candidate["peso_sugerido"], 1000)
+        self.assertEqual(candidate["origem_peso"], "itens_produzidos_galvanizacao")
+        self.assertEqual(float(load_item["peso_enviado"]), 1000)
+        self.assertEqual([row["id"] for row in linked_items], [item_id])
+        stored = self.conn.execute("SELECT produzir_internamente, precisa_galvanizacao FROM proposta_itens WHERE id = ?", (item_id,)).fetchone()
+        self.assertEqual(stored["produzir_internamente"], "indefinido")
+        self.assertEqual(stored["precisa_galvanizacao"], "indefinido")

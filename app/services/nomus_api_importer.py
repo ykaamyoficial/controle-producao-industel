@@ -10,6 +10,20 @@ from typing import Any
 
 from app.services.app_logging import get_logger
 from app.services.nomus_api_client import NomusApiClient, NomusApiClientError
+from app.services.nomus_import_progress import (
+    PROGRESS_RANGES,
+    STAGE_CONFIGURATION,
+    STAGE_CONNECTION,
+    STAGE_CONFERENCE,
+    STAGE_ITEMS,
+    STAGE_PRODUCTS,
+    STAGE_SEARCH,
+    STAGE_VALIDATION,
+    NomusImportProgressEvent,
+    ProgressCallback,
+    emit_progress,
+    progress_percent_for_products,
+)
 from app.services.nomus_product_service import (
     NomusProductService,
     NomusProductWeight,
@@ -129,19 +143,33 @@ class NomusApiImporter:
         self.max_search_pages = max(1, int(max_search_pages or 1))
         self.product_service = NomusProductService(client)
 
-    def fetch_proposal(self, proposal_number: str) -> StandardProposalImportResult:
+    def fetch_proposal(
+        self,
+        proposal_number: str,
+        progress_callback: ProgressCallback | None = None,
+    ) -> StandardProposalImportResult:
         requested = normalize_optional_text(proposal_number)
         if not requested:
             raise NomusApiInvalidResponseError("Informe o numero da proposta ou o ID do pedido Nomus.")
 
         started = time.monotonic()
         normalized = normalize_requested_identifier(requested)
+        _progress(
+            progress_callback,
+            STAGE_CONFIGURATION,
+            "Validando configuracao",
+            PROGRESS_RANGES[STAGE_CONFIGURATION][1],
+            detail="Configuracao local validada.",
+        )
         try:
             if requested.isdigit() and not requested.startswith("0"):
-                result = self._fetch_by_internal_id(requested)
+                result = self._fetch_by_internal_id(requested, progress_callback=progress_callback)
             else:
                 log.info("Importacao Nomus iniciada | endpoint=%s,%s | identificador=%s", PROPOSAL_ENDPOINT, ORDER_ENDPOINT, normalized.safe_log)
-                matches, pages_read, pagination_exhausted, endpoint = self._find_order_in_pages(requested)
+                matches, pages_read, pagination_exhausted, endpoint = self._find_order_in_pages(
+                    requested,
+                    progress_callback=progress_callback,
+                )
                 if not matches:
                     suffix = "paginacao esgotada" if pagination_exhausted else "limite de paginas atingido"
                     raise NomusApiOrderNotFoundError(
@@ -156,6 +184,7 @@ class NomusApiImporter:
                     requested_identifier=requested,
                     endpoint=endpoint,
                     search_pages=pages_read,
+                    progress_callback=progress_callback,
                 )
         except NomusApiImportError:
             raise
@@ -169,16 +198,40 @@ class NomusApiImporter:
             )
         return result
 
-    def _fetch_by_internal_id(self, requested: str) -> StandardProposalImportResult:
+    def _fetch_by_internal_id(
+        self,
+        requested: str,
+        *,
+        progress_callback: ProgressCallback | None = None,
+    ) -> StandardProposalImportResult:
         normalized = normalize_requested_identifier(requested)
         last_error: Exception | None = None
         for base_endpoint in (PROPOSAL_ENDPOINT, ORDER_ENDPOINT):
             endpoint = f"{base_endpoint}/{requested}"
             log.info("Importacao Nomus iniciada | endpoint=%s | identificador=%s", endpoint, normalized.safe_log)
             try:
+                _progress(
+                    progress_callback,
+                    STAGE_CONNECTION,
+                    "Conectando ao Nomus",
+                    detail=f"Consultando endpoint {base_endpoint}.",
+                    indeterminate=True,
+                )
                 payload = self._client_get(endpoint)
                 order_payload = _coerce_order_payload(payload)
-                return self.convert_order_payload(order_payload, requested_identifier=requested, endpoint=endpoint)
+                _progress(
+                    progress_callback,
+                    STAGE_SEARCH,
+                    "Proposta localizada",
+                    PROGRESS_RANGES[STAGE_SEARCH][1],
+                    detail="Pedido Nomus encontrado pelo ID interno.",
+                )
+                return self.convert_order_payload(
+                    order_payload,
+                    requested_identifier=requested,
+                    endpoint=endpoint,
+                    progress_callback=progress_callback,
+                )
             except NomusApiOrderNotFoundError as exc:
                 last_error = exc
                 continue
@@ -196,13 +249,32 @@ class NomusApiImporter:
         requested_identifier: str | None = None,
         endpoint: str = ORDER_ENDPOINT,
         search_pages: int | None = None,
+        progress_callback: ProgressCallback | None = None,
     ) -> StandardProposalImportResult:
-        order = self._enrich_order_weights_from_products(parse_order_payload(payload))
+        order = parse_order_payload(payload)
+        unique_products = _unique_product_ids(order.items)
+        _progress(
+            progress_callback,
+            STAGE_ITEMS,
+            "Itens carregados",
+            PROGRESS_RANGES[STAGE_ITEMS][1],
+            detail=f"{len(order.items)} item(ns) operacional(is) carregado(s).",
+            processed_products=0,
+            total_products=len(unique_products),
+        )
+        order = self._enrich_order_weights_from_products(order, progress_callback=progress_callback)
         if requested_identifier and not _identifier_matches_any(requested_identifier, order):
             normalized = normalize_requested_identifier(requested_identifier)
             raise NomusApiOrderNotFoundError(f"O pedido retornado nao corresponde a {normalized.safe_log}.")
         if not order.items:
             raise NomusApiItemsNotFoundError("O pedido Nomus nao retornou itens operacionais.")
+        _progress(
+            progress_callback,
+            STAGE_VALIDATION,
+            "Validando e organizando os dados",
+            PROGRESS_RANGES[STAGE_VALIDATION][1],
+            detail="Conferindo campos operacionais e pesos pendentes.",
+        )
         result = build_standard_result(order, endpoint=endpoint, search_pages=search_pages)
         log.info(
             "Pedido Nomus convertido | endpoint=%s | proposta=%s | itens=%s | avisos=%s | erros=%s",
@@ -212,9 +284,21 @@ class NomusApiImporter:
             len(result.warnings),
             len(result.errors),
         )
+        _progress(
+            progress_callback,
+            STAGE_CONFERENCE,
+            "Preparando a conferencia",
+            PROGRESS_RANGES[STAGE_CONFERENCE][1],
+            detail="Importacao pronta para revisao humana.",
+        )
         return result
 
-    def _find_order_in_pages(self, requested_identifier: str) -> tuple[list[dict[str, Any]], int, bool, str]:
+    def _find_order_in_pages(
+        self,
+        requested_identifier: str,
+        *,
+        progress_callback: ProgressCallback | None = None,
+    ) -> tuple[list[dict[str, Any]], int, bool, str]:
         matches: list[dict[str, Any]] = []
         total_pages_read = 0
         last_endpoint = PROPOSAL_ENDPOINT
@@ -223,6 +307,13 @@ class NomusApiImporter:
             pagination_exhausted = False
             pages_read = 0
             for page in range(1, self.max_search_pages + 1):
+                _progress(
+                    progress_callback,
+                    STAGE_SEARCH,
+                    "Localizando a proposta",
+                    detail=f"Consultando pagina {page} em {endpoint}.",
+                    indeterminate=True,
+                )
                 payload = self._client_get(endpoint, params={"pagina": page})
                 pages_read = page
                 total_pages_read += 1
@@ -237,6 +328,13 @@ class NomusApiImporter:
                 )
                 endpoint_matches.extend(record for record in records if _record_matches_identifier(requested_identifier, record))
                 if endpoint_matches:
+                    _progress(
+                        progress_callback,
+                        STAGE_SEARCH,
+                        "Proposta localizada",
+                        PROGRESS_RANGES[STAGE_SEARCH][1],
+                        detail=f"Encontrada em {endpoint}, pagina {page}.",
+                    )
                     break
                 if len(records) < 50:
                     pagination_exhausted = True
@@ -250,7 +348,12 @@ class NomusApiImporter:
     def _client_get(self, endpoint: str, params: dict[str, Any] | None = None) -> dict[str, Any] | list[Any]:
         return self.client.get(endpoint, params=params)
 
-    def _enrich_order_weights_from_products(self, order: NomusApiOrder) -> NomusApiOrder:
+    def _enrich_order_weights_from_products(
+        self,
+        order: NomusApiOrder,
+        *,
+        progress_callback: ProgressCallback | None = None,
+    ) -> NomusApiOrder:
         """Fill missing item weight from the product register when Nomus exposes it.
 
         Some proposal responses return item quantity and product id but omit weight.
@@ -259,12 +362,32 @@ class NomusApiImporter:
         operational fields and never import commercial values.
         """
 
-        if not any(item.product_id for item in order.items):
+        unique_products = _unique_product_ids(order.items)
+        if not unique_products:
+            _progress(
+                progress_callback,
+                STAGE_PRODUCTS,
+                "Consultando produtos e pesos",
+                PROGRESS_RANGES[STAGE_PRODUCTS][1],
+                detail="Nenhum produto com ID foi informado para consulta de peso.",
+                total_products=0,
+            )
             return order
         cache: dict[str, NomusProductWeight] = {}
         enriched: list[NomusApiOrderItem] = []
         changed = 0
         avoided_calls = 0
+        processed_products = 0
+        total_products = len(unique_products)
+        _progress(
+            progress_callback,
+            STAGE_PRODUCTS,
+            "Consultando produtos e pesos",
+            PROGRESS_RANGES[STAGE_PRODUCTS][0],
+            detail=f"0 de {total_products} produto(s) consultado(s).",
+            processed_products=0,
+            total_products=total_products,
+        )
         for item in order.items:
             if not item.product_id:
                 enriched.append(item)
@@ -272,6 +395,16 @@ class NomusApiImporter:
             product_id = str(item.product_id).strip()
             if product_id not in cache:
                 cache[product_id] = self.product_service.fetch_product_weight(product_id)
+                processed_products += 1
+                _progress(
+                    progress_callback,
+                    STAGE_PRODUCTS,
+                    "Consultando produtos e pesos",
+                    progress_percent_for_products(processed_products, total_products),
+                    detail=f"{processed_products} de {total_products} produto(s) consultado(s).",
+                    processed_products=processed_products,
+                    total_products=total_products,
+                )
             else:
                 avoided_calls += 1
             product_weight = cache[product_id].selected_unit_weight
@@ -840,3 +973,40 @@ def _weight_source_summary(items: list[NomusApiOrderItem]) -> dict[str, int]:
         source = item.weight_source or "missing"
         summary[source] = summary.get(source, 0) + 1
     return summary
+
+
+def _unique_product_ids(items: list[NomusApiOrderItem]) -> set[str]:
+    return {
+        str(item.product_id).strip()
+        for item in items
+        if item.product_id and str(item.product_id).strip()
+    }
+
+
+def _progress(
+    callback: ProgressCallback | None,
+    stage: str,
+    message: str,
+    percent: int | None = None,
+    *,
+    detail: str = "",
+    processed_products: int = 0,
+    total_products: int = 0,
+    indeterminate: bool = False,
+    warning: bool = False,
+) -> None:
+    if percent is not None:
+        percent = max(0, min(100, int(percent)))
+    emit_progress(
+        callback,
+        NomusImportProgressEvent(
+            stage=stage,
+            message=message,
+            percent=percent,
+            detail=detail,
+            processed_products=processed_products,
+            total_products=total_products,
+            indeterminate=indeterminate,
+            warning=warning,
+        ),
+    )

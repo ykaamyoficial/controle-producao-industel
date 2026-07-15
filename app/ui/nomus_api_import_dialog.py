@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from typing import Any, Callable
 
-from PySide6.QtCore import QObject, QThread, Signal, Qt
+from PySide6.QtCore import QThread, QTimer, Qt
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -28,25 +28,11 @@ from app.services.proposal_import.compatibility import to_current_payload
 from app.services.proposal_import.schemas import StandardProposalImportResult
 from app.ui.components.modern_button import ModernButton
 from app.ui.dialog_utils import style_dialog_from_parent
+from app.ui.nomus_import_progress_dialog import NomusImportProgressDialog
+from app.ui.nomus_import_worker import NomusImportWorker
 
 
 ImporterFactory = Callable[[], NomusApiImporter]
-
-
-class _NomusImportWorker(QObject):
-    finished = Signal(object)
-    failed = Signal(str)
-
-    def __init__(self, importer: NomusApiImporter, identifier: str):
-        super().__init__()
-        self.importer = importer
-        self.identifier = identifier
-
-    def run(self):
-        try:
-            self.finished.emit(self.importer.fetch_proposal(self.identifier))
-        except Exception as exc:  # pragma: no cover - exercised through dialog tests synchronously
-            self.failed.emit(_friendly_nomus_error(exc))
 
 
 class NomusApiImportDialog(QDialog):
@@ -77,7 +63,8 @@ class NomusApiImportDialog(QDialog):
         self.standard_result: StandardProposalImportResult | None = None
         self.preview_payload: dict[str, Any] | None = None
         self._thread: QThread | None = None
-        self._worker: _NomusImportWorker | None = None
+        self._worker: NomusImportWorker | None = None
+        self._progress_dialog: NomusImportProgressDialog | None = None
         self._build()
 
     def _build(self):
@@ -142,16 +129,21 @@ class NomusApiImportDialog(QDialog):
             return
 
         self._thread = QThread(self)
-        self._worker = _NomusImportWorker(importer, identifier)
+        self._worker = NomusImportWorker(importer, identifier)
+        self._progress_dialog = NomusImportProgressDialog(self)
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)
-        self._worker.finished.connect(self._handle_success)
-        self._worker.failed.connect(self._handle_error)
-        self._worker.finished.connect(self._thread.quit)
+        self._worker.progress_event.connect(self._progress_dialog.apply_event)
+        self._worker.completed.connect(self._handle_worker_success)
+        self._worker.failed.connect(self._handle_worker_error)
+        self._worker.completed.connect(self._thread.quit)
         self._worker.failed.connect(self._thread.quit)
+        self._worker.completed.connect(self._worker.deleteLater)
+        self._worker.failed.connect(self._worker.deleteLater)
         self._thread.finished.connect(self._thread.deleteLater)
         self._thread.finished.connect(self._clear_worker)
         self._thread.start()
+        self._progress_dialog.exec()
 
     def _validated_identifier(self) -> str:
         identifier = self.identifier.text().strip()
@@ -199,6 +191,21 @@ class NomusApiImportDialog(QDialog):
         self._set_loading(False)
         self.accept()
 
+    def _handle_worker_success(self, result: StandardProposalImportResult):
+        if self._progress_dialog:
+            self._progress_dialog.mark_completed()
+            QTimer.singleShot(260, self._progress_dialog.accept)
+        QTimer.singleShot(280, lambda: self._handle_success(result))
+
+    def _handle_worker_error(self, message: str):
+        self._set_loading(False)
+        self.status.setObjectName("ValidationWarning")
+        self.status.setText(message)
+        self.status.style().unpolish(self.status)
+        self.status.style().polish(self.status)
+        if self._progress_dialog:
+            self._progress_dialog.mark_failed(message)
+
     def _handle_error(self, message: str):
         self._set_loading(False)
         self._show_error(message)
@@ -214,11 +221,12 @@ class NomusApiImportDialog(QDialog):
     def _clear_worker(self):
         self._worker = None
         self._thread = None
+        self._progress_dialog = None
 
     def reject(self):
         if self._thread and self._thread.isRunning():
-            self._thread.quit()
-            self._thread.wait(1500)
+            self._show_error("A importacao Nomus ainda esta em andamento. Aguarde a conclusao da consulta.")
+            return
         super().reject()
 
 

@@ -38,6 +38,7 @@ def app_stylesheet(palette: dict) -> str:
     QAbstractScrollArea {{
         background: {surface};
         border: 1px solid {border};
+        {radius(14)}
     }}
     QAbstractScrollArea::viewport {{
         background: {surface};
@@ -202,6 +203,13 @@ def app_stylesheet(palette: dict) -> str:
         background: {surface};
         border: 1px solid {border};
         {radius(16)}
+    }}
+    QFrame#TopBar QLabel,
+    QFrame#FilterBar QLabel,
+    QFrame#Card QLabel,
+    QFrame#KpiCard QLabel,
+    QFrame#Panel QLabel {{
+        background: transparent;
     }}
     QFrame#TopBar {{
         {radius(12)}

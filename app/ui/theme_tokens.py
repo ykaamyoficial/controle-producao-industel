@@ -16,7 +16,7 @@ def dashboard_tokens(palette: dict) -> dict[str, str]:
         "header_end": palette["accent_hover"],
         "header_text": palette["accent_text"],
         "header_muted": with_alpha(palette["accent_text"], 205),
-        "shadow": with_alpha(palette["text"], 18),
+        "shadow": with_alpha(palette["text"], 10),
         "track": palette["surface_alt"],
         "hover": with_alpha(palette["accent"], 20),
         "success_soft": with_alpha(palette["success"], 34),
