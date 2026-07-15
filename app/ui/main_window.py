@@ -52,7 +52,7 @@ class UpdateCheckWorker(QObject):
 
 
 class MainWindow(QMainWindow):
-    def __init__(self):
+    def __init__(self, *, skip_auto_update_check: bool = False):
         super().__init__()
         self.service = BackendService()
         self.sidebar_collapsed = False
@@ -60,7 +60,7 @@ class MainWindow(QMainWindow):
         self._page_animation = None
         self._update_thread = None
         self._update_worker = None
-        self._auto_update_checked = False
+        self._auto_update_checked = skip_auto_update_check
         self.pages: dict[str, QWidget] = {}
         self.setWindowTitle(f"{APP_NAME} {APP_VERSION}")
         self.setWindowIcon(app_icon())

@@ -1,5 +1,5 @@
 #define MyAppName "Controle de Producao Industel"
-#define MyAppVersion "2.4.9"
+#define MyAppVersion "2.5.0"
 #define MyAppPublisher "Industel"
 #define MyAppExeName "ControleProducao.exe"
 #define MyAppDir "Industel\Controle de Producao"
@@ -14,7 +14,7 @@ DefaultDirName={autopf}\{#MyAppDir}
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 OutputDir=..\release
-OutputBaseFilename=ControleProducaoSetup-2.4.9
+OutputBaseFilename=ControleProducaoSetup-2.5.0
 SetupIconFile=..\app\assets\images\Logo_Industel_Icone.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 Compression=lzma

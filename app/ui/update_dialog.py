@@ -28,7 +28,7 @@ class UpdateDialog(QDialog):
         header_layout = QVBoxLayout(header)
         title = QLabel("Nova versao disponivel")
         title.setStyleSheet("font-size: 20px; font-weight: 800;")
-        subtitle = QLabel("Confira as informacoes da versao antes de atualizar manualmente.")
+        subtitle = QLabel("Confirme para baixar, validar, fazer backup e iniciar a instalacao automaticamente.")
         subtitle.setObjectName("Caption")
         header_layout.addWidget(title)
         header_layout.addWidget(subtitle)
@@ -54,7 +54,7 @@ class UpdateDialog(QDialog):
 
         footer = QHBoxLayout()
         footer.addStretch()
-        self.download_button = ModernButton("Baixar atualizacao", "download", accent=True)
+        self.download_button = ModernButton("Atualizar agora", "download", accent=True)
         self.download_button.clicked.connect(self.download_update)
         footer.addWidget(self.download_button, alignment=Qt.AlignRight)
         close = ModernButton("Fechar", "close")
@@ -78,7 +78,7 @@ class UpdateDialog(QDialog):
             return  
 
         self.download_button.setEnabled(False)
-        self.download_button.setText("Preparando atualizacao...")
+        self.download_button.setText("Atualizando...")
         self._worker_thread = start_worker(
             self,
             self._prepare_update,
@@ -94,7 +94,7 @@ class UpdateDialog(QDialog):
 
     def _update_failed(self, exc):
         self.download_button.setEnabled(True)
-        self.download_button.setText("Baixar atualizacao")
+        self.download_button.setText("Atualizar agora")
         if isinstance(exc, UpdateDownloadError):
             QMessageBox.warning(
                 self,
@@ -116,13 +116,7 @@ class UpdateDialog(QDialog):
 
     def _update_ready(self, result):
         self.download_button.setEnabled(True)
-        self.download_button.setText("Baixar atualizacao")
-        QMessageBox.information(
-            self,
-            "Atualizar sistema",
-            "Atualizacao baixada, validada e backup criado com sucesso.\n\n"
-            "O sistema sera fechado e a instalacao silenciosa sera iniciada agora.",
-        )
+        self.download_button.setText("Atualizar agora")
 
         try:
             run_silent_installer(result["installer_path"])

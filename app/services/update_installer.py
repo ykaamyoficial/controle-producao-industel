@@ -73,6 +73,12 @@ def _create_restart_script() -> Path:
     return script_path
 
 
+def _hidden_subprocess_options() -> dict:
+    if sys.platform.startswith("win"):
+        return {"creationflags": subprocess.CREATE_NO_WINDOW}
+    return {}
+
+
 def run_silent_installer(installer_path: str | Path) -> None:
     installer = Path(installer_path)
     if not installer.exists():
@@ -89,8 +95,8 @@ def run_silent_installer(installer_path: str | Path) -> None:
     ]
 
     try:
-        subprocess.Popen(args, shell=False)
-        subprocess.Popen(["cmd.exe", "/c", str(restart_script)], shell=False)
+        subprocess.Popen(args, shell=False, **_hidden_subprocess_options())
+        subprocess.Popen(["cmd.exe", "/c", str(restart_script)], shell=False, **_hidden_subprocess_options())
     except OSError as exc:
         raise UpdateInstallError(f"Nao foi possivel iniciar o instalador: {exc}") from exc
 
