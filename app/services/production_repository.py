@@ -4368,34 +4368,6 @@ class Repository:
             )
 
     def list_galvanization_return_proposals(self, load_id):
-        detail_count = self.conn.execute(
-            "SELECT COUNT(*) FROM cargas_galvanizacao_item_detalhes WHERE carga_id = ?",
-            (load_id,),
-        ).fetchone()[0]
-        if detail_count:
-            return self.conn.execute(
-                """
-                SELECT
-                    i.id AS carga_item_id,
-                    i.processo_id,
-                    i.proposta,
-                    i.cliente,
-                    i.observacao,
-                    SUM(d.quantidade_enviada) AS quantidade_enviada,
-                    SUM(d.quantidade_retornada) AS quantidade_retornada,
-                    SUM(d.peso_enviado) AS peso_enviado,
-                    SUM(d.peso_retornado) AS peso_retornado,
-                    SUM(d.peso_enviado - d.peso_retornado) AS peso_pendente,
-                    SUM(CASE WHEN d.quantidade_retornada < d.quantidade_enviada THEN 1 ELSE 0 END) AS itens_pendentes,
-                    COUNT(d.id) AS itens_total
-                FROM cargas_galvanizacao_itens i
-                JOIN cargas_galvanizacao_item_detalhes d ON d.carga_item_id = i.id
-                WHERE i.carga_id = ?
-                GROUP BY i.id
-                ORDER BY i.proposta, i.id
-                """,
-                (load_id,),
-            ).fetchall()
         return self.conn.execute(
             """
             SELECT
@@ -4403,16 +4375,31 @@ class Repository:
                 i.processo_id,
                 i.proposta,
                 i.cliente,
-                i.observacao,
-                0 AS quantidade_enviada,
-                0 AS quantidade_retornada,
-                COALESCE(i.peso_enviado, 0) AS peso_enviado,
-                0 AS peso_retornado,
-                COALESCE(i.peso_enviado, 0) AS peso_pendente,
-                0 AS itens_pendentes,
-                0 AS itens_total
+                TRIM(REPLACE(COALESCE(i.observacao, ''), '[RETORNADO_GALV]', '')) AS observacao,
+                COALESCE(SUM(d.quantidade_enviada), 0) AS quantidade_enviada,
+                COALESCE(SUM(d.quantidade_retornada), 0) AS quantidade_retornada,
+                CASE
+                    WHEN COUNT(d.id) = 0 THEN COALESCE(i.peso_enviado, 0)
+                    ELSE COALESCE(SUM(d.peso_enviado), 0)
+                END AS peso_enviado,
+                CASE
+                    WHEN COUNT(d.id) = 0 AND COALESCE(i.observacao, '') LIKE '%[RETORNADO_GALV]%' THEN COALESCE(i.peso_enviado, 0)
+                    ELSE COALESCE(SUM(d.peso_retornado), 0)
+                END AS peso_retornado,
+                CASE
+                    WHEN COUNT(d.id) = 0 AND COALESCE(i.observacao, '') LIKE '%[RETORNADO_GALV]%' THEN 0
+                    WHEN COUNT(d.id) = 0 THEN COALESCE(i.peso_enviado, 0)
+                    ELSE COALESCE(SUM(d.peso_enviado - d.peso_retornado), 0)
+                END AS peso_pendente,
+                CASE
+                    WHEN COUNT(d.id) = 0 THEN 0
+                    ELSE COALESCE(SUM(CASE WHEN d.quantidade_retornada < d.quantidade_enviada THEN 1 ELSE 0 END), 0)
+                END AS itens_pendentes,
+                COUNT(d.id) AS itens_total
             FROM cargas_galvanizacao_itens i
+            LEFT JOIN cargas_galvanizacao_item_detalhes d ON d.carga_item_id = i.id
             WHERE i.carga_id = ?
+            GROUP BY i.id
             ORDER BY i.proposta, i.id
             """,
             (load_id,),
@@ -4732,12 +4719,30 @@ class Repository:
             if not returned_items:
                 raise AppError("Selecione pelo menos um item para registrar retorno.")
             clean_items = []
+            legacy_process_returns = []
             for item in returned_items:
                 detail_id = int(item.get("detail_id") or item.get("id") or 0)
+                load_item_id = int(item.get("carga_item_id") or item.get("load_item_id") or 0)
                 quantity = self.to_float(item.get("quantidade_retornada", item.get("quantity", "")))
                 manual_weight = self.to_float(item.get("peso_retornado", ""))
-                if not detail_id:
+                if not detail_id and not load_item_id:
                     raise AppError("Item de retorno invalido.")
+                if not detail_id:
+                    load_item = self.conn.execute(
+                        "SELECT * FROM cargas_galvanizacao_itens WHERE id = ? AND carga_id = ?",
+                        (load_item_id, load_id),
+                    ).fetchone()
+                    if not load_item:
+                        raise AppError("Proposta nao pertence a carga selecionada.")
+                    if (load_item["observacao"] or "").find("[RETORNADO_GALV]") >= 0:
+                        continue
+                    weight = manual_weight
+                    if weight is None:
+                        weight = float(load_item["peso_enviado"] or 0)
+                    if weight < -0.0001:
+                        raise AppError("Peso retornado nao pode ser negativo.")
+                    legacy_process_returns.append((load_item, max(weight, 0.0)))
+                    continue
                 if quantity is None or quantity <= 0:
                     raise AppError("Informe uma quantidade retornada maior que zero.")
                 detail = self.conn.execute(
@@ -4768,6 +4773,7 @@ class Repository:
                 (load_id, today_br(), user["login"], self.computer, (observation or "").strip(), now_br()),
             ).lastrowid
             affected_process_ids = set()
+            operation_weight_by_process = {}
             for detail, quantity, weight in clean_items:
                 new_qty = float(detail["quantidade_retornada"] or 0) + quantity
                 new_weight = float(detail["peso_retornado"] or 0) + weight
@@ -4812,6 +4818,17 @@ class Repository:
                         (now_br(), user["login"], detail["proposta_item_id"]),
                     )
                 affected_process_ids.add(int(detail["processo_id"]))
+                operation_weight_by_process[int(detail["processo_id"])] = operation_weight_by_process.get(int(detail["processo_id"]), 0.0) + weight
+            for load_item, weight in legacy_process_returns:
+                note = (load_item["observacao"] or "").strip()
+                if "[RETORNADO_GALV]" not in note:
+                    note = f"{note} [RETORNADO_GALV]".strip()
+                self.conn.execute(
+                    "UPDATE cargas_galvanizacao_itens SET observacao = ? WHERE id = ?",
+                    (note, load_item["id"]),
+                )
+                affected_process_ids.add(int(load_item["processo_id"]))
+                operation_weight_by_process[int(load_item["processo_id"])] = operation_weight_by_process.get(int(load_item["processo_id"]), 0.0) + weight
             returned_process_ids = []
             for process_id in sorted(affected_process_ids):
                 process = self.get_process(process_id)
@@ -4837,7 +4854,7 @@ class Repository:
                 new_expedition = "EM_SEPARACAO" if pending == 0 else "AGUARDANDO_SEPARACAO_PARCIAL"
                 note = (
                     f"Retorno da carga {load_id} registrado | "
-                    f"Peso retornado nesta operacao: {sum(weight for detail, _qty, weight in clean_items if int(detail['processo_id']) == process_id):g} kg"
+                    f"Peso retornado nesta operacao: {operation_weight_by_process.get(process_id, 0.0):g} kg"
                 )
                 if observation:
                     note += f" | {observation.strip()}"
@@ -4879,11 +4896,25 @@ class Repository:
                     returned_process_ids.append(process_id)
             load_pending = self.conn.execute(
                 """
-                SELECT COUNT(*)
-                FROM cargas_galvanizacao_item_detalhes
-                WHERE carga_id = ? AND status_retorno <> 'RETORNADO'
+                SELECT
+                    (
+                        SELECT COUNT(*)
+                        FROM cargas_galvanizacao_item_detalhes
+                        WHERE carga_id = ? AND status_retorno <> 'RETORNADO'
+                    ) + (
+                        SELECT COUNT(*)
+                        FROM cargas_galvanizacao_itens i
+                        WHERE i.carga_id = ?
+                          AND COALESCE(i.peso_enviado, 0) > 0
+                          AND COALESCE(i.observacao, '') NOT LIKE '%[RETORNADO_GALV]%'
+                          AND NOT EXISTS (
+                              SELECT 1
+                              FROM cargas_galvanizacao_item_detalhes d
+                              WHERE d.carga_item_id = i.id
+                          )
+                    )
                 """,
-                (load_id,),
+                (load_id, load_id),
             ).fetchone()[0]
             new_load_status = "RETORNADA_GALVANIZACAO" if int(load_pending or 0) == 0 else "RETORNO_PARCIAL"
             self.conn.execute(

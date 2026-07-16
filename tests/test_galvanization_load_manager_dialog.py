@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import os
 import unittest
+from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication, QTabWidget
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QApplication, QMessageBox, QTabWidget
 
 from app.services.backend_adapter import OFFICIAL_COLOR_PALETTES
-from app.ui.galvanization_load_dialog import GalvanizationLoadDetailsDialog, GalvanizationLoadManagerDialog
+from app.ui.galvanization_load_dialog import GalvanizationLoadDetailsDialog, GalvanizationLoadManagerDialog, GalvanizationReturnDialog
 
 
 class FakeGalvanizationLoadService:
@@ -109,6 +111,63 @@ class FakeGalvanizationLoadService:
                 }
             ],
         }
+        self.return_proposals = {
+            2: [
+                {
+                    "carga_item_id": 201,
+                    "processo_id": 201,
+                    "proposta": "CP00201",
+                    "cliente": "MNS",
+                    "peso_enviado": 100,
+                    "peso_retornado": 0,
+                    "peso_pendente": 100,
+                    "itens_pendentes": 0,
+                    "observacao": "",
+                }
+            ],
+            4: [
+                {
+                    "carga_item_id": 401,
+                    "processo_id": 401,
+                    "proposta": "CP00401",
+                    "cliente": "MNS",
+                    "peso_enviado": 30,
+                    "peso_retornado": 0,
+                    "peso_pendente": 30,
+                    "itens_pendentes": 2,
+                    "observacao": "",
+                }
+            ],
+        }
+        self.return_items = {
+            (4, 401): [
+                {
+                    "id": 9001,
+                    "processo_id": 401,
+                    "numero_item": "1",
+                    "codigo_produto": "COD-A",
+                    "descricao": "Item A",
+                    "quantidade_enviada": 2,
+                    "quantidade_retornada": 0,
+                    "quantidade_pendente": 2,
+                    "peso_pendente": 20,
+                    "status_retorno": "AGUARDANDO_RETORNO",
+                },
+                {
+                    "id": 9002,
+                    "processo_id": 401,
+                    "numero_item": "2",
+                    "codigo_produto": "COD-B",
+                    "descricao": "Item B",
+                    "quantidade_enviada": 1,
+                    "quantidade_retornada": 0,
+                    "quantidade_pendente": 1,
+                    "peso_pendente": 10,
+                    "status_retorno": "AGUARDANDO_RETORNO",
+                },
+            ]
+        }
+        self.registered_returns = []
 
     def galvanization_loads(self):
         return self.loads
@@ -128,6 +187,15 @@ class FakeGalvanizationLoadService:
 
     def galvanization_load_proposal_items(self, load_id, process_id):
         return self.items.get((load_id, process_id), [])
+
+    def galvanization_return_proposals(self, load_id):
+        return self.return_proposals.get(load_id, [])
+
+    def galvanization_return_items(self, load_id, process_id):
+        return self.return_items.get((load_id, process_id), [])
+
+    def register_galvanization_partial_return(self, load_id, items, observation):
+        self.registered_returns.append((load_id, items, observation))
 
 
 class GalvanizationLoadManagerDialogTests(unittest.TestCase):
@@ -189,6 +257,29 @@ class GalvanizationLoadManagerDialogTests(unittest.TestCase):
         dialog._fill_selected_proposal_items()
         self.assertEqual(dialog.proposal_items_table.rowCount(), 1)
         self.assertEqual(dialog.all_items_table.rowCount(), 3)
+
+    def test_return_dialog_selects_whole_proposal_from_row_click_even_without_items(self):
+        dialog = GalvanizationReturnDialog(self.service, 2)
+
+        dialog.handle_proposal_click(0, 1)
+        with patch.object(QMessageBox, "question", return_value=QMessageBox.Yes), patch.object(QMessageBox, "information"):
+            dialog.confirm_return()
+
+        self.assertEqual(len(self.service.registered_returns), 1)
+        _load_id, items, _observation = self.service.registered_returns[0]
+        self.assertEqual(items, [{"carga_item_id": 201, "processo_id": 201, "peso_retornado": 100.0, "proposal_level": True}])
+
+    def test_return_dialog_item_selection_overrides_whole_proposal_selection(self):
+        dialog = GalvanizationReturnDialog(self.service, 4)
+
+        dialog.handle_proposal_click(0, 1)
+        dialog.open_items_from_row(0)
+        dialog.items_table.item(1, 0).setCheckState(Qt.Checked)
+        with patch.object(QMessageBox, "question", return_value=QMessageBox.Yes), patch.object(QMessageBox, "information"):
+            dialog.confirm_return()
+
+        _load_id, items, _observation = self.service.registered_returns[0]
+        self.assertEqual(items, [{"detail_id": 9002, "processo_id": 401, "quantidade_retornada": 1.0}])
 
 
 if __name__ == "__main__":

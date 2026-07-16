@@ -668,7 +668,9 @@ class GalvanizationReturnDialog(QDialog):
         self.proposals_table.horizontalHeader().setStretchLastSection(True)
         for col, width in enumerate((72, 130, 180, 110, 110, 110, 90, 260)):
             self.proposals_table.setColumnWidth(col, width)
+        self.proposals_table.cellClicked.connect(self.handle_proposal_click)
         self.proposals_table.cellDoubleClicked.connect(self.open_items_from_row)
+        self.proposals_table.itemChanged.connect(lambda _item: self.update_summary())
         self.tabs.addTab(self.proposals_table, "Propostas da carga")
 
         self.items_table = QTableWidget(0, 10)
@@ -691,6 +693,7 @@ class GalvanizationReturnDialog(QDialog):
         for col, width in enumerate((72, 70, 110, 360, 105, 115, 95, 105, 100, 130)):
             self.items_table.setColumnWidth(col, width)
         configure_wrapping_table(self.items_table)
+        self.items_table.itemChanged.connect(lambda _item: self.update_summary())
         self.tabs.addTab(self.items_table, "Itens da proposta")
         root.addWidget(self.tabs, 1)
 
@@ -721,6 +724,7 @@ class GalvanizationReturnDialog(QDialog):
         return item
 
     def load_proposals(self):
+        self.proposals_table.blockSignals(True)
         self.proposals_table.setRowCount(0)
         for data in self.service.galvanization_return_proposals(self.load_id):
             row = self.proposals_table.rowCount()
@@ -745,8 +749,19 @@ class GalvanizationReturnDialog(QDialog):
                 if col in (3, 4, 5, 6):
                     item.setTextAlignment(Qt.AlignCenter)
                 self.proposals_table.setItem(row, col, item)
+        self.proposals_table.blockSignals(False)
         if self.proposals_table.rowCount():
             self.proposals_table.selectRow(0)
+        self.update_summary()
+
+    def handle_proposal_click(self, row: int, column: int):
+        if column == 0:
+            self.update_summary()
+            return
+        check = self.proposals_table.item(row, 0)
+        if check and check.flags() & Qt.ItemIsUserCheckable:
+            check.setCheckState(Qt.Checked)
+        self.update_summary()
 
     def open_items_from_row(self, row: int, _column: int = 0):
         item = self.proposals_table.item(row, 0)
@@ -758,6 +773,7 @@ class GalvanizationReturnDialog(QDialog):
         self.tabs.setCurrentWidget(self.items_table)
 
     def load_items(self, process_id: int):
+        self.items_table.blockSignals(True)
         self.items_table.setRowCount(0)
         for data in self.service.galvanization_return_items(self.load_id, process_id):
             row = self.items_table.rowCount()
@@ -788,25 +804,59 @@ class GalvanizationReturnDialog(QDialog):
                 if col != 3:
                     table_item.setTextAlignment(Qt.AlignCenter)
                 self.items_table.setItem(row, col, table_item)
+        self.items_table.blockSignals(False)
         resize_rows_to_contents(self.items_table)
+        self.update_summary()
 
-    def _proposal_full_return_items(self) -> dict[int, dict]:
+    def _checked_item_processes(self) -> set[int]:
+        processes = set()
+        for row in range(self.items_table.rowCount()):
+            check = self.items_table.item(row, 0)
+            if not check or check.checkState() != Qt.Checked:
+                continue
+            data = check.data(Qt.UserRole) or {}
+            if data.get("processo_id"):
+                processes.add(int(data["processo_id"]))
+        return processes
+
+    def _proposal_full_return_items(self, skip_process_ids: set[int] | None = None) -> dict[object, dict]:
+        skip_process_ids = skip_process_ids or set()
         selected = {}
         for row in range(self.proposals_table.rowCount()):
             check = self.proposals_table.item(row, 0)
             if not check or check.checkState() != Qt.Checked:
                 continue
             data = check.data(Qt.UserRole)
-            for detail in self.service.galvanization_return_items(self.load_id, int(data["processo_id"])):
+            process_id = int(data["processo_id"])
+            if process_id in skip_process_ids:
+                continue
+            details = list(self.service.galvanization_return_items(self.load_id, process_id))
+            for detail in details:
                 pending_qty = float(detail.get("quantidade_pendente") or 0)
+                pending_weight = float(detail.get("peso_pendente") or 0)
                 if pending_qty > 0:
                     selected[int(detail["id"])] = {
                         "detail_id": int(detail["id"]),
+                        "processo_id": process_id,
                         "quantidade_retornada": pending_qty,
                     }
+                elif pending_weight > 0:
+                    selected[int(detail["id"])] = {
+                        "detail_id": int(detail["id"]),
+                        "processo_id": process_id,
+                        "quantidade_retornada": 1,
+                        "peso_retornado": pending_weight,
+                    }
+            if not details:
+                selected[f"proposal-{data['carga_item_id']}"] = {
+                    "carga_item_id": int(data["carga_item_id"]),
+                    "processo_id": process_id,
+                    "peso_retornado": float(data.get("peso_pendente") or 0),
+                    "proposal_level": True,
+                }
         return selected
 
-    def _selected_item_returns(self) -> dict[int, dict]:
+    def _selected_item_returns(self) -> dict[object, dict]:
         selected = {}
         for row in range(self.items_table.rowCount()):
             check = self.items_table.item(row, 0)
@@ -819,13 +869,24 @@ class GalvanizationReturnDialog(QDialog):
                 quantity = float(data.get("quantidade_pendente") or 0)
             selected[int(data["id"])] = {
                 "detail_id": int(data["id"]),
+                "processo_id": int(data["processo_id"]),
                 "quantidade_retornada": quantity,
             }
         return selected
 
+    def update_summary(self):
+        item_selected = self._selected_item_returns()
+        proposal_selected = self._proposal_full_return_items(self._checked_item_processes())
+        total = len(item_selected) + len(proposal_selected)
+        if total:
+            self.summary.setText(f"{total} retorno(s) selecionado(s).")
+        else:
+            self.summary.setText("Nenhum retorno selecionado.")
+
     def confirm_return(self):
-        selected = self._proposal_full_return_items()
-        selected.update(self._selected_item_returns())
+        item_selected = self._selected_item_returns()
+        selected = self._proposal_full_return_items(self._checked_item_processes())
+        selected.update(item_selected)
         if not selected:
             QMessageBox.warning(self, "Retorno da galvanizacao", "Selecione propostas ou itens para registrar retorno.")
             return

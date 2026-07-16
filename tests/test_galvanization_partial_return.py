@@ -168,6 +168,44 @@ class GalvanizationPartialReturnTests(unittest.TestCase):
         second_detail = self.return_items(second_load, process_id)[0]
         self.assertGreater(float(second_detail["quantidade_pendente"]), 0)
 
+    def test_proposal_without_item_details_can_return_by_proposal_selection(self):
+        process_id = self.create_process("CPRET006", 0)
+        load_id = self.conn.execute(
+            """
+            INSERT INTO cargas_galvanizacao(
+                motorista, peso_maximo, peso_total, status, data_prevista_retorno,
+                criado_em, criado_por, computador, observacao
+            ) VALUES ('Motorista', NULL, 250, 'LIBERADA_PARA_ENVIO', '20/07/2026',
+                      '14/07/2026 08:00:00', 'admin', 'TESTE', '')
+            """
+        ).lastrowid
+        load_item_id = self.conn.execute(
+            """
+            INSERT INTO cargas_galvanizacao_itens(
+                carga_id, processo_id, proposta, cliente, peso_total_proposta,
+                peso_enviado, parcial, observacao
+            ) VALUES (?, ?, 'CPRET006', 'Cliente teste', 250, 250, 0, '')
+            """,
+            (load_id, process_id),
+        ).lastrowid
+        self.conn.commit()
+
+        self.repo.register_galvanization_partial_return(
+            load_id,
+            [{"carga_item_id": load_item_id, "processo_id": process_id, "peso_retornado": 250}],
+            ADMIN,
+            "retorno por proposta sem itens",
+        )
+
+        process = self.repo.get_process(process_id)
+        load = self.repo.get_galvanization_load(load_id)
+        proposal = self.repo.list_galvanization_return_proposals(load_id)[0]
+        self.assertEqual(process["status_galvanizacao"], "RETORNOU_GALVANIZACAO")
+        self.assertEqual(process["status_expedicao"], "EM_SEPARACAO")
+        self.assertEqual(load["status"], "RETORNADA_GALVANIZACAO")
+        self.assertEqual(float(proposal["peso_pendente"]), 0)
+        self.assertEqual(float(proposal["peso_retornado"]), 250)
+
 
 if __name__ == "__main__":
     unittest.main()
