@@ -3,11 +3,12 @@ from __future__ import annotations
 import sys
 import traceback
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QMessageBox
 
 from app.ui.app_icon import app_icon, configure_windows_taskbar_icon
 from app.services.app_logging import configure_logging, get_logger
 from app.services.update_checker import check_for_updates
+from app.services.update_state import evaluate_pending_update
 
 
 log = get_logger("main")
@@ -21,6 +22,21 @@ def run_startup_update_check(
     timeout: int = 6,
 ) -> bool:
     """Checks for updates before the backend opens the SQLite database."""
+    pending = evaluate_pending_update()
+    if pending.get("status") == "failed_or_incomplete":
+        log.warning(
+            "Atualizacao anterior nao concluida antes da abertura | destino=%s | iniciada=%s",
+            pending.get("target_version"),
+            pending.get("started_at"),
+        )
+        if parent is not None:
+            QMessageBox.warning(
+                parent,
+                "Atualizacao nao concluida",
+                "A ultima atualizacao foi iniciada, mas esta versao ainda nao mudou.\n\n"
+                "O sistema vai continuar funcionando e voce podera tentar atualizar novamente.",
+            )
+
     try:
         result = checker(timeout=timeout)
     except Exception:

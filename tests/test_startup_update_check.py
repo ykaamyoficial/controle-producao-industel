@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
 from app.main import run_startup_update_check
 
@@ -20,6 +21,11 @@ class DummyDialog:
 class StartupUpdateCheckTests(unittest.TestCase):
     def setUp(self):
         DummyDialog.calls.clear()
+        self.pending_patcher = patch("app.main.evaluate_pending_update", return_value={"has_pending": False, "status": "none"})
+        self.pending_patcher.start()
+
+    def tearDown(self):
+        self.pending_patcher.stop()
 
     def test_startup_update_check_does_not_raise_on_network_error(self):
         def failing_checker(*, timeout: int):
