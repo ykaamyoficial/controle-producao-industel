@@ -59,7 +59,7 @@ class FiscalProposalDetailDialog(QDialog):
         title = QLabel(f"{self.fiscal_row.get('proposta') or '-'} | {self.fiscal_row.get('cliente') or '-'}")
         title.setObjectName("FilterTitle")
         subtitle = QLabel(
-            f"Status fiscal: {self.service.fiscal_status_label(self.fiscal_row.get('status_fiscal') or '')} | "
+            f"Status fiscal: {self.service.fiscal_status_label(self.fiscal_row.get('situacao_fiscal') or self.fiscal_row.get('status_fiscal') or '')} | "
             f"Entrada: {self.fiscal_row.get('data_entrada_fiscal') or '-'}"
         )
         subtitle.setObjectName("Caption")
@@ -98,7 +98,7 @@ class FiscalProposalDetailDialog(QDialog):
             ("Proposta", self.fiscal_row.get("proposta")),
             ("Cliente", self.fiscal_row.get("cliente")),
             ("Obra/Site", self.fiscal_row.get("obra_site")),
-            ("Status Fiscal", self.service.fiscal_status_label(self.fiscal_row.get("status_fiscal") or "")),
+            ("Status Fiscal", self.service.fiscal_status_label(self.fiscal_row.get("situacao_fiscal") or self.fiscal_row.get("status_fiscal") or "")),
             ("Entrada Fiscal", self.fiscal_row.get("data_entrada_fiscal")),
             ("Ultima Emissao", self.fiscal_row.get("data_ultima_emissao") or "-"),
             ("Numero da NF", latest_nf),
@@ -311,6 +311,10 @@ class FiscalPage(QWidget):
         self.proxy = ProcessFilterProxy(self)
         self.proxy.setSourceModel(self.model)
         self.proxy.setFilterCaseSensitivity(Qt.CaseInsensitive)
+        self.withdrawn_model = FiscalProcessTableModel()
+        self.withdrawn_proxy = ProcessFilterProxy(self)
+        self.withdrawn_proxy.setSourceModel(self.withdrawn_model)
+        self.withdrawn_proxy.setFilterCaseSensitivity(Qt.CaseInsensitive)
         self.items_model = FiscalItemsTableModel()
         self.report_model = FiscalReportTableModel()
         self._build()
@@ -357,6 +361,10 @@ class FiscalPage(QWidget):
         self.search.setPlaceholderText("Pesquisar proposta, cliente ou obra/site")
         self.status = QComboBox()
         self.status.addItem("Todos", "")
+        self.status.addItem("CP em processamento", "situacao:CP_EM_PROCESSAMENTO")
+        self.status.addItem("NF em processamento", "situacao:NF_EM_PROCESSAMENTO")
+        self.status.addItem("Disponivel para emitir NF", "situacao:DISPONIVEL_PARA_EMISSAO")
+        self.status.addItem("Pendencia fiscal critica", "situacao:PENDENCIA_FISCAL_CRITICA")
         self.status.addItem("Falta emitir NF", "FALTA_EMITIR_NOTA_FISCAL")
         self.status.addItem("NF parcial", "NOTA_FISCAL_PARCIAL")
         self.status.addItem("NF emitida", "NOTA_FISCAL_EMITIDA")
@@ -405,7 +413,41 @@ class FiscalPage(QWidget):
 
         self.search.textChanged.connect(lambda text: self.proxy.setFilterRegularExpression(QRegularExpression(text)))
         tabs.addTab(tracking, "Acompanhamento fiscal")
+        tabs.addTab(self._build_withdrawn_tab(), "Notas fiscais retiradas")
         tabs.addTab(self._build_report_tab(), "Relatorios fiscais")
+
+    def _build_withdrawn_tab(self) -> QWidget:
+        tab = QWidget()
+        tab.setObjectName("FiscalTabPage")
+        root = QVBoxLayout(tab)
+        root.setContentsMargins(0, 12, 0, 0)
+        root.setSpacing(12)
+
+        header = QFrame()
+        header.setObjectName("FilterBar")
+        layout = QVBoxLayout(header)
+        layout.setContentsMargins(16, 12, 16, 12)
+        title = QLabel("Notas fiscais retiradas")
+        title.setObjectName("FilterTitle")
+        caption = QLabel("Consulta das notas fiscais ja retiradas pelo cliente. Somente leitura.")
+        caption.setObjectName("Caption")
+        caption.setWordWrap(True)
+        layout.addWidget(title)
+        layout.addWidget(caption)
+        root.addWidget(header)
+
+        self.withdrawn_table = ModernTable(self.service)
+        self.withdrawn_table.status_shortcut_enabled = False
+        self.withdrawn_table.setModel(self.withdrawn_proxy)
+        self.withdrawn_table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.withdrawn_table.customContextMenuRequested.connect(self.open_withdrawn_menu)
+        self.withdrawn_table.clicked.connect(self.handle_withdrawn_click)
+        root.addWidget(self.withdrawn_table, 1)
+
+        hint = QLabel("Dica: use o botao direito do mouse ou a coluna Acoes para consultar os detalhes fiscais.")
+        hint.setObjectName("HintLabel")
+        root.addWidget(hint)
+        return tab
 
     def _add_filter_field(self, layout, row, column, label_text, widget):
         label = QLabel(label_text)
@@ -414,12 +456,22 @@ class FiscalPage(QWidget):
         layout.addWidget(widget, row, column + 1)
 
     def refresh(self):
+        if hasattr(self.service, "ensure_global_fiscal_entries"):
+            self.service.ensure_global_fiscal_entries()
+        raw_status = self.status.currentData() or ""
+        status_fiscal = raw_status
+        situacao_fiscal = ""
+        if isinstance(raw_status, str) and raw_status.startswith("situacao:"):
+            status_fiscal = ""
+            situacao_fiscal = raw_status.split(":", 1)[1]
         filters = {
             "text": self.search.text().strip(),
-            "status_fiscal": self.status.currentData() or "",
+            "status_fiscal": status_fiscal,
+            "situacao_fiscal": situacao_fiscal,
             "data_entrada_fiscal": self.entry_date.text().strip(),
             "pendencia_critica": self.critical.currentData() or "",
             "mais_7_dias_sem_emissao": "1" if self.critical.currentData() == "7" else "",
+            "excluir_retiradas": "1",
         }
         if filters["mais_7_dias_sem_emissao"]:
             filters["pendencia_critica"] = ""
@@ -428,6 +480,9 @@ class FiscalPage(QWidget):
         self.table.apply_column_layout()
         if rows:
             self.table.selectRow(0)
+        withdrawn_rows = self.service.fiscal_rows({"situacao_fiscal": "NF_RETIRADA_CLIENTE"})
+        self.withdrawn_model.set_rows(withdrawn_rows)
+        self.withdrawn_table.apply_column_layout()
 
     def clear(self):
         self.search.clear()
@@ -477,6 +532,15 @@ class FiscalPage(QWidget):
             return self.report_model.rows[row]
         return None
 
+    def selected_withdrawn_row(self) -> dict | None:
+        selected = self.withdrawn_table.selectionModel().selectedRows()
+        if not selected:
+            return None
+        source_index = self.withdrawn_proxy.mapToSource(selected[0])
+        if 0 <= source_index.row() < len(self.withdrawn_model.rows):
+            return self.withdrawn_model.rows[source_index.row()]
+        return None
+
     def handle_report_click(self, index):
         if not index.isValid():
             return
@@ -490,6 +554,22 @@ class FiscalPage(QWidget):
         if index.isValid():
             self.report_table.selectRow(index.row())
         self.open_actions_menu(self.selected_report_row(), self.report_table.viewport().mapToGlobal(point))
+
+    def handle_withdrawn_click(self, index):
+        if not index.isValid():
+            return
+        source_index = self.withdrawn_proxy.mapToSource(index)
+        key = self.withdrawn_model.columns[source_index.column()][0]
+        if key in {"acoes", "fiscal_action"}:
+            self.withdrawn_table.selectRow(index.row())
+            point = self.withdrawn_table.visualRect(index).bottomRight()
+            self.open_actions_menu(self.selected_withdrawn_row(), self.withdrawn_table.viewport().mapToGlobal(point))
+
+    def open_withdrawn_menu(self, point: QPoint):
+        index = self.withdrawn_table.indexAt(point)
+        if index.isValid():
+            self.withdrawn_table.selectRow(index.row())
+        self.open_actions_menu(self.selected_withdrawn_row(), self.withdrawn_table.viewport().mapToGlobal(point))
 
     def open_actions_menu(self, row: dict | None, global_pos: QPoint):
         if not row or not row.get("fiscal_processo_id"):

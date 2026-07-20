@@ -43,6 +43,9 @@ NAV_GROUPS = [
 
 NAV_ITEMS = [item for _group, items in NAV_GROUPS for item in items]
 NAV_LABELS = {key: label for key, label, _icon in NAV_ITEMS}
+EXPANDED_ICON_SIZE = QSize(26, 26)
+COLLAPSED_ICON_SIZE = QSize(43, 43)
+THEME_ICON_SIZE = QSize(28, 28)
 
 
 class Sidebar(QFrame):
@@ -68,7 +71,7 @@ class Sidebar(QFrame):
 
         top = QPushButton("  " + self.service.company)
         top.setIcon(make_icon("collapse", self.service.palette["accent"]))
-        top.setIconSize(QSize(18, 18))
+        top.setIconSize(EXPANDED_ICON_SIZE)
         top.setObjectName("GhostButton")
         top.setToolTip("Recolher ou expandir o menu lateral")
         top.clicked.connect(self.collapse_requested.emit)
@@ -92,9 +95,11 @@ class Sidebar(QFrame):
                 btn = QPushButton(label)
                 btn.setObjectName("NavButton")
                 btn.setProperty("active", "false")
+                btn.setProperty("collapsed", "false")
                 btn.setIcon(make_icon(icon, self.service.palette["accent"]))
-                btn.setIconSize(QSize(18, 18))
-                btn.setMinimumHeight(38)
+                btn.setIconSize(EXPANDED_ICON_SIZE)
+                btn.setMinimumHeight(34)
+                btn.setMaximumHeight(34)
                 btn.setToolTip(label)
                 btn.clicked.connect(lambda _=False, page=key: self.page_selected.emit(page))
                 self.buttons[key] = btn
@@ -103,8 +108,10 @@ class Sidebar(QFrame):
 
         self.theme_button = QPushButton()
         self.theme_button.setObjectName("ThemeToggleButton")
-        self.theme_button.setMinimumHeight(38)
-        self.theme_button.setIconSize(QSize(18, 18))
+        self.theme_button.setProperty("collapsed", "false")
+        self.theme_button.setMinimumHeight(36)
+        self.theme_button.setMaximumHeight(36)
+        self.theme_button.setIconSize(THEME_ICON_SIZE)
         self.theme_button.clicked.connect(self.theme_toggle_requested.emit)
         layout.addWidget(self.theme_button)
         self.update_theme_button()
@@ -133,6 +140,12 @@ class Sidebar(QFrame):
             label.setVisible(not collapsed)
         for key, button in self.buttons.items():
             button.setText("" if collapsed else NAV_LABELS[key])
+            button.setIconSize(COLLAPSED_ICON_SIZE if collapsed else EXPANDED_ICON_SIZE)
+            button.setMinimumHeight(44 if collapsed else 34)
+            button.setMaximumHeight(44 if collapsed else 34)
+            button.setProperty("collapsed", "true" if collapsed else "false")
+            button.style().unpolish(button)
+            button.style().polish(button)
         self.update_theme_button()
 
     def update_theme_button(self):
@@ -141,5 +154,11 @@ class Sidebar(QFrame):
         label = "Tema escuro" if target_dark else "Tema claro"
         icon_name = "moon" if target_dark else "sun"
         self.theme_button.setText("" if self.collapsed else label)
+        self.theme_button.setIconSize(COLLAPSED_ICON_SIZE if self.collapsed else THEME_ICON_SIZE)
+        self.theme_button.setMinimumHeight(44 if self.collapsed else 36)
+        self.theme_button.setMaximumHeight(44 if self.collapsed else 36)
+        self.theme_button.setProperty("collapsed", "true" if self.collapsed else "false")
         self.theme_button.setIcon(make_icon(icon_name, self.service.palette["accent"]))
         self.theme_button.setToolTip(f"Alternar para {label.lower()}")
+        self.theme_button.style().unpolish(self.theme_button)
+        self.theme_button.style().polish(self.theme_button)

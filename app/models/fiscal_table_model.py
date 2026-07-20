@@ -7,8 +7,16 @@ from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
 
 FISCAL_STATUS_LABELS = {
     "FALTA_EMITIR_NOTA_FISCAL": "Falta emitir NF",
+    "AGUARDANDO_NF": "CP em processamento",
+    "CP_EM_PROCESSAMENTO": "CP em processamento",
+    "NF_EM_PROCESSAMENTO": "NF em processamento",
+    "DISPONIVEL_PARA_EMISSAO": "Disponivel para emitir NF",
+    "PENDENCIA_FISCAL_CRITICA": "Pendencia fiscal critica",
     "NOTA_FISCAL_PARCIAL": "NF parcial",
+    "NF_PARCIAL": "NF parcial",
     "NOTA_FISCAL_EMITIDA": "NF emitida",
+    "NF_EMITIDA": "NF emitida",
+    "NF_RETIRADA_CLIENTE": "NF retirada pelo cliente",
     "FISCAL_CANCELADO": "Fiscal cancelado",
     "PENDENTE": "Pendente",
     "PARCIAL": "Parcial",
@@ -22,27 +30,35 @@ def fiscal_status_label(status: str) -> str:
 
 
 def fiscal_action_icon(row: dict[str, Any]) -> str:
-    status = str(row.get("status_fiscal") or "").strip().upper()
+    status = str(row.get("situacao_fiscal") or row.get("status_fiscal") or "").strip().upper()
     if int(row.get("pendencia_critica") or 0):
         return "fiscal_critical"
-    if str(row.get("status_expedicao") or "").strip().upper() == "ENTREGUE" and status != "NOTA_FISCAL_EMITIDA":
+    if (
+        str(row.get("status_expedicao") or "").strip().upper() == "ENTREGUE"
+        and status not in {"NOTA_FISCAL_EMITIDA", "NF_EMITIDA", "NF_RETIRADA_CLIENTE"}
+    ):
         return "fiscal_blocked"
-    if status == "NOTA_FISCAL_EMITIDA":
+    if status in {"NOTA_FISCAL_EMITIDA", "NF_EMITIDA", "NF_RETIRADA_CLIENTE"}:
         return "fiscal_done"
-    if status == "NOTA_FISCAL_PARCIAL":
+    if status in {"NOTA_FISCAL_PARCIAL", "NF_PARCIAL"}:
         return "fiscal_partial"
     return "fiscal_pending"
 
 
 def fiscal_action_tooltip(row: dict[str, Any]) -> str:
-    status = str(row.get("status_fiscal") or "").strip().upper()
+    status = str(row.get("situacao_fiscal") or row.get("status_fiscal") or "").strip().upper()
     if int(row.get("pendencia_critica") or 0):
-        return "Pendência fiscal crítica"
-    if str(row.get("status_expedicao") or "").strip().upper() == "ENTREGUE" and status != "NOTA_FISCAL_EMITIDA":
+        return "Pendencia fiscal critica: retirado sem NF emitida"
+    if (
+        str(row.get("status_expedicao") or "").strip().upper() == "ENTREGUE"
+        and status not in {"NOTA_FISCAL_EMITIDA", "NF_EMITIDA", "NF_RETIRADA_CLIENTE"}
+    ):
         return "Proposta entregue sem nota fiscal"
-    if status == "NOTA_FISCAL_EMITIDA":
+    if status == "NF_RETIRADA_CLIENTE":
+        return "Nota fiscal retirada pelo cliente"
+    if status in {"NOTA_FISCAL_EMITIDA", "NF_EMITIDA"}:
         return "Nota fiscal emitida"
-    if status == "NOTA_FISCAL_PARCIAL":
+    if status in {"NOTA_FISCAL_PARCIAL", "NF_PARCIAL"}:
         return "Nota fiscal emitida parcialmente"
     return "Falta emitir nota fiscal"
 
@@ -101,7 +117,7 @@ class FiscalProcessTableModel(QAbstractTableModel):
             if key == "acoes":
                 return "..."
             if key == "status_fiscal":
-                return fiscal_status_label(str(value or ""))
+                return fiscal_status_label(str(row.get("situacao_fiscal") or value or ""))
             if key == "pendencia_critica":
                 alerts = []
                 if int(row.get("pendencia_critica") or 0):
@@ -125,7 +141,7 @@ class FiscalProcessTableModel(QAbstractTableModel):
                 return "FALTA_EMITIR_NOTA_FISCAL"
             if key == "pendencia_critica" and int(row.get("mais_7_dias_sem_emissao") or 0):
                 return "NOTA_FISCAL_PARCIAL"
-            return row.get("status_fiscal") if key == "status_fiscal" else value
+            return (row.get("situacao_fiscal") or row.get("status_fiscal")) if key == "status_fiscal" else value
         if role == Qt.UserRole + 3:
             return "FISCAL"
         if role == Qt.ToolTipRole:

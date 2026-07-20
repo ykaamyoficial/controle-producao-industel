@@ -92,6 +92,24 @@ class ThemeSelectionTests(unittest.TestCase):
         self.assertIn("claro", sidebar.theme_button.toolTip())
         self.assertEqual(sidebar.theme_button.text(), "Tema claro")
 
+    def test_sidebar_uses_larger_icons_when_collapsed(self):
+        service = ThemeServiceStub()
+        sidebar = Sidebar(service)
+        button = sidebar.buttons["PAINEL GERAL"]
+
+        self.assertEqual(button.iconSize().width(), 26)
+        self.assertEqual(button.minimumHeight(), 34)
+        self.assertEqual(button.maximumHeight(), 34)
+
+        sidebar.set_collapsed(True)
+
+        self.assertEqual(button.iconSize().width(), 43)
+        self.assertEqual(button.minimumHeight(), 44)
+        self.assertEqual(button.maximumHeight(), 44)
+        self.assertEqual(button.property("collapsed"), "true")
+        self.assertEqual(sidebar.theme_button.iconSize().width(), 43)
+        self.assertEqual(sidebar.theme_button.property("collapsed"), "true")
+
 
 if __name__ == "__main__":
     unittest.main()

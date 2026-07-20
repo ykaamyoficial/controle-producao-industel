@@ -86,17 +86,33 @@ DEFAULT_DATE_FIELDS = ("atualizado_em", "data_entrada", "data_cadastro", "prazo_
 
 
 FISCAL_STATUS_PRIORITY = [
+    "PENDENCIA_FISCAL_CRITICA",
+    "DISPONIVEL_PARA_EMISSAO",
+    "AGUARDANDO_NF",
+    "CP_EM_PROCESSAMENTO",
+    "NF_EM_PROCESSAMENTO",
     "FALTA_EMITIR_NOTA_FISCAL",
+    "NF_PARCIAL",
     "NOTA_FISCAL_PARCIAL",
+    "NF_EMITIDA",
     "NOTA_FISCAL_EMITIDA",
+    "NF_RETIRADA_CLIENTE",
     "FISCAL_CANCELADO",
 ]
 
 
 FISCAL_STATUS_DATE_FIELDS = {
     "FALTA_EMITIR_NOTA_FISCAL": ("data_entrada_fiscal", "updated_at", "created_at"),
+    "AGUARDANDO_NF": ("data_entrada_fiscal", "updated_at", "created_at"),
+    "CP_EM_PROCESSAMENTO": ("data_entrada_fiscal", "updated_at", "created_at"),
+    "NF_EM_PROCESSAMENTO": ("updated_at", "data_entrada_fiscal", "created_at"),
+    "DISPONIVEL_PARA_EMISSAO": ("updated_at", "data_entrada_fiscal", "created_at"),
+    "PENDENCIA_FISCAL_CRITICA": ("data_retirada", "updated_at", "data_entrada_fiscal", "created_at"),
     "NOTA_FISCAL_PARCIAL": ("data_ultima_emissao", "updated_at", "data_entrada_fiscal", "created_at"),
+    "NF_PARCIAL": ("data_ultima_emissao", "updated_at", "data_entrada_fiscal", "created_at"),
     "NOTA_FISCAL_EMITIDA": ("data_ultima_emissao", "updated_at", "data_entrada_fiscal", "created_at"),
+    "NF_EMITIDA": ("data_ultima_emissao", "updated_at", "data_entrada_fiscal", "created_at"),
+    "NF_RETIRADA_CLIENTE": ("data_retirada_nf", "data_ultima_emissao", "updated_at", "data_entrada_fiscal", "created_at"),
     "FISCAL_CANCELADO": ("updated_at", "data_ultima_emissao", "data_entrada_fiscal", "created_at"),
 }
 
@@ -135,7 +151,7 @@ def status_date_value(area: str | None, row: dict[str, Any], status: str | None 
 
 
 def fiscal_status_date_value(row: dict[str, Any]) -> datetime | None:
-    status_key = _normalize_status(row.get("status_fiscal"))
+    status_key = _normalize_status(row.get("situacao_fiscal") or row.get("status_fiscal"))
     fields = FISCAL_STATUS_DATE_FIELDS.get(status_key, ("updated_at", "data_entrada_fiscal", "created_at"))
     return _first_date(row, fields)
 
@@ -153,7 +169,7 @@ def _process_sort_key(area: str, row: dict[str, Any]) -> tuple[int, int, str, in
 
 def _fiscal_sort_key(row: dict[str, Any]) -> tuple[int, int, str, int]:
     return (
-        fiscal_status_priority(row.get("status_fiscal")),
+        fiscal_status_priority(row.get("situacao_fiscal") or row.get("status_fiscal")),
         -_date_number(fiscal_status_date_value(row)),
         str(row.get("proposta") or "").lower(),
         _safe_int(row.get("fiscal_processo_id") or row.get("id")),

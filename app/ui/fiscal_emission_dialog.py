@@ -4,7 +4,6 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QDialog,
-    QDoubleSpinBox,
     QFrame,
     QGridLayout,
     QHeaderView,
@@ -30,9 +29,8 @@ class FiscalEmissionDialog(QDialog):
         self.service = service
         self.fiscal_row = fiscal_row
         self.items = service.fiscal_items(int(fiscal_row["fiscal_processo_id"]))
-        self.quantity_inputs: dict[int, QDoubleSpinBox] = {}
-        self.weight_inputs: dict[int, QDoubleSpinBox] = {}
         self.item_balances: dict[int, tuple[float, float]] = {}
+        self.selection_items: dict[int, QTableWidgetItem] = {}
         self.setWindowTitle("Registrar emissao fiscal")
         apply_large_dialog_geometry(self, parent)
         style_dialog_from_parent(self, parent)
@@ -45,7 +43,13 @@ class FiscalEmissionDialog(QDialog):
 
         title = QLabel(f"{self.fiscal_row.get('proposta', '')} | {self.fiscal_row.get('cliente', '')}")
         title.setStyleSheet("font-size: 18px; font-weight: 800;")
-        caption = QLabel("Registre manualmente a emissao fiscal por item. Este sistema nao emite nota fiscal real.")
+        caption_text = "Registre manualmente a emissao fiscal por item. Este sistema nao emite nota fiscal real."
+        if not self.items:
+            caption_text = (
+                "Esta proposta nao possui itens cadastrados. A emissao fiscal sera registrada na proposta, "
+                "sem itens vinculados. Este sistema nao emite nota fiscal real."
+            )
+        caption = QLabel(caption_text)
         caption.setObjectName("Caption")
         caption.setWordWrap(True)
         root.addWidget(title)
@@ -78,35 +82,40 @@ class FiscalEmissionDialog(QDialog):
 
         self.table = QTableWidget(0, 10)
         self.table.setHorizontalHeaderLabels([
+            "Emitir",
             "Item",
             "Codigo",
             "Descricao",
             "Qtd. total",
             "Qtd. faturada",
             "Saldo qtd.",
-            "Qtd. agora",
             "Peso total",
             "Peso faturado",
-            "Peso agora",
+            "Peso pendente",
         ])
         self.table.setAlternatingRowColors(True)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.verticalHeader().setVisible(False)
         self.table.horizontalHeader().setStretchLastSection(False)
-        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
-        configure_wrapping_table(self.table, description_columns=(2,), code_columns=(1,), min_row_height=42)
+        self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
+        configure_wrapping_table(self.table, description_columns=(3,), code_columns=(2,), min_row_height=42)
         root.addWidget(self.table, 1)
         self._populate_items()
 
         footer = QHBoxLayout()
-        total_btn = ModernButton("Marcar saldo como faturado", "status", accent=True)
+        total_btn = ModernButton("Selecionar todos os saldos", "status", accent=True)
         total_btn.clicked.connect(self.mark_all_pending)
+        total_btn.setEnabled(bool(self.items))
+        clear_btn = ModernButton("Limpar selecao", "clear")
+        clear_btn.clicked.connect(self.clear_selection)
+        clear_btn.setEnabled(bool(self.items))
         cancel_btn = ModernButton("Cancelar", "clear")
         cancel_btn.clicked.connect(self.reject)
         confirm_btn = ModernButton("Registrar emissao fiscal", "status", accent=True)
         confirm_btn.clicked.connect(self.confirm)
         footer.addWidget(total_btn)
+        footer.addWidget(clear_btn)
         footer.addStretch()
         footer.addWidget(cancel_btn)
         footer.addWidget(confirm_btn)
@@ -114,54 +123,47 @@ class FiscalEmissionDialog(QDialog):
 
     def _populate_items(self):
         self.table.setRowCount(len(self.items))
+        if not self.items:
+            self.table.setRowCount(1)
+            empty_item = QTableWidgetItem("Sem itens cadastrados. O registro fiscal sera feito apenas na proposta.")
+            empty_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+            empty_item.setTextAlignment(Qt.AlignCenter)
+            self.table.setItem(0, 0, empty_item)
+            self.table.setSpan(0, 0, 1, self.table.columnCount())
+            self.table.setMinimumHeight(220)
+            return
         for row_index, item in enumerate(self.items):
             fiscal_item_id = int(item["id"])
             quantity_balance = float(item.get("quantidade_pendente") or 0)
             weight_balance = float(item.get("peso_pendente") or 0)
             self.item_balances[fiscal_item_id] = (quantity_balance, weight_balance)
             values = [
+                "",
                 item.get("numero_item") or "",
                 item_product_code(item),
                 item.get("descricao") or "",
                 format_number(item.get("quantidade_total")),
                 format_number(item.get("quantidade_faturada")),
                 format_number(quantity_balance),
-                "",
                 format_weight(item.get("peso_total")),
                 format_weight(item.get("peso_faturado")),
-                "",
+                format_weight(weight_balance),
             ]
             for column, value in enumerate(values):
                 table_item = QTableWidgetItem(str(value))
-                if column not in (2,):
+                if column == 0:
+                    table_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsUserCheckable)
+                    table_item.setCheckState(Qt.Unchecked)
+                    table_item.setToolTip("Marque para emitir todo o saldo pendente deste item.")
+                    self.selection_items[fiscal_item_id] = table_item
+                    table_item.setTextAlignment(Qt.AlignCenter)
+                elif column not in (3,):
                     table_item.setTextAlignment(Qt.AlignCenter)
                 else:
                     table_item.setTextAlignment(Qt.AlignTop | Qt.AlignLeft)
                 self.table.setItem(row_index, column, table_item)
 
-            quantity = QDoubleSpinBox()
-            quantity.setMinimumWidth(96)
-            quantity.setDecimals(3)
-            quantity.setMinimum(0)
-            quantity.setMaximum(max(0, quantity_balance))
-            quantity.setSingleStep(1)
-            quantity.setValue(0)
-            weight = QDoubleSpinBox()
-            weight.setMinimumWidth(96)
-            weight.setDecimals(3)
-            weight.setMinimum(0)
-            weight.setMaximum(max(0, weight_balance))
-            weight.setSingleStep(1)
-            weight.setValue(0)
-            self.quantity_inputs[fiscal_item_id] = quantity
-            self.weight_inputs[fiscal_item_id] = weight
-            self.table.setCellWidget(row_index, 6, quantity)
-            self.table.setCellWidget(row_index, 9, weight)
-            quantity.valueChanged.connect(
-                lambda value, current_id=fiscal_item_id: self._sync_weight_from_quantity(current_id, value)
-            )
-
-        widths = (68, 95, 340, 92, 108, 92, 108, 108, 118, 108)
+        widths = (70, 68, 95, 360, 92, 108, 92, 108, 118, 112)
         for column, width in enumerate(widths):
             self.table.setColumnWidth(column, width)
         resize_rows_to_contents(self.table)
@@ -169,30 +171,22 @@ class FiscalEmissionDialog(QDialog):
     def mark_all_pending(self):
         for item in self.items:
             fiscal_item_id = int(item["id"])
-            self.quantity_inputs[fiscal_item_id].setValue(float(item.get("quantidade_pendente") or 0))
-            self.weight_inputs[fiscal_item_id].setValue(float(item.get("peso_pendente") or 0))
+            selection_item = self.selection_items.get(fiscal_item_id)
+            quantity_balance, weight_balance = self.item_balances.get(fiscal_item_id, (0, 0))
+            if selection_item and (quantity_balance > 0 or weight_balance > 0):
+                selection_item.setCheckState(Qt.Checked)
 
-    def _sync_weight_from_quantity(self, fiscal_item_id: int, quantity_now: float):
-        quantity_balance, weight_balance = self.item_balances.get(fiscal_item_id, (0.0, 0.0))
-        weight_input = self.weight_inputs.get(fiscal_item_id)
-        if not weight_input:
-            return
-        if quantity_balance <= 0 or weight_balance <= 0 or quantity_now <= 0:
-            weight_input.setValue(0)
-            return
-        if quantity_now >= quantity_balance:
-            weight_input.setValue(weight_balance)
-            return
-        proportional = round(weight_balance * (quantity_now / quantity_balance), 3)
-        weight_input.setValue(max(0, min(weight_balance, proportional)))
+    def clear_selection(self):
+        for selection_item in self.selection_items.values():
+            selection_item.setCheckState(Qt.Unchecked)
 
     def prepared_emissions(self) -> list[dict]:
         emissions = []
         for item in self.items:
             fiscal_item_id = int(item["id"])
-            quantity = self.quantity_inputs[fiscal_item_id].value()
-            weight = self.weight_inputs[fiscal_item_id].value()
-            if quantity > 0 or weight > 0:
+            selection_item = self.selection_items.get(fiscal_item_id)
+            if selection_item and selection_item.checkState() == Qt.Checked:
+                quantity, weight = self.item_balances.get(fiscal_item_id, (0.0, 0.0))
                 emissions.append({
                     "fiscal_item_id": fiscal_item_id,
                     "quantidade_emitida": quantity,
@@ -202,14 +196,19 @@ class FiscalEmissionDialog(QDialog):
 
     def confirm(self):
         emissions = self.prepared_emissions()
-        if not emissions:
+        if not emissions and self.items:
             QMessageBox.warning(self, "Emissao fiscal", "Informe pelo menos um item para registrar.")
             return
+        confirmation = "Confirmar o registro fiscal manual dos itens selecionados?"
+        if not self.items:
+            confirmation = (
+                "Esta proposta nao possui itens cadastrados.\n\n"
+                "Confirmar o registro fiscal manual diretamente na proposta?"
+            )
         answer = QMessageBox.question(
             self,
             "Registrar emissao fiscal",
-            "Confirmar o registro fiscal manual dos itens selecionados?\n\n"
-            "Esta acao nao emite nota fiscal real.",
+            f"{confirmation}\n\nEsta acao nao emite nota fiscal real.",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,
         )

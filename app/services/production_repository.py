@@ -1,4 +1,4 @@
-﻿import hashlib
+import hashlib
 import hmac
 import json
 import math
@@ -242,7 +242,7 @@ EXPORT_LABELS = {
     "id": "ID",
     "cliente": "Cliente",
     "proposta": "Proposta",
-    "pedido_compra": "OC/Pedido",
+    "pedido_compra": "PD / Pedido",
     "obra_site": "Obra/Site",
     "peso": "Peso",
     "lote": "Lote",
@@ -534,7 +534,7 @@ PROCESS_COLUMNS = [
     ("tipo_processo", "Tipo", 80),
     ("cliente", "Cliente", 150),
     ("proposta", "Proposta", 110),
-    ("pedido_compra", "OC/Pedido", 110),
+    ("pedido_compra", "PD / Pedido", 110),
     ("obra_site", "Obra/Site", 140),
     ("peso", "Peso", 80),
     ("lote", "Lote", 90),
@@ -553,7 +553,7 @@ BASE_AREA_PROCESS_COLUMNS = [
     ("tipo_processo", "Tipo", 75),
     ("cliente", "Cliente", 170),
     ("proposta", "Proposta", 120),
-    ("pedido_compra", "OC/Pedido", 120),
+    ("pedido_compra", "PD / Pedido", 120),
     ("obra_site", "Obra/Site", 160),
     ("peso", "Peso", 80),
     ("lote", "Lote", 90),
@@ -714,7 +714,7 @@ AREA_STATUS_LABEL_OVERRIDES = {
 FORM_FIELDS = [
     ("cliente", "Cliente", True),
     ("proposta", "Proposta", True),
-    ("pedido_compra", "Ordem de compra / pedido", False),
+    ("pedido_compra", "PD / Pedido de venda", False),
     ("obra_site", "Obra / site", False),
     ("peso", "Peso", False),
     ("lote", "Lote", False),
@@ -1783,11 +1783,11 @@ class Repository:
             (process_id,),
         ).fetchone() is not None
 
-    def ensure_fiscal_entry_for_process(self, processo_id, usuario, observacao=None):
+    def ensure_fiscal_entry_for_process(self, processo_id, usuario, observacao=None, require_galvanization_return=True):
         process = self.get_process(processo_id)
         if not process:
             raise AppError("Processo nao encontrado para entrada fiscal.")
-        if (process["status_galvanizacao"] or "") != "RETORNOU_GALVANIZACAO":
+        if require_galvanization_return and (process["status_galvanizacao"] or "") != "RETORNOU_GALVANIZACAO":
             return None
         if process["origem_remanejamento"] or (process["situacao_fluxo"] or "") == "PENDENTE_POR_REMANEJAMENTO":
             return None
@@ -1803,8 +1803,8 @@ class Repository:
             """
             INSERT INTO fiscal_processos(
                 processo_id, proposta, status_fiscal, data_entrada_fiscal,
-                observacao, created_at, updated_at
-            ) VALUES (?, ?, 'FALTA_EMITIR_NOTA_FISCAL', ?, ?, ?, ?)
+                situacao_fiscal, observacao, created_at, updated_at
+            ) VALUES (?, ?, 'FALTA_EMITIR_NOTA_FISCAL', ?, 'AGUARDANDO_NF', ?, ?, ?)
             """,
             (
                 process["id"],
@@ -1833,6 +1833,30 @@ class Repository:
             ),
         )
         return fiscal_id
+
+    def ensure_fiscal_entries_for_all_processes(self, usuario, observacao=None):
+        created = 0
+        rows = self.conn.execute(
+            """
+            SELECT p.id
+            FROM processos p
+            LEFT JOIN fiscal_processos fp ON fp.processo_id = p.id
+            WHERE fp.id IS NULL
+            ORDER BY p.id
+            """
+        ).fetchall()
+        for row in rows:
+            fiscal_id = self.ensure_fiscal_entry_for_process(
+                row["id"],
+                usuario,
+                observacao or "Entrada fiscal global criada para acompanhamento.",
+                require_galvanization_return=False,
+            )
+            if fiscal_id:
+                created += 1
+        if created:
+            self.conn.commit()
+        return created
 
     def create_fiscal_items_from_process_items(self, processo_id, fiscal_processo_id=None):
         process = self.get_process(processo_id)
@@ -1876,6 +1900,23 @@ class Repository:
         filters = filters or {}
         where = []
         params = []
+        situation_expr = """
+            CASE
+                WHEN COALESCE(fp.situacao_fiscal, '') = 'NF_RETIRADA_CLIENTE' THEN 'NF_RETIRADA_CLIENTE'
+                WHEN fp.status_fiscal = 'NOTA_FISCAL_EMITIDA' THEN 'NF_EMITIDA'
+                WHEN fp.status_fiscal = 'NOTA_FISCAL_PARCIAL' THEN 'NF_PARCIAL'
+                WHEN fp.status_fiscal = 'FISCAL_CANCELADO' THEN 'FISCAL_CANCELADO'
+                WHEN p.status_expedicao = 'ENTREGUE' THEN 'PENDENCIA_FISCAL_CRITICA'
+                WHEN p.status_expedicao IN (
+                    'AGUARDANDO_SEPARACAO',
+                    'AGUARDANDO_SEPARACAO_PARCIAL',
+                    'SEPARACAO_INICIADA',
+                    'SEPARADO',
+                    'ENTREGUE_PARCIAL'
+                ) THEN 'DISPONIVEL_PARA_EMISSAO'
+                ELSE 'CP_EM_PROCESSAMENTO'
+            END
+        """
         text = (filters.get("text") or "").strip()
         if text:
             like = f"%{text}%"
@@ -1885,6 +1926,12 @@ class Repository:
         if status:
             where.append("fp.status_fiscal = ?")
             params.append(status)
+        fiscal_situation = (filters.get("situacao_fiscal") or "").strip()
+        if fiscal_situation:
+            where.append(f"({situation_expr}) = ?")
+            params.append(fiscal_situation)
+        if filters.get("excluir_retiradas") in (True, "1", "SIM", "sim"):
+            where.append("COALESCE(fp.situacao_fiscal, '') <> 'NF_RETIRADA_CLIENTE'")
         entry_date = (filters.get("data_entrada_fiscal") or "").strip()
         if entry_date:
             where.append("fp.data_entrada_fiscal = ?")
@@ -1909,10 +1956,15 @@ class Repository:
                 fp.processo_id,
                 fp.proposta,
                 p.cliente,
+                p.pedido_compra,
                 p.obra_site,
                 fp.status_fiscal,
+                {situation_expr} AS situacao_fiscal,
                 fp.data_entrada_fiscal,
                 fp.data_ultima_emissao,
+                fp.data_retirada_nf,
+                fp.retirada_por,
+                fp.observacao_retirada_nf,
                 p.status_expedicao,
                 COUNT(fi.id) AS quantidade_itens,
                 COALESCE(SUM(CASE WHEN fi.status_item_fiscal <> 'FATURADO' THEN 1 ELSE 0 END), 0) AS itens_pendentes,
@@ -2341,8 +2393,6 @@ class Repository:
         if fiscal["status_fiscal"] == "NOTA_FISCAL_EMITIDA":
             raise AppError("Esta proposta ja esta totalmente faturada.")
         emissions = emissions or []
-        if not emissions:
-            raise AppError("Selecione pelo menos um item para registrar emissao fiscal.")
 
         item_rows = {
             int(row["id"]): row
@@ -2351,6 +2401,16 @@ class Repository:
                 (fiscal_processo_id,),
             ).fetchall()
         }
+        if not item_rows and not emissions:
+            return self._register_fiscal_emission_without_items(
+                fiscal_processo_id,
+                fiscal,
+                user,
+                numero_controle=numero_controle,
+                observacao=observacao,
+            )
+        if not emissions:
+            raise AppError("Selecione pelo menos um item para registrar emissao fiscal.")
         prepared = []
         for entry in emissions:
             item_id = int(entry.get("fiscal_item_id") or entry.get("item_id") or 0)
@@ -2451,12 +2511,13 @@ class Repository:
             self.conn.execute(
                 """
                 UPDATE fiscal_processos
-                SET status_fiscal = ?, data_ultima_emissao = ?,
+                SET status_fiscal = ?, situacao_fiscal = ?, data_ultima_emissao = ?,
                     emitido_por = ?, observacao = ?, updated_at = ?
                 WHERE id = ?
                 """,
                 (
                     new_status,
+                    "NF_EMITIDA" if new_status == "NOTA_FISCAL_EMITIDA" else "NF_PARCIAL",
                     timestamp,
                     user["login"],
                     observacao or "",
@@ -2486,6 +2547,135 @@ class Repository:
         except Exception:
             self.conn.rollback()
             raise
+
+    def _register_fiscal_emission_without_items(self, fiscal_processo_id, fiscal, user, numero_controle="", observacao=""):
+        old_status = fiscal["status_fiscal"] or ""
+        timestamp = now_br()
+        try:
+            emission_id = self.conn.execute(
+                """
+                INSERT INTO fiscal_emissoes(
+                    fiscal_processo_id, numero_controle, tipo_emissao,
+                    data_emissao, usuario, observacao, created_at
+                ) VALUES (?, ?, 'TOTAL', ?, ?, ?, ?)
+                """,
+                (
+                    fiscal_processo_id,
+                    (numero_controle or "").strip(),
+                    timestamp,
+                    user["login"],
+                    observacao or "",
+                    timestamp,
+                ),
+            ).lastrowid
+            self.conn.execute(
+                """
+                UPDATE fiscal_processos
+                SET status_fiscal = 'NOTA_FISCAL_EMITIDA',
+                    situacao_fiscal = 'NF_EMITIDA',
+                    data_ultima_emissao = ?,
+                    emitido_por = ?,
+                    observacao = ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    timestamp,
+                    user["login"],
+                    observacao or "",
+                    timestamp,
+                    fiscal_processo_id,
+                ),
+            )
+            self.conn.execute(
+                """
+                INSERT INTO fiscal_movimentacoes(
+                    fiscal_processo_id, processo_id, tipo_movimento,
+                    status_anterior, status_novo, usuario, data_hora, observacao
+                ) VALUES (?, ?, 'EMISSAO_FISCAL', ?, 'NOTA_FISCAL_EMITIDA', ?, ?, ?)
+                """,
+                (
+                    fiscal_processo_id,
+                    fiscal["processo_id"],
+                    old_status,
+                    user["login"],
+                    timestamp,
+                    observacao or "Emissao fiscal registrada sem itens cadastrados.",
+                ),
+            )
+            self.conn.commit()
+            return emission_id
+        except Exception:
+            self.conn.rollback()
+            raise
+
+    def mark_fiscal_invoice_withdrawn(self, fiscal_processo_id, user, observacao=""):
+        if not user_can_edit_area(self.conn, user, "fiscal"):
+            raise AppError("Seu usuario nao tem permissao para marcar NF retirada.")
+        fiscal = self.get_fiscal_process(fiscal_processo_id)
+        if not fiscal:
+            raise AppError("Controle fiscal nao encontrado.")
+        if fiscal["status_fiscal"] != "NOTA_FISCAL_EMITIDA":
+            raise AppError("A NF precisa estar emitida antes de ser retirada pelo cliente.")
+
+        try:
+            changed = self._mark_fiscal_invoice_withdrawn_in_transaction(fiscal, user, observacao)
+            self.conn.commit()
+            return fiscal_processo_id if changed else None
+        except Exception:
+            self.conn.rollback()
+            raise
+
+    def _mark_fiscal_invoice_withdrawn_in_transaction(self, fiscal, user, observacao=""):
+        current_situation = (fiscal["situacao_fiscal"] or "").strip().upper()
+        if current_situation == "NF_RETIRADA_CLIENTE":
+            return False
+        timestamp = now_br()
+        note = (observacao or "").strip()
+        self.conn.execute(
+            """
+            UPDATE fiscal_processos
+            SET situacao_fiscal = 'NF_RETIRADA_CLIENTE',
+                data_retirada_nf = ?,
+                retirada_por = ?,
+                observacao_retirada_nf = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (timestamp, user["login"], note, timestamp, fiscal["id"]),
+        )
+        self.conn.execute(
+            """
+            INSERT INTO fiscal_movimentacoes(
+                fiscal_processo_id, processo_id, tipo_movimento,
+                status_anterior, status_novo, usuario, data_hora, observacao
+            ) VALUES (?, ?, 'NF_RETIRADA_CLIENTE', ?, 'NF_RETIRADA_CLIENTE', ?, ?, ?)
+            """,
+            (
+                fiscal["id"],
+                fiscal["processo_id"],
+                current_situation or fiscal["status_fiscal"] or "",
+                user["login"],
+                timestamp,
+                note or "Nota fiscal retirada automaticamente pela retirada na Expedicao.",
+            ),
+        )
+        return True
+
+    def mark_fiscal_withdrawn_after_expedition_delivery(self, process_id, user, observacao=""):
+        fiscal = self.conn.execute(
+            "SELECT * FROM fiscal_processos WHERE processo_id = ?",
+            (process_id,),
+        ).fetchone()
+        if not fiscal:
+            return False
+        if fiscal["status_fiscal"] != "NOTA_FISCAL_EMITIDA":
+            return False
+        return self._mark_fiscal_invoice_withdrawn_in_transaction(
+            fiscal,
+            user,
+            observacao or "Nota fiscal retirada automaticamente pela retirada na Expedicao.",
+        )
 
     def process_main_id(self, process):
         return int(process["processo_pai_id"] or process["id"])
@@ -3039,6 +3229,12 @@ class Repository:
             ),
         )
         self.add_history(process_id, process["proposta"], "EXPEDICAO", process["status_expedicao"] or "", new_status, user, observation or "Entrega de itens selecionados")
+        if new_status == "ENTREGUE":
+            self.mark_fiscal_withdrawn_after_expedition_delivery(
+                process_id,
+                user,
+                observation or "Retirada registrada pela Expedicao.",
+            )
         if not remaining and process["processo_pai_id"]:
             self.refresh_parent_completion(process["processo_pai_id"], user)
         self.conn.commit()
@@ -4130,6 +4326,12 @@ class Repository:
                 )
         elif area == "EXPEDICAO" and new_status == "ENTREGUE" and self.is_partial_process(process):
             self.refresh_parent_completion(process["processo_pai_id"], user)
+        if area == "EXPEDICAO" and new_status == "ENTREGUE":
+            self.mark_fiscal_withdrawn_after_expedition_delivery(
+                process_id,
+                user,
+                observation or "Retirada registrada pela Expedicao.",
+            )
         if area in ("GALVANIZACAO", "EXPEDICAO") or "status_expedicao" in updates:
             self.try_auto_merge_expedition_partials(process_id, user)
         if area == "GALVANIZACAO" and new_status == "RETORNOU_GALVANIZACAO":

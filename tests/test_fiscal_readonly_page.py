@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import os
 import sqlite3
@@ -15,8 +15,9 @@ from PySide6.QtWidgets import QApplication, QPushButton, QTabWidget
 from app.services.migration_runner import apply_migrations
 from app.services.production_repository import Repository, initialize_database
 from app.services.backend_adapter import OFFICIAL_COLOR_PALETTES
-from app.models.fiscal_table_model import FiscalProcessTableModel
+from app.models.fiscal_table_model import FiscalProcessTableModel, fiscal_status_label
 from app.ui.dashboard_page import DashboardPage
+from app.ui.fiscal_emission_dialog import FiscalEmissionDialog
 from app.ui.fiscal_page import FiscalPage, FiscalProposalDetailDialog
 from app.ui.sidebar import Sidebar
 from app.ui.styles import app_stylesheet
@@ -49,6 +50,12 @@ class FiscalUiService:
     def fiscal_rows(self, filters=None):
         return [dict(row) for row in self.repo.list_fiscal_processes(filters)]
 
+    def ensure_global_fiscal_entries(self):
+        return self.repo.ensure_fiscal_entries_for_all_processes(
+            {"login": "admin", "perfil": "admin", "areas_acesso": ""},
+            "Entrada fiscal global de teste.",
+        )
+
     def fiscal_items(self, fiscal_processo_id):
         return [dict(row) for row in self.repo.list_fiscal_items(fiscal_processo_id)]
 
@@ -79,6 +86,13 @@ class FiscalUiService:
             observacao,
         )
 
+    def mark_fiscal_invoice_withdrawn(self, fiscal_processo_id, observacao=""):
+        return self.repo.mark_fiscal_invoice_withdrawn(
+            fiscal_processo_id,
+            {"login": "admin", "perfil": "admin", "areas_acesso": ""},
+            observacao,
+        )
+
     def visible_areas(self):
         return ["CONTROLE GERAL", "PRODUCAO", "GALVANIZACAO", "EXPEDICAO", "ALMOXARIFADO"]
 
@@ -104,7 +118,7 @@ class FiscalUiService:
         return status or "-"
 
     def fiscal_status_label(self, status):
-        return status or "-"
+        return fiscal_status_label(status)
 
 
 class FiscalReadOnlyPageTests(unittest.TestCase):
@@ -369,7 +383,55 @@ class FiscalReadOnlyPageTests(unittest.TestCase):
         row = page.model.rows[0]
         menu = page.build_actions_menu(row)
 
-        self.assertEqual([action.text() for action in menu.actions()], ["Detalhes da Proposta", "Registrar emissao fiscal"])
+        self.assertEqual(
+            [action.text() for action in menu.actions()],
+            ["Detalhes da Proposta", "Registrar emissao fiscal"],
+        )
+
+    def test_fiscal_emission_dialog_selects_items_instead_of_manual_values(self):
+        fiscal_id = self.create_fiscal_process("CP02007S")
+        row = self.service.fiscal_rows({"text": "CP02007S"})[0]
+        dialog = FiscalEmissionDialog(self.service, row)
+        headers = [dialog.table.horizontalHeaderItem(index).text() for index in range(dialog.table.columnCount())]
+
+        self.assertEqual(headers[0], "Emitir")
+        self.assertNotIn("Qtd. agora", headers)
+        self.assertNotIn("Peso agora", headers)
+
+        first_item_id = int(self.service.fiscal_items(fiscal_id)[0]["id"])
+        dialog.selection_items[first_item_id].setCheckState(Qt.Checked)
+
+        self.assertEqual(
+            dialog.prepared_emissions(),
+            [{"fiscal_item_id": first_item_id, "quantidade_emitida": 10.0, "peso_emitido": 25.0}],
+        )
+
+    def test_fiscal_emission_dialog_allows_process_without_items(self):
+        fiscal_id = self.create_fiscal_process("CP02007W")
+        self.repo.conn.execute("DELETE FROM fiscal_itens WHERE fiscal_processo_id = ?", (fiscal_id,))
+        self.repo.conn.commit()
+        row = self.service.fiscal_rows({"text": "CP02007W"})[0]
+
+        dialog = FiscalEmissionDialog(self.service, row)
+
+        self.assertEqual(dialog.prepared_emissions(), [])
+        self.assertIn("Sem itens cadastrados", dialog.table.item(0, 0).text())
+
+    def test_fiscal_page_has_withdrawn_invoices_tab(self):
+        self.create_fiscal_process("CP02007R", status_fiscal="NOTA_FISCAL_EMITIDA")
+        fiscal_id = [dict(row) for row in self.repo.list_fiscal_processes({"text": "CP02007R"})][0]["fiscal_processo_id"]
+        self.repo.mark_fiscal_invoice_withdrawn(
+            fiscal_id,
+            {"login": "admin", "perfil": "admin", "areas_acesso": ""},
+            "Retirada teste",
+        )
+
+        page = FiscalPage(self.service)
+        page.refresh()
+        tabs = page.findChild(QTabWidget, "ModernTabs")
+
+        self.assertEqual(tabs.tabText(1), "Notas fiscais retiradas")
+        self.assertEqual([row["proposta"] for row in page.withdrawn_model.rows], ["CP02007R"])
 
     def test_fiscal_action_column_uses_specific_icons_and_tooltips(self):
         self.create_fiscal_process("CP02007I", status_fiscal="FALTA_EMITIR_NOTA_FISCAL")
@@ -384,7 +446,10 @@ class FiscalReadOnlyPageTests(unittest.TestCase):
         self.assertEqual(model.data(model.index(by_proposal["CP02007P"], action_column), Qt.UserRole + 2), "fiscal_partial")
         self.assertEqual(model.data(model.index(by_proposal["CP02007E"], action_column), Qt.UserRole + 2), "fiscal_done")
         self.assertEqual(model.data(model.index(by_proposal["CP02007C"], action_column), Qt.UserRole + 2), "fiscal_critical")
-        self.assertEqual(model.data(model.index(by_proposal["CP02007C"], action_column), Qt.ToolTipRole), "Pendência fiscal crítica")
+        self.assertEqual(
+            model.data(model.index(by_proposal["CP02007C"], action_column), Qt.ToolTipRole),
+            "Pendencia fiscal critica: retirado sem NF emitida",
+        )
 
     def test_clicking_fiscal_action_column_opens_actions_menu(self):
         self.create_fiscal_process("CP02007A")
@@ -423,7 +488,7 @@ class FiscalReadOnlyPageTests(unittest.TestCase):
         page = FiscalPage(self.service)
         page.refresh()
 
-        forbidden = ("emitir", "emissao", "emissão", "nota", "faturar")
+        forbidden = ("emitir", "emissao", "emissÃ£o", "nota", "faturar")
         button_texts = [button.text().lower() for button in page.findChildren(QPushButton)]
 
         self.assertTrue(button_texts)
@@ -447,6 +512,12 @@ class FiscalReadOnlyPageTests(unittest.TestCase):
         entry_date: str = "2026-06-15",
         return_process_id: bool = False,
     ):
+        situation = {
+            "FALTA_EMITIR_NOTA_FISCAL": "AGUARDANDO_NF",
+            "NOTA_FISCAL_PARCIAL": "NF_PARCIAL",
+            "NOTA_FISCAL_EMITIDA": "NF_EMITIDA",
+            "FISCAL_CANCELADO": "FISCAL_CANCELADO",
+        }.get(status_fiscal, "AGUARDANDO_NF")
         process_id = self.conn.execute(
             """
             INSERT INTO processos(
@@ -478,12 +549,12 @@ class FiscalReadOnlyPageTests(unittest.TestCase):
         fiscal_id = self.conn.execute(
             """
             INSERT INTO fiscal_processos(
-                processo_id, proposta, status_fiscal, data_entrada_fiscal,
+                processo_id, proposta, status_fiscal, situacao_fiscal, data_entrada_fiscal,
                 created_at, updated_at
-            ) VALUES (?, ?, ?, ?, '2026-06-15 10:00:00',
+            ) VALUES (?, ?, ?, ?, ?, '2026-06-15 10:00:00',
                       '2026-06-15 10:00:00')
             """,
-            (process_id, proposal, status_fiscal, entry_date),
+            (process_id, proposal, status_fiscal, situation, entry_date),
         ).lastrowid
         for item_id, numero, descricao, quantity, weight in (
             (item_a, "1", "Fiscal item A", 10, 25),
@@ -543,3 +614,4 @@ class FiscalReadOnlyPageTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

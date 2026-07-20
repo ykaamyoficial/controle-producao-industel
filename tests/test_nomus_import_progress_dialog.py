@@ -61,6 +61,21 @@ class NomusImportProgressDialogTests(unittest.TestCase):
         finally:
             dialog.close()
 
+    def test_dialog_uses_modern_update_like_structure(self):
+        dialog = NomusImportProgressDialog()
+        try:
+            dialog.apply_event(NomusImportProgressEvent(STAGE_SEARCH, "Localizando a proposta", 35, "Pagina 1."))
+
+            self.assertEqual(dialog.objectName(), "NomusImportProgressDialog")
+            self.assertEqual(dialog.progress_bar.objectName(), "NomusProgressBar")
+            self.assertIn("Localizando", dialog.stage_chip_value.text())
+            self.assertIn("Sem dados financeiros", dialog.security_chip_value.text())
+            self.assertIn("qlineargradient", dialog.hero.styleSheet())
+            self.assertIn("QProgressBar#NomusProgressBar", dialog.progress_bar.styleSheet())
+            self.assertGreaterEqual(dialog.width(), 700)
+        finally:
+            dialog.close()
+
     def test_dialog_error_allows_close_without_opening_success_state(self):
         dialog = NomusImportProgressDialog()
         try:

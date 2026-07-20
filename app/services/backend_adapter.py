@@ -378,6 +378,14 @@ class BackendService:
     def fiscal_rows(self, filters: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         return sort_fiscal_rows(row_to_dict(row) for row in self.repo.list_fiscal_processes(filters))
 
+    def ensure_global_fiscal_entries(self) -> int:
+        if not self.user:
+            raise legacy.AppError("Usuario nao autenticado.")
+        return self.repo.ensure_fiscal_entries_for_all_processes(
+            self.user,
+            "Entrada fiscal criada para permitir acompanhamento em qualquer area.",
+        )
+
     def fiscal_items(self, fiscal_processo_id: int) -> list[dict[str, Any]]:
         return [row_to_dict(row) for row in self.repo.list_fiscal_items(fiscal_processo_id)]
 
@@ -419,11 +427,24 @@ class BackendService:
             observacao=observacao,
         )
 
+    def mark_fiscal_invoice_withdrawn(self, fiscal_processo_id: int, observacao: str = "") -> int | None:
+        if not self.user:
+            raise legacy.AppError("Usuario nao autenticado.")
+        return self.repo.mark_fiscal_invoice_withdrawn(fiscal_processo_id, self.user, observacao)
+
     def fiscal_status_label(self, status: str) -> str:
         labels = {
             "FALTA_EMITIR_NOTA_FISCAL": "Falta emitir NF",
+            "AGUARDANDO_NF": "CP em processamento",
+            "CP_EM_PROCESSAMENTO": "CP em processamento",
+            "NF_EM_PROCESSAMENTO": "NF em processamento",
+            "DISPONIVEL_PARA_EMISSAO": "Disponivel para emitir NF",
+            "PENDENCIA_FISCAL_CRITICA": "Pendencia fiscal critica",
             "NOTA_FISCAL_PARCIAL": "NF parcial",
+            "NF_PARCIAL": "NF parcial",
             "NOTA_FISCAL_EMITIDA": "NF emitida",
+            "NF_EMITIDA": "NF emitida",
+            "NF_RETIRADA_CLIENTE": "NF retirada pelo cliente",
             "FISCAL_CANCELADO": "Fiscal cancelado",
             "PENDENTE": "Pendente",
             "PARCIAL": "Parcial",

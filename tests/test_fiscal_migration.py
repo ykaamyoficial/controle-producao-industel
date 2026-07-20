@@ -24,7 +24,9 @@ FISCAL_TABLES = {
 EXPECTED_INDEXES = {
     "ix_fiscal_processos_processo_id",
     "ix_fiscal_processos_status_fiscal",
+    "ix_fiscal_processos_situacao_fiscal",
     "ix_fiscal_processos_data_entrada",
+    "ix_fiscal_processos_data_retirada_nf",
     "ix_fiscal_itens_fiscal_processo_id",
     "ix_fiscal_itens_processo_id",
     "ix_fiscal_itens_status_item_fiscal",
@@ -50,7 +52,7 @@ class FiscalMigrationTests(unittest.TestCase):
 
     def test_fiscal_migration_runs_on_fresh_database(self):
         with self.connect(self.temp_dir / "fresh.db") as conn:
-            self.assertEqual(apply_migrations(conn), [1, 2, 3, 4, 5, 6, 7])
+            self.assertEqual(apply_migrations(conn), [1, 2, 3, 4, 5, 6, 7, 8])
             self.assertEqual(apply_migrations(conn), [])
             production_repository.initialize_database(conn)
             applied = {
@@ -58,6 +60,7 @@ class FiscalMigrationTests(unittest.TestCase):
                 for item in migration_status(conn)
             }
             self.assertTrue(applied[4])
+            self.assertTrue(applied[8])
             self.assert_fiscal_schema(conn)
 
     def test_fiscal_migration_runs_on_current_database_copy_without_operational_changes(self):
@@ -173,6 +176,19 @@ class FiscalMigrationTests(unittest.TestCase):
             )
         }
         self.assertTrue(EXPECTED_INDEXES <= indexes)
+        fiscal_columns = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(fiscal_processos)")
+        }
+        self.assertTrue(
+            {
+                "situacao_fiscal",
+                "data_retirada_nf",
+                "retirada_por",
+                "observacao_retirada_nf",
+            }
+            <= fiscal_columns
+        )
 
     def assert_fiscal_tables_empty(self, conn: sqlite3.Connection):
         for table in FISCAL_TABLES:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QPointF, QRectF, Qt
+from PySide6.QtCore import QPointF, QRectF, QSize, Qt
 from PySide6.QtGui import QColor, QIcon, QPainter, QPainterPath, QPen, QPixmap
 
 
@@ -40,6 +40,7 @@ ICON_SYMBOLS = {
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 APP_ICON_DIR = ROOT_DIR / "app" / "assets" / "icons"
+PREMIUM_ICON_SIZES = (16, 24, 32, 48, 64, 128, 256, 512)
 
 ICON_FILES = {
     "dashboard": "area_painel.png",
@@ -48,7 +49,7 @@ ICON_FILES = {
     "galvanization": "area_galvanizacao.png",
     "expedition": "area_expedicao.png",
     "stock": "area_almoxarifado.png",
-    "fiscal": "sistema_auditoria.png",
+    "fiscal": "sistema_fiscal.png",
     "partial": "status_parcial.png",
     "history": "sistema_historico.png",
     "audit": "sistema_auditoria.png",
@@ -72,6 +73,11 @@ ICON_FILES = {
     "refresh": "acao_atualizar.png",
     "pdf": "acao_pdf.png",
     "excel": "acao_excel.png",
+    "fiscal_pending": "status_pendente.png",
+    "fiscal_partial": "status_parcial.png",
+    "fiscal_done": "status_finalizado.png",
+    "fiscal_critical": "status_pendente.png",
+    "fiscal_blocked": "status_cancelado.png",
 }
 
 
@@ -82,9 +88,19 @@ def make_icon(name: str, color: str = "#2563eb", size: int = 20) -> QIcon:
         if (APP_ICON_DIR / status_file).exists():
             icon_file = status_file
     if icon_file:
+        icon = QIcon()
+        loaded = False
+        for icon_size in PREMIUM_ICON_SIZES:
+            path = APP_ICON_DIR / "premium" / str(icon_size) / icon_file
+            if path.exists():
+                icon.addFile(str(path), QSize(icon_size, icon_size))
+                loaded = True
         path = APP_ICON_DIR / icon_file
         if path.exists():
-            return QIcon(str(path))
+            icon.addFile(str(path), QSize(512, 512))
+            loaded = True
+        if loaded:
+            return icon
     pix = QPixmap(size, size)
     pix.fill(Qt.transparent)
     painter = QPainter(pix)

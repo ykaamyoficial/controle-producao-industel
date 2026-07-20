@@ -108,7 +108,7 @@ class ProcessFormDialog(QDialog):
         grid.setVerticalSpacing(7)
         fields = [
             ("cliente", "Cliente *"), ("proposta", "Proposta *"),
-            ("pedido_compra", "OC/Pedido"), ("obra_site", "Obra/Site"),
+            ("pedido_compra", "PD / Pedido de venda"), ("obra_site", "Obra/Site"),
             ("peso", "Peso total (kg)"), ("lote", "Lote"),
             ("data_entrada", "Entrada"), ("prazo_entrega", "Prazo"),
         ]

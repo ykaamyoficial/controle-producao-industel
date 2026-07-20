@@ -44,6 +44,7 @@ class FiscalEmissionTests(unittest.TestCase):
         items = self.items(fiscal_id)
         self.assertIsNotNone(emission_id)
         self.assertEqual(fiscal["status_fiscal"], "NOTA_FISCAL_PARCIAL")
+        self.assertEqual(fiscal["situacao_fiscal"], "NF_PARCIAL")
         self.assertEqual(items[0]["status_item_fiscal"], "PARCIAL")
         self.assertEqual(items[0]["quantidade_faturada"], 4)
         self.assertEqual(items[0]["peso_faturado"], 10)
@@ -87,6 +88,7 @@ class FiscalEmissionTests(unittest.TestCase):
         items = self.items(fiscal_id)
         emission = self.conn.execute("SELECT * FROM fiscal_emissoes WHERE fiscal_processo_id = ?", (fiscal_id,)).fetchone()
         self.assertEqual(fiscal["status_fiscal"], "NOTA_FISCAL_EMITIDA")
+        self.assertEqual(fiscal["situacao_fiscal"], "NF_EMITIDA")
         self.assertEqual([row["status_item_fiscal"] for row in items], ["FATURADO", "FATURADO"])
         self.assertEqual(emission["tipo_emissao"], "TOTAL")
 
@@ -137,6 +139,31 @@ class FiscalEmissionTests(unittest.TestCase):
                 [{"fiscal_item_id": item_ids[0], "quantidade_emitida": 0, "peso_emitido": 0}],
                 ADMIN,
             )
+
+    def test_allows_emission_for_process_without_fiscal_items(self):
+        _process_id, fiscal_id, _item_ids = self.create_fiscal_process("CP03006S")
+        self.conn.execute("DELETE FROM fiscal_itens WHERE fiscal_processo_id = ?", (fiscal_id,))
+        self.conn.commit()
+
+        emission_id = self.repo.register_fiscal_emission(
+            fiscal_id,
+            [],
+            ADMIN,
+            numero_controle="NF-SEM-ITEM",
+            observacao="Registro sem itens cadastrados",
+        )
+
+        fiscal = self.fiscal(fiscal_id)
+        emission = self.conn.execute("SELECT * FROM fiscal_emissoes WHERE id = ?", (emission_id,)).fetchone()
+        movement = self.last_movement(fiscal_id)
+        self.assertIsNotNone(emission_id)
+        self.assertEqual(fiscal["status_fiscal"], "NOTA_FISCAL_EMITIDA")
+        self.assertEqual(fiscal["situacao_fiscal"], "NF_EMITIDA")
+        self.assertEqual(emission["tipo_emissao"], "TOTAL")
+        self.assertEqual(emission["numero_controle"], "NF-SEM-ITEM")
+        self.assertEqual(self.count("fiscal_emissao_itens"), 0)
+        self.assertEqual(movement["tipo_movimento"], "EMISSAO_FISCAL")
+        self.assertEqual(movement["status_novo"], "NOTA_FISCAL_EMITIDA")
 
     def test_blocks_already_emitted_process(self):
         _process_id, fiscal_id, item_ids = self.create_fiscal_process("CP03007", status_fiscal="NOTA_FISCAL_EMITIDA")
@@ -192,7 +219,80 @@ class FiscalEmissionTests(unittest.TestCase):
             columns = [row["name"].lower() for row in self.conn.execute(f"PRAGMA table_info({table})")]
             self.assertFalse(any(any(term in column for term in forbidden) for column in columns), table)
 
+    def test_can_create_fiscal_entry_for_process_in_any_area(self):
+        process_id = self.conn.execute(
+            """
+            INSERT INTO processos(
+                cliente, proposta, obra_site, data_cadastro, status_geral,
+                status_producao, status_galvanizacao, status_expedicao
+            ) VALUES ('Cliente Fiscal', 'CP03011', 'Obra Fiscal', '2026-06-16 08:00:00',
+                      'EM_PRODUCAO', 'EM_PRODUCAO', 'NAO_INICIADO', 'NAO_INICIADO')
+            """
+        ).lastrowid
+        self.conn.execute(
+            """
+            INSERT INTO proposta_itens(
+                processo_principal_id, processo_atual_id, numero_item,
+                descricao, quantidade, peso
+            ) VALUES (?, ?, '1', 'Fiscal item C', 2, 4)
+            """,
+            (process_id, process_id),
+        )
+        self.conn.commit()
+
+        fiscal_id = self.repo.ensure_fiscal_entry_for_process(
+            process_id,
+            ADMIN,
+            "Entrada fiscal global",
+            require_galvanization_return=False,
+        )
+
+        fiscal = self.fiscal(fiscal_id)
+        self.assertEqual(fiscal["status_fiscal"], "FALTA_EMITIR_NOTA_FISCAL")
+        self.assertEqual(self.repo.list_fiscal_processes({"situacao_fiscal": "CP_EM_PROCESSAMENTO"})[0]["situacao_fiscal"], "CP_EM_PROCESSAMENTO")
+        self.assertEqual(len(self.items(fiscal_id)), 1)
+
+    def test_expedition_delivery_marks_emitted_nf_as_withdrawn(self):
+        process_id, fiscal_id, item_ids = self.create_fiscal_process("CP03012")
+        self.repo.register_fiscal_emission(
+            fiscal_id,
+            [
+                {"fiscal_item_id": item_ids[0], "quantidade_emitida": 10, "peso_emitido": 25},
+                {"fiscal_item_id": item_ids[1], "quantidade_emitida": 5, "peso_emitido": 15},
+            ],
+            ADMIN,
+            numero_controle="NF-RET",
+        )
+
+        self.repo.update_status(process_id, "EXPEDICAO", "ENTREGUE", "Cliente retirou", ADMIN)
+
+        fiscal = self.fiscal(fiscal_id)
+        movement = self.last_movement(fiscal_id)
+        self.assertEqual(fiscal["status_fiscal"], "NOTA_FISCAL_EMITIDA")
+        self.assertEqual(fiscal["situacao_fiscal"], "NF_RETIRADA_CLIENTE")
+        self.assertEqual(fiscal["retirada_por"], "admin")
+        self.assertEqual(movement["tipo_movimento"], "NF_RETIRADA_CLIENTE")
+        self.assertIn("Cliente retirou", movement["observacao"])
+
+    def test_expedition_delivery_without_nf_keeps_critical_fiscal_pending(self):
+        process_id, fiscal_id, _item_ids = self.create_fiscal_process("CP03013")
+
+        self.repo.update_status(process_id, "EXPEDICAO", "ENTREGUE", "Cliente retirou sem NF", ADMIN)
+
+        fiscal = self.fiscal(fiscal_id)
+        row = self.repo.list_fiscal_processes({"situacao_fiscal": "PENDENCIA_FISCAL_CRITICA"})[0]
+        self.assertEqual(fiscal["status_fiscal"], "FALTA_EMITIR_NOTA_FISCAL")
+        self.assertNotEqual(fiscal["situacao_fiscal"], "NF_RETIRADA_CLIENTE")
+        self.assertEqual(row["fiscal_processo_id"], fiscal_id)
+        self.assertEqual(row["pendencia_critica"], 1)
+
     def create_fiscal_process(self, proposal: str, status_fiscal: str = "FALTA_EMITIR_NOTA_FISCAL"):
+        situation = {
+            "FALTA_EMITIR_NOTA_FISCAL": "AGUARDANDO_NF",
+            "NOTA_FISCAL_PARCIAL": "NF_PARCIAL",
+            "NOTA_FISCAL_EMITIDA": "NF_EMITIDA",
+            "FISCAL_CANCELADO": "FISCAL_CANCELADO",
+        }.get(status_fiscal, "AGUARDANDO_NF")
         process_id = self.conn.execute(
             """
             INSERT INTO processos(
@@ -221,12 +321,12 @@ class FiscalEmissionTests(unittest.TestCase):
         fiscal_id = self.conn.execute(
             """
             INSERT INTO fiscal_processos(
-                processo_id, proposta, status_fiscal, data_entrada_fiscal,
+                processo_id, proposta, status_fiscal, situacao_fiscal, data_entrada_fiscal,
                 created_at, updated_at
-            ) VALUES (?, ?, ?, '16/06/2026', '16/06/2026 08:00:00',
+            ) VALUES (?, ?, ?, ?, '16/06/2026', '16/06/2026 08:00:00',
                       '16/06/2026 08:00:00')
             """,
-            (process_id, proposal, status_fiscal),
+            (process_id, proposal, status_fiscal, situation),
         ).lastrowid
         for item_id, numero, descricao, quantity, weight in (
             (item_ids[0], "1", "Fiscal item A", 10, 25),

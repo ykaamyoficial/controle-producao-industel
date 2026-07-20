@@ -164,8 +164,12 @@ def app_stylesheet(palette: dict) -> str:
         background: transparent;
         border: 1px solid transparent;
         text-align: left;
-        padding: 9px 12px;
+        padding: 2px 8px;
         {radius(12)}
+    }}
+    QPushButton#NavButton[collapsed="true"] {{
+        text-align: center;
+        padding: 1px 0px;
     }}
     QPushButton#NavButton:hover {{
         background: {surface_alt};
@@ -186,9 +190,13 @@ def app_stylesheet(palette: dict) -> str:
         color: {text};
         border: 1px solid {border};
         text-align: left;
-        padding: 8px 12px;
+        padding: 3px 8px;
         {radius(12)}
         font-weight: 700;
+    }}
+    QPushButton#ThemeToggleButton[collapsed="true"] {{
+        text-align: center;
+        padding: 1px 0px;
     }}
     QPushButton#ThemeToggleButton:hover {{
         background: {accent};
@@ -474,8 +482,16 @@ STATUS_CATEGORY_BY_STATUS = {
     "ALMOXARIFADO_ENTREGUE": "final_done",
     "ALMOXARIFADO_ENTREGUE_PARCIAL": "attention",
     "FALTA_EMITIR_NOTA_FISCAL": "danger",
+    "AGUARDANDO_NF": "waiting",
+    "CP_EM_PROCESSAMENTO": "progress",
+    "NF_EM_PROCESSAMENTO": "progress",
+    "DISPONIVEL_PARA_EMISSAO": "waiting",
+    "PENDENCIA_FISCAL_CRITICA": "blocked",
     "NOTA_FISCAL_PARCIAL": "attention",
+    "NF_PARCIAL": "attention",
     "NOTA_FISCAL_EMITIDA": "done",
+    "NF_EMITIDA": "done",
+    "NF_RETIRADA_CLIENTE": "final_done",
     "FISCAL_CANCELADO": "danger",
     "PENDENTE": "attention",
     "PARCIAL": "attention",
