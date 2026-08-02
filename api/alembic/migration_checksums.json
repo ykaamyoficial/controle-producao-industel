@@ -1,0 +1,13 @@
+{
+  "20260720_0001_create_system_metadata.py": "b482fccb78e27df96b64f7900472fc89c54a0dac7243b069db385962565b9b27",
+  "20260720_0002_create_auth_security.py": "7adddf55e86187ea0e4c1c77178e4b702312f70b405d803f9ed4eef40b52476e",
+  "20260720_0003_create_proposals_read_model.py": "2a406b463e556f7f316f7e48730d5d2b02f7fe8c645bc70c0bf2aea22188ea95",
+  "20260720_0004_link_admin_proposal_permissions.py": "2b536fe8d0ec87e406129795a3a711b0cdf803e42558a3543a0d43dfa513aa88",
+  "20260720_0005_make_proposals_official.py": "a29157a8fe5b5c986084cbda1b5793e76edb9a88cbb4a209edd3afedd3a5692b",
+  "20260721_0006_create_galvanization_loads.py": "07992fde7214aff26ef79003001424b21c5d306e4e76c689911ddd9bfe6c84d0",
+  "20260721_0007_create_expedition_items.py": "d08799d6ddecc45dc333b2f7eef0e6515c3a2708dc4d9b00aa577bc22e4b900e",
+  "20260721_0008_create_fiscal_records.py": "dc01df0550569e7b7eb15477e81b1df2b12f07bf18cab80e595a0795d469e21d",
+  "20260722_0009_initial_admin_provisioning.py": "db9018676a2faf24011f7a02c6b04d8edc19277f1c116e5570687638f968f33b",
+  "20260727_0010_sector_rbac_permissions.py": "bcb2b52a13f935cd56dae7e40760795e468f2aa55cb757a73a2dbbc3efdfb8f5",
+  "20260801_0011_create_chat_module.py": "2a95867c24b3d7b062e6aaebff918f46d1756da0e19462a534081c911da8e5c5"
+}

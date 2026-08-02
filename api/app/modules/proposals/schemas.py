@@ -1,0 +1,945 @@
+from __future__ import annotations
+
+from datetime import date, datetime
+from decimal import Decimal
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+
+class ProposalItemSummary(BaseModel):
+    id: int
+    legacy_id: int | None = None
+    item_number: str
+    product_code: str | None = None
+    description: str | None = None
+    quantity: Decimal
+    unit: str | None = None
+    unit_weight: Decimal
+    total_weight: Decimal
+    produce_internally: str
+    requires_galvanization: str
+    flow_defined: bool
+    produced: bool
+    galvanized: bool
+    delivered: bool
+    synced_at: datetime
+    source_hash: str | None = None
+    version: int = 1
+    active: bool = True
+    notes: str | None = None
+
+
+class ProposalItemDetail(ProposalItemSummary):
+    proposal_id: int
+    legacy_current_process_id: int | None = None
+    delivered_at: datetime | None = None
+    legacy_updated_at: datetime | None = None
+
+
+class ProposalListItem(BaseModel):
+    id: int
+    legacy_id: int | None = None
+    proposal_number: str
+    customer_name: str
+    project_name: str | None = None
+    order_reference: str | None = None
+    lot: str | None = None
+    proposal_date: date | None = None
+    deadline_date: date | None = None
+    current_area: str | None = None
+    current_status: str | None = None
+    is_partial: bool
+    is_cancelled: bool
+    is_completed: bool
+    legacy_updated_at: datetime | None = None
+    synced_at: datetime
+    version: int = 1
+    active: bool = True
+
+
+class ProposalDetail(ProposalListItem):
+    general_status: str | None = None
+    production_status: str | None = None
+    galvanization_status: str | None = None
+    shipping_status: str | None = None
+    warehouse_status: str | None = None
+    flow_situation: str | None = None
+    has_production_pending: bool
+    process_type: str | None = None
+    parent_legacy_id: int | None = None
+    partial_number: int | None = None
+    source: str
+    source_hash: str | None = None
+    legacy_created_at: datetime | None = None
+    notes: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    items: list[ProposalItemSummary] = Field(default_factory=list)
+
+
+class PaginatedProposalResponse(BaseModel):
+    items: list[ProposalListItem]
+    total: int
+    limit: int
+    offset: int
+
+
+class PartialProposalSummary(BaseModel):
+    id: int
+    proposal_number: str
+    customer_name: str
+    project_name: str | None = None
+    lot: str | None = None
+    current_area: str | None = None
+    current_status: str | None = None
+    production_status: str | None = None
+    galvanization_status: str | None = None
+    shipping_status: str | None = None
+    warehouse_status: str | None = None
+    fiscal_status: str | None = None
+    flow_situation: str | None = None
+    process_type: str | None = None
+    partial_number: int | None = None
+    total_items: int
+    produced_items: int
+    production_pending_items: int
+    galvanized_items: int
+    galvanization_pending_items: int
+    delivered_items: int
+    expedition_pending_items: int
+    billed_items: int
+    fiscal_pending_items: int
+    total_weight: Decimal
+    produced_weight: Decimal
+    production_pending_weight: Decimal
+    galvanization_sent_weight: Decimal
+    galvanization_returned_weight: Decimal
+    galvanization_pending_weight: Decimal
+    expedition_delivered_weight: Decimal
+    expedition_pending_weight: Decimal
+    fiscal_billed_weight: Decimal
+    fiscal_pending_weight: Decimal
+    partial_stage: str
+    updated_at: datetime | None = None
+    version: int = 1
+
+
+class PaginatedPartialProposalResponse(BaseModel):
+    items: list[PartialProposalSummary]
+    total: int
+    limit: int
+    offset: int
+
+
+class WarehouseProposalSummary(BaseModel):
+    id: int
+    proposal_number: str
+    customer_name: str
+    project_name: str | None = None
+    lot: str | None = None
+    current_area: str | None = None
+    current_status: str | None = None
+    warehouse_status: str
+    warehouse_required: str
+    general_status: str | None = None
+    shipping_status: str | None = None
+    total_items: int
+    total_weight: Decimal
+    updated_at: datetime | None = None
+    version: int = 1
+
+
+class PaginatedWarehouseProposalResponse(BaseModel):
+    items: list[WarehouseProposalSummary]
+    total: int
+    limit: int
+    offset: int
+
+
+class ProposalHistoryItem(BaseModel):
+    id: int
+    source: str
+    proposal_id: int | None = None
+    proposal_number: str | None = None
+    area: str | None = None
+    from_status: str | None = None
+    to_status: str | None = None
+    event_type: str
+    actor_user_id: int | None = None
+    actor_name: str | None = None
+    observation: str | None = None
+    request_id: str | None = None
+    created_at: datetime
+
+
+class ProposalItemCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    item_number: str = Field(min_length=1, max_length=80)
+    product_code: str | None = Field(default=None, max_length=120)
+    description: str = Field(min_length=1)
+    quantity: Decimal = Field(gt=0)
+    unit: str | None = Field(default="UN", max_length=40)
+    unit_weight: Decimal = Field(ge=0)
+    total_weight: Decimal = Field(ge=0)
+    produce_internally: bool | None = None
+    non_production_reason: str | None = None
+    requires_galvanization: bool | None = None
+    notes: str | None = None
+
+    @field_validator("item_number", "product_code", "unit", mode="before")
+    @classmethod
+    def strip_short_text(cls, value):
+        return value.strip() if isinstance(value, str) else value
+
+
+class ProposalItemUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    version: int = Field(ge=1)
+    item_number: str | None = Field(default=None, min_length=1, max_length=80)
+    product_code: str | None = Field(default=None, max_length=120)
+    description: str | None = Field(default=None, min_length=1)
+    quantity: Decimal | None = Field(default=None, gt=0)
+    unit: str | None = Field(default=None, max_length=40)
+    unit_weight: Decimal | None = Field(default=None, ge=0)
+    total_weight: Decimal | None = Field(default=None, ge=0)
+    produce_internally: bool | None = None
+    non_production_reason: str | None = None
+    requires_galvanization: bool | None = None
+    notes: str | None = None
+
+
+class ProposalCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    proposal_number: str = Field(min_length=1, max_length=80)
+    customer_name: str = Field(min_length=1, max_length=180)
+    project_name: str | None = Field(default=None, max_length=180)
+    purchase_order: str | None = Field(default=None, max_length=120)
+    batch_reference: str | None = Field(default=None, max_length=80)
+    proposal_date: date | None = None
+    deadline_date: date | None = None
+    source: str = Field(default="MANUAL", max_length=80)
+    warehouse_status: str | None = Field(default=None, max_length=120)
+    notes: str | None = None
+    items: list[ProposalItemCreate] = Field(min_length=1)
+
+    @field_validator("proposal_number", "customer_name", "project_name", "purchase_order", "batch_reference", "source", mode="before")
+    @classmethod
+    def strip_text(cls, value):
+        return value.strip() if isinstance(value, str) else value
+
+    @field_validator("source")
+    @classmethod
+    def validate_source(cls, value: str) -> str:
+        normalized = value.upper()
+        if normalized not in {"MANUAL", "NOMUS_API", "NOMUS_PDF", "IMPORT", "SYSTEM"}:
+            raise ValueError("origem invalida")
+        return normalized
+
+
+class ProposalUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    version: int = Field(ge=1)
+    customer_name: str | None = Field(default=None, min_length=1, max_length=180)
+    project_name: str | None = Field(default=None, max_length=180)
+    purchase_order: str | None = Field(default=None, max_length=120)
+    batch_reference: str | None = Field(default=None, max_length=80)
+    proposal_date: date | None = None
+    deadline_date: date | None = None
+    warehouse_status: str | None = Field(default=None, max_length=120)
+    notes: str | None = None
+
+
+class WarehouseStatusRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    version: int = Field(ge=1)
+    status: str = Field(max_length=120)
+    observation: str | None = Field(default=None, max_length=500)
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def strip_status(cls, value):
+        return value.strip().upper() if isinstance(value, str) else value
+
+
+class ProposalCancelRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    version: int = Field(ge=1)
+    reason: str | None = Field(default=None, max_length=500)
+
+
+class ProposalStatusChangeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    version: int = Field(ge=1)
+    to_area: str = Field(max_length=80)
+    to_status: str = Field(max_length=120)
+    reason: str | None = Field(default=None, max_length=500)
+
+    @field_validator("to_area", "to_status", mode="before")
+    @classmethod
+    def strip_state(cls, value):
+        return value.strip().upper() if isinstance(value, str) else value
+
+
+class ProposalAdministrativeCorrectionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    to_area: str = Field(max_length=80)
+    to_status: str = Field(max_length=120)
+    justification: str = Field(min_length=1, max_length=1000)
+
+    @field_validator("to_area", "to_status", mode="before")
+    @classmethod
+    def strip_state(cls, value):
+        return value.strip().upper().replace(" ", "_") if isinstance(value, str) else value
+
+    @field_validator("justification", mode="before")
+    @classmethod
+    def strip_justification(cls, value):
+        return value.strip() if isinstance(value, str) else value
+
+
+class ProposalStatusResponse(BaseModel):
+    id: int
+    current_area: str
+    current_status: str
+    version: int
+    active: bool
+
+
+class ProductionProgress(BaseModel):
+    total_items: int
+    internal_items: int
+    produced_items: int
+    pending_items: int
+    undefined_flow_items: int
+    missing_weight_items: int
+    needs_galvanization_items: int
+    no_galvanization_items: int
+    total_weight: Decimal
+    produced_weight: Decimal
+    pending_weight: Decimal
+    next_destination: str | None = None
+    summary_status: str
+
+
+class ProductionAction(BaseModel):
+    id: str
+    label: str
+    enabled: bool = True
+    reason: str | None = None
+
+
+class ProductionProposalListItem(ProposalListItem):
+    production_status: str | None = None
+    general_status: str | None = None
+    progress: ProductionProgress
+    actions: list[ProductionAction] = Field(default_factory=list)
+
+
+class PaginatedProductionResponse(BaseModel):
+    items: list[ProductionProposalListItem]
+    total: int
+    limit: int
+    offset: int
+
+
+class ProductionProposalDetail(ProposalDetail):
+    progress: ProductionProgress
+    actions: list[ProductionAction] = Field(default_factory=list)
+
+
+class ProductionItemRow(BaseModel):
+    proposal_id: int
+    proposal_number: str
+    customer_name: str
+    project_name: str | None = None
+    lot: str | None = None
+    proposal_version: int
+    proposal_status: str
+    item_id: int
+    item_number: str
+    product_code: str | None = None
+    description: str | None = None
+    quantity: Decimal
+    unit: str | None = None
+    unit_weight: Decimal
+    total_weight: Decimal
+    produce_internally: str
+    requires_galvanization: str
+    flow_defined: bool
+    produced: bool
+    notes: str | None = None
+    version: int
+
+
+class PaginatedProductionItemResponse(BaseModel):
+    items: list[ProductionItemRow]
+    total: int
+    limit: int
+    offset: int
+
+
+class ProductionStartRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    version: int = Field(ge=1)
+    observation: str | None = Field(default=None, max_length=500)
+
+
+class ProductionItemFlowDefinition(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    item_id: int = Field(gt=0)
+    version: int | None = Field(default=None, ge=1)
+    produce_internally: bool | None = None
+    non_production_reason: str | None = Field(default=None, max_length=500)
+    requires_galvanization: bool | None = None
+    notes: str | None = None
+
+
+class ProductionItemFlowRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    version: int = Field(ge=1)
+    origin: str = Field(default="Producao", max_length=80)
+    items: list[ProductionItemFlowDefinition] = Field(min_length=1)
+
+
+class ProductionItemWeightUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    item_id: int = Field(gt=0)
+    version: int | None = Field(default=None, ge=1)
+    unit_weight: Decimal = Field(ge=0)
+
+
+class ProductionItemWeightsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    version: int = Field(ge=1)
+    items: list[ProductionItemWeightUpdate] = Field(min_length=1)
+
+
+class ProductionCompleteItemsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    version: int = Field(ge=1)
+    item_ids: list[int] | None = None
+    observation: str | None = Field(default=None, max_length=500)
+
+
+class GalvanizationCandidateItem(BaseModel):
+    proposal_id: int
+    proposal_number: str
+    customer_name: str
+    project_name: str | None = None
+    lot: str | None = None
+    item_id: int
+    item_number: str
+    product_code: str | None = None
+    description: str
+    quantity: Decimal
+    available_quantity: Decimal
+    unit_weight: Decimal
+    available_weight: Decimal
+    sent_quantity: Decimal
+    sent_weight: Decimal
+    production_completed_at: datetime | None = None
+    priority: str | None = None
+    notes: str | None = None
+    version: int
+    situation: str
+
+
+class PaginatedGalvanizationCandidateResponse(BaseModel):
+    items: list[GalvanizationCandidateItem]
+    total: int
+    limit: int
+    offset: int
+
+
+class GalvanizationLoadItemSummary(BaseModel):
+    id: int
+    load_id: int
+    proposal_id: int
+    proposal_number: str
+    customer_name: str
+    proposal_item_id: int
+    item_number: str
+    product_code: str | None = None
+    description: str
+    sent_quantity: Decimal
+    returned_quantity: Decimal
+    pending_quantity: Decimal
+    unit_weight: Decimal
+    sent_weight: Decimal
+    returned_weight: Decimal
+    pending_weight: Decimal
+    status: str
+    version: int
+    returned_at: datetime | None = None
+    active: bool = True
+
+
+class GalvanizationLoadProposalSummary(BaseModel):
+    proposal_id: int
+    proposal_number: str
+    customer_name: str
+    project_name: str | None = None
+    sent_weight: Decimal
+    returned_weight: Decimal
+    pending_weight: Decimal
+    item_count: int
+    pending_item_count: int
+    status: str
+
+
+class GalvanizationLoadSummary(BaseModel):
+    id: int
+    code: str | None = None
+    driver_name: str
+    max_weight: Decimal | None = None
+    total_weight: Decimal
+    status: str
+    expected_return_date: date | None = None
+    sent_at: datetime | None = None
+    returned_at: datetime | None = None
+    closed_at: datetime | None = None
+    notes: str | None = None
+    version: int
+    active: bool
+    created_at: datetime
+    updated_at: datetime
+    proposal_count: int
+    item_count: int
+    returned_item_count: int
+    pending_item_count: int
+    pending_weight: Decimal
+    overdue: bool = False
+
+
+class PaginatedGalvanizationLoadResponse(BaseModel):
+    items: list[GalvanizationLoadSummary]
+    total: int
+    limit: int
+    offset: int
+
+
+class GalvanizationLoadDetail(GalvanizationLoadSummary):
+    proposals: list[GalvanizationLoadProposalSummary] = Field(default_factory=list)
+    items: list[GalvanizationLoadItemSummary] = Field(default_factory=list)
+
+
+class GalvanizationLoadItemInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    proposal_item_id: int = Field(gt=0)
+    version: int | None = Field(default=None, ge=1)
+    sent_quantity: Decimal | None = Field(default=None, gt=0)
+    notes: str | None = Field(default=None, max_length=500)
+
+
+class GalvanizationLoadCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    driver_name: str = Field(min_length=1, max_length=180)
+    max_weight: Decimal | None = Field(default=None, gt=0)
+    expected_return_date: date | None = None
+    notes: str | None = Field(default=None, max_length=1000)
+    items: list[GalvanizationLoadItemInput] = Field(min_length=1)
+
+    @field_validator("driver_name", mode="before")
+    @classmethod
+    def strip_driver(cls, value):
+        return value.strip() if isinstance(value, str) else value
+
+
+class GalvanizationLoadUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    version: int = Field(ge=1)
+    driver_name: str | None = Field(default=None, min_length=1, max_length=180)
+    max_weight: Decimal | None = Field(default=None, gt=0)
+    expected_return_date: date | None = None
+    notes: str | None = Field(default=None, max_length=1000)
+    items: list[GalvanizationLoadItemInput] | None = None
+
+
+class GalvanizationLoadVersionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    version: int = Field(ge=1)
+    observation: str | None = Field(default=None, max_length=1000)
+
+
+class GalvanizationReturnItemInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    load_item_id: int | None = Field(default=None, gt=0)
+    proposal_item_id: int | None = Field(default=None, gt=0)
+    quantity_returned: Decimal | None = Field(default=None, gt=0)
+
+
+class GalvanizationReturnRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    version: int = Field(ge=1)
+    proposal_ids: list[int] | None = None
+    items: list[GalvanizationReturnItemInput] | None = None
+    observation: str | None = Field(default=None, max_length=1000)
+
+
+class ExpeditionItemSummary(BaseModel):
+    id: int
+    proposal_id: int
+    proposal_item_id: int
+    item_number: str
+    product_code: str | None = None
+    description: str
+    available_quantity: Decimal
+    separated_quantity: Decimal
+    delivered_quantity: Decimal
+    remanaged_quantity: Decimal
+    pending_quantity: Decimal
+    unit_weight: Decimal
+    total_weight: Decimal
+    origin: str
+    status: str
+    version: int
+
+
+class ExpeditionProposalSummary(BaseModel):
+    id: int
+    proposal_number: str
+    customer_name: str
+    project_name: str | None = None
+    lot: str | None = None
+    shipping_status: str | None = None
+    general_status: str | None = None
+    version: int
+    item_count: int
+    available_quantity: Decimal
+    separated_quantity: Decimal
+    delivered_quantity: Decimal
+    pending_quantity: Decimal
+    origins: list[str] = Field(default_factory=list)
+    actions: list[ProductionAction] = Field(default_factory=list)
+
+
+class PaginatedExpeditionResponse(BaseModel):
+    items: list[ExpeditionProposalSummary]
+    total: int
+    limit: int
+    offset: int
+
+
+class ExpeditionProposalDetail(ExpeditionProposalSummary):
+    items: list[ExpeditionItemSummary] = Field(default_factory=list)
+
+
+class ExpeditionVersionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    version: int = Field(ge=1)
+    observation: str | None = Field(default=None, max_length=1000)
+
+
+class ExpeditionItemQuantityInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expedition_item_id: int | None = Field(default=None, gt=0)
+    proposal_item_id: int | None = Field(default=None, gt=0)
+    version: int | None = Field(default=None, ge=1)
+    quantity: Decimal | None = Field(default=None, gt=0)
+
+
+class ExpeditionItemsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    version: int = Field(ge=1)
+    items: list[ExpeditionItemQuantityInput] | None = None
+    observation: str | None = Field(default=None, max_length=1000)
+
+
+class ExpeditionRemanageRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    version: int = Field(ge=1)
+    items: list[ExpeditionItemQuantityInput] = Field(min_length=1)
+    reason: str = Field(min_length=1, max_length=1000)
+
+
+class ExpeditionRemanagementDeliveryRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    version: int = Field(ge=1)
+    source_proposal_id: int = Field(gt=0)
+    source_version: int = Field(ge=1)
+    items: list[ExpeditionItemQuantityInput] = Field(min_length=1)
+    reason: str = Field(min_length=1, max_length=1000)
+
+
+class FiscalAction(BaseModel):
+    id: str
+    label: str
+    enabled: bool = True
+    reason: str | None = None
+
+
+class FiscalItemSummary(BaseModel):
+    id: int
+    fiscal_record_id: int
+    proposal_id: int
+    proposal_item_id: int
+    item_number: str
+    product_code: str | None = None
+    description: str
+    total_quantity: Decimal
+    billed_quantity: Decimal
+    pending_quantity: Decimal
+    total_weight: Decimal
+    billed_weight: Decimal
+    pending_weight: Decimal
+    status: str
+    version: int
+
+
+class FiscalInvoiceItemSummary(BaseModel):
+    id: int
+    fiscal_invoice_id: int
+    fiscal_item_id: int
+    proposal_item_id: int
+    item_number: str
+    quantity: Decimal
+    weight: Decimal
+    active: bool
+    cancelled_at: datetime | None = None
+    cancel_reason: str | None = None
+
+
+class FiscalInvoiceSummary(BaseModel):
+    id: int
+    fiscal_record_id: int
+    proposal_id: int
+    invoice_number: str
+    series: str | None = None
+    access_key: str | None = None
+    issued_at: datetime
+    emission_type: str
+    status: str
+    source: str
+    observation: str | None = None
+    version: int
+    item_count: int
+    quantity: Decimal
+    weight: Decimal
+    items: list[FiscalInvoiceItemSummary] = Field(default_factory=list)
+
+
+class FiscalEventSummary(BaseModel):
+    id: int
+    event_type: str
+    from_status: str | None = None
+    to_status: str | None = None
+    actor_user_id: int | None = None
+    created_at: datetime
+    metadata: dict | None = None
+
+
+class FiscalRecordSummary(BaseModel):
+    id: int
+    proposal_id: int
+    proposal_number: str
+    customer_name: str
+    project_name: str | None = None
+    lot: str | None = None
+    current_area: str | None = None
+    current_status: str | None = None
+    shipping_status: str | None = None
+    status_fiscal: str
+    fiscal_situation: str
+    entry_date: date
+    last_emission_at: datetime | None = None
+    invoice_withdrawn_at: datetime | None = None
+    version: int
+    item_count: int
+    pending_items: int
+    billed_items: int
+    total_weight: Decimal
+    billed_weight: Decimal
+    pending_weight: Decimal
+    critical_pending: bool = False
+    older_than_7_days: bool = False
+    actions: list[FiscalAction] = Field(default_factory=list)
+
+
+class FiscalRecordDetail(FiscalRecordSummary):
+    items: list[FiscalItemSummary] = Field(default_factory=list)
+    invoices: list[FiscalInvoiceSummary] = Field(default_factory=list)
+    events: list[FiscalEventSummary] = Field(default_factory=list)
+
+
+class PaginatedFiscalResponse(BaseModel):
+    items: list[FiscalRecordSummary]
+    total: int
+    limit: int
+    offset: int
+
+
+class FiscalIndicators(BaseModel):
+    falta_emitir: int
+    nf_parcial: int
+    nf_emitida: int
+    pendencia_critica: int
+    entregues_sem_nf: int
+    peso_pendente: Decimal
+    peso_faturado: Decimal
+    mais_7_dias_sem_emissao: int
+
+
+class FiscalEmissionItemInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    fiscal_item_id: int | None = Field(default=None, gt=0)
+    proposal_item_id: int | None = Field(default=None, gt=0)
+    version: int | None = Field(default=None, ge=1)
+    quantity: Decimal | None = Field(default=None, gt=0)
+    weight: Decimal | None = Field(default=None, ge=0)
+
+
+class FiscalRegisterInvoiceRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    version: int = Field(ge=1)
+    invoice_number: str = Field(min_length=1, max_length=80)
+    series: str | None = Field(default=None, max_length=40)
+    access_key: str | None = Field(default=None, max_length=80)
+    issued_at: datetime | None = None
+    source: str = Field(default="MANUAL", max_length=40)
+    observation: str | None = Field(default=None, max_length=1000)
+    items: list[FiscalEmissionItemInput] | None = None
+
+    @field_validator("invoice_number", "series", "access_key", "source", mode="before")
+    @classmethod
+    def strip_fiscal_text(cls, value):
+        return value.strip() if isinstance(value, str) else value
+
+    @field_validator("source")
+    @classmethod
+    def validate_fiscal_source(cls, value: str) -> str:
+        normalized = value.upper()
+        if normalized not in {"MANUAL", "NOMUS", "SYSTEM"}:
+            raise ValueError("origem fiscal invalida")
+        return normalized
+
+
+class FiscalCancelInvoiceItemRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    version: int = Field(ge=1)
+    reason: str = Field(min_length=1, max_length=1000)
+
+
+class FiscalWithdrawalRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    version: int = Field(ge=1)
+    observation: str | None = Field(default=None, max_length=1000)
+
+
+class ProposalItemSyncPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    legacy_id: int = Field(gt=0)
+    legacy_current_process_id: int | None = Field(default=None, gt=0)
+    item_number: str = Field(min_length=1, max_length=80)
+    product_code: str | None = Field(default=None, max_length=120)
+    description: str | None = None
+    quantity: Decimal = Field(ge=0)
+    unit: str | None = Field(default=None, max_length=40)
+    unit_weight: Decimal = Field(ge=0)
+    total_weight: Decimal = Field(ge=0)
+    produce_internally: str = Field(max_length=20)
+    requires_galvanization: str = Field(max_length=20)
+    flow_defined: bool = False
+    produced: bool = False
+    galvanized: bool = False
+    delivered: bool = False
+    delivered_at: datetime | None = None
+    legacy_created_at: datetime | None = None
+    legacy_updated_at: datetime | None = None
+    source_hash: str = Field(min_length=64, max_length=64)
+
+    @field_validator("item_number", "product_code", "unit", "produce_internally", "requires_galvanization", mode="before")
+    @classmethod
+    def strip_short_text(cls, value):
+        return value.strip() if isinstance(value, str) else value
+
+
+class ProposalSyncPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    legacy_id: int = Field(gt=0)
+    proposal_number: str = Field(min_length=1, max_length=80)
+    customer_name: str = Field(min_length=1, max_length=180)
+    project_name: str | None = Field(default=None, max_length=180)
+    order_reference: str | None = Field(default=None, max_length=120)
+    lot: str | None = Field(default=None, max_length=80)
+    proposal_date: date | None = None
+    deadline_date: date | None = None
+    current_area: str | None = Field(default=None, max_length=80)
+    current_status: str | None = Field(default=None, max_length=120)
+    general_status: str | None = Field(default=None, max_length=120)
+    production_status: str | None = Field(default=None, max_length=120)
+    galvanization_status: str | None = Field(default=None, max_length=120)
+    shipping_status: str | None = Field(default=None, max_length=120)
+    warehouse_status: str | None = Field(default=None, max_length=120)
+    flow_situation: str | None = Field(default=None, max_length=120)
+    has_production_pending: bool = False
+    process_type: str | None = Field(default=None, max_length=80)
+    parent_legacy_id: int | None = None
+    partial_number: int | None = None
+    is_partial: bool = False
+    is_cancelled: bool = False
+    is_completed: bool = False
+    source: str = Field(default="sqlite", max_length=80)
+    legacy_created_at: datetime | None = None
+    legacy_updated_at: datetime | None = None
+    source_hash: str = Field(min_length=64, max_length=64)
+    items: list[ProposalItemSyncPayload] = Field(default_factory=list)
+
+    @field_validator("proposal_number", "customer_name", "project_name", "order_reference", "lot", mode="before")
+    @classmethod
+    def strip_text(cls, value):
+        return value.strip() if isinstance(value, str) else value
+
+
+class ProposalSyncBatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source_identifier: str = Field(min_length=1, max_length=300)
+    dry_run: bool = False
+    batch_number: int = Field(default=1, ge=1)
+    batch_total: int = Field(default=1, ge=1)
+    proposals: list[ProposalSyncPayload] = Field(default_factory=list, max_length=200)
+
+
+class SyncSummary(BaseModel):
+    received: int = 0
+    created: int = 0
+    updated: int = 0
+    unchanged: int = 0
+    rejected: int = 0
+    errors: list[str] = Field(default_factory=list)
+    dry_run: bool = False
+    sync_run_id: int | None = None
+    item_created: int = 0
+    item_updated: int = 0
+    item_unchanged: int = 0
