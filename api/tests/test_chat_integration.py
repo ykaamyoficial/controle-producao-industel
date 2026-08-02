@@ -18,6 +18,7 @@ from api.app.modules.auth.models import Permission, Role, User
 from api.app.modules.auth.permissions import ADMIN_PERMISSION_CODES, CHAT_SEND, CHAT_VIEW
 from api.app.modules.auth.security import hash_password
 from api.app.modules.auth.tokens import utcnow
+from api.app.modules.chat.models import ChatConversation
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -295,6 +296,50 @@ class ChatIntegrationTests(unittest.TestCase):
 
         blocked_finalized = self.client.get("/api/v1/chat/conversations?status=FINALIZADA", headers=joao_headers)
         self.assertEqual(blocked_finalized.status_code, 403)
+
+    def _finalize_conversation(self, conversation_id: int) -> None:
+        async def _update():
+            session_factory = get_sessionmaker()
+            async with session_factory() as session:
+                conversation = await session.get(ChatConversation, conversation_id)
+                conversation.status = "FINALIZADA"
+                await session.commit()
+
+        asyncio.run(_update())
+
+    def test_finalized_conversation_content_is_blocked_without_permission(self):
+        admin_headers = self._headers("admin")
+        joao_headers = self._headers("joao")
+        proposal = self._create_proposal(admin_headers, "CP-CHAT-0003")
+
+        timeline = self.client.get(f"/api/v1/chat/proposals/{proposal['id']}/timeline", headers=admin_headers)
+        self.assertEqual(timeline.status_code, 200, timeline.text)
+        conversation_id = timeline.json()["conversation_id"]
+
+        self.client.post(
+            f"/api/v1/chat/conversations/{conversation_id}/messages",
+            json={"body": "Mensagem antes de finalizar.", "message_type": "MENSAGEM"},
+            headers=admin_headers,
+        )
+
+        # joao tem CHAT_VIEW mas nao CHAT_VIEW_FINALIZED: enquanto a conversa
+        # esta ativa, ele consegue ler normalmente.
+        active_messages = self.client.get(f"/api/v1/chat/conversations/{conversation_id}/messages", headers=joao_headers)
+        self.assertEqual(active_messages.status_code, 200, active_messages.text)
+
+        self._finalize_conversation(conversation_id)
+
+        # depois de finalizada, o acesso direto por ID (nao so a listagem
+        # filtrada) tem que ser bloqueado para quem nao tem a permissao.
+        blocked_messages = self.client.get(f"/api/v1/chat/conversations/{conversation_id}/messages", headers=joao_headers)
+        self.assertEqual(blocked_messages.status_code, 403, blocked_messages.text)
+
+        blocked_timeline = self.client.get(f"/api/v1/chat/proposals/{proposal['id']}/timeline", headers=joao_headers)
+        self.assertEqual(blocked_timeline.status_code, 403, blocked_timeline.text)
+
+        # admin e superuser: continua enxergando o conteudo normalmente.
+        admin_messages = self.client.get(f"/api/v1/chat/conversations/{conversation_id}/messages", headers=admin_headers)
+        self.assertEqual(admin_messages.status_code, 200, admin_messages.text)
 
 
 if __name__ == "__main__":

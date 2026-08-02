@@ -7,8 +7,7 @@ from api.app.core.exceptions import PermissionDeniedError
 from api.app.database.session import get_db_session
 from api.app.modules.auth.dependencies import require_permission
 from api.app.modules.auth.models import User
-from api.app.modules.auth.permissions import CHAT_SEND, CHAT_VIEW, CHAT_VIEW_FINALIZED
-from api.app.modules.auth.service import effective_permissions
+from api.app.modules.auth.permissions import CHAT_SEND, CHAT_VIEW
 from api.app.modules.chat import service
 from api.app.modules.chat.schemas import (
     ConversationList,
@@ -29,9 +28,7 @@ router = APIRouter(tags=["chat"])
 def _ensure_can_view_status(actor: User, status_filter: str | None) -> None:
     if status_filter != "FINALIZADA":
         return
-    if actor.is_superuser:
-        return
-    if CHAT_VIEW_FINALIZED not in effective_permissions(actor):
+    if not service.actor_can_view_finalized(actor):
         raise PermissionDeniedError("Seu usuario nao pode visualizar conversas finalizadas.")
 
 
@@ -54,9 +51,9 @@ async def list_messages(
     limit: int = Query(200, ge=1, le=500),
     offset: int = Query(0, ge=0),
     session: AsyncSession = Depends(get_db_session),
-    _actor: User = Depends(require_permission(CHAT_VIEW)),
+    actor: User = Depends(require_permission(CHAT_VIEW)),
 ):
-    return await service.list_messages(session, conversation_id, limit=limit, offset=offset)
+    return await service.list_messages(session, conversation_id, actor, limit=limit, offset=offset)
 
 
 @router.post("/chat/conversations/{conversation_id}/messages", response_model=MessageOut, status_code=status.HTTP_201_CREATED)
@@ -83,9 +80,9 @@ async def answer_question(
 async def get_proposal_timeline(
     proposal_id: int,
     session: AsyncSession = Depends(get_db_session),
-    _actor: User = Depends(require_permission(CHAT_VIEW)),
+    actor: User = Depends(require_permission(CHAT_VIEW)),
 ):
-    return await service.get_proposal_timeline(session, proposal_id)
+    return await service.get_proposal_timeline(session, proposal_id, actor)
 
 
 @router.post("/chat/conversations/{conversation_id}/read", status_code=status.HTTP_204_NO_CONTENT)

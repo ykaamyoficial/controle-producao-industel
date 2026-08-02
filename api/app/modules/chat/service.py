@@ -4,8 +4,10 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.app.core import error_codes
-from api.app.core.exceptions import ApiError
+from api.app.core.exceptions import ApiError, PermissionDeniedError
 from api.app.modules.auth.models import User
+from api.app.modules.auth.permissions import CHAT_VIEW_FINALIZED
+from api.app.modules.auth.service import effective_permissions
 from api.app.modules.chat.models import ChatConversation, ChatMessage, ChatMessageRead, ChatNotification
 from api.app.modules.chat.schemas import (
     ConversationOut,
@@ -58,6 +60,20 @@ async def get_conversation(session: AsyncSession, conversation_id: int) -> ChatC
     if conversation is None:
         raise ApiError(error_codes.CHAT_CONVERSATION_NOT_FOUND, "Conversa nao encontrada.", status_code=404)
     return conversation
+
+
+def actor_can_view_finalized(actor: User) -> bool:
+    return actor.is_superuser or CHAT_VIEW_FINALIZED in effective_permissions(actor)
+
+
+def _ensure_can_view_conversation(actor: User, conversation: ChatConversation) -> None:
+    """Mesma politica aplicada ao filtro de listagem (status=FINALIZADA), mas
+    verificada contra o status real da conversa — evita que quem nao pode ver
+    conversas finalizadas leia o conteudo acessando o ID diretamente."""
+    if conversation.status != "FINALIZADA":
+        return
+    if not actor_can_view_finalized(actor):
+        raise PermissionDeniedError("Seu usuario nao pode visualizar conversas finalizadas.")
 
 
 async def _users_by_id(session: AsyncSession, ids: set[int | None]) -> dict[int, User]:
@@ -208,8 +224,9 @@ async def answer_question(session: AsyncSession, question_message_id: int, actor
     return _message_out(answer, users_by_id)
 
 
-async def list_messages(session: AsyncSession, conversation_id: int, limit: int = 200, offset: int = 0) -> MessageList:
+async def list_messages(session: AsyncSession, conversation_id: int, actor: User, limit: int = 200, offset: int = 0) -> MessageList:
     conversation = await get_conversation(session, conversation_id)
+    _ensure_can_view_conversation(actor, conversation)
     total = int(
         (await session.execute(select(func.count()).select_from(ChatMessage).where(ChatMessage.conversation_id == conversation.id))).scalar_one()
     )
@@ -227,11 +244,12 @@ async def list_messages(session: AsyncSession, conversation_id: int, limit: int 
     return MessageList(items=[_message_out(row, users_by_id, seen_by_message.get(row.id, 0)) for row in rows], total=total)
 
 
-async def get_proposal_timeline(session: AsyncSession, proposal_id: int) -> TimelineList:
+async def get_proposal_timeline(session: AsyncSession, proposal_id: int, actor: User) -> TimelineList:
     # GET com efeito colateral deliberado: garante que toda proposta consultada
     # tenha um chat proprio, sem precisar alterar o fluxo de criacao de proposta.
     conversation = await get_or_create_proposal_chat(session, proposal_id)
     await session.commit()
+    _ensure_can_view_conversation(actor, conversation)
 
     messages = (
         await session.execute(
