@@ -54,6 +54,11 @@ class UpdateInstallerTests(unittest.TestCase):
             self.assertIn("/CLOSEAPPLICATIONS", content)
             self.assertIn("Start-Process -FilePath $appExe", content)
 
+    def test_pre_update_backup_is_disabled_for_postgresql_only_runtime(self):
+        backup = update_installer.create_pre_update_backup("2.6.0")
+
+        self.assertIsNone(backup)
+
 
 if __name__ == "__main__":
     unittest.main()

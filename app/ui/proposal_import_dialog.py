@@ -35,7 +35,7 @@ from app.ui.table_utils import configure_wrapping_table, resize_rows_to_contents
 
 
 class ProposalImportDialog(QDialog):
-    """Editable preview for Nomus operational data. It never writes to SQLite."""
+    """Editable preview for Nomus operational data before saving through the API."""
 
     REQUIRED_FIELDS = {
         "proposal_number": "Numero da proposta",

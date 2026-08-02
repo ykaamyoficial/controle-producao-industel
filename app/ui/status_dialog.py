@@ -5,6 +5,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.ui.components.modern_button import ModernButton
+from app.ui.background_worker import start_worker
 from app.ui.galvanization_load_dialog import GalvanizationLoadManagerDialog, GalvanizationReturnDialog
 from app.ui.icons import make_icon
 from app.ui.item_flow_dialog import ItemFlowDialog
@@ -19,8 +20,12 @@ class StatusDialog(QDialog):
         super().__init__(parent)
         self.service = service
         self.process_id = process_id
-        self.process = service.get_process_dict(process_id)
-        self.area = area or service.current_location(self.process)[0] or "CONTROLE GERAL"
+        self._action_thread = None
+        self._running_action = False
+        self._action_buttons = []
+        base_process = service.get_process_dict(process_id)
+        self.area = area or service.current_location(base_process)[0] or "CONTROLE GERAL"
+        self.process = service.get_process_area_dict(process_id, self.area)
         self.setWindowTitle("Acoes da proposta")
         self.setMinimumWidth(580)
         self._build()
@@ -58,6 +63,7 @@ class StatusDialog(QDialog):
             button = ModernButton(action["label"], action["icon"], accent=True)
             button.setMinimumHeight(42)
             button.clicked.connect(lambda _checked=False, data=action: self.run_action(data))
+            self._action_buttons.append(button)
             root.addWidget(button)
 
         root.addWidget(QLabel("Observacao (opcional)"))
@@ -78,6 +84,8 @@ class StatusDialog(QDialog):
         root.addLayout(footer)
 
     def run_action(self, action: dict[str, str]):
+        if self._running_action:
+            return
         try:
             action_id = action["id"]
             if action_id == "MANAGE_LOAD":
@@ -108,15 +116,34 @@ class StatusDialog(QDialog):
             if status == "CANCELADA" and not self.observation.toPlainText().strip():
                 QMessageBox.warning(self, "Cancelar proposta", "Informe o motivo do cancelamento na observacao.")
                 return
-            self.service.update_status(
-                self.process_id,
-                action["area"],
-                status,
-                self.observation.toPlainText().strip(),
+            self._run_background_action(
+                lambda: self.service.update_status(
+                    self.process_id,
+                    action["area"],
+                    status,
+                    self.observation.toPlainText().strip(),
+                )
             )
-            self.accept()
         except Exception as exc:
             QMessageBox.warning(self, "Acao da proposta", str(exc))
+
+    def _run_background_action(self, operation):
+        self._set_action_running(True)
+        self._action_thread = start_worker(self, operation, self._action_success, self._action_error)
+
+    def _action_success(self, _result):
+        self._set_action_running(False)
+        self.accept()
+
+    def _action_error(self, exc):
+        self._set_action_running(False)
+        QMessageBox.warning(self, "Acao da proposta", str(exc))
+
+    def _set_action_running(self, running: bool):
+        self._running_action = running
+        self.observation.setEnabled(not running)
+        for button in self._action_buttons:
+            button.setEnabled(not running)
 
     def _register_galvanization_return(self):
         active_loads = [
@@ -170,10 +197,11 @@ class StatusDialog(QDialog):
                 if answer == QMessageBox.Cancel:
                     return
                 status = "FINALIZADO" if answer == QMessageBox.Yes else "FINALIZADO_PARCIAL"
-            self.service.update_status(
-                self.process_id, "PRODUCAO", status, self.observation.toPlainText().strip()
+            self._run_background_action(
+                lambda: self.service.update_status(
+                    self.process_id, "PRODUCAO", status, self.observation.toPlainText().strip()
+                )
             )
-            self.accept()
             return
         selector = ItemSelectionDialog(self.service, self.process_id, "production", self)
         selector.setWindowTitle("Registrar itens produzidos")
@@ -183,15 +211,18 @@ class StatusDialog(QDialog):
         status = "FINALIZADO" if all_selected else "FINALIZADO_PARCIAL"
         if status not in options:
             raise RuntimeError("Esta selecao nao e permitida para o processo atual. Conclua todos os itens deste subprocesso.")
-        self.service.update_status(
-            self.process_id,
-            "PRODUCAO",
-            status,
-            self.observation.toPlainText().strip(),
-            selector.selected_ids,
-            produced_weight=selector.manual_weight,
+        selected_ids = list(selector.selected_ids)
+        manual_weight = selector.manual_weight
+        self._run_background_action(
+            lambda: self.service.update_status(
+                self.process_id,
+                "PRODUCAO",
+                status,
+                self.observation.toPlainText().strip(),
+                selected_ids,
+                produced_weight=manual_weight,
+            )
         )
-        self.accept()
 
     def _register_delivery(self):
         available = self.service.proposal_items(self.process_id, pending_delivery=True)
@@ -203,18 +234,22 @@ class StatusDialog(QDialog):
             if not selector.exec():
                 return
             status = "ENTREGUE" if len(selector.selected_ids) == len(available) else "ENTREGUE_PARCIAL"
-            self.service.update_status(
-                self.process_id,
-                "EXPEDICAO",
-                status,
-                self.observation.toPlainText().strip(),
-                selector.selected_ids,
+            selected_ids = list(selector.selected_ids)
+            self._run_background_action(
+                lambda: self.service.update_status(
+                    self.process_id,
+                    "EXPEDICAO",
+                    status,
+                    self.observation.toPlainText().strip(),
+                    selected_ids,
+                )
             )
         else:
-            self.service.update_status(
-                self.process_id, "EXPEDICAO", "ENTREGUE", self.observation.toPlainText().strip()
+            self._run_background_action(
+                lambda: self.service.update_status(
+                    self.process_id, "EXPEDICAO", "ENTREGUE", self.observation.toPlainText().strip()
+                )
             )
-        self.accept()
 
     def open_manual_correction(self):
         dialog = ManualStatusDialog(self.service, self.process_id, self.area, self)

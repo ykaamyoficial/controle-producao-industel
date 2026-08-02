@@ -19,7 +19,7 @@ REPRESENTATIVE_ICONS = (
     "sistema_relatorios.png",
     "sistema_configuracoes.png",
     "sistema_backup.png",
-    "sistema_banco_sqlite.png",
+    "sistema_banco_postgresql.png",
     "sistema_historico.png",
     "sistema_usuarios.png",
     "sistema_auditoria.png",

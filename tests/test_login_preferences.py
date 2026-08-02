@@ -20,6 +20,7 @@ class FakeAuthService:
     def __init__(self, valid_login: str = "joao"):
         self.valid_login = valid_login
         self.calls: list[tuple[str, str]] = []
+        self.user = {"password_must_change": False}
 
     def authenticate(self, login: str, password: str) -> bool:
         self.calls.append((login, password))

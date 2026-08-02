@@ -9,7 +9,6 @@ ROOT_DIR = Path(__file__).resolve().parents[2]
 APP_DIR = ROOT_DIR / "app"
 CONFIG_FILE_NAME = "controle_producao_config.json"
 CONFIG_EXAMPLE_FILE_NAME = "controle_producao_config.example.json"
-DATABASE_FILE_NAME = "controle_producao.db"
 
 
 def is_packaged() -> bool:
@@ -34,14 +33,6 @@ def get_config_path() -> Path:
     if is_packaged():
         return get_app_data_dir() / CONFIG_FILE_NAME
     return APP_DIR / "config" / CONFIG_FILE_NAME
-
-
-def get_database_path() -> Path:
-    return get_app_data_dir() / DATABASE_FILE_NAME
-
-
-def get_backup_dir() -> Path:
-    return get_app_data_dir() / "backups"
 
 
 def get_updates_dir() -> Path:
@@ -72,7 +63,6 @@ def get_config_example_path() -> Path:
 
 def ensure_app_data_dirs() -> None:
     get_app_data_dir().mkdir(parents=True, exist_ok=True)
-    get_backup_dir().mkdir(parents=True, exist_ok=True)
     get_updates_dir().mkdir(parents=True, exist_ok=True)
     get_logs_dir().mkdir(parents=True, exist_ok=True)
     get_diagnostics_dir().mkdir(parents=True, exist_ok=True)

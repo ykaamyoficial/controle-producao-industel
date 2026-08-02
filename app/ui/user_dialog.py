@@ -229,14 +229,17 @@ class UserManagerDialog(QDialog):
         new = ModernButton("Novo usuario", "new", accent=True)
         self.edit_btn = ModernButton("Editar usuario", "edit")
         toggle = ModernButton("Ativar/Inativar", "status")
+        self.delete_btn = ModernButton("Excluir usuario", "clear")
         close = ModernButton("Fechar", "clear")
         new.clicked.connect(self.new_user)
         self.edit_btn.clicked.connect(self.edit_user)
         toggle.clicked.connect(self.toggle_user)
+        self.delete_btn.clicked.connect(self.delete_user)
         close.clicked.connect(self.accept)
         actions.addWidget(new)
         actions.addWidget(self.edit_btn)
         actions.addWidget(toggle)
+        actions.addWidget(self.delete_btn)
         actions.addStretch()
         actions.addWidget(close)
         root.addLayout(actions)
@@ -255,7 +258,9 @@ class UserManagerDialog(QDialog):
         return bool(self.table.selectionModel().selectedRows())
 
     def _update_action_state(self):
-        self.edit_btn.setEnabled(self._has_selection())
+        selected = self._has_selection()
+        self.edit_btn.setEnabled(selected)
+        self.delete_btn.setEnabled(selected)
 
     def refresh(self):
         self.model.set_rows(self.service.user_rows())
@@ -282,6 +287,25 @@ class UserManagerDialog(QDialog):
             return
         try:
             self.service.toggle_user(user_id)
+            self.refresh()
+        except Exception as exc:
+            QMessageBox.warning(self, "Usuarios", str(exc))
+
+    def delete_user(self):
+        user_id = self.selected_user_id()
+        if not user_id:
+            return
+        answer = QMessageBox.question(
+            self,
+            "Usuarios",
+            "Deseja excluir este usuario? Esta acao remove o acesso dele ao sistema.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return
+        try:
+            self.service.delete_user(user_id)
             self.refresh()
         except Exception as exc:
             QMessageBox.warning(self, "Usuarios", str(exc))

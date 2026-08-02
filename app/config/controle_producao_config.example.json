@@ -1,8 +1,11 @@
 {
-  "db_path": "app/data/controle_producao.db",
-  "backup_dir": "app/data/backups",
-  "backup_keep": 20,
   "company": "Industel",
   "color_palette": "claro",
+  "desktop_api": {
+    "enabled": true,
+    "base_url": "http://127.0.0.1:8000",
+    "connect_timeout": 3.0,
+    "read_timeout": 10.0
+  },
   "saved_reports": []
 }

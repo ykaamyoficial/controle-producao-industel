@@ -21,7 +21,7 @@ def run_startup_update_check(
     dialog_factory=None,
     timeout: int = 6,
 ) -> bool:
-    """Checks for updates before the backend opens the SQLite database."""
+    """Checks for updates before the desktop starts the official API runtime."""
     pending = evaluate_pending_update()
     if pending.get("status") == "failed_or_incomplete":
         log.warning(
@@ -72,6 +72,7 @@ def run_startup_update_check(
 def main():
     configure_logging()
     def handle_exception(exc_type, exc_value, exc_traceback):
+        traceback.print_exception(exc_type, exc_value, exc_traceback)
         log.critical("Erro nao tratado", exc_info=(exc_type, exc_value, exc_traceback))
     sys.excepthook = handle_exception
     configure_windows_taskbar_icon()

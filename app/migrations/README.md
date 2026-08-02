@@ -1,22 +1,26 @@
-# Migracoes SQLite
+# Migracoes Legadas do Desktop
 
-As alteracoes estruturais do banco devem ser feitas somente por arquivos SQL
-numerados nesta pasta.
+Esta pasta registra as migrations historicas do antigo banco local do desktop.
+No runtime oficial atual, alteracoes estruturais do banco devem ser feitas na
+API com Alembic/PostgreSQL.
+
+Estes arquivos permanecem apenas para testes legados e referencia historica
+durante a migracao.
 
 ## Convencao
 
 - Nome: `NNN_descricao_curta.sql`.
 - Versoes nunca devem ser reutilizadas.
 - Uma migracao aplicada nunca deve ser editada. Crie uma nova migracao.
-- Cada arquivo e executado em uma transacao exclusiva.
-- Em caso de erro, a transacao sofre rollback e o aplicativo nao inicia.
-- O checksum SHA-256 impede que uma migracao aplicada seja alterada em silencio.
+- Cada arquivo era executado em uma transacao exclusiva pelo runtime legado.
+- Em caso de erro, a transacao sofria rollback e o aplicativo nao iniciava.
+- O checksum SHA-256 impedia que uma migracao aplicada fosse alterada em silencio.
 
 ## Fluxo
 
-1. O executor cria `schema_migrations`, se necessario.
+1. O executor legado cria `schema_migrations`, se necessario.
 2. Le os arquivos em ordem numerica.
-3. Compara versao e checksum com o banco.
+3. Compara versao e checksum com o banco legado.
 4. Aplica somente arquivos pendentes.
 5. Registra versao, nome, data UTC e checksum.
 

@@ -1,15 +1,12 @@
 from __future__ import annotations
 
-import sqlite3
 import subprocess
 import sys
 import os
-from contextlib import closing
 from pathlib import Path
 
 from app.services.app_logging import get_logger
 from app.services.app_paths import get_app_data_dir, get_logs_dir
-from app.services.sqlite_safety import safe_backup
 from app.services.update_state import write_pending_update
 from app.version import APP_VERSION
 
@@ -21,43 +18,10 @@ class UpdateInstallError(RuntimeError):
 log = get_logger("updates.installer")
 
 
-def _database_path() -> Path:
-    return get_app_data_dir() / "controle_producao.db"
-
-
-def _backup_dir() -> Path:
-    return get_app_data_dir() / "backups" / "pre_update"
-
-
-def _validate_sqlite_database(db_path: Path) -> None:
-    if not db_path.exists():
-        return
-
-    try:
-        with closing(sqlite3.connect(str(db_path))) as conn:
-            integrity = conn.execute("PRAGMA integrity_check").fetchone()
-            if not integrity or integrity[0] != "ok":
-                raise UpdateInstallError(f"Banco com integrity_check invalido: {integrity}")
-
-            foreign_errors = conn.execute("PRAGMA foreign_key_check").fetchall()
-            if foreign_errors:
-                raise UpdateInstallError(f"Banco com problemas de foreign key: {foreign_errors}")
-    except sqlite3.Error as exc:
-        raise UpdateInstallError(f"Nao foi possivel validar o banco antes da atualizacao: {exc}") from exc
-
-
 def create_pre_update_backup(target_version: str) -> Path | None:
-    db_path = _database_path()
-    if not db_path.exists():
-        return None
-
-    destination_dir = _backup_dir()
-    safe_version = str(target_version or "nova").replace(".", "_")
-    try:
-        backup_path = safe_backup(db_path, destination_dir, f"pre_update_{safe_version}")
-    except Exception as exc:
-        raise UpdateInstallError(f"Nao foi possivel criar backup antes da atualizacao: {exc}") from exc
-    return backup_path
+    _ = target_version
+    log.info("Backup local pre-atualizacao ignorado | banco_operacional=PostgreSQL via API")
+    return None
 
 
 def _program_executable_path() -> Path:

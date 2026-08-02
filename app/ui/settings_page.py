@@ -5,7 +5,6 @@ import os
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QFileDialog,
     QComboBox,
     QFrame,
     QGridLayout,
@@ -18,14 +17,14 @@ from PySide6.QtWidgets import (
 )
 
 from app.services.app_logging import get_logger
-from app.services.app_paths import get_diagnostics_dir, get_logs_dir
+from app.services.app_paths import get_logs_dir
 from app.services.network_diagnostics import diagnose_update_endpoint
-from app.services.sqlite_safety import inspect_database, recover_database
-from app.services.support_diagnostics import export_diagnostic_zip
 from app.services.update_checker import RELEASES_API_URL, check_for_updates
 from app.ui.background_worker import start_worker
 from app.ui.components.modern_button import ModernButton
 from app.ui.components.toast_notification import ToastNotification
+from app.ui.api_diagnostic_dialog import ApiDiagnosticDialog
+from app.ui.api_proposals_readonly_dialog import ApiProposalsReadonlyDialog
 from app.ui.nomus_api_settings_dialog import NomusApiSettingsDialog
 from app.ui.update_dialog import UpdateDialog
 from app.ui.user_dialog import UserManagerDialog
@@ -53,7 +52,7 @@ class SettingsPage(QWidget):
         header_layout = QVBoxLayout(header)
         title = QLabel("Configuracoes")
         title.setStyleSheet("font-size: 22px; font-weight: 800;")
-        subtitle = QLabel("Ajustes do sistema, aparencia, usuarios, backup e banco de dados.")
+        subtitle = QLabel("Ajustes do sistema, aparencia, usuarios, API e PostgreSQL.")
         subtitle.setObjectName("Caption")
         header_layout.addWidget(title)
         header_layout.addWidget(subtitle)
@@ -95,7 +94,7 @@ class SettingsPage(QWidget):
         system_info = self.panel("Informacoes do sistema")
         system_info.layout().addWidget(QLabel(f"Usuario logado: {self.service.user_name()}"))
         system_info.layout().addWidget(QLabel(f"Perfil: {self.service.user_profile()}"))
-        db_info = QLabel(f"Banco conectado:\n{self.service.config.get('db_path')}")
+        db_info = QLabel(self._database_summary_text())
         db_info.setWordWrap(True)
         system_info.layout().addWidget(db_info)
         system_info.layout().addWidget(QLabel(f"Versao do sistema: {APP_VERSION}"))
@@ -106,7 +105,13 @@ class SettingsPage(QWidget):
         grid.addWidget(system_info, 0, 1)
 
         users = self.panel("Usuarios e acesso")
-        users.layout().addWidget(QLabel("Cadastre usuarios, perfis e areas que cada pessoa pode alterar."))
+        users_text = QLabel(
+            "Usuarios e permissoes sao autenticados pela API/PostgreSQL."
+            if self.service.official_proposals_enabled()
+            else "Cadastre usuarios, perfis e areas que cada pessoa pode alterar."
+        )
+        users_text.setWordWrap(True)
+        users.layout().addWidget(users_text)
         manage_users = ModernButton("Usuarios e permissoes", "users", accent=True)
         manage_users.setEnabled(self.service.can_edit("users_permissions"))
         manage_users.clicked.connect(self.open_users)
@@ -115,22 +120,15 @@ class SettingsPage(QWidget):
         users.setMinimumHeight(170)
         grid.addWidget(users, 1, 0)
 
-        data = self.panel("Banco de dados e backup")
-        db_label = QLabel(f"Banco atual:\n{self.service.config.get('db_path')}")
+        data = self.panel("API e PostgreSQL")
+        db_label = QLabel(self._local_database_text())
         db_label.setWordWrap(True)
-        backup = ModernButton("Backup agora", "backup", accent=True)
-        restore = ModernButton("Restaurar backup", "restore")
-        choose = ModernButton("Escolher banco SQLite", "database")
-        backup.setEnabled(can_edit_settings)
-        restore.setEnabled(can_edit_settings)
-        choose.setEnabled(can_edit_settings)
-        backup.clicked.connect(self.backup_now)
-        restore.clicked.connect(self.restore_backup)
-        choose.clicked.connect(self.choose_database)
+        api_status = ModernButton("Diagnostico API/PostgreSQL", "settings", accent=True)
+        api_status.setEnabled(self.service.can_admin())
+        api_status.clicked.connect(self.open_api_diagnostic)
         data.layout().addWidget(db_label)
-        data.layout().addWidget(backup)
-        data.layout().addWidget(restore)
-        data.layout().addWidget(choose)
+        data.layout().addWidget(api_status)
+        data.layout().addStretch()
         data.setMinimumHeight(210)
         grid.addWidget(data, 1, 1)
 
@@ -166,28 +164,43 @@ class SettingsPage(QWidget):
             nomus.layout().addStretch()
             nomus.setMinimumHeight(170)
             grid.addWidget(nomus, 3, 0, 1, 2)
-            support_row = 4
+
+            api_panel = self.panel("Integracao com API do sistema")
+            api_text = QLabel(self._api_panel_text())
+            api_text.setWordWrap(True)
+            open_api = ModernButton("Diagnostico da API", "settings", accent=True)
+            open_api.clicked.connect(self.open_api_diagnostic)
+            open_api_proposals = ModernButton("Consultar propostas na API", "search")
+            open_api_proposals.clicked.connect(self.open_api_proposals)
+            api_panel.layout().addWidget(api_text)
+            api_panel.layout().addWidget(open_api)
+            api_panel.layout().addWidget(open_api_proposals)
+            api_panel.layout().addStretch()
+            api_panel.setMinimumHeight(170)
+            grid.addWidget(api_panel, 4, 0, 1, 2)
+            support_row = 5
         else:
             support_row = 3
 
         support = self.panel("Suporte e diagnostico")
-        support.layout().addWidget(QLabel("Valide banco, atualizacao e logs sem interromper o trabalho."))
-        integrity = ModernButton("Verificar integridade do banco", "database")
+        support_text = QLabel(
+            "Valide API, atualizacao e logs sem interromper o trabalho."
+            if self.service.official_proposals_enabled()
+            else "Valide banco, atualizacao e logs sem interromper o trabalho."
+        )
+        support_text.setWordWrap(True)
+        support.layout().addWidget(support_text)
         test_update = ModernButton("Testar servidor de atualizacao", "refresh")
         open_logs = ModernButton("Abrir pasta de logs", "folder")
-        export_zip = ModernButton("Exportar pacote de diagnostico", "download", accent=True)
-        recover = ModernButton("Tentar recuperar banco corrompido", "restore")
-        integrity.clicked.connect(self.check_database_integrity)
         test_update.clicked.connect(self.test_update_server)
         open_logs.clicked.connect(self.open_logs_folder)
-        export_zip.clicked.connect(self.export_diagnostics)
-        recover.clicked.connect(self.recover_damaged_database)
         support_actions = QWidget()
         support_grid = QGridLayout(support_actions)
         support_grid.setContentsMargins(0, 0, 0, 0)
         support_grid.setHorizontalSpacing(10)
         support_grid.setVerticalSpacing(8)
-        for index, button in enumerate((integrity, test_update, open_logs, export_zip, recover)):
+        support_buttons = (test_update, open_logs)
+        for index, button in enumerate(support_buttons):
             button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
             support_grid.addWidget(button, index // 2, index % 2)
         support.layout().addWidget(support_actions)
@@ -206,6 +219,33 @@ class SettingsPage(QWidget):
         label.setStyleSheet("font-size: 16px; font-weight: 800;")
         layout.addWidget(label)
         return frame
+
+    def _database_summary_text(self) -> str:
+        if self.service.official_proposals_enabled():
+            api = self.service.config.get("desktop_api") or {}
+            return (
+                "Banco operacional:\n"
+                f"PostgreSQL via API ({api.get('base_url', 'API nao configurada')})"
+            )
+        return "Banco operacional:\nPostgreSQL via API"
+
+    def _local_database_text(self) -> str:
+        if self.service.official_proposals_enabled():
+            return (
+                "PostgreSQL oficial ativo.\n"
+                "O desktop acessa os dados somente pela API do sistema.\n"
+                "Backups e restauracoes devem ser feitos no servidor PostgreSQL."
+            )
+        return "PostgreSQL oficial ativo via API do sistema."
+
+    def _api_panel_text(self) -> str:
+        api = self.service.config.get("desktop_api") or {}
+        if self.service.official_proposals_enabled():
+            return (
+                "Modo oficial ativo: propostas, producao, galvanizacao, expedicao e fiscal "
+                f"usam PostgreSQL pela API em {api.get('base_url', 'API nao configurada')}."
+            )
+        return "Diagnostico para validar a API REST antes de ativar a operacao oficial."
 
     def apply_palette(self):
         if not self.service.can_edit("settings"):
@@ -234,43 +274,17 @@ class SettingsPage(QWidget):
             return
         NomusApiSettingsDialog(self).exec()
 
-    def backup_now(self):
-        if not self.service.can_edit("settings"):
-            QMessageBox.warning(self, "Permissao", "Seu usuario nao pode alterar configuracoes.")
+    def open_api_diagnostic(self):
+        if not self.service.can_admin():
+            QMessageBox.warning(self, "Permissao", "Apenas administradores podem abrir o diagnostico da API.")
             return
-        self._run_background(
-            self.service.backup_now,
-            lambda target: ToastNotification(self.window(), f"Backup criado: {target}", "success"),
-            lambda exc: QMessageBox.warning(self, "Backup", str(exc)),
-        )
+        ApiDiagnosticDialog(self).exec()
 
-    def restore_backup(self):
-        if not self.service.can_edit("settings"):
-            QMessageBox.warning(self, "Permissao", "Seu usuario nao pode alterar configuracoes.")
+    def open_api_proposals(self):
+        if not self.service.can_admin():
+            QMessageBox.warning(self, "Permissao", "Apenas administradores podem consultar propostas pela API.")
             return
-        path, _ = QFileDialog.getOpenFileName(self, "Restaurar backup", self.service.config.get("backup_dir", ""), "SQLite (*.db);;Todos (*.*)")
-        if not path:
-            return
-        if QMessageBox.question(self, "Restaurar backup", "O banco atual sera substituido. Deseja continuar?") != QMessageBox.Yes:
-            return
-        self._run_background(
-            lambda: self.service.restore_backup(path),
-            lambda safety: ToastNotification(self.window(), f"Backup restaurado. Copia anterior: {safety}", "success"),
-            lambda exc: QMessageBox.warning(self, "Restaurar backup", str(exc)),
-        )
-
-    def choose_database(self):
-        if not self.service.can_edit("settings"):
-            QMessageBox.warning(self, "Permissao", "Seu usuario nao pode alterar configuracoes.")
-            return
-        path, _ = QFileDialog.getOpenFileName(self, "Selecionar banco SQLite", "", "SQLite (*.db);;Todos (*.*)")
-        if not path:
-            return
-        self._run_background(
-            lambda: self.service.choose_database(path),
-            lambda _result: QMessageBox.information(self, "Banco SQLite", "Banco validado e configurado. Reabra o sistema para concluir a troca."),
-            lambda exc: QMessageBox.warning(self, "Banco SQLite", str(exc)),
-        )
+        ApiProposalsReadonlyDialog(self).exec()
 
     def check_updates(self):
         self._run_background(check_for_updates, self._handle_update_result, self._handle_update_error)
@@ -306,20 +320,6 @@ class SettingsPage(QWidget):
         log.exception("Falha inesperada na verificacao manual", exc_info=(type(exc), exc, exc.__traceback__))
         QMessageBox.warning(self, "Atualizacoes", "Nao foi possivel verificar atualizacoes agora. O sistema continuara funcionando normalmente.")
 
-    def check_database_integrity(self):
-        db_path = self.service.config.get("db_path", "")
-        self._run_background(
-            lambda: inspect_database(db_path, require_schema=True),
-            self._show_database_health,
-            lambda exc: QMessageBox.warning(self, "Integridade do banco", str(exc)),
-        )
-
-    def _show_database_health(self, health):
-        if health.integrity_ok and health.foreign_key_errors == 0:
-            QMessageBox.information(self, "Integridade do banco", "Banco integro e pronto para uso.")
-        else:
-            QMessageBox.critical(self, "Integridade do banco", "O banco apresentou inconsistencias e nao deve ser usado. Consulte os logs e restaure um backup valido.")
-
     def test_update_server(self):
         self._run_background(
             lambda: diagnose_update_endpoint(RELEASES_API_URL),
@@ -336,36 +336,6 @@ class SettingsPage(QWidget):
     def open_logs_folder(self):
         get_logs_dir().mkdir(parents=True, exist_ok=True)
         os.startfile(str(get_logs_dir()))
-
-    def export_diagnostics(self):
-        db_path = self.service.config.get("db_path", "")
-        self._run_background(
-            lambda: export_diagnostic_zip(db_path),
-            lambda path: QMessageBox.information(self, "Diagnostico", f"Pacote criado em:\n{path}"),
-            lambda exc: QMessageBox.warning(self, "Diagnostico", str(exc)),
-        )
-
-    def recover_damaged_database(self):
-        path, _ = QFileDialog.getOpenFileName(self, "Selecionar banco corrompido", "", "SQLite (*.db);;Todos (*.*)")
-        if not path:
-            return
-        if QMessageBox.question(
-            self,
-            "Recuperacao segura",
-            "O banco original sera preservado. A recuperacao criara somente uma nova copia e um relatorio. Continuar?",
-        ) != QMessageBox.Yes:
-            return
-        self._run_background(
-            lambda: recover_database(path, get_diagnostics_dir() / "recovery"),
-            self._show_recovery_result,
-            lambda exc: QMessageBox.warning(self, "Recuperacao", str(exc)),
-        )
-
-    def _show_recovery_result(self, result):
-        if result.get("success"):
-            QMessageBox.information(self, "Recuperacao", f"Copia recuperada criada em:\n{result.get('recovered')}\n\nValide a copia antes de seleciona-la.")
-        else:
-            QMessageBox.warning(self, "Recuperacao", f"A recuperacao automatica nao foi possivel. O original foi preservado e um relatorio foi criado em:\n{result.get('report')}")
 
     def _run_background(self, operation, on_success, on_error):
         thread = start_worker(self, operation, on_success, on_error)

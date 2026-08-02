@@ -70,8 +70,8 @@ class NomusFormTransferTests(unittest.TestCase):
     def setUp(self):
         self.service = ServiceSpy()
         self.form = ProcessFormDialog(self.service)
-        self.db_hash_before = self._db_hash()
-        self.db_time_before = DATABASE.stat().st_mtime_ns
+        self.db_hash_before = self._db_hash() if DATABASE.exists() else None
+        self.db_time_before = DATABASE.stat().st_mtime_ns if DATABASE.exists() else None
 
     def tearDown(self):
         self.form.close()
@@ -81,6 +81,9 @@ class NomusFormTransferTests(unittest.TestCase):
         return hashlib.sha256(DATABASE.read_bytes()).hexdigest()
 
     def assert_database_unchanged(self):
+        if self.db_hash_before is None:
+            self.assertFalse(DATABASE.exists())
+            return
         self.assertEqual(self._db_hash(), self.db_hash_before)
         self.assertEqual(DATABASE.stat().st_mtime_ns, self.db_time_before)
 

@@ -10,7 +10,6 @@ from pathlib import Path
 from app.services.app_logging import get_logger
 from app.services.app_paths import get_diagnostics_dir, get_logs_dir
 from app.services.network_diagnostics import diagnose_update_endpoint
-from app.services.sqlite_safety import inspect_database
 from app.services.update_checker import RELEASES_API_URL
 from app.version import APP_VERSION
 
@@ -18,20 +17,25 @@ from app.version import APP_VERSION
 log = get_logger("diagnostics")
 
 
-def build_diagnostic_report(db_path: str) -> dict:
-    health = inspect_database(db_path, require_schema=True)
+def build_diagnostic_report(db_path: str | None = None) -> dict:
+    _ = db_path
     return {
         "generated_at": datetime.now().isoformat(timespec="seconds"),
         "app_version": APP_VERSION,
         "computer": platform.node(),
         "windows_user": os.environ.get("USERNAME", "-"),
         "platform": platform.platform(),
-        "database": health.__dict__,
+        "database": {
+            "engine": "PostgreSQL",
+            "access": "API",
+            "status": "managed_by_server",
+            "detail": "Desktop nao acessa banco de dados diretamente.",
+        },
         "updates": diagnose_update_endpoint(RELEASES_API_URL),
     }
 
 
-def export_diagnostic_zip(db_path: str) -> Path:
+def export_diagnostic_zip(db_path: str | None = None) -> Path:
     output_dir = get_diagnostics_dir()
     output_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")

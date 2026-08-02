@@ -6,7 +6,7 @@ import re
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QAbstractItemView, QComboBox, QDialog, QFrame, QGridLayout, QHBoxLayout,
-    QHeaderView, QLineEdit, QLabel, QMessageBox, QScrollArea, QSpinBox,
+    QApplication, QHeaderView, QLineEdit, QLabel, QMessageBox, QScrollArea, QSpinBox,
     QStyledItemDelegate, QTableWidget, QTableWidgetItem, QTextEdit, QVBoxLayout, QWidget,
 )
 
@@ -37,8 +37,10 @@ class ProcessFormDialog(QDialog):
         self.process_id = process_id
         self.initial_data = initial_data or {}
         self.import_metadata: dict | None = None
+        self.import_source = "MANUAL"
         self.is_partial = False
         self.items_locked = False
+        self._saving = False
         self.reason_options = [("", "-")]
         self.setWindowTitle("Proposta")
         apply_large_dialog_geometry(self, parent)
@@ -213,13 +215,13 @@ class ProcessFormDialog(QDialog):
         footer.setMaximumHeight(52)
         actions = QHBoxLayout()
         actions.setContentsMargins(12, 8, 12, 8)
-        save = ModernButton("Salvar", "status", accent=True)
+        self.save_button = ModernButton("Salvar", "status", accent=True)
         cancel = ModernButton("Cancelar", "clear")
-        save.clicked.connect(self.save)
+        self.save_button.clicked.connect(self.save)
         cancel.clicked.connect(self.reject)
         actions.addStretch()
         actions.addWidget(cancel)
-        actions.addWidget(save)
+        actions.addWidget(self.save_button)
         footer.setLayout(actions)
         root.addWidget(scroll, 1)
         root.addWidget(footer)
@@ -361,6 +363,7 @@ class ProcessFormDialog(QDialog):
 
         source = str(data.get("source") or "nomus_pdf").lower()
         source_name = "Nomus API" if source == "nomus_api" else "PDF"
+        self.import_source = "NOMUS_API" if source == "nomus_api" else "NOMUS_PDF"
 
         self.items_table.setRowCount(0)
         pending_weights = 0
@@ -497,11 +500,16 @@ class ProcessFormDialog(QDialog):
         reason: str = "",
         galvanize: str = "indefinido",
         flow_note: str = "",
+        api_id: int | None = None,
+        api_version: int | None = None,
     ):
         self.items_table.blockSignals(True)
         row = self.items_table.rowCount()
         self.items_table.insertRow(row)
-        self.items_table.setItem(row, 0, QTableWidgetItem(number or str(row + 1)))
+        number_item = QTableWidgetItem(number or str(row + 1))
+        number_item.setData(Qt.UserRole, api_id)
+        number_item.setData(Qt.UserRole + 1, api_version)
+        self.items_table.setItem(row, 0, number_item)
         code_item = QTableWidgetItem(code or "-")
         code_item.setTextAlignment(Qt.AlignCenter)
         self.items_table.setItem(row, 1, code_item)
@@ -594,6 +602,8 @@ class ProcessFormDialog(QDialog):
                     str(item.get("motivo_nao_produzir") or ""),
                     str(item.get("precisa_galvanizacao") or "indefinido"),
                     str(item.get("observacao_fluxo_item") or ""),
+                    int(item.get("api_id") or item.get("id") or 0) or None,
+                    int(item.get("api_version") or 0) or None,
                 )
         self.item_quantity.setValue(self.items_table.rowCount())
         editable_items = not self.is_partial and not self.items_locked
@@ -626,6 +636,8 @@ class ProcessFormDialog(QDialog):
                 galvanize = self.items_table.cellWidget(row, 7)
                 flow_note = self.items_table.cellWidget(row, 8)
                 items.append({
+                    "api_id": number.data(Qt.UserRole) if number else None,
+                    "api_version": number.data(Qt.UserRole + 1) if number else None,
                     "numero_item": number.text().strip() if number else str(row + 1),
                     "codigo_produto": code.text().strip() if code else "",
                     "descricao": description.text().strip() if description else "",
@@ -637,8 +649,20 @@ class ProcessFormDialog(QDialog):
                     "observacao_fluxo_item": flow_note.text().strip() if isinstance(flow_note, QLineEdit) else "",
                 })
             data["itens"] = items
+        data["_import_source"] = self.import_source
         try:
+            if self._saving:
+                return
+            self._set_saving(True)
             self.service.save_process(data, self.process_id, self.import_metadata)
             self.accept()
         except Exception as exc:
             QMessageBox.warning(self, "Salvar proposta", str(exc))
+        finally:
+            self._set_saving(False)
+
+    def _set_saving(self, saving: bool):
+        self._saving = saving
+        self.save_button.setEnabled(not saving)
+        self.save_button.setText("Salvando..." if saving else "Salvar")
+        QApplication.processEvents()

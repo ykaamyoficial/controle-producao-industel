@@ -19,7 +19,6 @@ from PySide6.QtWidgets import (
 )
 
 from app.models.operational_report_table_model import OperationalReportTableModel
-from app.services.executive_dashboard import ExecutiveDashboardService
 from app.ui.components.modern_button import ModernButton
 from app.ui.components.modern_table import ModernTable
 from app.ui.icons import make_icon
@@ -40,7 +39,6 @@ class ExecutiveDashboardPage(QWidget):
     def __init__(self, service, parent=None):
         super().__init__(parent)
         self.service = service
-        self.dashboard_service = ExecutiveDashboardService(service.conn)
         self.current_data: dict[str, Any] = {}
         self.operational_cards: list[QWidget] = []
         self.fiscal_cards: list[QWidget] = []
@@ -296,7 +294,7 @@ class ExecutiveDashboardPage(QWidget):
         }
 
     def refresh(self) -> None:
-        self.current_data = self.dashboard_service.gerar_dashboard_executivo(self.filters())
+        self.current_data = self.service.executive_dashboard_report(self.filters())
         self.reliability_badge.setText(f"Confiabilidade: {str(self.current_data.get('confiabilidade') or '-').title()}")
         self.updated_at.setText("Ultima atualizacao: " + datetime.now().strftime("%d/%m/%Y %H:%M"))
         self.focus_label.setText(self._focus_text())

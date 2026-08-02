@@ -27,7 +27,6 @@ from PySide6.QtWidgets import (
 )
 
 from app.models.operational_report_table_model import OperationalReportTableModel
-from app.services.operational_reports import OperationalReportsService
 from app.ui.components.kpi_card import KpiCard
 from app.ui.components.modern_button import ModernButton
 from app.ui.components.modern_table import ModernTable
@@ -129,7 +128,6 @@ class OperationalReportsPage(QWidget):
     def __init__(self, service, parent=None):
         super().__init__(parent)
         self.service = service
-        self.reports = OperationalReportsService(service.conn)
         self.current_report: dict[str, Any] | None = None
         self.model = OperationalReportTableModel(self)
         self._card_widgets: list[KpiCard] = []
@@ -285,14 +283,7 @@ class OperationalReportsPage(QWidget):
         self.refresh()
 
     def _generate_report(self, area: str, filters: dict[str, str]) -> dict[str, Any]:
-        generators = {
-            "PRODUCAO": self.reports.gerar_relatorio_producao,
-            "GALVANIZACAO": self.reports.gerar_relatorio_galvanizacao,
-            "EXPEDICAO": self.reports.gerar_relatorio_expedicao,
-            "ALMOXARIFADO": self.reports.gerar_relatorio_almoxarifado,
-            "REMANEJAMENTOS": self.reports.gerar_relatorio_remanejamentos,
-        }
-        return generators[area](filters)
+        return self.service.operational_report(area, filters)
 
     def _render_cards(self, cards: list[dict[str, Any]]) -> None:
         while self.cards_layout.count():
@@ -490,7 +481,7 @@ class OperationalReportsPage(QWidget):
     def _remanagement_rows_for(self, row: dict[str, Any], process_id: int | None) -> list[dict[str, Any]]:
         if self.area.currentData() == "REMANEJAMENTOS" and row.get("remanejamento_id"):
             return [row]
-        report = self.reports.gerar_relatorio_remanejamentos({})
+        report = self.service.operational_report("REMANEJAMENTOS", {})
         rows = report.get("linhas") or []
         if not process_id:
             return rows

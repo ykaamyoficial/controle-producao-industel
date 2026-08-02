@@ -30,6 +30,7 @@ from app.models.fiscal_items_table_model import FiscalItemsTableModel
 from app.models.fiscal_report_table_model import FiscalReportTableModel
 from app.models.fiscal_table_model import format_weight
 from app.models.fiscal_table_model import FiscalProcessTableModel
+from app.ui.background_worker import start_worker
 from app.ui.components.kpi_card import KpiCard
 from app.ui.components.modern_button import ModernButton
 from app.ui.components.modern_table import ModernTable, ProcessFilterProxy
@@ -317,6 +318,8 @@ class FiscalPage(QWidget):
         self.withdrawn_proxy.setFilterCaseSensitivity(Qt.CaseInsensitive)
         self.items_model = FiscalItemsTableModel()
         self.report_model = FiscalReportTableModel()
+        self._refresh_thread = None
+        self._refreshing = False
         self._build()
 
     def _build(self):
@@ -376,6 +379,10 @@ class FiscalPage(QWidget):
         self.critical.addItem("Mais de 7 dias sem emissao", "7")
         apply_btn = ModernButton("Aplicar", "search", accent=True)
         clear_btn = ModernButton("Limpar", "clear")
+        self.refresh_buttons = [apply_btn, clear_btn]
+        self.loading = QLabel("Carregando...")
+        self.loading.setObjectName("Caption")
+        self.loading.setVisible(False)
         apply_btn.clicked.connect(self.refresh)
         clear_btn.clicked.connect(self.clear)
 
@@ -388,6 +395,7 @@ class FiscalPage(QWidget):
         self._add_filter_field(fields, 0, 6, "Alerta", self.critical)
         actions = QHBoxLayout()
         actions.setSpacing(8)
+        actions.addWidget(self.loading)
         actions.addWidget(apply_btn)
         actions.addWidget(clear_btn)
         fields.addLayout(actions, 0, 8)
@@ -456,8 +464,8 @@ class FiscalPage(QWidget):
         layout.addWidget(widget, row, column + 1)
 
     def refresh(self):
-        if hasattr(self.service, "ensure_global_fiscal_entries"):
-            self.service.ensure_global_fiscal_entries()
+        if self._refreshing:
+            return
         raw_status = self.status.currentData() or ""
         status_fiscal = raw_status
         situacao_fiscal = ""
@@ -475,14 +483,44 @@ class FiscalPage(QWidget):
         }
         if filters["mais_7_dias_sem_emissao"]:
             filters["pendencia_critica"] = ""
-        rows = self.service.fiscal_rows(filters)
+        self._set_loading(True)
+        self._refresh_thread = start_worker(
+            self,
+            lambda: {
+                "rows": self.service.fiscal_rows(filters),
+                "withdrawn_rows": self.service.fiscal_rows({"situacao_fiscal": "NF_RETIRADA_CLIENTE"}),
+            },
+            self._refresh_success,
+            self._refresh_error,
+        )
+
+    def _refresh_success(self, payload):
+        rows = payload.get("rows") or []
         self.model.set_rows(rows)
         self.table.apply_column_layout()
         if rows:
             self.table.selectRow(0)
-        withdrawn_rows = self.service.fiscal_rows({"situacao_fiscal": "NF_RETIRADA_CLIENTE"})
+        withdrawn_rows = payload.get("withdrawn_rows") or []
         self.withdrawn_model.set_rows(withdrawn_rows)
         self.withdrawn_table.apply_column_layout()
+        self._set_loading(False)
+
+    def _refresh_error(self, exc):
+        self.model.set_rows([])
+        self.withdrawn_model.set_rows([])
+        self.table.apply_column_layout()
+        self.withdrawn_table.apply_column_layout()
+        self._set_loading(False)
+        QMessageBox.warning(self, "Fiscal", str(exc))
+
+    def _set_loading(self, loading: bool):
+        self._refreshing = loading
+        self.loading.setVisible(loading)
+        self.table.setEnabled(not loading)
+        self.withdrawn_table.setEnabled(not loading)
+        self.register_btn.setEnabled(not loading and self.service.can_register_fiscal_emission())
+        for button in getattr(self, "refresh_buttons", []):
+            button.setEnabled(not loading)
 
     def clear(self):
         self.search.clear()
@@ -583,6 +621,8 @@ class FiscalPage(QWidget):
         status = str(row.get("status_fiscal") or "").strip().upper()
         if self.service.can_register_fiscal_emission() and status not in {"NOTA_FISCAL_EMITIDA", "FISCAL_CANCELADO"}:
             menu.addAction(QAction("Registrar emissao fiscal", self, triggered=self.register_emission))
+        if getattr(self.service, "can_cancel_fiscal_emission", lambda: False)() and self.service.fiscal_emissions(int(row["fiscal_processo_id"])):
+            menu.addAction(QAction("Cancelar ultima emissao interna", self, triggered=lambda: self.cancel_latest_emission(row)))
         return menu
 
     def show_fiscal_details(self, row: dict):
@@ -658,6 +698,29 @@ class FiscalPage(QWidget):
         if dialog.exec():
             self.refresh()
             QMessageBox.information(self, "Fiscal", "Emissao fiscal registrada com sucesso.")
+
+    def cancel_latest_emission(self, row: dict):
+        if not getattr(self.service, "can_cancel_fiscal_emission", lambda: False)():
+            QMessageBox.warning(self, "Fiscal", "Seu usuario nao tem permissao para cancelar emissao fiscal.")
+            return
+        answer = QMessageBox.question(
+            self,
+            "Cancelar emissao fiscal",
+            "Cancelar a ultima emissao fiscal interna desta proposta?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return
+        try:
+            cancelled = self.service.cancel_latest_fiscal_emission(
+                int(row["fiscal_processo_id"]),
+                "Cancelamento interno pelo Desktop",
+            )
+            self.refresh()
+            QMessageBox.information(self, "Fiscal", f"{cancelled} vinculo(s) fiscal(is) cancelado(s).")
+        except Exception as exc:
+            QMessageBox.warning(self, "Fiscal", str(exc))
 
     def _build_report_tab(self) -> QWidget:
         tab = QWidget()

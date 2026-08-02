@@ -6,7 +6,7 @@ from datetime import datetime
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication, QPushButton
+from PySide6.QtWidgets import QApplication, QLabel, QPushButton
 
 from app.services.nomus_api_config import NomusApiSettings, NomusConnectionTestResult
 from app.ui.nomus_api_settings_dialog import NomusApiSettingsDialog
@@ -40,7 +40,14 @@ class FakeNomusStore:
 class FakeSettingsService:
     palettes = {"light": {"label": "Claro"}}
     palette_name = "light"
-    config = {"db_path": "teste.db", "backup_dir": "backups"}
+    config = {
+        "desktop_api": {
+            "enabled": True,
+            "base_url": "http://127.0.0.1:8000",
+            "connect_timeout": 3,
+            "read_timeout": 10,
+        }
+    }
     company = "Industel"
 
     def __init__(self, admin: bool):
@@ -51,6 +58,9 @@ class FakeSettingsService:
 
     def can_edit(self, area: str):
         return area in {"settings", "users_permissions"}
+
+    def official_proposals_enabled(self):
+        return True
 
     def user_name(self):
         return "Administrador" if self.admin else "Operador"
@@ -110,7 +120,28 @@ class NomusApiSettingsDialogTests(unittest.TestCase):
         user_buttons = [button.text() for button in user_page.findChildren(QPushButton)]
 
         self.assertIn("Configurar API Nomus", admin_buttons)
+        self.assertIn("Diagnostico da API", admin_buttons)
+        self.assertIn("Consultar propostas na API", admin_buttons)
         self.assertNotIn("Configurar API Nomus", user_buttons)
+        self.assertNotIn("Diagnostico da API", user_buttons)
+        self.assertNotIn("Consultar propostas na API", user_buttons)
+
+    def test_settings_page_no_longer_shows_sqlite_controls(self):
+        page = SettingsPage(FakeSettingsService(admin=True))
+        visible_texts = [widget.text() for widget in page.findChildren(QPushButton)]
+        visible_texts.extend(label.text() for label in page.findChildren(QLabel))
+        combined = "\n".join(visible_texts)
+
+        self.assertNotIn("SQLite", combined)
+        self.assertNotIn(".db", combined)
+        self.assertIn("Diagnostico API/PostgreSQL", combined)
+
+    def test_settings_page_enables_user_management_in_official_postgresql_mode(self):
+        page = SettingsPage(FakeSettingsService(admin=True))
+        buttons = {button.text(): button for button in page.findChildren(QPushButton)}
+
+        self.assertIn("Usuarios e permissoes", buttons)
+        self.assertTrue(buttons["Usuarios e permissoes"].isEnabled())
 
 
 if __name__ == "__main__":

@@ -210,8 +210,9 @@ class UpdateDialog(QDialog):
         confirm = QMessageBox.question(
             self,
             "Atualizar sistema",
-            "O sistema vai baixar a atualizacao, validar o arquivo, criar backup do banco "
+            "O sistema vai baixar a atualizacao, validar o arquivo "
             "e iniciar a instalacao silenciosa.\n\n"
+            "O banco PostgreSQL fica no servidor e nao sera alterado pelo instalador do desktop.\n\n"
             "O programa sera fechado automaticamente.\n\n"
             "Deseja continuar?",
             QMessageBox.Yes | QMessageBox.No,

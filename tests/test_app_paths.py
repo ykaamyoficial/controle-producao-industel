@@ -11,9 +11,9 @@ from app.services import app_paths
 class AppPathsTest(unittest.TestCase):
     def test_development_paths_stay_inside_project(self):
         self.assertFalse(app_paths.is_packaged())
-        self.assertEqual(app_paths.get_database_path(), app_paths.APP_DIR / "data" / "controle_producao.db")
         self.assertEqual(app_paths.get_config_path(), app_paths.APP_DIR / "config" / "controle_producao_config.json")
-        self.assertEqual(app_paths.get_backup_dir(), app_paths.APP_DIR / "data" / "backups")
+        self.assertEqual(app_paths.get_updates_dir(), app_paths.APP_DIR / "data" / "updates")
+        self.assertEqual(app_paths.get_diagnostics_dir(), app_paths.APP_DIR / "data" / "diagnostics")
 
     def test_packaged_paths_use_program_data(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -24,9 +24,9 @@ class AppPathsTest(unittest.TestCase):
             ):
                 expected_root = Path(temp_dir) / "Industel" / "ControleProducao"
                 self.assertEqual(app_paths.get_app_data_dir(), expected_root)
-                self.assertEqual(app_paths.get_database_path(), expected_root / "controle_producao.db")
                 self.assertEqual(app_paths.get_config_path(), expected_root / "controle_producao_config.json")
-                self.assertEqual(app_paths.get_backup_dir(), expected_root / "backups")
+                self.assertEqual(app_paths.get_updates_dir(), expected_root / "updates")
+                self.assertEqual(app_paths.get_diagnostics_dir(), expected_root / "diagnostics")
 
     def test_environment_override_wins_for_packaged_data_dir(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -37,7 +37,7 @@ class AppPathsTest(unittest.TestCase):
             ):
                 self.assertEqual(app_paths.get_app_data_dir(), Path(temp_dir))
 
-    def test_new_packaged_config_points_to_program_data_paths(self):
+    def test_new_packaged_config_is_api_postgresql_only(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             with patch.object(app_paths.sys, "frozen", True, create=True), patch.dict(
                 os.environ,
@@ -46,8 +46,22 @@ class AppPathsTest(unittest.TestCase):
             ):
                 config = backend_adapter.load_app_config()
 
-        self.assertEqual(config["db_path"], str(Path(temp_dir) / "controle_producao.db"))
-        self.assertEqual(config["backup_dir"], str(Path(temp_dir) / "backups"))
+        self.assertNotIn("db_path", config)
+        self.assertNotIn("backup_dir", config)
+        self.assertEqual(config["desktop_api"]["base_url"], "http://127.0.0.1:8000")
+
+    def test_app_data_dirs_do_not_create_local_database_or_backup_dirs(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with patch.object(app_paths.sys, "frozen", True, create=True), patch.dict(
+                os.environ,
+                {"CONTROLE_PRODUCAO_DATA_DIR": temp_dir},
+                clear=False,
+            ):
+                app_paths.ensure_app_data_dirs()
+
+        root = Path(temp_dir)
+        self.assertFalse((root / "controle_producao.db").exists())
+        self.assertFalse((root / "backups").exists())
 
 
 if __name__ == "__main__":
