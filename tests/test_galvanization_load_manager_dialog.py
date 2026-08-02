@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import unittest
+from datetime import date
 from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -207,7 +208,8 @@ class GalvanizationLoadManagerDialogTests(unittest.TestCase):
         self.service = FakeGalvanizationLoadService()
 
     def test_main_table_is_load_only_with_action_column(self):
-        dialog = GalvanizationLoadManagerDialog(self.service)
+        with patch("app.ui.galvanization_load_dialog.current_date", return_value=date(2026, 7, 19)):
+            dialog = GalvanizationLoadManagerDialog(self.service)
 
         self.assertEqual(dialog.table.horizontalHeaderItem(0).text(), "Acao")
         self.assertEqual(dialog.table.horizontalHeaderItem(1).text(), "Carga")
@@ -218,6 +220,13 @@ class GalvanizationLoadManagerDialogTests(unittest.TestCase):
         self.assertIn("aguardando", dialog.table.item(0, 0).toolTip().lower())
         self.assertIsNotNone(dialog.table.cellWidget(0, 2))
         self.assertIn("border-radius", dialog.table.cellWidget(0, 2).styleSheet())
+
+    def test_overdue_load_uses_current_date_rule(self):
+        with patch("app.ui.galvanization_load_dialog.current_date", return_value=date(2026, 7, 21)):
+            dialog = GalvanizationLoadManagerDialog(self.service)
+
+        self.assertIn("atrasada", dialog.table.item(0, 0).toolTip().lower())
+        self.assertEqual(dialog.table.item(0, 2).text(), "Atrasada")
 
     def test_action_menu_respects_load_status(self):
         dialog = GalvanizationLoadManagerDialog(self.service)
