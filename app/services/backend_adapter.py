@@ -7,6 +7,7 @@ from app.services.api_reports import ApiExecutiveDashboardService, ApiOperationa
 from app.services.status_sorting import sort_fiscal_rows, sort_process_rows
 from app.services.app_paths import ensure_app_data_dirs, get_config_example_path, get_config_path
 from app.services.app_logging import get_logger
+from app.services.configuration_service import get_configuration_service
 from app.services.login_preferences import save_login_preferences
 log = get_logger('backend')
 PERMISSION_LEVEL_NONE = 'NONE'
@@ -132,12 +133,8 @@ def _load_config_example() -> dict[str, Any]:
 
 def load_app_config() -> dict[str, Any]:
     ensure_app_data_dirs()
-    config_path = get_config_path()
-    if config_path.exists():
-        with config_path.open('r', encoding='utf-8') as file:
-            data = legacy.json.load(file)
-    else:
-        data = _load_config_example()
+    service = get_configuration_service(get_config_path())
+    data = service.load() if service.exists() else _load_config_example()
     data.setdefault('company', 'Industel')
     data.setdefault('color_palette', 'claro')
     data.setdefault('desktop_api', {'enabled': True, 'base_url': 'http://127.0.0.1:8000', 'connect_timeout': 3, 'read_timeout': 10})
@@ -153,8 +150,18 @@ def load_app_config() -> dict[str, Any]:
 
 def save_app_config(config: dict[str, Any]):
     ensure_app_data_dirs()
-    with get_config_path().open('w', encoding='utf-8') as file:
-        legacy.json.dump(config, file, ensure_ascii=False, indent=2)
+    get_configuration_service(get_config_path()).save(config)
+
+def update_app_config(changes: dict[str, Any]) -> dict[str, Any]:
+    """Atualizacao parcial atomica de nivel superior: mescla apenas as chaves
+    de `changes`, sem sobrescrever o restante da configuracao com um
+    snapshot em memoria que possa estar desatualizado."""
+    ensure_app_data_dirs()
+
+    def _apply(config: dict[str, Any]) -> None:
+        config.update(changes)
+
+    return get_configuration_service(get_config_path()).update(_apply)
 
 def row_to_dict(row: Any) -> dict[str, Any]:
     if row is None:
@@ -786,8 +793,10 @@ class BackendService:
         palette_name = normalize_palette_name(palette_name)
         if palette_name not in self.palettes:
             raise legacy.AppError('Paleta invalida.')
-        self.config['color_palette'] = palette_name
-        save_app_config(self.config)
+        # Atualizacao parcial atomica em vez de reescrever o self.config inteiro
+        # (que pode estar desatualizado em relacao a outras gravacoes feitas por
+        # outras telas/threads desde que este BackendService foi inicializado).
+        self.config = update_app_config({'color_palette': palette_name})
 
     def toggle_palette(self) -> str:
         next_palette = 'escuro' if self.palette_name == 'claro' else 'claro'

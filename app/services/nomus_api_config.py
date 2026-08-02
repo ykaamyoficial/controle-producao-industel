@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import ctypes
-import json
 import ssl
 import time
 from dataclasses import dataclass
@@ -16,6 +15,7 @@ import certifi
 
 from app.services.app_logging import get_logger
 from app.services.app_paths import get_app_data_dir, get_config_path
+from app.services.configuration_service import get_configuration_service
 
 
 log = get_logger("nomus_api")
@@ -173,6 +173,7 @@ class NomusApiConfigStore:
         self.secret_path = Path(secret_path) if secret_path else get_app_data_dir() / "secrets" / SECRET_FILE_NAME
         self.protector = protector or WindowsDpapiProtector()
         self.url_fetcher = url_fetcher or _fetch_url_status_code
+        self._service = get_configuration_service(self.config_path)
 
     def load_settings(self) -> NomusApiSettings:
         raw = self._read_nomus_config()
@@ -194,28 +195,31 @@ class NomusApiConfigStore:
         if enabled and not self.get_api_key():
             raise NomusApiConfigError("Informe e salve uma chave da API antes de ativar a integracao.")
 
-        config = self._read_full_config()
-        current = dict(config.get(NOMUS_CONFIG_KEY) or {})
-        current["enabled"] = bool(enabled)
-        current["base_url"] = normalized_url
-        if last_result:
-            current["last_tested_at"] = last_result.tested_at.isoformat(timespec="seconds")
-            current["last_test_status"] = last_result.category
-            current["last_test_message"] = last_result.user_message
-        config[NOMUS_CONFIG_KEY] = current
-        self._write_full_config(config)
+        def _apply(config: dict[str, Any]) -> None:
+            current = dict(config.get(NOMUS_CONFIG_KEY) or {})
+            current["enabled"] = bool(enabled)
+            current["base_url"] = normalized_url
+            if last_result:
+                current["last_tested_at"] = last_result.tested_at.isoformat(timespec="seconds")
+                current["last_test_status"] = last_result.category
+                current["last_test_message"] = last_result.user_message
+            config[NOMUS_CONFIG_KEY] = current
+
+        self._service.update(_apply)
         return self.load_settings()
 
     def record_test_result(self, *, base_url: str, result: NomusConnectionTestResult) -> NomusApiSettings:
         normalized_url = normalize_base_url(base_url) if base_url.strip() else ""
-        config = self._read_full_config()
-        current = dict(config.get(NOMUS_CONFIG_KEY) or {})
-        current["base_url"] = normalized_url
-        current["last_tested_at"] = result.tested_at.isoformat(timespec="seconds")
-        current["last_test_status"] = result.category
-        current["last_test_message"] = result.user_message
-        config[NOMUS_CONFIG_KEY] = current
-        self._write_full_config(config)
+
+        def _apply(config: dict[str, Any]) -> None:
+            current = dict(config.get(NOMUS_CONFIG_KEY) or {})
+            current["base_url"] = normalized_url
+            current["last_tested_at"] = result.tested_at.isoformat(timespec="seconds")
+            current["last_test_status"] = result.category
+            current["last_test_message"] = result.user_message
+            config[NOMUS_CONFIG_KEY] = current
+
+        self._service.update(_apply)
         return self.load_settings()
 
     def test_authenticated_connection(
@@ -305,16 +309,7 @@ class NomusApiConfigStore:
         return dict(self._read_full_config().get(NOMUS_CONFIG_KEY) or {})
 
     def _read_full_config(self) -> dict[str, Any]:
-        if not self.config_path.exists():
-            return {}
-        with self.config_path.open("r", encoding="utf-8") as file:
-            data = json.load(file)
-        return data if isinstance(data, dict) else {}
-
-    def _write_full_config(self, config: dict[str, Any]) -> None:
-        self.config_path.parent.mkdir(parents=True, exist_ok=True)
-        with self.config_path.open("w", encoding="utf-8") as file:
-            json.dump(config, file, ensure_ascii=False, indent=2)
+        return self._service.load()
 
 
 def _fetch_url_status_code(url: str, timeout_seconds: int) -> int:

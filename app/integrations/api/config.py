@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -9,6 +8,7 @@ from urllib.parse import urlparse, urlunparse
 
 from app.services.app_logging import get_logger
 from app.services.app_paths import get_config_path
+from app.services.configuration_service import get_configuration_service
 
 
 log = get_logger("desktop_api_config")
@@ -67,6 +67,7 @@ def normalize_api_base_url(value: str, *, allow_http_local: bool = True) -> str:
 class DesktopApiConfigStore:
     def __init__(self, *, config_path: Path | None = None):
         self.config_path = Path(config_path) if config_path else get_config_path()
+        self._service = get_configuration_service(self.config_path)
 
     def load_settings(self) -> DesktopApiSettings:
         raw = dict(self._read_full_config().get(API_CONFIG_KEY) or {})
@@ -96,18 +97,20 @@ class DesktopApiConfigStore:
             raise DesktopApiConfigError("Informe a URL base antes de ativar a integracao.")
         if connect_timeout <= 0 or read_timeout <= 0:
             raise DesktopApiConfigError("Timeouts da API devem ser maiores que zero.")
-        config = self._read_full_config()
-        current = dict(config.get(API_CONFIG_KEY) or {})
-        current["enabled"] = bool(enabled)
-        current["base_url"] = normalized_url
-        current["connect_timeout"] = float(connect_timeout)
-        current["read_timeout"] = float(read_timeout)
-        if last_test_status or last_test_message:
-            current["last_tested_at"] = datetime.now().isoformat(timespec="seconds")
-            current["last_test_status"] = last_test_status
-            current["last_test_message"] = last_test_message
-        config[API_CONFIG_KEY] = current
-        self._write_full_config(config)
+
+        def _apply(config: dict[str, Any]) -> None:
+            current = dict(config.get(API_CONFIG_KEY) or {})
+            current["enabled"] = bool(enabled)
+            current["base_url"] = normalized_url
+            current["connect_timeout"] = float(connect_timeout)
+            current["read_timeout"] = float(read_timeout)
+            if last_test_status or last_test_message:
+                current["last_tested_at"] = datetime.now().isoformat(timespec="seconds")
+                current["last_test_status"] = last_test_status
+                current["last_test_message"] = last_test_message
+            config[API_CONFIG_KEY] = current
+
+        self._service.update(_apply)
         log.info("Configuracao da API desktop atualizada | enabled=%s | base_url=%s", enabled, normalized_url)
         return self.load_settings()
 
@@ -123,16 +126,7 @@ class DesktopApiConfigStore:
         )
 
     def _read_full_config(self) -> dict[str, Any]:
-        if not self.config_path.exists():
-            return {}
-        with self.config_path.open("r", encoding="utf-8") as file:
-            data = json.load(file)
-        return data if isinstance(data, dict) else {}
-
-    def _write_full_config(self, config: dict[str, Any]) -> None:
-        self.config_path.parent.mkdir(parents=True, exist_ok=True)
-        with self.config_path.open("w", encoding="utf-8") as file:
-            json.dump(config, file, ensure_ascii=False, indent=2)
+        return self._service.load()
 
 
 def _parse_datetime(value: str | None) -> datetime | None:
