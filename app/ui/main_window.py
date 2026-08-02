@@ -81,7 +81,16 @@ class MainWindow(QMainWindow):
         if not login.exec():
             return False
         self._build()
+        self._ensure_notifier_startup_registration()
         return True
+
+    def _ensure_notifier_startup_registration(self) -> None:
+        try:
+            from app.services.notifier_agent import ensure_startup_registration
+
+            ensure_startup_registration()
+        except Exception:
+            log.exception("Falha inesperada ao registrar notificador na pasta Startup")
 
     def _build(self):
         root = QWidget()

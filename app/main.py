@@ -71,11 +71,23 @@ def run_startup_update_check(
 
 def main():
     configure_logging()
+
+    if "--notifier" in sys.argv[1:]:
+        from app.services.notifier_agent import run_notifier_loop
+
+        run_notifier_loop()
+        return 0
+
     def handle_exception(exc_type, exc_value, exc_traceback):
         traceback.print_exception(exc_type, exc_value, exc_traceback)
         log.critical("Erro nao tratado", exc_info=(exc_type, exc_value, exc_traceback))
     sys.excepthook = handle_exception
     configure_windows_taskbar_icon()
+
+    from app.services.notifier_agent import acquire_main_app_mutex
+
+    acquire_main_app_mutex()
+
     app = QApplication(sys.argv)
     app.setApplicationName("Controle de Producao Industel")
     app.setWindowIcon(app_icon())
