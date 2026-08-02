@@ -7,6 +7,7 @@ from PySide6.QtWidgets import QFileDialog, QComboBox, QFrame, QGridLayout, QHBox
 
 from app.controllers.process_controller import ProcessController
 from app.models.process_table_model import ProcessTableModel
+from app.ui.background_worker import start_worker
 from app.ui.components.empty_state import EmptyState
 from app.ui.components.modern_button import ModernButton
 from app.ui.components.modern_table import ModernTable, ProcessFilterProxy
@@ -14,9 +15,9 @@ from app.ui.status_dialog import StatusDialog
 from app.ui.components.toast_notification import ToastNotification
 from app.ui.process_form_dialog import ProcessFormDialog
 from app.ui.batch_status_dialog import BatchStatusDialog
-from app.ui.galvanization_load_dialog import GalvanizationLoadManagerDialog
 from app.ui.early_remanagement_dialog import EarlyRemanagementDeliveryDialog
 from app.ui.process_detail_dialog import ProcessDetailDialog
+from app.ui.proposal_chat_dialog import ProposalChatDialog
 
 
 class ProcessPage(QWidget):
@@ -30,6 +31,8 @@ class ProcessPage(QWidget):
         self.proxy = ProcessFilterProxy(self)
         self.proxy.setSourceModel(self.model)
         self.proxy.setFilterCaseSensitivity(Qt.CaseInsensitive)
+        self._refresh_thread = None
+        self._refreshing = False
         self._build()
 
     def _build(self):
@@ -55,8 +58,17 @@ class ProcessPage(QWidget):
         edit_btn = ModernButton("Editar", "status")
         status_btn = ModernButton("Acoes", "status", accent=True)
         batch_btn = ModernButton("Acoes em lote", "batch", accent=True)
-        load_btn = ModernButton("Cargas", "load", accent=True)
         remanage_btn = ModernButton("Entrega remanejada", "load", accent=True)
+        self.action_buttons = [
+            apply_btn,
+            clear_btn,
+            details_btn,
+            new_btn,
+            edit_btn,
+            status_btn,
+            batch_btn,
+            remanage_btn,
+        ]
         apply_btn.clicked.connect(self.refresh)
         clear_btn.clicked.connect(self.clear)
         details_btn.clicked.connect(self.show_details)
@@ -64,7 +76,6 @@ class ProcessPage(QWidget):
         edit_btn.clicked.connect(self.edit_process)
         status_btn.clicked.connect(self.change_status)
         batch_btn.clicked.connect(self.change_status_batch)
-        load_btn.clicked.connect(self.open_galvanization_loads)
         remanage_btn.clicked.connect(self.open_early_remanagement_delivery)
         title = QLabel(self.title)
         title.setObjectName("FilterTitle")
@@ -99,8 +110,6 @@ class ProcessPage(QWidget):
             proposal_actions.addWidget(batch_btn)
         if self.area == "EXPEDICAO" and self._can_edit_area("EXPEDICAO"):
             proposal_actions.addWidget(remanage_btn)
-        if self.area == "GALVANIZACAO" and self._can_mount_galvanization_load():
-            proposal_actions.addWidget(load_btn)
 
         field_row = QGridLayout()
         field_row.setHorizontalSpacing(10)
@@ -117,9 +126,15 @@ class ProcessPage(QWidget):
         fl.addLayout(proposal_actions)
         root.addWidget(filters)
 
+        self.loading = QLabel("Carregando...")
+        self.loading.setObjectName("Caption")
+        self.loading.setVisible(False)
+        root.addWidget(self.loading)
+
         self.table = ModernTable(self.service)
         self.table.setModel(self.proxy)
         self.table.status_shortcut_requested.connect(self.change_status_for_id)
+        self.table.chat_shortcut_requested.connect(self.open_chat_for_id)
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self.open_context_menu)
         self.empty_state = EmptyState(
@@ -171,12 +186,9 @@ class ProcessPage(QWidget):
             return bool(self.service.can_access_area(area))
         return True
 
-    def _can_mount_galvanization_load(self) -> bool:
-        if hasattr(self.service, "can_mount_galvanization_load"):
-            return bool(self.service.can_mount_galvanization_load())
-        return self._can_edit_area("GALVANIZACAO") or self._can_edit_area("EXPEDICAO")
-
     def refresh(self):
+        if self._refreshing:
+            return
         self.status.blockSignals(True)
         current = self.status.currentData() or ""
         self.status.clear()
@@ -193,10 +205,47 @@ class ProcessPage(QWidget):
             self.status.currentData() or "",
             self.prazo.currentText() if self.prazo.currentText() != "TODOS" else "",
         )
-        rows = self.controller.rows_for(self.area, filters)
+        self._set_loading(True)
+        self._refresh_thread = start_worker(
+            self,
+            lambda: (self.controller.rows_for(self.area, filters), self._fetch_chat_status()),
+            self._refresh_success,
+            self._refresh_error,
+        )
+
+    def _fetch_chat_status(self) -> dict[int, dict]:
+        if not hasattr(self.service, "chat_conversations"):
+            return {}
+        try:
+            conversations = self.service.chat_conversations({"limit": 200})
+        except Exception:
+            return {}
+        return {int(item["proposal_id"]): item for item in conversations if item.get("proposal_id")}
+
+    def _refresh_success(self, result):
+        rows, chat_status = result
+        for row in rows:
+            status = chat_status.get(int(row.get("id") or 0))
+            row["_chat_unread"] = int(status.get("unread_count") or 0) if status else 0
+            row["_chat_has_messages"] = bool(status and (status.get("message_count") or 0) > 0)
         self.model.set_rows(rows)
         self.table.apply_column_layout()
         self._update_empty_state()
+        self._set_loading(False)
+
+    def _refresh_error(self, exc):
+        self.model.set_rows([])
+        self.table.apply_column_layout()
+        self._update_empty_state()
+        self._set_loading(False)
+        ToastNotification(self.window(), str(exc), "error")
+
+    def _set_loading(self, loading: bool):
+        self._refreshing = loading
+        self.loading.setVisible(loading)
+        self.table.setEnabled(not loading)
+        for button in getattr(self, "action_buttons", []):
+            button.setEnabled(not loading)
 
     def clear(self):
         self.search.clear()
@@ -246,6 +295,11 @@ class ProcessPage(QWidget):
             self.refresh()
             ToastNotification(self.window(), "Acao registrada com sucesso.", "success")
 
+    def open_chat_for_id(self, process_id: int):
+        dialog = ProposalChatDialog(self.service, process_id, self)
+        dialog.exec()
+        self.refresh()
+
     def change_status_batch(self):
         if not self._can_edit_area(self.area or ""):
             ToastNotification(self.window(), "Seu usuario tem apenas visualizacao nesta area.", "error")
@@ -256,15 +310,6 @@ class ProcessPage(QWidget):
         if dialog.exec():
             self.refresh()
             ToastNotification(self.window(), "Acoes em lote aplicadas com sucesso.", "success")
-
-    def open_galvanization_loads(self):
-        if not self._can_mount_galvanization_load():
-            ToastNotification(self.window(), "Seu usuario nao pode alterar cargas.", "error")
-            return
-        ids = self.selected_process_ids()
-        dialog = GalvanizationLoadManagerDialog(self.service, ids, self)
-        if dialog.exec() or dialog.changed:
-            self.refresh()
 
     def open_early_remanagement_delivery(self):
         if not self._can_edit_area("EXPEDICAO"):
@@ -324,7 +369,7 @@ class ProcessPage(QWidget):
         if not rows:
             ToastNotification(self.window(), "Selecione uma ou mais propostas.", "error")
             return
-        columns = [(key, label) for key, label in self.model.columns if key != "status_icon"]
+        columns = [(key, label) for key, label in self.model.columns if key not in {"status_icon", "chat_icon"}]
         suffix = "csv" if kind == "csv" else "pdf"
         path, _ = QFileDialog.getSaveFileName(self, "Exportar selecao", f"processos_selecionados.{suffix}", f"*.{suffix}")
         if not path:

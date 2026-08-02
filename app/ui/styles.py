@@ -229,6 +229,22 @@ def app_stylesheet(palette: dict) -> str:
     QFrame#FilterBar {{
         padding: 2px;
     }}
+    QSplitter::handle {{
+        background: {border};
+        margin: 2px;
+    }}
+    QSplitter::handle:horizontal {{
+        width: 2px;
+    }}
+    QSplitter::handle:vertical {{
+        height: 2px;
+    }}
+    QSplitter::handle:hover {{
+        background: {accent};
+    }}
+    QSplitter::handle:pressed {{
+        background: {accent_hover};
+    }}
     QLabel#FilterTitle {{
         font-size: 14px;
         font-weight: 800;

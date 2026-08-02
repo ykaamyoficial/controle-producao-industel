@@ -29,8 +29,9 @@ class TableColumnOrderTests(unittest.TestCase):
             with self.subTest(area=area):
                 keys = [key for key, _label in columns_by_area[area]]
                 proposal_index = keys.index("proposta")
-                self.assertEqual(keys[proposal_index + 1], "cliente")
-                self.assertEqual(keys[proposal_index + 2], status_key)
+                self.assertEqual(keys[proposal_index + 1], "chat_icon")
+                self.assertEqual(keys[proposal_index + 2], "cliente")
+                self.assertEqual(keys[proposal_index + 3], status_key)
 
     def test_fiscal_table_shows_status_immediately_after_client(self):
         keys = [key for key, _label in FiscalProcessTableModel.columns]

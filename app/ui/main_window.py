@@ -6,6 +6,11 @@ from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QMainWindow, QStacked
 from app.services.backend_adapter import BackendService
 from app.ui.animations import animate_width, fade_in
 from app.ui.app_icon import app_icon
+from app.ui.background_worker import start_worker
+from app.ui.chat_center_page import ChatCenterPage
+from app.ui.components.floating_chat_button import FloatingChatButton
+from app.ui.components.modern_button import ModernButton
+from app.ui.components.notification_bell import NotificationBell
 from app.ui.data_page import DataPage
 from app.ui.dashboard_page import DashboardPage
 from app.ui.executive_dashboard_page import ExecutiveDashboardPage
@@ -13,6 +18,8 @@ from app.ui.fiscal_page import FiscalPage
 from app.ui.login_dialog import LoginDialog
 from app.ui.operational_reports_page import OperationalReportsPage
 from app.ui.process_page import ProcessPage
+from app.ui.production_items_page import ProductionAreaPage
+from app.ui.galvanization_items_page import GalvanizationAreaPage
 from app.ui.settings_page import SettingsPage
 from app.ui.sidebar import Sidebar
 from app.ui.styles import app_stylesheet
@@ -96,6 +103,24 @@ class MainWindow(QMainWindow):
         content_layout.setSpacing(10)
         main.addWidget(content, 1)
 
+        self.notification_bell = None
+        self.quick_indicator_messages = None
+        self.quick_indicator_questions = None
+        self.quick_indicator_observations = None
+        if self._can_view("chats", "CHATS"):
+            top_bar = QHBoxLayout()
+            top_bar.setSpacing(8)
+            top_bar.addStretch()
+            self.quick_indicator_messages = self._build_quick_indicator("chat")
+            self.quick_indicator_questions = self._build_quick_indicator("question")
+            self.quick_indicator_observations = self._build_quick_indicator("doc")
+            top_bar.addWidget(self.quick_indicator_messages)
+            top_bar.addWidget(self.quick_indicator_questions)
+            top_bar.addWidget(self.quick_indicator_observations)
+            self.notification_bell = NotificationBell(self.service)
+            top_bar.addWidget(self.notification_bell)
+            content_layout.addLayout(top_bar)
+
         self.stack = QStackedWidget()
         content_layout.addWidget(self.stack, 1)
         self._create_pages()
@@ -103,6 +128,19 @@ class MainWindow(QMainWindow):
         if first_page:
             self.select_page(first_page)
             QTimer.singleShot(1500, self._start_background_update_check)
+
+        self.floating_chat_button = None
+        if self._can_view("chats", "CHATS"):
+            self.floating_chat_button = FloatingChatButton(self.service, parent=root)
+            self.floating_chat_button.clicked.connect(lambda: self.select_page("CHATS"))
+            self.floating_chat_button.raise_()
+            self._reposition_floating_button()
+
+        if self.notification_bell is not None or self.floating_chat_button is not None:
+            self._chat_poll_timer = QTimer(self)
+            self._chat_poll_timer.timeout.connect(self._poll_chat_unread)
+            self._chat_poll_timer.start(20000)
+            QTimer.singleShot(1000, self._poll_chat_unread)
     
     
 
@@ -153,8 +191,17 @@ class MainWindow(QMainWindow):
             self.pages["DASHBOARD EXECUTIVO"] = ExecutiveDashboardPage(self.service)
             self.stack.addWidget(self.pages["DASHBOARD EXECUTIVO"])
 
+        if self._can_view("chats", "CHATS"):
+            self.pages["CHATS"] = ChatCenterPage(self.service)
+            self.stack.addWidget(self.pages["CHATS"])
+
         for area in self.service.visible_areas():
-            self.pages[area] = ProcessPage(self.service, area, area.title())
+            if area == "PRODUCAO":
+                self.pages[area] = ProductionAreaPage(self.service)
+            elif area == "GALVANIZACAO":
+                self.pages[area] = GalvanizationAreaPage(self.service)
+            else:
+                self.pages[area] = ProcessPage(self.service, area, area.title())
             self.stack.addWidget(self.pages[area])
 
         if self._can_view("partials", "PARCIAIS"):
@@ -256,6 +303,52 @@ class MainWindow(QMainWindow):
         end = 76 if self.sidebar_collapsed else 236
         self.sidebar.set_collapsed(self.sidebar_collapsed)
         self._width_animation = animate_width(self.sidebar, start, end)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._reposition_floating_button()
+
+    def _reposition_floating_button(self):
+        button = getattr(self, "floating_chat_button", None)
+        if not button:
+            return
+        parent = button.parentWidget()
+        if not parent:
+            return
+        margin = 24
+        x = parent.width() - button.width() - margin
+        y = parent.height() - button.height() - margin
+        button.move(max(0, x), max(0, y))
+
+    def _poll_chat_unread(self):
+        if not hasattr(self.service, "chat_unread_summary"):
+            return
+        self._chat_poll_thread = start_worker(self, self.service.chat_unread_summary, self._apply_chat_unread_summary, lambda _exc: None)
+
+    def _build_quick_indicator(self, icon_name: str) -> ModernButton:
+        button = ModernButton("", icon_name)
+        button.setObjectName("GhostButton")
+        button.clicked.connect(lambda: self.select_page("CHATS"))
+        return button
+
+    def _apply_chat_unread_summary(self, summary: dict):
+        total = int(summary.get("total_unread") or 0)
+        pending_questions = int(summary.get("pending_questions") or 0)
+        new_observations = int(summary.get("new_observations") or 0)
+        if self.notification_bell is not None:
+            self.notification_bell.set_unread_count(total)
+        if self.floating_chat_button is not None:
+            self.floating_chat_button.set_unread_count(total)
+        if self.quick_indicator_messages is not None:
+            self.quick_indicator_messages.setText(str(total) if total else "")
+            self.quick_indicator_messages.setToolTip(f"{total} mensagem(ns) nao lida(s)")
+        if self.quick_indicator_questions is not None:
+            self.quick_indicator_questions.setText(str(pending_questions) if pending_questions else "")
+            self.quick_indicator_questions.setToolTip(f"{pending_questions} pergunta(s) pendente(s) para voce")
+        if self.quick_indicator_observations is not None:
+            self.quick_indicator_observations.setText(str(new_observations) if new_observations else "")
+            self.quick_indicator_observations.setToolTip(f"{new_observations} observacao(oes) nova(s)")
+        self.sidebar.set_nav_badge("CHATS", total)
 
     def closeEvent(self, event):
       log.info("Fechamento solicitado")

@@ -17,6 +17,7 @@ NAV_GROUPS = [
     (
         "OPERACAO",
         [
+            ("CHATS", "Chats", "chat"),
             ("CONTROLE GERAL", "Controle Geral", "control"),
             ("PRODUCAO", "Producao", "production"),
             ("GALVANIZACAO", "Galvanizacao", "galvanization"),
@@ -59,6 +60,7 @@ class Sidebar(QFrame):
         self.buttons: dict[str, QPushButton] = {}
         self.group_labels: list[QLabel] = []
         self.collapsed = False
+        self._nav_badges: dict[str, int] = {}
         self.setObjectName("Sidebar")
         self.setMinimumWidth(236)
         self.setMaximumWidth(236)
@@ -123,6 +125,21 @@ class Sidebar(QFrame):
         always_visible = {"PAINEL GERAL", "DASHBOARD EXECUTIVO", "FISCAL", "PARCIAIS", "RELATORIOS OPERACIONAIS", "HISTORICO", "CONFIGURACOES"}
         return key in always_visible or key in visible
 
+    def set_nav_badge(self, key: str, count: int):
+        self._nav_badges[key] = count
+        self._apply_badge_text(key)
+
+    def _apply_badge_text(self, key: str):
+        button = self.buttons.get(key)
+        if not button:
+            return
+        if self.collapsed:
+            button.setText("")
+            return
+        label = NAV_LABELS.get(key, key)
+        count = self._nav_badges.get(key, 0)
+        button.setText(f"{label}   {count}" if count else label)
+
     def set_active(self, key: str):
         for item_key, button in self.buttons.items():
             button.setProperty("active", "true" if item_key == key else "false")
@@ -139,7 +156,7 @@ class Sidebar(QFrame):
         for label in self.group_labels:
             label.setVisible(not collapsed)
         for key, button in self.buttons.items():
-            button.setText("" if collapsed else NAV_LABELS[key])
+            self._apply_badge_text(key)
             button.setIconSize(COLLAPSED_ICON_SIZE if collapsed else EXPANDED_ICON_SIZE)
             button.setMinimumHeight(44 if collapsed else 34)
             button.setMaximumHeight(44 if collapsed else 34)

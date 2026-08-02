@@ -8,6 +8,7 @@ from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
 DEFAULT_COLUMNS = [
     ("status_icon", ""),
     ("proposta", "Proposta"),
+    ("chat_icon", ""),
     ("cliente", "Cliente"),
     ("status_localizacao", "Status"),
     ("obra_site", "Obra/Site"),
@@ -24,14 +25,14 @@ DEFAULT_COLUMNS = [
 AREA_COLUMNS = {
     "PRODUCAO": [
         ("status_icon", ""),
-        ("proposta", "Proposta"), ("cliente", "Cliente"), ("status_producao", "Status producao"),
+        ("proposta", "Proposta"), ("chat_icon", ""), ("cliente", "Cliente"), ("status_producao", "Status producao"),
         ("obra_site", "Obra/Site"), ("progresso_peso", "Peso/Saldo"), ("prazo_entrega", "Prazo"),
         ("id", "ID"), ("tipo_processo", "Tipo"), ("pedido_compra", "PD / Pedido"),
         ("lote", "Lote"), ("data_entrada", "Entrada"),
     ],
     "GALVANIZACAO": [
         ("status_icon", ""),
-        ("proposta", "Proposta"), ("cliente", "Cliente"), ("status_galvanizacao", "Status galvanizacao"),
+        ("proposta", "Proposta"), ("chat_icon", ""), ("cliente", "Cliente"), ("status_galvanizacao", "Status galvanizacao"),
         ("obra_site", "Obra/Site"), ("progresso_peso", "Peso/Saldo"), ("prazo_entrega", "Prazo"),
         ("id", "ID"), ("tipo_processo", "Tipo"), ("pedido_compra", "PD / Pedido"),
         ("lote", "Lote"), ("carga_galvanizacao", "Carga"), ("data_envio_galv", "Envio Galv."),
@@ -39,14 +40,14 @@ AREA_COLUMNS = {
     ],
     "EXPEDICAO": [
         ("status_icon", ""),
-        ("proposta", "Proposta"), ("cliente", "Cliente"), ("status_expedicao", "Status expedicao"),
+        ("proposta", "Proposta"), ("chat_icon", ""), ("cliente", "Cliente"), ("status_expedicao", "Status expedicao"),
         ("obra_site", "Obra/Site"), ("progresso_peso", "Peso/Saldo"), ("prazo_entrega", "Prazo"),
         ("id", "ID"), ("tipo_processo", "Tipo"), ("pedido_compra", "PD / Pedido"),
         ("lote", "Lote"), ("almoxarifado_info", "Almox."),
     ],
     "ALMOXARIFADO": [
         ("status_icon", ""),
-        ("proposta", "Proposta"), ("cliente", "Cliente"), ("status_almoxarifado", "Status almoxarifado"),
+        ("proposta", "Proposta"), ("chat_icon", ""), ("cliente", "Cliente"), ("status_almoxarifado", "Status almoxarifado"),
         ("obra_site", "Obra/Site"), ("progresso_peso", "Peso/Saldo"), ("prazo_entrega", "Prazo"),
         ("id", "ID"), ("tipo_processo", "Tipo"), ("pedido_compra", "PD / Pedido"),
         ("lote", "Lote"), ("data_entrada", "Entrada"), ("necessita_almoxarifado", "Necessita"),
@@ -86,12 +87,16 @@ class ProcessTableModel(QAbstractTableModel):
             if key == "status_icon":
                 area, _label, status = self.service.current_location(row)
                 return status
+            if key == "chat_icon":
+                return row.get("_chat_unread", 0)
             if key == "status_localizacao":
                 return self.service.current_location(row)[2]
             if key == "localizacao_atual":
                 return self.service.current_location(row)[0]
             return row.get(key, "")
         if role == Qt.UserRole + 3:
+            if key == "chat_icon":
+                return row.get("_chat_has_messages", False)
             if key in {"status_localizacao", "localizacao_atual", "status_icon"}:
                 return self.service.current_location(row)[0]
             return {
@@ -102,12 +107,15 @@ class ProcessTableModel(QAbstractTableModel):
                 "status_almoxarifado": "ALMOXARIFADO",
             }.get(key, "")
         if role in (Qt.DisplayRole, Qt.EditRole):
-            if key == "status_icon":
+            if key in {"status_icon", "chat_icon"}:
                 return ""
             return self.service.display_cell(key, row.get(key), row)
         if role == Qt.ToolTipRole:
             if key == "status_icon":
                 return "Abrir acoes da proposta"
+            if key == "chat_icon":
+                unread = row.get("_chat_unread", 0)
+                return f"{unread} mensagem(ns) nao lida(s)" if unread else "Abrir chat da proposta"
             return self.data(index, Qt.DisplayRole)
         if role == Qt.TextAlignmentRole:
             if key in {"id", "peso", "peso_parcial", "saldo_pendente"}:

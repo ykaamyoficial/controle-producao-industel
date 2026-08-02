@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PySide6.QtCore import QSortFilterProxyModel, Qt, Signal
+from PySide6.QtCore import QRectF, QSortFilterProxyModel, Qt, Signal
 from PySide6.QtGui import QBrush, QColor, QPainter, QPen
 from PySide6.QtWidgets import QAbstractItemView, QHeaderView, QStyledItemDelegate, QStyle, QStyleOptionViewItem, QTableView
 
@@ -26,6 +26,39 @@ class StatusBadgeDelegate(QStyledItemDelegate):
 
     def paint(self, painter: QPainter, option: QStyleOptionViewItem, index):
         key = index.data(Qt.UserRole + 1)
+        if key == "chat_icon":
+            unread = int(index.data(Qt.UserRole + 2) or 0)
+            has_messages = bool(index.data(Qt.UserRole + 3))
+            painter.save()
+            if option.state & QStyle.State_Selected:
+                painter.fillRect(option.rect, QColor(self.service.palette["accent"]))
+            if unread > 0:
+                color = self.service.palette.get("danger", "#dc2626")
+            elif has_messages:
+                color = self.service.palette["accent"]
+            else:
+                color = self.service.palette.get("muted", "#94a3b8")
+            icon = make_icon("chat", color, 18)
+            pix = icon.pixmap(18, 18)
+            offset = 6 if unread > 0 else 0
+            x = option.rect.x() + (option.rect.width() - 18) // 2 - offset
+            y = option.rect.y() + (option.rect.height() - 18) // 2
+            painter.setRenderHint(QPainter.Antialiasing)
+            painter.drawPixmap(x, y, pix)
+            if unread > 0:
+                badge_text = str(unread) if unread < 100 else "99+"
+                badge_rect = QRectF(x + 12, y - 2, 20, 14)
+                painter.setPen(Qt.NoPen)
+                painter.setBrush(QBrush(QColor(self.service.palette.get("danger", "#dc2626"))))
+                painter.drawRoundedRect(badge_rect, 7, 7)
+                painter.setPen(QPen(QColor("#ffffff")))
+                font = painter.font()
+                font.setPointSize(max(6, font.pointSize() - 3))
+                font.setBold(True)
+                painter.setFont(font)
+                painter.drawText(badge_rect, Qt.AlignCenter, badge_text)
+            painter.restore()
+            return
         if key in {"status_icon", "fiscal_action"}:
             raw = index.data(Qt.UserRole + 2) or "status"
             painter.save()
@@ -69,6 +102,7 @@ class StatusBadgeDelegate(QStyledItemDelegate):
 
 class ModernTable(QTableView):
     status_shortcut_requested = Signal(int)
+    chat_shortcut_requested = Signal(int)
 
     def __init__(self, service, parent=None):
         super().__init__(parent)
@@ -87,7 +121,7 @@ class ModernTable(QTableView):
         self.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
         self.setItemDelegate(StatusBadgeDelegate(service, self))
         self.setWordWrap(True)
-        self.setToolTip("Clique no icone da primeira coluna para abrir as acoes da proposta.")
+        self.setToolTip("Clique no icone de status para abrir as acoes da proposta, ou no icone de chat para abrir a conversa.")
         self.setMouseTracking(True)
         self.status_shortcut_enabled = True
 
@@ -101,6 +135,7 @@ class ModernTable(QTableView):
         columns = getattr(source, "columns", [])
         widths = {
             "status_icon": 44,
+            "chat_icon": 44,
             "fiscal_action": 44,
             "id": 54,
             "tipo_processo": 86,
@@ -122,6 +157,7 @@ class ModernTable(QTableView):
             "status_localizacao": 210,
             "localizacao_atual": 175,
             "status_producao": 215,
+            "status_producao_item": 150,
             "status_galvanizacao": 220,
             "status_expedicao": 215,
             "status_almoxarifado": 215,
@@ -187,17 +223,28 @@ class ModernTable(QTableView):
 
     def mousePressEvent(self, event):
         index = self.indexAt(event.position().toPoint())
-        if self.status_shortcut_enabled and index.isValid() and index.column() == 0:
+        if self.status_shortcut_enabled and index.isValid():
             model = self.model()
             source_index = model.mapToSource(index) if hasattr(model, "mapToSource") else index
             process_id = model.sourceModel().process_id_at(source_index.row()) if hasattr(model, "sourceModel") else model.process_id_at(source_index.row())
             if process_id:
-                self.status_shortcut_requested.emit(process_id)
-                return
+                if index.column() == 0:
+                    self.status_shortcut_requested.emit(process_id)
+                    return
+                if source_index.data(Qt.UserRole + 1) == "chat_icon":
+                    self.chat_shortcut_requested.emit(process_id)
+                    return
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
         index = self.indexAt(event.position().toPoint())
-        shortcut_cell = self.status_shortcut_enabled and index.isValid() and index.column() == 0
+        shortcut_cell = False
+        if self.status_shortcut_enabled and index.isValid():
+            if index.column() == 0:
+                shortcut_cell = True
+            else:
+                model = self.model()
+                source_index = model.mapToSource(index) if hasattr(model, "mapToSource") else index
+                shortcut_cell = source_index.data(Qt.UserRole + 1) == "chat_icon"
         self.setCursor(Qt.PointingHandCursor if shortcut_cell else Qt.ArrowCursor)
         super().mouseMoveEvent(event)

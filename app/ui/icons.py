@@ -31,6 +31,15 @@ ICON_SYMBOLS = {
     "download": "download",
     "moon": "moon",
     "sun": "sun",
+    "chat": "chat",
+    "bell": "bell",
+    "question": "question",
+    "gear": "gear",
+    "attach": "attach",
+    "emoji": "emoji",
+    "mic": "mic",
+    "send": "send",
+    "at": "at",
     "fiscal_pending": "fiscal_pending",
     "fiscal_partial": "fiscal_partial",
     "fiscal_done": "fiscal_done",
@@ -58,7 +67,7 @@ ICON_FILES = {
     "users": "sistema_usuarios.png",
     "backup": "sistema_backup.png",
     "restore": "sistema_restaurar.png",
-    "database": "sistema_banco_sqlite.png",
+    "database": "sistema_banco_postgresql.png",
     "search": "acao_pesquisar.png",
     "clear": "acao_limpar.png",
     "new": "acao_novo.png",
@@ -227,6 +236,79 @@ def make_icon(name: str, color: str = "#2563eb", size: int = 20) -> QIcon:
         cut = QPainterPath()
         cut.addEllipse(QRectF(w * .42, w * .08, w * .48, w * .62))
         painter.drawPath(path.subtracted(cut))
+    elif shape == "chat":
+        painter.drawRoundedRect(QRectF(w * .16, w * .20, w * .68, w * .46), 8, 8)
+        tail = QPainterPath(QPointF(w * .32, w * .66))
+        tail.lineTo(QPointF(w * .40, w * .82))
+        tail.lineTo(QPointF(w * .46, w * .66))
+        tail.closeSubpath()
+        painter.drawPath(tail)
+    elif shape == "bell":
+        path = QPainterPath()
+        path.moveTo(w * .30, w * .58)
+        path.cubicTo(w * .30, w * .34, w * .38, w * .20, w * .50, w * .20)
+        path.cubicTo(w * .62, w * .20, w * .70, w * .34, w * .70, w * .58)
+        path.lineTo(w * .78, w * .70)
+        path.lineTo(w * .22, w * .70)
+        path.closeSubpath()
+        painter.drawPath(path)
+        painter.drawLine(QPointF(w * .42, w * .78), QPointF(w * .58, w * .78))
+    elif shape == "question":
+        painter.drawEllipse(QRectF(w * .20, w * .20, w * .60, w * .60))
+        path = QPainterPath(QPointF(w * .38, w * .40))
+        path.cubicTo(QPointF(w * .38, w * .30), QPointF(w * .62, w * .30), QPointF(w * .62, w * .42))
+        path.cubicTo(QPointF(w * .62, w * .50), QPointF(w * .50, w * .48), QPointF(w * .50, w * .60))
+        painter.drawPath(path)
+        painter.drawPoint(QPointF(w * .50, w * .70))
+    elif shape == "gear":
+        painter.drawEllipse(QRectF(w * .36, w * .36, w * .28, w * .28))
+        for angle in range(0, 360, 45):
+            painter.save()
+            painter.translate(w / 2, w / 2)
+            painter.rotate(angle)
+            painter.drawLine(QPointF(0, -w * .40), QPointF(0, -w * .30))
+            painter.restore()
+    elif shape == "attach":
+        path = QPainterPath()
+        path.moveTo(w * .64, w * .24)
+        path.lineTo(w * .34, w * .54)
+        path.cubicTo(QPointF(w * .20, w * .68), QPointF(w * .20, w * .84), QPointF(w * .34, w * .90))
+        path.cubicTo(QPointF(w * .46, w * .95), QPointF(w * .58, w * .90), QPointF(w * .66, w * .82))
+        path.lineTo(w * .84, w * .64)
+        path.cubicTo(QPointF(w * .92, w * .56), QPointF(w * .92, w * .44), QPointF(w * .84, w * .36))
+        path.cubicTo(QPointF(w * .76, w * .28), QPointF(w * .64, w * .28), QPointF(w * .56, w * .36))
+        path.lineTo(w * .40, w * .52)
+        painter.drawPath(path)
+    elif shape == "emoji":
+        painter.drawEllipse(QRectF(w * .18, w * .18, w * .64, w * .64))
+        painter.drawEllipse(QRectF(w * .36, w * .38, w * .06, w * .06))
+        painter.drawEllipse(QRectF(w * .58, w * .38, w * .06, w * .06))
+        smile = QPainterPath(QPointF(w * .34, w * .58))
+        smile.cubicTo(QPointF(w * .42, w * .70), QPointF(w * .58, w * .70), QPointF(w * .66, w * .58))
+        painter.drawPath(smile)
+    elif shape == "mic":
+        painter.drawRoundedRect(QRectF(w * .38, w * .16, w * .24, w * .42), w * .12, w * .12)
+        path = QPainterPath(QPointF(w * .26, w * .46))
+        path.cubicTo(QPointF(w * .26, w * .68), QPointF(w * .74, w * .68), QPointF(w * .74, w * .46))
+        painter.drawPath(path)
+        painter.drawLine(QPointF(w * .50, w * .68), QPointF(w * .50, w * .82))
+        painter.drawLine(QPointF(w * .36, w * .82), QPointF(w * .64, w * .82))
+    elif shape == "send":
+        path = QPainterPath(QPointF(w * .18, w * .50))
+        path.lineTo(w * .84, w * .18)
+        path.lineTo(w * .60, w * .84)
+        path.lineTo(w * .48, w * .56)
+        path.closeSubpath()
+        painter.drawPath(path)
+        painter.drawLine(QPointF(w * .48, w * .56), QPointF(w * .84, w * .18))
+    elif shape == "at":
+        painter.drawEllipse(QRectF(w * .36, w * .36, w * .28, w * .28))
+        path = QPainterPath(QPointF(w * .64, w * .50))
+        path.lineTo(w * .64, w * .66)
+        path.cubicTo(QPointF(w * .64, w * .76), QPointF(w * .82, w * .76), QPointF(w * .82, w * .62))
+        path.cubicTo(QPointF(w * .82, w * .34), QPointF(w * .50, w * .18), QPointF(w * .26, w * .38))
+        path.cubicTo(QPointF(w * .10, w * .54), QPointF(w * .16, w * .82), QPointF(w * .42, w * .88))
+        painter.drawPath(path)
     elif shape == "sun":
         painter.drawEllipse(QRectF(w * .34, w * .34, w * .32, w * .32))
         for angle in range(0, 360, 45):
