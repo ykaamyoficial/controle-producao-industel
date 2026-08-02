@@ -22,11 +22,13 @@ from app.ui.app_icon import app_icon_path
 log = get_logger("notifier_agent")
 
 MAIN_APP_MUTEX_NAME = "Global\\ControleProducaoIndustel_MainAppRunning"
+NOTIFIER_INSTANCE_MUTEX_NAME = "Global\\ControleProducaoIndustel_NotifierInstance"
 STATE_FILE_NAME = "notifier_state.json"
 POLL_INTERVAL_SECONDS = 180
 TOAST_APP_ID = "Controle de Producao Industel"
 STARTUP_SCRIPT_NAME = "ControleProducaoIndustelNotificacoes.bat"
 SYNCHRONIZE = 0x00100000
+ERROR_ALREADY_EXISTS = 183
 
 
 def acquire_main_app_mutex() -> int | None:
@@ -52,6 +54,27 @@ def is_main_app_running() -> bool:
         ctypes.windll.kernel32.CloseHandle(handle)
         return True
     return False
+
+
+def _try_acquire_notifier_instance_lock() -> int | None:
+    """Garante uma unica instancia do agente --notifier por vez.
+
+    Sem isso, uma instancia lancada manualmente (ex.: para teste) rodando ao
+    mesmo tempo que a instancia registrada na pasta Startup poderia disputar a
+    renovacao do MESMO refresh token — e como o backend revoga a familia
+    inteira do token ao detectar reuso, isso derrubaria a sessao do usuario
+    (inclusive do app principal) sem aviso.
+    """
+    if not hasattr(ctypes, "windll"):
+        return None
+    handle = ctypes.windll.kernel32.CreateMutexW(None, False, NOTIFIER_INSTANCE_MUTEX_NAME)
+    last_error = ctypes.windll.kernel32.GetLastError()
+    if not handle:
+        return None
+    if last_error == ERROR_ALREADY_EXISTS:
+        ctypes.windll.kernel32.CloseHandle(handle)
+        return None
+    return handle
 
 
 @dataclass
@@ -133,23 +156,29 @@ def _fetch_unread_summary() -> dict[str, Any] | None:
         client.close()
 
 
-def _send_toast(message: str) -> None:
+def _send_toast(message: str) -> bool:
+    """Tenta exibir o toast. Retorna False se nao foi possivel disparar."""
     try:
         from winotify import Notification
     except ImportError:
         log.warning("notifier_winotify_indisponivel")
-        return
+        return False
     icon_path = app_icon_path()
     launch_target = str(Path(sys.executable)) if is_packaged() else ""
-    toast = Notification(
-        app_id=TOAST_APP_ID,
-        title="Controle de Producao Industel",
-        msg=message,
-        icon=str(icon_path) if icon_path.exists() else "",
-        duration="long",
-        launch=launch_target,
-    )
-    toast.show()
+    try:
+        toast = Notification(
+            app_id=TOAST_APP_ID,
+            title=TOAST_APP_ID,
+            msg=message,
+            icon=str(icon_path) if icon_path.exists() else "",
+            duration="long",
+            launch=launch_target,
+        )
+        toast.show()
+        return True
+    except Exception:
+        log.exception("notifier_toast_erro_ao_exibir")
+        return False
 
 
 def run_cycle() -> None:
@@ -165,15 +194,22 @@ def run_cycle() -> None:
         pending_questions=int(summary.get("pending_questions") or 0),
         new_observations=int(summary.get("new_observations") or 0),
     )
-    save_state(current)
     message = build_notification_message(previous, current)
-    if not message:
-        return
-    log.info("notifier_toast_disparado | resumo=%s", message)
-    _send_toast(message)
+    if message:
+        log.info("notifier_toast_disparado | resumo=%s", message)
+        if not _send_toast(message):
+            # Nao avanca o estado salvo: se o toast falhou, a novidade
+            # precisa continuar "pendente" para ser tentada no proximo ciclo.
+            return
+    save_state(current)
 
 
 def run_notifier_loop(*, poll_interval: int = POLL_INTERVAL_SECONDS) -> None:
+    if hasattr(ctypes, "windll"):
+        instance_lock = _try_acquire_notifier_instance_lock()
+        if instance_lock is None:
+            log.warning("notifier_ja_em_execucao | outra_instancia_do_agente_detectada")
+            return
     log.info("notifier_iniciado | intervalo_segundos=%s", poll_interval)
     while True:
         try:
