@@ -206,6 +206,10 @@ class GalvanizationLoadEvent(Base):
     __table_args__ = (
         Index("ix_galvanization_load_events_load_created", "load_id", "created_at"),
         Index("ix_galvanization_load_events_event_type", "event_type"),
+        # Necessario para o modulo de Chat buscar eventos de varias propostas
+        # de uma vez (proposal_id IN (...)) sem passar por load_id — nenhum
+        # indice existente cobre esse acesso (ver ETAPA 4).
+        Index("ix_galvanization_load_events_proposal", "proposal_id"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)

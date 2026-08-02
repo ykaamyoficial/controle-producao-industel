@@ -9,5 +9,6 @@
   "20260721_0008_create_fiscal_records.py": "dc01df0550569e7b7eb15477e81b1df2b12f07bf18cab80e595a0795d469e21d",
   "20260722_0009_initial_admin_provisioning.py": "db9018676a2faf24011f7a02c6b04d8edc19277f1c116e5570687638f968f33b",
   "20260727_0010_sector_rbac_permissions.py": "bcb2b52a13f935cd56dae7e40760795e468f2aa55cb757a73a2dbbc3efdfb8f5",
-  "20260801_0011_create_chat_module.py": "2a95867c24b3d7b062e6aaebff918f46d1756da0e19462a534081c911da8e5c5"
+  "20260801_0011_create_chat_module.py": "2a95867c24b3d7b062e6aaebff918f46d1756da0e19462a534081c911da8e5c5",
+  "20260802_0012_chat_performance_indexes.py": "be6b2d8ebf886186b05a52c3aa99a5b8725c01570ebc122bda4633e8af56eebb"
 }

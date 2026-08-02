@@ -10,7 +10,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 API_VERSION = "0.8.0"
 API_STAGE = "official-fiscal"
 SERVICE_NAME = "controle-producao-api"
-EXPECTED_DATABASE_REVISION = "20260801_0011"
+EXPECTED_DATABASE_REVISION = "20260802_0012"
 MINIMUM_DESKTOP_VERSION = "2.5.2"
 MAXIMUM_DESKTOP_VERSION: str | None = None
 SUPPORTED_FEATURES = ["auth", "auth_me", "permissions_read", "refresh", "logout", "proposals_read", "proposal_items_read", "proposals_write", "proposal_items_write", "production_official", "galvanization_official", "expedition_official", "fiscal_official"]

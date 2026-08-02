@@ -49,6 +49,10 @@ class ChatMessage(Base):
 class ChatMessageRead(Base):
     __tablename__ = "chat_message_reads"
     __table_args__ = (UniqueConstraint("conversation_id", "user_id", name="uq_chat_message_reads_conversation_user"),)
+    # Sem indice novo aqui de proposito: toda consulta do chat que filtra por
+    # user_id tambem restringe conversation_id (a coluna lider do unique
+    # existente), entao o indice composto ja atende bem — evita indice extra
+    # sem uso real (ver ETAPA 4).
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
     conversation_id: Mapped[int] = mapped_column(ForeignKey("chat_conversations.id", ondelete="CASCADE"), nullable=False)

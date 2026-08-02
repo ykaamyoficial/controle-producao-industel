@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from sqlalchemy import func, select, update
+from sqlalchemy import and_, func, literal, select, union_all, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from api.app.core import error_codes
 from api.app.core.exceptions import ApiError, PermissionDeniedError
@@ -25,7 +26,18 @@ from api.app.modules.chat.schemas import (
     UnreadSummary,
 )
 from api.app.modules.proposals import service as proposals_service
-from api.app.modules.proposals.models import Proposal
+from api.app.modules.proposals.models import (
+    ExpeditionEvent,
+    FiscalEvent,
+    FiscalRecord,
+    GalvanizationLoadEvent,
+    Proposal,
+    ProposalEvent,
+)
+from api.app.modules.proposals.service import _history_observation
+
+
+HISTORY_ITEMS_PER_PROPOSAL_LIMIT = 200
 
 
 GENERAL_CHAT_KIND = "GERAL"
@@ -103,21 +115,32 @@ def _message_out(message: ChatMessage, users_by_id: dict[int, User], seen_by_cou
     )
 
 
-async def _seen_counts(session: AsyncSession, conversation_id: int, messages: list[ChatMessage]) -> dict[int, int]:
+async def _seen_counts(session: AsyncSession, messages: list[ChatMessage]) -> dict[int, int]:
+    """Para cada mensagem, quantos outros usuarios (nao o proprio autor) ja
+    leram ate ela ou alem — calculado em uma unica consulta agregada em vez
+    de um laco Python O(mensagens x leituras)."""
     if not messages:
         return {}
-    reads = (
-        await session.execute(select(ChatMessageRead).where(ChatMessageRead.conversation_id == conversation_id))
-    ).scalars().all()
-    result: dict[int, int] = {}
-    for message in messages:
-        count = 0
-        for read in reads:
-            if read.user_id == message.author_user_id:
-                continue
-            if (read.last_read_message_id or 0) >= message.id:
-                count += 1
-        result[message.id] = count
+    message_ids = [message.id for message in messages]
+    stmt = (
+        select(ChatMessage.id, func.count(ChatMessageRead.id))
+        .select_from(ChatMessage)
+        .join(
+            ChatMessageRead,
+            and_(
+                ChatMessageRead.conversation_id == ChatMessage.conversation_id,
+                func.coalesce(ChatMessageRead.last_read_message_id, 0) >= ChatMessage.id,
+                ChatMessageRead.user_id.is_distinct_from(ChatMessage.author_user_id),
+            ),
+        )
+        .where(ChatMessage.id.in_(message_ids))
+        .group_by(ChatMessage.id)
+    )
+    rows = (await session.execute(stmt)).all()
+    # sempre uma entrada por mensagem (mesmo com 0 leituras), igual o
+    # contrato original garantia.
+    result = {message_id: 0 for message_id in message_ids}
+    result.update({int(message_id): int(count) for message_id, count in rows})
     return result
 
 
@@ -240,7 +263,7 @@ async def list_messages(session: AsyncSession, conversation_id: int, actor: User
         ids.add(row.author_user_id)
         ids.add(row.mentioned_user_id)
     users_by_id = await _users_by_id(session, ids)
-    seen_by_message = await _seen_counts(session, conversation.id, rows)
+    seen_by_message = await _seen_counts(session, rows)
     return MessageList(items=[_message_out(row, users_by_id, seen_by_message.get(row.id, 0)) for row in rows], total=total)
 
 
@@ -251,17 +274,28 @@ async def get_proposal_timeline(session: AsyncSession, proposal_id: int, actor: 
     await session.commit()
     _ensure_can_view_conversation(actor, conversation)
 
-    messages = (
-        await session.execute(
-            select(ChatMessage).where(ChatMessage.conversation_id == conversation.id).order_by(ChatMessage.created_at)
+    # limite de seguranca (mesmo teto usado abaixo para list_proposal_history)
+    # para nunca carregar um numero irrestrito de mensagens de uma unica vez.
+    messages = list(
+        reversed(
+            (
+                await session.execute(
+                    select(ChatMessage)
+                    .where(ChatMessage.conversation_id == conversation.id)
+                    .order_by(ChatMessage.created_at.desc())
+                    .limit(5000)
+                )
+            )
+            .scalars()
+            .all()
         )
-    ).scalars().all()
+    )
     ids: set[int | None] = set()
     for message in messages:
         ids.add(message.author_user_id)
         ids.add(message.mentioned_user_id)
     users_by_id = await _users_by_id(session, ids)
-    seen_by_message = await _seen_counts(session, conversation.id, messages)
+    seen_by_message = await _seen_counts(session, messages)
 
     entries: list[TimelineEntry] = []
     for message in messages:
@@ -306,44 +340,49 @@ async def get_proposal_timeline(session: AsyncSession, proposal_id: int, actor: 
 
 
 async def _unread_counts(session: AsyncSession, actor: User, conversation_ids: list[int]) -> dict[int, int]:
+    """Uma unica consulta agregada (LEFT JOIN + GROUP BY) para todas as
+    conversas, em vez de uma consulta de contagem por conversa."""
     if not conversation_ids:
         return {}
-    reads = (
-        await session.execute(
-            select(ChatMessageRead).where(ChatMessageRead.user_id == actor.id, ChatMessageRead.conversation_id.in_(conversation_ids))
+    reads_subq = (
+        select(ChatMessageRead.conversation_id, ChatMessageRead.last_read_message_id)
+        .where(ChatMessageRead.user_id == actor.id, ChatMessageRead.conversation_id.in_(conversation_ids))
+        .subquery()
+    )
+    stmt = (
+        select(ChatMessage.conversation_id, func.count())
+        .select_from(ChatMessage)
+        .outerjoin(reads_subq, reads_subq.c.conversation_id == ChatMessage.conversation_id)
+        .where(
+            ChatMessage.conversation_id.in_(conversation_ids),
+            ChatMessage.id > func.coalesce(reads_subq.c.last_read_message_id, 0),
+            ChatMessage.author_user_id.is_distinct_from(actor.id),
         )
-    ).scalars().all()
-    last_read_by_conversation = {read.conversation_id: (read.last_read_message_id or 0) for read in reads}
-
-    result: dict[int, int] = {}
-    for conversation_id in conversation_ids:
-        last_read_id = last_read_by_conversation.get(conversation_id, 0)
-        count = (
-            await session.execute(
-                select(func.count()).select_from(ChatMessage).where(
-                    ChatMessage.conversation_id == conversation_id,
-                    ChatMessage.id > last_read_id,
-                    ChatMessage.author_user_id.is_distinct_from(actor.id),
-                )
-            )
-        ).scalar_one()
-        result[conversation_id] = int(count)
-    return result
+        .group_by(ChatMessage.conversation_id)
+    )
+    rows = (await session.execute(stmt)).all()
+    return {conversation_id: int(count) for conversation_id, count in rows}
 
 
 async def _last_messages(session: AsyncSession, conversation_ids: list[int]) -> dict[int, ChatMessage]:
+    """Busca a ultima mensagem de todas as conversas em uma unica consulta,
+    usando ROW_NUMBER() particionado por conversa em vez de uma consulta
+    "ORDER BY ... LIMIT 1" por conversa."""
     if not conversation_ids:
         return {}
-    result: dict[int, ChatMessage] = {}
-    for conversation_id in conversation_ids:
-        message = (
-            await session.execute(
-                select(ChatMessage).where(ChatMessage.conversation_id == conversation_id).order_by(ChatMessage.created_at.desc()).limit(1)
-            )
-        ).scalars().first()
-        if message:
-            result[conversation_id] = message
-    return result
+    ranked = (
+        select(
+            ChatMessage,
+            func.row_number()
+            .over(partition_by=ChatMessage.conversation_id, order_by=ChatMessage.created_at.desc())
+            .label("rn"),
+        )
+        .where(ChatMessage.conversation_id.in_(conversation_ids))
+        .subquery()
+    )
+    ranked_message = aliased(ChatMessage, ranked)
+    rows = (await session.execute(select(ranked_message).where(ranked.c.rn == 1))).scalars().all()
+    return {message.conversation_id: message for message in rows}
 
 
 async def list_conversations(
@@ -463,14 +502,100 @@ async def _pending_question_count(session: AsyncSession, actor: User) -> int:
     return int(count)
 
 
+async def _recent_history_by_proposal(session: AsyncSession, proposal_ids: list[int], *, per_proposal_limit: int = HISTORY_ITEMS_PER_PROPOSAL_LIMIT):
+    """Busca, em consultas fixas (uma por tabela de evento, nunca uma por
+    proposta), os `per_proposal_limit` eventos mais recentes de CADA
+    proposta — os mesmos 4 tipos de evento e o mesmo criterio de ordenacao
+    e corte que proposals_service.list_proposal_history usa para uma unica
+    proposta, so que aplicados a todas de uma vez via UNION ALL + ROW_NUMBER
+    particionado por proposal_id. Retorna um dict proposal_id -> lista de
+    linhas (id, proposal_id, source, created_at, metadata_, actor_user_id,
+    area), da mais recente para a mais antiga."""
+    if not proposal_ids:
+        return {}
+
+    proposal_q = select(
+        ProposalEvent.id.label("id"),
+        ProposalEvent.proposal_id.label("proposal_id"),
+        literal("proposal").label("source"),
+        ProposalEvent.created_at.label("created_at"),
+        ProposalEvent.metadata_.label("metadata_"),
+        ProposalEvent.actor_user_id.label("actor_user_id"),
+        func.coalesce(ProposalEvent.to_area, ProposalEvent.from_area).label("area"),
+    ).where(ProposalEvent.proposal_id.in_(proposal_ids))
+
+    expedition_q = select(
+        ExpeditionEvent.id.label("id"),
+        ExpeditionEvent.proposal_id.label("proposal_id"),
+        literal("expedition").label("source"),
+        ExpeditionEvent.created_at.label("created_at"),
+        ExpeditionEvent.metadata_.label("metadata_"),
+        ExpeditionEvent.actor_user_id.label("actor_user_id"),
+        literal("EXPEDICAO").label("area"),
+    ).where(ExpeditionEvent.proposal_id.in_(proposal_ids))
+
+    galvanization_q = select(
+        GalvanizationLoadEvent.id.label("id"),
+        GalvanizationLoadEvent.proposal_id.label("proposal_id"),
+        literal("galvanization").label("source"),
+        GalvanizationLoadEvent.created_at.label("created_at"),
+        GalvanizationLoadEvent.metadata_.label("metadata_"),
+        GalvanizationLoadEvent.actor_user_id.label("actor_user_id"),
+        literal("GALVANIZACAO").label("area"),
+    ).where(GalvanizationLoadEvent.proposal_id.in_(proposal_ids))
+
+    # join com fiscal_records (nao um indice novo em fiscal_events) para
+    # reaproveitar os indices ja existentes em uq_fiscal_records_proposal e
+    # ix_fiscal_events_record_created, igual list_proposal_history ja faz.
+    fiscal_q = (
+        select(
+            FiscalEvent.id.label("id"),
+            FiscalRecord.proposal_id.label("proposal_id"),
+            literal("fiscal").label("source"),
+            FiscalEvent.created_at.label("created_at"),
+            FiscalEvent.metadata_.label("metadata_"),
+            FiscalEvent.actor_user_id.label("actor_user_id"),
+            literal("FISCAL").label("area"),
+        )
+        .select_from(FiscalEvent)
+        .join(FiscalRecord, FiscalRecord.id == FiscalEvent.fiscal_record_id)
+        .where(FiscalRecord.proposal_id.in_(proposal_ids))
+    )
+
+    combined = union_all(proposal_q, expedition_q, galvanization_q, fiscal_q).subquery("combined_history")
+    ranked = select(
+        combined,
+        func.row_number()
+        .over(
+            partition_by=combined.c.proposal_id,
+            order_by=(combined.c.created_at.desc(), combined.c.source.desc(), combined.c.id.desc()),
+        )
+        .label("rn"),
+    ).subquery("ranked_history")
+
+    rows = (
+        await session.execute(
+            select(ranked).where(ranked.c.rn <= per_proposal_limit).order_by(ranked.c.proposal_id, ranked.c.created_at.desc())
+        )
+    ).all()
+
+    result: dict[int, list] = {}
+    for row in rows:
+        result.setdefault(row.proposal_id, []).append(row)
+    return result
+
+
 async def _new_observation_entries(session: AsyncSession, actor: User, conversations: list[ChatConversation]) -> list[dict]:
     """Observacoes de area publicadas depois da ultima vez que o usuario abriu
     aquela conversa. Nao existe uma tabela propria para isso: reaproveita o
-    mesmo merge-na-leitura da Timeline (list_proposal_history), comparando
-    contra o cursor de leitura (ChatMessageRead.updated_at) que ja existe."""
+    mesmo conjunto de eventos que a Timeline usa (_recent_history_by_proposal,
+    equivalente em lote a proposals_service.list_proposal_history) e a mesma
+    regra de extracao de observacao (_history_observation), comparando contra
+    o cursor de leitura (ChatMessageRead.updated_at) que ja existe."""
     proposal_conversations = [c for c in conversations if c.kind == PROPOSAL_CHAT_KIND and c.proposal_id]
     if not proposal_conversations:
         return []
+    conversation_by_proposal = {c.proposal_id: c for c in proposal_conversations}
     conversation_ids = [c.id for c in proposal_conversations]
     reads = (
         await session.execute(
@@ -479,26 +604,41 @@ async def _new_observation_entries(session: AsyncSession, actor: User, conversat
     ).scalars().all()
     last_seen_by_conversation = {read.conversation_id: read.updated_at for read in reads}
 
+    # so proposta cujo chat o usuario ja abriu pelo menos uma vez entra na
+    # busca (sem isso nao ha "ultima vez visto" pra comparar).
+    relevant_proposal_ids = [
+        proposal_id
+        for proposal_id, conversation in conversation_by_proposal.items()
+        if last_seen_by_conversation.get(conversation.id) is not None
+    ]
+    if not relevant_proposal_ids:
+        return []
+
+    history_by_proposal = await _recent_history_by_proposal(session, relevant_proposal_ids)
+
+    actor_ids = {row.actor_user_id for rows in history_by_proposal.values() for row in rows if row.actor_user_id}
+    users_by_id = await _users_by_id(session, actor_ids)
+
     entries: list[dict] = []
-    for conversation in proposal_conversations:
-        last_seen_at = last_seen_by_conversation.get(conversation.id)
-        if last_seen_at is None:
-            # usuario nunca abriu essa conversa: nao ha "novidade" a notificar ainda
-            continue
-        history = await proposals_service.list_proposal_history(session, proposal_id=conversation.proposal_id, limit=200, offset=0)
-        for item in history:
-            if not item.observation or item.created_at <= last_seen_at:
+    for proposal_id in relevant_proposal_ids:
+        conversation = conversation_by_proposal[proposal_id]
+        last_seen_at = last_seen_by_conversation[conversation.id]
+        for item in history_by_proposal.get(proposal_id, []):
+            metadata = item.metadata_ if isinstance(item.metadata_, dict) else {}
+            observation = _history_observation(metadata)
+            if not observation or item.created_at <= last_seen_at:
                 continue
+            actor_row = users_by_id.get(item.actor_user_id) if item.actor_user_id else None
             entries.append(
                 {
                     "notification_type": "OBSERVACAO",
                     "conversation_id": conversation.id,
                     "kind": conversation.kind,
-                    "proposal_id": conversation.proposal_id,
+                    "proposal_id": proposal_id,
                     "message_id": None,
-                    "message_body": item.observation,
+                    "message_body": observation,
                     "area": item.area,
-                    "author_name": item.actor_name,
+                    "author_name": actor_row.display_name if actor_row else None,
                     "created_at": item.created_at,
                     "read_at": None,
                 }
