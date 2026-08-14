@@ -14,10 +14,11 @@ log = logging.getLogger("api.errors")
 
 
 class ApiError(Exception):
-    def __init__(self, code: str, message: str, status_code: int = 400):
+    def __init__(self, code: str, message: str, status_code: int = 400, *, details: object | None = None):
         self.code = code
         self.message = message
         self.status_code = status_code
+        self.details = details
         super().__init__(message)
 
 
@@ -36,6 +37,11 @@ class AuthConfigurationError(ApiError):
         super().__init__(error_codes.CONFIGURATION_ERROR, message, status_code=503)
 
 
+class VersionConfigurationError(ApiError):
+    def __init__(self, message: str = "A configuracao central de versoes do servidor esta invalida."):
+        super().__init__(error_codes.CONFIGURATION_ERROR, message, status_code=503)
+
+
 class AuthenticationError(ApiError):
     def __init__(self, code: str = error_codes.TOKEN_INVALID, message: str = "Autenticacao invalida."):
         super().__init__(code, message, status_code=401)
@@ -46,10 +52,64 @@ class PermissionDeniedError(ApiError):
         super().__init__(error_codes.PERMISSION_DENIED, message, status_code=403)
 
 
+class MaintenanceTransitionError(ApiError):
+    """Traduz api.app.maintenance.exceptions.InvalidMaintenanceTransitionError
+    para o contrato HTTP dos routers administrativos (Fase 14, Secao 13)."""
+
+    def __init__(self, message: str):
+        super().__init__(error_codes.MAINTENANCE_INVALID_TRANSITION, message, status_code=409)
+
+
+class MaintenanceConcurrencyError(ApiError):
+    """Traduz api.app.maintenance.exceptions.ConcurrentMaintenanceOperationError
+    (Fase 14, Secao 27: comandos administrativos concorrentes)."""
+
+    def __init__(self, message: str):
+        super().__init__(error_codes.MAINTENANCE_OPERATION_IN_PROGRESS, message, status_code=409)
+
+
+class ChannelTransitionError(ApiError):
+    """Traduz api.app.channels.exceptions.InvalidPromotionTransitionError
+    (Fase 15, Secao 10)."""
+
+    def __init__(self, message: str):
+        super().__init__(error_codes.CHANNEL_INVALID_TRANSITION, message, status_code=409)
+
+
+class ChannelConcurrencyError(ApiError):
+    """Traduz api.app.channels.exceptions.ConcurrentPromotionOperationError
+    (Fase 15, Secao 27)."""
+
+    def __init__(self, message: str):
+        super().__init__(error_codes.CHANNEL_OPERATION_IN_PROGRESS, message, status_code=409)
+
+
+class ChannelArtifactMismatchError(ApiError):
+    """Traduz api.app.channels.exceptions.ArtifactMismatchError (Fase 15,
+    Secao 4/12: hash divergente do snapshot tirado na autorizacao do piloto)."""
+
+    def __init__(self, message: str):
+        super().__init__(error_codes.CHANNEL_ARTIFACT_MISMATCH, message, status_code=409)
+
+
+class ChannelGatesNotMetError(ApiError):
+    """Traduz api.app.channels.exceptions.PilotGatesNotMetError (Fase 15, Secao 20)."""
+
+    def __init__(self, message: str):
+        super().__init__(error_codes.CHANNEL_GATES_NOT_MET, message, status_code=409)
+
+
+class ChannelReleaseNotEligibleError(ApiError):
+    """Traduz api.app.channels.exceptions.ReleaseNotEligibleError (Fase 15)."""
+
+    def __init__(self, message: str):
+        super().__init__(error_codes.CHANNEL_RELEASE_NOT_ELIGIBLE, message, status_code=409)
+
+
 def install_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(ApiError)
     async def api_error_handler(request: Request, exc: ApiError):
-        return error_response(exc.code, exc.message, request, status_code=exc.status_code)
+        return error_response(exc.code, exc.message, request, status_code=exc.status_code, details=exc.details)
 
     @app.exception_handler(RequestValidationError)
     async def validation_error_handler(request: Request, exc: RequestValidationError):

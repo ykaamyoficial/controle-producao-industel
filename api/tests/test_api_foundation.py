@@ -133,6 +133,21 @@ class ApiFoundationTests(unittest.TestCase):
         with self.assertRaises(ValidationError):
             Settings(API_LOG_LEVEL="LOUD")
 
+    def test_default_host_stays_loopback_for_local_development(self):
+        # Le o default declarado no campo, nao Settings() direto: o ambiente de
+        # teste (container dev) ja define API_HOST=0.0.0.0 (Fase 1), entao uma
+        # instancia real refletiria o ambiente, nao o default de fabrica.
+        self.assertEqual(Settings.model_fields["api_host"].default, "127.0.0.1")
+
+    def test_production_style_host_bind_is_accepted(self):
+        # Fase 1 - Servidor e Endereco Oficial da API: o servidor fisico precisa
+        # poder escutar em todas as interfaces (0.0.0.0) para aceitar conexoes
+        # vindas de outros computadores da LAN, nao apenas da propria maquina.
+        settings = Settings(DATABASE_URL="", SECRET_KEY="", API_HOST="0.0.0.0")
+
+        self.assertEqual(settings.api_host, "0.0.0.0")
+        self.assertEqual(settings.api_port, 8000)
+
 
 if __name__ == "__main__":
     unittest.main()

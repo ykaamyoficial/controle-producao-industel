@@ -14,17 +14,18 @@ def current_request_id(request: Request | None = None) -> str:
     return request_id_var.get() or ""
 
 
-def error_response(code: str, message: str, request: Request, status_code: int) -> JSONResponse:
+def error_response(code: str, message: str, request: Request, status_code: int, *, details: object | None = None) -> JSONResponse:
     request_id = current_request_id(request)
+    error = {
+        "code": code,
+        "message": message,
+        "request_id": request_id,
+    }
+    if details is not None:
+        error["details"] = details
     response = JSONResponse(
         status_code=status_code,
-        content={
-            "error": {
-                "code": code,
-                "message": message,
-                "request_id": request_id,
-            }
-        },
+        content={"error": error},
     )
     if request_id:
         response.headers["X-Request-ID"] = request_id

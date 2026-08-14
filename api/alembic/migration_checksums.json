@@ -9,6 +9,17 @@
   "20260721_0008_create_fiscal_records.py": "dc01df0550569e7b7eb15477e81b1df2b12f07bf18cab80e595a0795d469e21d",
   "20260722_0009_initial_admin_provisioning.py": "db9018676a2faf24011f7a02c6b04d8edc19277f1c116e5570687638f968f33b",
   "20260727_0010_sector_rbac_permissions.py": "bcb2b52a13f935cd56dae7e40760795e468f2aa55cb757a73a2dbbc3efdfb8f5",
-  "20260801_0011_create_chat_module.py": "2a95867c24b3d7b062e6aaebff918f46d1756da0e19462a534081c911da8e5c5",
-  "20260802_0012_chat_performance_indexes.py": "be6b2d8ebf886186b05a52c3aa99a5b8725c01570ebc122bda4633e8af56eebb"
+  "20260801_0011_create_chat_module.py": "c734c9bfe30532a291c707868ddd85219a2e3586b9b13d0c2b6880c160493bc8",
+  "20260802_0012_chat_performance_indexes.py": "be6b2d8ebf886186b05a52c3aa99a5b8725c01570ebc122bda4633e8af56eebb",
+  "20260803_0013_extend_chat_messaging.py": "e66646b46e7c44d296ea0e9862d4092040d4a05497209060e157026a33e42088",
+  "20260807_0014_response_requests_and_notes.py": "e8c71f9d4a2f4bb8ba0ffa89f9d1f602b449a06db005e8916e896531f686964c",
+  "20260810_0015_product_weight_resolution.py": "24147dc62469064cc844e4e007a433ddf235a7ac77a40b36d8fa59eebc2cbd0c",
+  "20260811_0016_decouple_operational_weights.py": "bfcc0ddeadac024a82c5ba4a13a02fe5358ffe8902a0573c0332d41f6e109d0f",
+  "20260811_0017_terminal_proposal_cancellation.py": "0fd6c105677aeed2260b006f3563a16e04d19ec5049ae5c4a716eb31b65b9f55",
+  "20260811_0018_compensated_remanagement.py": "9227b7d02b610677b9061dc1ab5b67e52d732ba58de7e441dc58f29c30334066",
+  "20260812_0019_create_client_installations.py": "b7bc01f7815613f224a5bdce735f14fadd564fa9ec1cef371adb0d6b510f8f87",
+  "20260812_0020_create_update_audit_events.py": "34be35354ac9034cba5f2c7fb7e1829a145f06351e1e7d10f59b715099fafcd9",
+  "20260813_0010_add_user_profile.py": "fe043a716317a90e2e81dd278104bfa3184785303ec08babe754278c05c5d002",
+  "20260814_0021_proposal_partial_hierarchy.py": "f71ae4c46c95161002284aa7484aad696ecbd76ccace722b25784554b3d76fa9",
+  "20260814_0022_backfill_legacy_partial_parents.py": "a34c6531b378d89febfb2d9ebbf98dda9f52ad7491ac563f8ffdbde7c2cc44de"
 }

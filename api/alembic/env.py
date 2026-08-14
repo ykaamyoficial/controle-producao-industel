@@ -9,7 +9,10 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from api.app.core.config import get_settings
 from api.app.database.base import Base
+from api.app.audit import db_models as audit_db_models  # noqa: F401
+from api.app.channels import db_models as channels_db_models  # noqa: F401
 from api.app.modules.auth import models as auth_models  # noqa: F401
+from api.app.modules.product_catalog import models as product_catalog_models  # noqa: F401
 from api.app.modules.proposals import models as proposal_models  # noqa: F401
 from api.app.modules.system import models as system_models  # noqa: F401
 
