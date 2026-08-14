@@ -29,6 +29,7 @@ desktop.ini
 logs/
 backups/
 backup/
+deployments/
 *.bak
 *.backup
 *.tmp
@@ -50,6 +51,7 @@ gerados/
 
 # Conteudo local e versoes arquivadas
 .codex-tools/
+.codex-remote-attachments/
 desktop/
 versoes_antigas/
 modelos Propostas/
