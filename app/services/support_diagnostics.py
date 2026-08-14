@@ -10,11 +10,22 @@ from pathlib import Path
 from app.services.app_logging import get_logger
 from app.services.app_paths import get_diagnostics_dir, get_logs_dir
 from app.services.network_diagnostics import diagnose_update_endpoint
-from app.services.update_checker import RELEASES_API_URL
+from app.services.update_distribution_client import diagnostic_probe_url
 from app.version import APP_VERSION
 
 
 log = get_logger("diagnostics")
+
+
+def _updates_diagnostic() -> dict:
+    probe_url = diagnostic_probe_url()
+    if probe_url is None:
+        return {
+            "internet": False, "update_url": False, "certificate": False,
+            "clock": datetime.now().isoformat(timespec="seconds"), "clock_ok": None,
+            "errors": [{"kind": "not_configured", "detail": "Integracao com a API desativada nas configuracoes."}],
+        }
+    return diagnose_update_endpoint(probe_url)
 
 
 def build_diagnostic_report(db_path: str | None = None) -> dict:
@@ -31,7 +42,7 @@ def build_diagnostic_report(db_path: str | None = None) -> dict:
             "status": "managed_by_server",
             "detail": "Desktop nao acessa banco de dados diretamente.",
         },
-        "updates": diagnose_update_endpoint(RELEASES_API_URL),
+        "updates": _updates_diagnostic(),
     }
 
 

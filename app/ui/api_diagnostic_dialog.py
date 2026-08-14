@@ -4,6 +4,7 @@ from datetime import datetime
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QDialog,
     QFrame,
@@ -11,6 +12,8 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QMessageBox,
     QPlainTextEdit,
     QVBoxLayout,
@@ -24,24 +27,50 @@ from app.integrations.api.exceptions import ApiClientError
 from app.integrations.api.session import ExperimentalApiSession
 from app.integrations.api.system_client import SystemApiClient
 from app.integrations.api.token_store import ApiTokenStore
+from app.services.app_logging import get_logger
+from app.services.diagnostic_service import (
+    DiagnosticResult,
+    DiagnosticStatus,
+    build_report_text,
+    run_diagnostics,
+)
 from app.ui.background_worker import start_worker
 from app.ui.components.modern_button import ModernButton
 from app.ui.dialog_utils import style_dialog_from_parent
 
+log = get_logger("api_diagnostic_dialog")
+
+_STATUS_MARKERS = {
+    DiagnosticStatus.OK: "OK",
+    DiagnosticStatus.WARNING: "ATENCAO",
+    DiagnosticStatus.ERROR: "ERRO",
+    DiagnosticStatus.NOT_TESTED: "NAO TESTADO",
+}
+_OVERALL_LABELS = {
+    DiagnosticStatus.OK: "OK",
+    DiagnosticStatus.WARNING: "ATENCAO",
+    DiagnosticStatus.ERROR: "ERRO",
+    DiagnosticStatus.NOT_TESTED: "NAO EXECUTADO",
+}
+
 
 class ApiDiagnosticDialog(QDialog):
-    def __init__(self, parent=None, *, store: DesktopApiConfigStore | None = None, token_store: ApiTokenStore | None = None):
+    def __init__(self, parent=None, *, store: DesktopApiConfigStore | None = None, token_store: ApiTokenStore | None = None, diagnostic_client_factory=DesktopApiClient):
         super().__init__(parent)
         self.setWindowTitle("Diagnostico da API")
         self.store = store or DesktopApiConfigStore()
         self.token_store = token_store
+        self.diagnostic_client_factory = diagnostic_client_factory
         self._worker_threads = []
         self._session: ExperimentalApiSession | None = None
+        self._diagnostic_result: DiagnosticResult | None = None
+        self._diagnostic_running = False
+        self._diagnostic_thread = None
         self._build()
         self._load()
         style_dialog_from_parent(self, parent)
-        self.setMinimumSize(760, 560)
-        self.resize(860, 620)
+        self.setMinimumSize(760, 620)
+        self.resize(860, 700)
 
     def _build(self):
         root = QVBoxLayout(self)
@@ -55,6 +84,44 @@ class ApiDiagnosticDialog(QDialog):
         subtitle.setWordWrap(True)
         root.addWidget(title)
         root.addWidget(subtitle)
+
+        diag_panel = QFrame()
+        diag_panel.setObjectName("Panel")
+        diag_layout = QVBoxLayout(diag_panel)
+        diag_layout.setContentsMargins(18, 16, 18, 16)
+        diag_layout.setSpacing(8)
+
+        diag_title = QLabel("Diagnostico de conexao")
+        diag_title.setStyleSheet("font-size: 15px; font-weight: 800;")
+        diag_layout.addWidget(diag_title)
+
+        self.diag_status_label = QLabel("Status geral: nao executado")
+        diag_layout.addWidget(self.diag_status_label)
+        self.diag_server_label = QLabel("Servidor configurado: -")
+        self.diag_server_label.setObjectName("Caption")
+        diag_layout.addWidget(self.diag_server_label)
+        self.diag_meta_label = QLabel("Ultimo teste: nunca")
+        self.diag_meta_label.setObjectName("Caption")
+        diag_layout.addWidget(self.diag_meta_label)
+
+        diag_actions = QHBoxLayout()
+        diag_actions.setSpacing(10)
+        self.diag_run_button = ModernButton("Executar diagnostico", "refresh", accent=True)
+        self.diag_run_button.clicked.connect(self.run_diagnostic)
+        self.diag_copy_button = ModernButton("Copiar relatorio", "save")
+        self.diag_copy_button.clicked.connect(self.copy_diagnostic_report)
+        self.diag_copy_button.setEnabled(False)
+        diag_actions.addWidget(self.diag_run_button)
+        diag_actions.addWidget(self.diag_copy_button)
+        diag_actions.addStretch()
+        diag_layout.addLayout(diag_actions)
+
+        self.diag_checks_list = QListWidget()
+        self.diag_checks_list.setMinimumHeight(150)
+        self.diag_checks_list.setMaximumHeight(210)
+        diag_layout.addWidget(self.diag_checks_list)
+
+        root.addWidget(diag_panel)
 
         form = QFrame()
         form.setObjectName("Panel")
@@ -138,6 +205,58 @@ class ApiDiagnosticDialog(QDialog):
         self.connect_timeout.setText(str(self.settings.connect_timeout))
         self.read_timeout.setText(str(self.settings.read_timeout))
         self._refresh_status()
+        server_label = self.settings.base_url if self.store.is_configured() else "nao configurado"
+        self.diag_server_label.setText(f"Servidor configurado: {server_label}")
+
+    def run_diagnostic(self):
+        if self._diagnostic_running:
+            return
+        self._diagnostic_running = True
+        self.diag_run_button.setEnabled(False)
+        self.diag_copy_button.setEnabled(False)
+        self.diag_status_label.setText("Status geral: verificando...")
+        self.diag_checks_list.clear()
+        self._diagnostic_thread = start_worker(
+            self,
+            lambda: run_diagnostics(config_store=self.store, client_factory=self.diagnostic_client_factory),
+            self._on_diagnostic_result,
+            self._on_diagnostic_error,
+        )
+
+    def _on_diagnostic_result(self, result: DiagnosticResult) -> None:
+        self._diagnostic_running = False
+        self.diag_run_button.setEnabled(True)
+        self.diag_copy_button.setEnabled(True)
+        self._diagnostic_result = result
+        self._load()  # atualiza "Servidor configurado" caso o bootstrap/outra tela tenha alterado a config.
+
+        self.diag_status_label.setText(f"Status geral: {_OVERALL_LABELS[result.overall_status]}")
+        when = result.started_at.astimezone().strftime("%d/%m/%Y %H:%M:%S")
+        self.diag_meta_label.setText(f"Ultimo teste: {when} | Tempo total: {result.duration_ms} ms")
+
+        self.diag_checks_list.clear()
+        for check in result.checks:
+            marker = _STATUS_MARKERS[check.status]
+            text = f"[{marker}] {check.label} - {check.detail}"
+            if check.status == DiagnosticStatus.ERROR and check.recommendation:
+                text += f" | Sugestao: {check.recommendation}"
+            item = QListWidgetItem(text)
+            self.diag_checks_list.addItem(item)
+
+        self._append(f"Diagnostico executado: {result.overall_status.value} | {result.user_message}")
+
+    def _on_diagnostic_error(self, exc: Exception) -> None:
+        self._diagnostic_running = False
+        self.diag_run_button.setEnabled(True)
+        self.diag_status_label.setText("Status geral: falha ao executar diagnostico")
+        log.exception("Falha inesperada ao executar o diagnostico completo")
+
+    def copy_diagnostic_report(self):
+        if self._diagnostic_result is None:
+            return
+        report = build_report_text(self._diagnostic_result)
+        QApplication.clipboard().setText(report)
+        self._append("Relatorio de diagnostico copiado para a area de transferencia.")
 
     def _refresh_status(self):
         if not self.settings.last_tested_at:

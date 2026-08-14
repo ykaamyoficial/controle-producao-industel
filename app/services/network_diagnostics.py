@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from typing import Any
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 import certifi
@@ -60,6 +61,10 @@ def download_bytes(url: str, timeout: int = 30) -> bytes:
 
 
 def diagnose_update_endpoint(url: str, timeout: int = 8) -> dict[str, Any]:
+    """Diagnostica conectividade com `url` (Fase 12: aponta para o servidor
+    de atualizacoes configurado, nunca mais para api.github.com de forma
+    fixa -- a checagem de conectividade generica usa o proprio host/porta da
+    URL recebida)."""
     result: dict[str, Any] = {
         "internet": False,
         "update_url": False,
@@ -69,9 +74,12 @@ def diagnose_update_endpoint(url: str, timeout: int = 8) -> dict[str, Any]:
         "errors": [],
     }
     try:
-        socket.create_connection(("api.github.com", 443), timeout=timeout).close()
+        parsed = urlparse(url)
+        host = parsed.hostname or ""
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        socket.create_connection((host, port), timeout=timeout).close()
         result["internet"] = True
-        request = Request(url, headers={"Accept": "application/vnd.github+json", "User-Agent": "ControleProducaoIndustel"})
+        request = Request(url, headers={"Accept": "application/json", "User-Agent": "ControleProducaoIndustel"})
         with urlopen(request, timeout=timeout, context=trusted_ssl_context()) as response:
             response.read(1)
             server_date = response.headers.get("Date")
