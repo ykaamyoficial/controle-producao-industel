@@ -5,9 +5,9 @@ from typing import Callable
 from PySide6.QtCore import QObject, QPropertyAnimation, QThread, Qt, Signal
 from PySide6.QtWidgets import QDialog, QFrame, QHBoxLayout, QLabel, QMessageBox, QProgressBar, QTextEdit, QVBoxLayout, QWidget
 
-from app.services.update_downloader import UpdateDownloadError, download_update as download_update_file
-from app.services.update_installer import UpdateInstallError, create_pre_update_backup, run_silent_installer
+from app.services.update_coordinator import UpdateCoordinator
 from app.ui.components.modern_button import ModernButton
+from app.ui.icons import AppIcons, icon_provider
 
 
 class UpdateWorker(QObject):
@@ -30,9 +30,11 @@ class UpdateWorker(QObject):
 
 
 class UpdateDialog(QDialog):
-    def __init__(self, update_info: dict, parent=None):
+    def __init__(self, update_info: dict, parent=None, *, update_coordinator_factory: Callable[[], object] = UpdateCoordinator):
         super().__init__(parent)
         self.update_info = update_info
+        self.update_launched = False
+        self._update_coordinator_factory = update_coordinator_factory
         self._worker_thread = None
         self._progress_animation = None
         self.setWindowTitle("Nova versao disponivel")
@@ -49,9 +51,12 @@ class UpdateDialog(QDialog):
         header.setObjectName("UpdateHero")
         header_layout = QHBoxLayout(header)
         header_layout.setContentsMargins(18, 18, 18, 18)
-        icon = QLabel("↻")
+        icon = QLabel()
         icon.setObjectName("UpdateHeroIcon")
         icon.setAlignment(Qt.AlignCenter)
+        refresh_icon = icon_provider.get_icon(AppIcons.REFRESH, 28, "#ffffff")
+        if refresh_icon is not None:
+            icon.setPixmap(refresh_icon.pixmap(28, 28))
         header_text = QVBoxLayout()
         title = QLabel("Nova versao disponivel")
         title.setObjectName("UpdateTitle")
@@ -210,13 +215,13 @@ class UpdateDialog(QDialog):
         confirm = QMessageBox.question(
             self,
             "Atualizar sistema",
-            "O sistema vai baixar a atualizacao, validar o arquivo "
-            "e iniciar a instalacao silenciosa.\n\n"
-            "O banco PostgreSQL fica no servidor e nao sera alterado pelo instalador do desktop.\n\n"
-            "O programa sera fechado automaticamente.\n\n"
+            "O sistema vai baixar a atualizacao, validar a integridade do arquivo "
+            "e preparar a instalacao.\n\n"
+            "O banco PostgreSQL fica no servidor e nao sera alterado por esta atualizacao.\n\n"
+            "O programa sera fechado automaticamente para concluir a instalacao e reabrira em seguida.\n\n"
             "Deseja continuar?",
             QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,     
+            QMessageBox.No,
         )
 
         if confirm != QMessageBox.Yes:
@@ -252,53 +257,43 @@ class UpdateDialog(QDialog):
         self._progress_animation.start()
 
     def _prepare_update(self, progress):
-        progress("Baixando instalador da nova versao", 20)
-        result = download_update_file(self.update_info)
-        progress("Instalador baixado. Validando seguranca", 55)
-        progress("Criando backup antes da atualizacao", 70)
-        backup = create_pre_update_backup(self.update_info.get("latest_version", "nova"))
-        result["backup_path"] = str(backup) if backup else None
-        progress("Preparando instalacao assistida", 90)
+        progress("Baixando e validando a atualizacao", 30)
+        coordinator = self._update_coordinator_factory()
+        result = coordinator.start_required_update(expected_version=self.update_info.get("latest_version"))
+        progress("Atualizacao preparada", 90)
         return result
 
     def _update_failed(self, exc):
         self.download_button.setEnabled(True)
         self.download_button.setText("Atualizar agora")
-        if isinstance(exc, UpdateDownloadError):
-            QMessageBox.warning(
-                self,
-                "Atualizar sistema",
-                "Nao foi possivel baixar e validar a atualizacao.\n\n"
-                "Verifique internet, data/hora do computador, proxy ou bloqueio do antivirus. "
-                "O sistema continuara funcionando normalmente.",
-            )
-            return
-        if isinstance(exc, UpdateInstallError):
-            QMessageBox.warning(
-              self,
-              "Atualizar sistema",
-              "Nao foi possivel preparar a instalacao.\n\n"
-              f"Detalhes: {exc}",
-            )
-            return
-        QMessageBox.warning(self, "Atualizar sistema", "Nao foi possivel preparar a atualizacao. Consulte os logs tecnicos.")
+        self._set_progress("Falha ao preparar a atualizacao", 0)
+        QMessageBox.warning(
+            self,
+            "Atualizar sistema",
+            "Nao foi possivel preparar a atualizacao.\n\n"
+            "Verifique internet, data/hora do computador, proxy ou bloqueio do antivirus. "
+            "O sistema continuara funcionando normalmente.\n\n"
+            "Consulte os logs tecnicos para mais detalhes.",
+        )
 
     def _update_ready(self, result):
         self.download_button.setEnabled(True)
         self.download_button.setText("Atualizar agora")
-        self._set_progress("Tudo pronto. O sistema sera fechado para instalar", 100)
 
-        try:
-            run_silent_installer(
-                result["installer_path"],
-                target_version=self.update_info.get("latest_version"),
-                sha256=result.get("sha256"),
-                backup_path=result.get("backup_path"),
-            )
-        except UpdateInstallError as exc:
-            QMessageBox.warning(
-                self,
-                "Atualizar sistema",
-                "Nao foi possivel iniciar o instalador.\n\n"
-                f"Detalhes: {exc}",
-            )
+        if getattr(result, "launched", False):
+            # Nunca um QMessageBox modal aqui: o app esta prestes a fechar
+            # sozinho para o Updater assumir (mesmo padrao de
+            # CompatibilityGateDialog._on_update_result).
+            self.update_launched = True
+            self._set_progress("Atualizacao iniciada. O sistema sera fechado automaticamente.", 100)
+            self.accept()
+            return
+
+        self._set_progress("Nao foi possivel concluir a atualizacao", 0)
+        error_message = getattr(result, "error_message", None) or "Nao foi possivel iniciar a atualizacao."
+        QMessageBox.warning(
+            self,
+            "Atualizar sistema",
+            f"Nao foi possivel concluir a atualizacao.\n\n{error_message}\n\n"
+            "O sistema continuara funcionando normalmente.",
+        )
