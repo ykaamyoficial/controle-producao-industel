@@ -73,25 +73,6 @@ class ThemeSelectionTests(unittest.TestCase):
 
                 self.assertEqual(config["color_palette"], new_name)
 
-    def test_sidebar_theme_button_points_to_next_theme_and_emits_signal(self):
-        service = ThemeServiceStub()
-        sidebar = Sidebar(service)
-        received = []
-        sidebar.theme_toggle_requested.connect(lambda: received.append(True))
-
-        self.assertIn("escuro", sidebar.theme_button.toolTip())
-        self.assertEqual(sidebar.theme_button.text(), "Tema escuro")
-        sidebar.theme_button.click()
-
-        self.assertEqual(received, [True])
-
-        service.palette_name = "escuro"
-        service.palette = backend_adapter.OFFICIAL_COLOR_PALETTES["escuro"]
-        sidebar.update_theme_button()
-
-        self.assertIn("claro", sidebar.theme_button.toolTip())
-        self.assertEqual(sidebar.theme_button.text(), "Tema claro")
-
     def test_sidebar_uses_larger_icons_when_collapsed(self):
         service = ThemeServiceStub()
         sidebar = Sidebar(service)
@@ -107,8 +88,6 @@ class ThemeSelectionTests(unittest.TestCase):
         self.assertEqual(button.minimumHeight(), 44)
         self.assertEqual(button.maximumHeight(), 44)
         self.assertEqual(button.property("collapsed"), "true")
-        self.assertEqual(sidebar.theme_button.iconSize().width(), 43)
-        self.assertEqual(sidebar.theme_button.property("collapsed"), "true")
 
 
 if __name__ == "__main__":

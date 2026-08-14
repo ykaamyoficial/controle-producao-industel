@@ -5,7 +5,7 @@ from PySide6.QtGui import QBrush, QColor, QPainter, QPen
 from PySide6.QtWidgets import QAbstractItemView, QHeaderView, QStyledItemDelegate, QStyle, QStyleOptionViewItem, QTableView
 
 from app.ui.styles import area_color, status_color
-from app.ui.icons import make_icon
+from app.ui.icons import IconSize, make_icon, status_icon
 
 
 class ProcessFilterProxy(QSortFilterProxyModel):
@@ -26,6 +26,11 @@ class StatusBadgeDelegate(QStyledItemDelegate):
 
     def paint(self, painter: QPainter, option: QStyleOptionViewItem, index):
         key = index.data(Qt.UserRole + 1)
+        batch_background = index.data(Qt.BackgroundRole)
+        if batch_background is not None and not (option.state & QStyle.State_Selected):
+            painter.save()
+            painter.fillRect(option.rect, batch_background)
+            painter.restore()
         if key == "chat_icon":
             unread = int(index.data(Qt.UserRole + 2) or 0)
             has_messages = bool(index.data(Qt.UserRole + 3))
@@ -61,13 +66,15 @@ class StatusBadgeDelegate(QStyledItemDelegate):
             return
         if key in {"status_icon", "fiscal_action"}:
             raw = index.data(Qt.UserRole + 2) or "status"
+            area = index.data(Qt.UserRole + 3) or None
             painter.save()
             if option.state & QStyle.State_Selected:
                 painter.fillRect(option.rect, QColor(self.service.palette["accent"]))
-            icon = make_icon(str(raw), self.service.palette["accent"], 20)
-            pix = icon.pixmap(20, 20)
-            x = option.rect.x() + (option.rect.width() - 20) // 2
-            y = option.rect.y() + (option.rect.height() - 20) // 2
+            size = int(IconSize.TABLE_STATUS)
+            icon = status_icon(str(raw), area=area, palette=self.service.palette, size=size)
+            pix = icon.pixmap(size, size)
+            x = option.rect.x() + (option.rect.width() - size) // 2
+            y = option.rect.y() + (option.rect.height() - size) // 2
             painter.setRenderHint(QPainter.Antialiasing)
             painter.setPen(Qt.NoPen)
             painter.setBrush(QBrush(QColor(self.service.palette["surface"])))
@@ -134,6 +141,7 @@ class ModernTable(QTableView):
         source = model.sourceModel() if hasattr(model, "sourceModel") else model
         columns = getattr(source, "columns", [])
         widths = {
+            "batch_select": 42,
             "status_icon": 44,
             "chat_icon": 44,
             "fiscal_action": 44,

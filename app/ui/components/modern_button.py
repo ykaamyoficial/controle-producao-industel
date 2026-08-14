@@ -1,20 +1,20 @@
 from __future__ import annotations
 
-from PySide6.QtCore import QSize, Qt
-from PySide6.QtWidgets import QPushButton
-
-from app.ui.icons import make_icon
+from app.ui.components.app_icon_button import AppIconButton
+from app.ui.icons import IconSize
 
 
-class ModernButton(QPushButton):
+class ModernButton(AppIconButton):
     def __init__(self, text: str = "", icon_name: str | None = None, accent: bool = False, parent=None):
-        super().__init__(text, parent)
-        self.setCursor(Qt.PointingHandCursor)
+        super().__init__(
+            icon_name,
+            text,
+            color="#ffffff" if accent else "#2563eb",
+            size=IconSize.MD,
+            accent=accent,
+            parent=parent,
+        )
         self.setMinimumHeight(34)
-        self.setObjectName("AccentButton" if accent else "GhostButton")
-        if icon_name:
-            self.setIcon(make_icon(icon_name, "#ffffff" if accent else "#2563eb"))
-            self.setIconSize(QSize(18, 18))
         if text:
             icon_space = 28 if icon_name else 0
             self.setMinimumWidth(max(82, self.fontMetrics().horizontalAdvance(text) + icon_space + 30))
