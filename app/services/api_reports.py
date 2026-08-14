@@ -122,8 +122,12 @@ class ApiOperationalReportsService:
         ])
 
     def remanagements(self, filters: dict[str, Any]) -> dict[str, Any]:
-        rows = self._filter_text(self.storage.audit_rows(), filters)
-        rows = [row for row in rows if "REMAN" in _norm(row.get("acao") or row.get("action") or row.get("mensagem") or "")]
+        dedicated_reader = getattr(self.storage, "remanagement_rows", None)
+        if callable(dedicated_reader):
+            rows = dedicated_reader()
+        else:
+            rows = [row for row in self.storage.audit_rows() if "REMAN" in _norm(row.get("acao") or row.get("action") or row.get("mensagem") or "")]
+        rows = self._filter_text(rows, filters)
         cards = [
             _card("Remanejamentos", len(rows)),
             _card("Origem distintas", len({row.get("processo_origem_id") for row in rows if row.get("processo_origem_id")})),
@@ -132,7 +136,7 @@ class ApiOperationalReportsService:
             _card("Peso remanejado", sum(_as_float(row.get("peso_remanejado")) for row in rows), "kg"),
         ]
         return _result("REMANEJAMENTOS", "Relatorio de Remanejamentos", filters, cards, rows, "media", [
-            "Remanejamentos usam eventos disponiveis na auditoria da API ate o endpoint operacional dedicado ser separado.",
+            "Operacoes compensadas: material pronto A para B e producao realocada B para A. Nao representam entrega ao cliente.",
         ])
 
     def _filtered_process_rows(self, rows: list[dict[str, Any]], filters: dict[str, Any], *, status_key: str) -> list[dict[str, Any]]:

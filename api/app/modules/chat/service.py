@@ -1,18 +1,28 @@
 from __future__ import annotations
 
-from sqlalchemy import and_, func, literal, select, union_all, update
+import logging
+import uuid
+from datetime import datetime
+
+from sqlalchemy import and_, func, or_, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from api.app.core import error_codes
 from api.app.core.exceptions import ApiError, PermissionDeniedError
+from api.app.modules.auth import repository as auth_repository
+from api.app.modules.auth.dependencies import user_has_permission
 from api.app.modules.auth.models import User
-from api.app.modules.auth.permissions import CHAT_VIEW_FINALIZED
+from api.app.modules.auth.permissions import CHAT_ADMIN, CHAT_SEND, CHAT_VIEW, CHAT_VIEW_FINALIZED
 from api.app.modules.auth.service import effective_permissions
+from api.app.modules.auth.tokens import utcnow
 from api.app.modules.chat.models import ChatConversation, ChatMessage, ChatMessageRead, ChatNotification
+from api.app.modules.chat.ws_manager import manager as ws_manager
 from api.app.modules.chat.schemas import (
     ConversationOut,
     ConversationList,
+    ConversationReadState,
     ConversationUnread,
     MentionableUserList,
     MentionableUserOut,
@@ -26,22 +36,25 @@ from api.app.modules.chat.schemas import (
     UnreadSummary,
 )
 from api.app.modules.proposals import service as proposals_service
-from api.app.modules.proposals.models import (
-    ExpeditionEvent,
-    FiscalEvent,
-    FiscalRecord,
-    GalvanizationLoadEvent,
-    Proposal,
-    ProposalEvent,
-)
-from api.app.modules.proposals.service import _history_observation
+from api.app.modules.proposals.models import Proposal
 
 
-HISTORY_ITEMS_PER_PROPOSAL_LIMIT = 200
+logger = logging.getLogger(__name__)
 
 
 GENERAL_CHAT_KIND = "GERAL"
 PROPOSAL_CHAT_KIND = "PROPOSTA"
+
+NOTIFICATION_PRIORITIES = {
+    "MENSAGEM": "normal",
+    "MENCAO": "atencao",
+    "RESPOSTA": "atencao",
+    "NOTA_DIRECIONADA": "atencao",
+    "NOTA_IMPORTANTE": "atencao",
+    "PERGUNTA_ATRIBUIDA": "acao_obrigatoria",
+    "PERGUNTA_RESPONDIDA": "atencao",
+    "PERGUNTA_ATRASADA": "atrasada",
+}
 
 
 async def get_or_create_general_chat(session: AsyncSession) -> ChatConversation:
@@ -78,6 +91,14 @@ def actor_can_view_finalized(actor: User) -> bool:
     return actor.is_superuser or CHAT_VIEW_FINALIZED in effective_permissions(actor)
 
 
+def _conversation_visible_in_listings(actor: User, conversation: ChatConversation) -> bool:
+    """Conversas FINALIZADA para quem nao tem CHAT_VIEW_FINALIZED nao podem
+    nem aparecer nas listagens/soma de nao lidas — quem nao pode ver o
+    conteudo tambem nao pode ficar com um contador que nunca consegue
+    zerar (mark_read exige a mesma permissao, via _ensure_can_view_conversation)."""
+    return conversation.status != "FINALIZADA" or actor_can_view_finalized(actor)
+
+
 def _ensure_can_view_conversation(actor: User, conversation: ChatConversation) -> None:
     """Mesma politica aplicada ao filtro de listagem (status=FINALIZADA), mas
     verificada contra o status real da conversa — evita que quem nao pode ver
@@ -96,6 +117,19 @@ async def _users_by_id(session: AsyncSession, ids: set[int | None]) -> dict[int,
     return {user.id: user for user in rows}
 
 
+def _effective_question_status(raw_status: str | None, due_at: datetime | None, *, now: datetime | None = None) -> str | None:
+    """AGUARDANDO_RESPOSTA some com o tempo e vira ATRASADA quando o prazo
+    vence — mas isso nunca e gravado no banco (evita depender de um
+    scheduler): e calculado aqui, de forma pura e deterministica, toda vez
+    que a mensagem e exibida. RESPONDIDA/CANCELADA nunca viram ATRASADA,
+    mesmo com prazo vencido — a transicao so existe a partir de
+    AGUARDANDO_RESPOSTA (ver PDF 4.2)."""
+    if raw_status != "AGUARDANDO_RESPOSTA" or due_at is None:
+        return raw_status
+    reference = now or datetime.now(due_at.tzinfo)
+    return "ATRASADA" if due_at < reference else raw_status
+
+
 def _message_out(message: ChatMessage, users_by_id: dict[int, User], seen_by_count: int = 0) -> MessageOut:
     author = users_by_id.get(message.author_user_id) if message.author_user_id else None
     mentioned = users_by_id.get(message.mentioned_user_id) if message.mentioned_user_id else None
@@ -104,12 +138,19 @@ def _message_out(message: ChatMessage, users_by_id: dict[int, User], seen_by_cou
         conversation_id=message.conversation_id,
         author_user_id=message.author_user_id,
         author_name=author.display_name if author else None,
+        author_avatar_available=bool(author and author.avatar_bytes),
         message_type=message.message_type,
         body=message.body,
         mentioned_user_id=message.mentioned_user_id,
         mentioned_user_name=mentioned.display_name if mentioned else None,
-        question_status=message.question_status,
+        question_status=_effective_question_status(message.question_status, message.due_at),
         answered_message_id=message.answered_message_id,
+        area=message.area,
+        due_at=message.due_at,
+        viewed_at=message.viewed_at,
+        cancelled_at=message.cancelled_at,
+        cancellation_reason=message.cancellation_reason,
+        is_important=message.is_important,
         created_at=message.created_at,
         seen_by_count=seen_by_count,
     )
@@ -153,7 +194,10 @@ async def _create_message(
     message_type: str,
     mentioned_user_id: int | None = None,
     answered_message_id: int | None = None,
-) -> ChatMessage:
+    area: str | None = None,
+    due_at: datetime | None = None,
+    is_important: bool = False,
+) -> tuple[ChatMessage, set[int]]:
     message = ChatMessage(
         conversation_id=conversation.id,
         author_user_id=actor.id,
@@ -162,44 +206,147 @@ async def _create_message(
         mentioned_user_id=mentioned_user_id,
         question_status="AGUARDANDO_RESPOSTA" if message_type == "PERGUNTA" else None,
         answered_message_id=answered_message_id,
+        area=area,
+        due_at=due_at if message_type == "PERGUNTA" else None,
+        is_important=is_important if message_type == "NOTA_INTERNA" else False,
     )
     session.add(message)
     conversation.last_activity_at = func.now()
     await session.flush()
-    await _create_notifications(session, conversation, message, actor)
-    return message
+    recipient_ids = await _create_notifications(session, conversation, message, actor)
+    return message, recipient_ids
 
 
-async def _create_notifications(session: AsyncSession, conversation: ChatConversation, message: ChatMessage, actor: User) -> None:
-    if conversation.kind == GENERAL_CHAT_KIND:
-        return
-    if message.message_type == "PERGUNTA":
-        recipient_ids = {message.mentioned_user_id} if message.mentioned_user_id else set()
-        notification_type = "MENCAO"
-    else:
-        participant_ids = set(
-            (
-                await session.execute(
-                    select(ChatMessage.author_user_id).where(
-                        ChatMessage.conversation_id == conversation.id,
-                        ChatMessage.author_user_id.is_not(None),
-                    )
-                )
-            ).scalars().all()
+async def _insert_notification(session: AsyncSession, *, user_id: int, conversation_id: int, message_id: int, notification_type: str) -> None:
+    """Insercao idempotente: a constraint unica (user_id, message_id,
+    notification_type) garante que a mesma notificacao nunca e duplicada,
+    mesmo sob reconexao/poll concorrente ou nova chamada da varredura de
+    atraso (ver _ensure_overdue_notifications)."""
+    stmt = (
+        pg_insert(ChatNotification)
+        .values(user_id=user_id, conversation_id=conversation_id, message_id=message_id, notification_type=notification_type)
+        .on_conflict_do_nothing(index_elements=["user_id", "message_id", "notification_type"])
+    )
+    await session.execute(stmt)
+
+
+async def _prior_participants(session: AsyncSession, conversation_id: int, *, exclude_user_id: int, exclude_message_id: int) -> set[int]:
+    """Quem ja mandou alguma mensagem nesta conversa antes (mesmo conceito de
+    "participantes" que o desktop usa em ChatConversationPanel.participants()),
+    com conta ainda ativa — nao ha tabela de membros, entao "participante" e
+    definido pelo historico real da conversa."""
+    rows = (
+        await session.execute(
+            select(ChatMessage.author_user_id)
+            .join(User, User.id == ChatMessage.author_user_id)
+            .where(
+                ChatMessage.conversation_id == conversation_id,
+                ChatMessage.author_user_id.is_not(None),
+                ChatMessage.author_user_id != exclude_user_id,
+                ChatMessage.id != exclude_message_id,
+                User.active.is_(True),
+            )
+            .distinct()
         )
-        recipient_ids = participant_ids - {actor.id}
-        notification_type = "MENSAGEM"
-    for user_id in recipient_ids:
-        if not user_id:
-            continue
-        session.add(
-            ChatNotification(
-                user_id=user_id,
-                conversation_id=conversation.id,
-                message_id=message.id,
-                notification_type=notification_type,
+    ).scalars().all()
+    return set(rows)
+
+
+async def _create_notifications(session: AsyncSession, conversation: ChatConversation, message: ChatMessage, actor: User) -> set[int]:
+    """Gera notificacao (o "sino") para: mencao, resposta, pergunta
+    atribuida/respondida, nota interna direcionada — e, desde a ETAPA 3,
+    tambem para toda mensagem comum, notificando quem ja participou da
+    conversa antes (exceto quem ja recebe um tipo mais especifico acima
+    para esta mesma mensagem, via setdefault — nunca duas notificacoes
+    pelo mesmo evento). Nota importante SEM destinatario continua sem
+    notificar ninguem individualmente: o projeto nao tem um mapeamento
+    usuario->area para rotear isso com seguranca, e notificar todo mundo
+    indiscriminadamente e proibido pelo escopo (PDF secao 8)."""
+    if conversation.kind == GENERAL_CHAT_KIND:
+        return set()
+
+    notifications: dict[int, str] = {}
+    if message.mentioned_user_id and message.mentioned_user_id != actor.id:
+        if message.message_type == "PERGUNTA":
+            notifications[message.mentioned_user_id] = "PERGUNTA_ATRIBUIDA"
+        elif message.message_type == "NOTA_INTERNA":
+            notifications[message.mentioned_user_id] = "NOTA_DIRECIONADA"
+        else:
+            notifications[message.mentioned_user_id] = "MENCAO"
+
+    if message.answered_message_id:
+        original = await session.get(ChatMessage, message.answered_message_id)
+        if original and original.author_user_id and original.author_user_id != actor.id:
+            notification_type = "PERGUNTA_RESPONDIDA" if original.message_type == "PERGUNTA" else "RESPOSTA"
+            notifications.setdefault(original.author_user_id, notification_type)
+
+    participant_ids = await _prior_participants(session, conversation.id, exclude_user_id=actor.id, exclude_message_id=message.id)
+    for user_id in participant_ids:
+        notifications.setdefault(user_id, "MENSAGEM")
+
+    for user_id, notification_type in notifications.items():
+        await _insert_notification(session, user_id=user_id, conversation_id=conversation.id, message_id=message.id, notification_type=notification_type)
+    return set(notifications.keys())
+
+
+async def _conversation_participant_ids(session: AsyncSession, conversation_id: int) -> set[int]:
+    rows = (
+        await session.execute(
+            select(ChatMessage.author_user_id).where(
+                ChatMessage.conversation_id == conversation_id,
+                ChatMessage.author_user_id.is_not(None),
             )
         )
+    ).scalars().all()
+    return {user_id for user_id in rows if user_id}
+
+
+def _realtime_envelope(event_type: str, data: dict) -> dict:
+    """Envelope padronizado (ETAPA 7) pra todo evento realtime: event_id
+    unico (dedup/diagnostico no cliente), version simples (evolucao futura
+    do contrato sem quebrar clientes antigos — tipo desconhecido e
+    ignorado, nao derruba o RealtimeClient), occurred_at, e o payload de
+    dominio em `data`."""
+    return {
+        "version": 1,
+        "event_id": str(uuid.uuid4()),
+        "type": event_type,
+        "occurred_at": utcnow().isoformat(),
+        "data": data,
+    }
+
+
+async def _conversation_broadcast_targets(session: AsyncSession, conversation: ChatConversation, notified_ids: set[int], actor: User) -> set[int]:
+    """Quem deve receber eventos realtime desta conversa. GERAL nao tem
+    controle de acesso proprio, entao vai pra todo mundo online (que so
+    conseguiu conectar por ja ter CHAT_VIEW — ver /chat/ws). Conversa de
+    proposta vai so pra quem ja participou dela, quem foi notificado agora,
+    e o proprio autor — nunca um broadcast global pra conversa privada."""
+    if conversation.kind == GENERAL_CHAT_KIND:
+        return ws_manager.online_user_ids()
+    return await _conversation_participant_ids(session, conversation.id) | set(notified_ids) | {actor.id}
+
+
+async def _publish_conversation_event(
+    session: AsyncSession, conversation: ChatConversation, notified_ids: set[int], actor: User, event_type: str, data: dict
+) -> None:
+    """Avisa clientes conectados por websocket que algo mudou nesta
+    conversa — chamado sempre DEPOIS do commit, pra nunca empurrar algo que
+    ainda poderia ser desfeito. Payload minimo de proposito (ETAPA 7,
+    Estrategia B): o cliente ja tem um refresh() bem testado via REST,
+    entao o evento so precisa dizer "o que" mudou e "onde", nao carregar a
+    mensagem inteira por um segundo canal que poderia divergir do banco."""
+    targets = await _conversation_broadcast_targets(session, conversation, notified_ids, actor)
+    await ws_manager.broadcast(targets, _realtime_envelope(event_type, data))
+
+
+async def _publish_user_event(user_id: int, event_type: str, data: dict) -> None:
+    """ETAPA 10: variante de _publish_conversation_event pra eventos que sao
+    sempre estritamente individuais (notification.created/read/read_all) --
+    vao direto pro dono da notificacao, nunca pros outros participantes da
+    conversa (ninguem mais precisa saber que fulano recebeu uma notificacao).
+    Mesma regra de sempre: so chamar depois do commit."""
+    await ws_manager.broadcast({user_id}, _realtime_envelope(event_type, data))
 
 
 async def post_message(session: AsyncSession, conversation_id: int, actor: User, payload: MessageCreate) -> MessageOut:
@@ -210,18 +357,77 @@ async def post_message(session: AsyncSession, conversation_id: int, actor: User,
     if not body:
         raise ApiError(error_codes.CHAT_MESSAGE_INVALID, "A mensagem nao pode ser vazia.", status_code=422)
 
-    mentioned_user_id: int | None = None
-    if payload.message_type == "PERGUNTA":
-        mentioned_user_id = payload.mentioned_user_id
-        if not mentioned_user_id:
-            raise ApiError(error_codes.CHAT_MENTION_REQUIRED, "Selecione o destinatario da pergunta.", status_code=422)
+    if payload.message_type == "PERGUNTA" and not payload.mentioned_user_id:
+        raise ApiError(error_codes.CHAT_MENTION_REQUIRED, "Selecione o destinatario da pergunta.", status_code=422)
+
+    mentioned_user_id: int | None = payload.mentioned_user_id
+    if mentioned_user_id:
         mentioned_user = await session.get(User, mentioned_user_id)
-        if mentioned_user is None or not mentioned_user.active:
+        # o responsavel de uma Pergunta precisa poder responde-la (CHAT_SEND);
+        # uma mencao comum so precisa poder ver a mensagem (CHAT_VIEW).
+        required_permission = CHAT_SEND if payload.message_type == "PERGUNTA" else CHAT_VIEW
+        if mentioned_user is None or not mentioned_user.active or not user_has_permission(mentioned_user, required_permission):
             raise ApiError(error_codes.CHAT_MENTIONED_USER_INVALID, "Usuario mencionado invalido.", status_code=422)
 
-    message = await _create_message(session, conversation, actor, body=body, message_type=payload.message_type, mentioned_user_id=mentioned_user_id)
+    answered_message_id: int | None = None
+    if payload.reply_to_message_id:
+        original = await session.get(ChatMessage, payload.reply_to_message_id)
+        if original is None or original.conversation_id != conversation.id:
+            raise ApiError(error_codes.CHAT_MESSAGE_NOT_FOUND, "Mensagem citada nao encontrada nesta conversa.", status_code=404)
+        answered_message_id = original.id
+
+    message, notified_ids = await _create_message(
+        session,
+        conversation,
+        actor,
+        body=body,
+        message_type=payload.message_type,
+        mentioned_user_id=mentioned_user_id,
+        answered_message_id=answered_message_id,
+        area=payload.area if payload.message_type == "NOTA_INTERNA" else None,
+        due_at=payload.due_at,
+        is_important=payload.is_important,
+    )
     await session.commit()
     await session.refresh(message)
+    await _publish_conversation_event(
+        session,
+        conversation,
+        notified_ids,
+        actor,
+        "message.created",
+        {
+            "conversation_id": conversation.id,
+            "message_id": message.id,
+            "proposal_id": conversation.proposal_id,
+            "sender_user_id": message.author_user_id,
+        },
+    )
+    # ETAPA 10: cada usuario notificado ganha o proprio evento individual,
+    # distinto do message.created acima -- o cliente precisa de um tipo
+    # proprio pra saber que e a Central de Notificacoes/sino que mudou, sem
+    # ter que reinterpretar um evento de conversa como "talvez seja uma
+    # notificacao pra mim".
+    for notified_user_id in notified_ids:
+        await _publish_user_event(notified_user_id, "notification.created", {"conversation_id": conversation.id})
+    if message.message_type == "PERGUNTA":
+        # uma Pergunta nova e as duas coisas ao mesmo tempo: uma mensagem
+        # (message.created, acima) e uma pendencia nova pro responsavel
+        # (mesmo par de eventos que reassign_question ja emite ao trocar
+        # de responsavel).
+        await _publish_conversation_event(
+            session,
+            conversation,
+            notified_ids,
+            actor,
+            "action_required.created",
+            {
+                "conversation_id": conversation.id,
+                "message_id": message.id,
+                "proposal_id": conversation.proposal_id,
+                "assigned_to_user_id": message.mentioned_user_id,
+            },
+        )
     users_by_id = await _users_by_id(session, {message.author_user_id, message.mentioned_user_id})
     return _message_out(message, users_by_id)
 
@@ -232,6 +438,10 @@ async def answer_question(session: AsyncSession, question_message_id: int, actor
         raise ApiError(error_codes.CHAT_MESSAGE_NOT_FOUND, "Pergunta nao encontrada.", status_code=404)
     if question.question_status == "RESPONDIDA":
         raise ApiError(error_codes.CHAT_QUESTION_ALREADY_ANSWERED, "Esta pergunta ja foi respondida.", status_code=409)
+    if question.question_status == "CANCELADA":
+        raise ApiError(error_codes.CHAT_QUESTION_CANCELLED, "Esta pergunta foi cancelada e nao aceita mais respostas.", status_code=409)
+    if question.mentioned_user_id != actor.id and not user_has_permission(actor, CHAT_ADMIN):
+        raise PermissionDeniedError("Somente o responsavel pela pergunta ou um administrador do chat pode responde-la.")
     conversation = await get_conversation(session, question.conversation_id)
     if conversation.status == "FINALIZADA":
         raise ApiError(error_codes.CHAT_CONVERSATION_FINALIZED, "Esta conversa esta finalizada e nao aceita novas mensagens.", status_code=409)
@@ -239,12 +449,208 @@ async def answer_question(session: AsyncSession, question_message_id: int, actor
     if not stripped:
         raise ApiError(error_codes.CHAT_MESSAGE_INVALID, "A resposta nao pode ser vazia.", status_code=422)
 
-    answer = await _create_message(session, conversation, actor, body=stripped, message_type="MENSAGEM", answered_message_id=question.id)
-    question.question_status = "RESPONDIDA"
+    # Transicao atomica: so avanca se a pergunta ainda estiver aberta no banco
+    # neste exato instante — fecha a corrida entre respostas/cancelamentos
+    # concorrentes (a checagem acima nao basta sozinha sob READ COMMITTED,
+    # duas requisicoes podem passar por ela antes de qualquer uma comitar).
+    # So cria a mensagem de resposta depois de garantir a posse da transicao,
+    # pra nunca deixar uma resposta orfa se a transicao falhar.
+    claimed = await session.execute(
+        update(ChatMessage)
+        .where(ChatMessage.id == question.id, ChatMessage.question_status == "AGUARDANDO_RESPOSTA")
+        .values(question_status="RESPONDIDA")
+    )
+    if claimed.rowcount == 0:
+        await session.rollback()
+        raise ApiError(error_codes.CHAT_QUESTION_ALREADY_ANSWERED, "Esta pergunta ja foi respondida ou cancelada.", status_code=409)
+
+    answer, notified_ids = await _create_message(
+        session, conversation, actor, body=stripped, message_type="MENSAGEM", answered_message_id=question.id
+    )
     await session.commit()
     await session.refresh(answer)
+    # dois eventos de dominio distintos pelo mesmo commit: a resposta e uma
+    # mensagem nova, e a pergunta original mudou de estado — um cliente que
+    # so cuida de mensagens e outro que so cuida de pendencias reagem cada
+    # um ao seu, sem precisar interpretar um evento generico.
+    await _publish_conversation_event(
+        session,
+        conversation,
+        notified_ids,
+        actor,
+        "message.created",
+        {
+            "conversation_id": conversation.id,
+            "message_id": answer.id,
+            "proposal_id": conversation.proposal_id,
+            "sender_user_id": answer.author_user_id,
+        },
+    )
+    await _publish_conversation_event(
+        session,
+        conversation,
+        notified_ids,
+        actor,
+        "action_required.resolved",
+        {"conversation_id": conversation.id, "message_id": question.id, "proposal_id": conversation.proposal_id},
+    )
+    for notified_user_id in notified_ids:
+        await _publish_user_event(notified_user_id, "notification.created", {"conversation_id": conversation.id})
     users_by_id = await _users_by_id(session, {answer.author_user_id, answer.mentioned_user_id})
     return _message_out(answer, users_by_id)
+
+
+async def _get_question(session: AsyncSession, message_id: int) -> ChatMessage:
+    question = await session.get(ChatMessage, message_id)
+    if question is None or question.message_type != "PERGUNTA":
+        raise ApiError(error_codes.CHAT_MESSAGE_NOT_FOUND, "Pergunta nao encontrada.", status_code=404)
+    return question
+
+
+async def mark_question_viewed(session: AsyncSession, message_id: int, actor: User) -> MessageOut:
+    """So o proprio responsavel marca a visualizacao, e so uma vez — abrir de
+    novo nao atualiza o horario (PDF: 'mostrar quem visualizou e quando, sem
+    alterar o status'). Chamado automaticamente pelo desktop ao renderizar o
+    card da pergunta pro responsavel, sem exigir uma acao extra dele."""
+    question = await _get_question(session, message_id)
+    if question.mentioned_user_id == actor.id and question.viewed_at is None:
+        question.viewed_at = func.now()
+        await session.commit()
+        await session.refresh(question)
+    users_by_id = await _users_by_id(session, {question.author_user_id, question.mentioned_user_id})
+    return _message_out(question, users_by_id)
+
+
+async def cancel_question(session: AsyncSession, message_id: int, actor: User, reason: str) -> MessageOut:
+    question = await _get_question(session, message_id)
+    if question.question_status == "RESPONDIDA":
+        raise ApiError(error_codes.CHAT_QUESTION_ALREADY_ANSWERED, "Esta pergunta ja foi respondida e nao pode ser cancelada.", status_code=409)
+    if question.question_status == "CANCELADA":
+        raise ApiError(error_codes.CHAT_QUESTION_NOT_CANCELLABLE, "Esta pergunta ja esta cancelada.", status_code=409)
+    is_author = question.author_user_id == actor.id
+    is_admin = user_has_permission(actor, CHAT_ADMIN)
+    if not is_author and not is_admin:
+        raise PermissionDeniedError("Somente o autor da pergunta ou um administrador do chat pode cancela-la.")
+
+    # Mesma transicao atomica de answer_question: garante que resolver e
+    # cancelar concorrentes nao pisem um no outro silenciosamente.
+    claimed = await session.execute(
+        update(ChatMessage)
+        .where(ChatMessage.id == question.id, ChatMessage.question_status == "AGUARDANDO_RESPOSTA")
+        .values(
+            question_status="CANCELADA",
+            cancelled_at=func.now(),
+            cancelled_by_user_id=actor.id,
+            cancellation_reason=reason.strip(),
+        )
+    )
+    if claimed.rowcount == 0:
+        await session.rollback()
+        raise ApiError(error_codes.CHAT_QUESTION_ALREADY_ANSWERED, "Esta pergunta ja foi respondida ou cancelada.", status_code=409)
+    await session.refresh(question)
+    await auth_repository.create_security_event(
+        session,
+        "CHAT_QUESTION_CANCELLED",
+        actor_user_id=actor.id,
+        target_user_id=question.mentioned_user_id,
+        details={"message_id": question.id, "reason": question.cancellation_reason, "by_admin": is_admin and not is_author},
+    )
+    await session.commit()
+    await session.refresh(question)
+    conversation = await get_conversation(session, question.conversation_id)
+    await _publish_conversation_event(
+        session,
+        conversation,
+        {question.mentioned_user_id} if question.mentioned_user_id else set(),
+        actor,
+        "action_required.cancelled",
+        {"conversation_id": conversation.id, "message_id": question.id, "proposal_id": conversation.proposal_id},
+    )
+    users_by_id = await _users_by_id(session, {question.author_user_id, question.mentioned_user_id})
+    return _message_out(question, users_by_id)
+
+
+async def reassign_question(session: AsyncSession, message_id: int, actor: User, assignee_user_id: int, reason: str) -> MessageOut:
+    """So administrador do chat (ou superusuario) reatribui, e so com
+    justificativa — trocar o responsavel sem isso e proibido mesmo que o
+    desktop esconda o botao (o backend continua sendo a autoridade, PDF 16)."""
+    if not user_has_permission(actor, CHAT_ADMIN):
+        raise PermissionDeniedError("Somente um administrador do chat pode reatribuir uma pergunta.")
+    question = await _get_question(session, message_id)
+    if question.question_status in ("RESPONDIDA", "CANCELADA"):
+        raise ApiError(error_codes.CHAT_QUESTION_REASSIGN_DENIED, "Esta pergunta ja foi finalizada e nao pode ser reatribuida.", status_code=409)
+
+    new_assignee = await session.get(User, assignee_user_id)
+    if new_assignee is None or not new_assignee.active or not user_has_permission(new_assignee, CHAT_SEND):
+        raise ApiError(error_codes.CHAT_MENTIONED_USER_INVALID, "Novo responsavel invalido.", status_code=422)
+
+    previous_assignee_id = question.mentioned_user_id
+    question.mentioned_user_id = assignee_user_id
+    question.viewed_at = None
+    await auth_repository.create_security_event(
+        session,
+        "CHAT_QUESTION_REASSIGNED",
+        actor_user_id=actor.id,
+        target_user_id=assignee_user_id,
+        details={"message_id": question.id, "previous_assignee_id": previous_assignee_id, "reason": reason.strip()},
+    )
+    await session.flush()
+    await _insert_notification(session, user_id=assignee_user_id, conversation_id=question.conversation_id, message_id=question.id, notification_type="PERGUNTA_ATRIBUIDA")
+    await session.commit()
+    await session.refresh(question)
+    conversation = await get_conversation(session, question.conversation_id)
+    await _publish_conversation_event(
+        session,
+        conversation,
+        {assignee_user_id},
+        actor,
+        "action_required.created",
+        {
+            "conversation_id": conversation.id,
+            "message_id": question.id,
+            "proposal_id": conversation.proposal_id,
+            "assigned_to_user_id": assignee_user_id,
+        },
+    )
+    await _publish_user_event(assignee_user_id, "notification.created", {"conversation_id": conversation.id})
+    users_by_id = await _users_by_id(session, {question.author_user_id, question.mentioned_user_id})
+    return _message_out(question, users_by_id)
+
+
+async def mark_notification_read(session: AsyncSession, notification_id: int, actor: User) -> None:
+    notification = await session.get(ChatNotification, notification_id)
+    if notification is None or notification.user_id != actor.id:
+        raise ApiError(error_codes.CHAT_NOTIFICATION_NOT_FOUND, "Notificacao nao encontrada.", status_code=404)
+    if notification.read_at is None:
+        notification.read_at = func.now()
+        await session.commit()
+        # ETAPA 10: avisa as OUTRAS conexoes do mesmo usuario (dois
+        # computadores, por exemplo) que esta notificacao especifica virou
+        # lida -- mesmo padrao do conversation.read da ETAPA 9.
+        await _publish_user_event(actor.id, "notification.read", {"notification_id": notification_id})
+
+
+async def _ensure_overdue_notifications(session: AsyncSession, actor: User) -> None:
+    """Varredura preguicosa: em vez de um job agendado, cada consulta de
+    notificacoes/resumo do proprio usuario verifica se alguma pergunta
+    atribuida a ele venceu o prazo e ainda nao tem o aviso de atraso — a
+    constraint unica torna isso idempotente mesmo chamando varias vezes."""
+    overdue_ids = (
+        await session.execute(
+            select(ChatMessage.id, ChatMessage.conversation_id).where(
+                ChatMessage.message_type == "PERGUNTA",
+                ChatMessage.mentioned_user_id == actor.id,
+                ChatMessage.question_status == "AGUARDANDO_RESPOSTA",
+                ChatMessage.due_at.is_not(None),
+                ChatMessage.due_at < func.now(),
+            )
+        )
+    ).all()
+    if not overdue_ids:
+        return
+    for message_id, conversation_id in overdue_ids:
+        await _insert_notification(session, user_id=actor.id, conversation_id=conversation_id, message_id=message_id, notification_type="PERGUNTA_ATRASADA")
+    await session.commit()
 
 
 async def list_messages(session: AsyncSession, conversation_id: int, actor: User, limit: int = 200, offset: int = 0) -> MessageList:
@@ -255,7 +661,15 @@ async def list_messages(session: AsyncSession, conversation_id: int, actor: User
     )
     rows = (
         await session.execute(
-            select(ChatMessage).where(ChatMessage.conversation_id == conversation.id).order_by(ChatMessage.created_at).limit(limit).offset(offset)
+            select(ChatMessage)
+            .where(ChatMessage.conversation_id == conversation.id)
+            # ETAPA 9: id como desempate -- created_at sozinho nao e garantia
+            # de ordem deterministica sob mensagens com timestamp igual/muito
+            # proximo, e o cursor de leitura (last_read_message_id) compara
+            # por id. As duas ordenacoes tem que concordar sempre.
+            .order_by(ChatMessage.created_at, ChatMessage.id)
+            .limit(limit)
+            .offset(offset)
         )
     ).scalars().all()
     ids: set[int | None] = set()
@@ -267,7 +681,9 @@ async def list_messages(session: AsyncSession, conversation_id: int, actor: User
     return MessageList(items=[_message_out(row, users_by_id, seen_by_message.get(row.id, 0)) for row in rows], total=total)
 
 
-async def get_proposal_timeline(session: AsyncSession, proposal_id: int, actor: User) -> TimelineList:
+async def get_proposal_timeline(
+    session: AsyncSession, proposal_id: int, actor: User, *, before: datetime | None = None, limit: int = 200
+) -> TimelineList:
     # GET com efeito colateral deliberado: garante que toda proposta consultada
     # tenha um chat proprio, sem precisar alterar o fluxo de criacao de proposta.
     conversation = await get_or_create_proposal_chat(session, proposal_id)
@@ -282,7 +698,8 @@ async def get_proposal_timeline(session: AsyncSession, proposal_id: int, actor: 
                 await session.execute(
                     select(ChatMessage)
                     .where(ChatMessage.conversation_id == conversation.id)
-                    .order_by(ChatMessage.created_at.desc())
+                    # ETAPA 9: id como desempate, mesma razao de list_messages.
+                    .order_by(ChatMessage.created_at.desc(), ChatMessage.id.desc())
                     .limit(5000)
                 )
             )
@@ -299,44 +716,45 @@ async def get_proposal_timeline(session: AsyncSession, proposal_id: int, actor: 
 
     entries: list[TimelineEntry] = []
     for message in messages:
-        author = users_by_id.get(message.author_user_id) if message.author_user_id else None
-        mentioned = users_by_id.get(message.mentioned_user_id) if message.mentioned_user_id else None
-        entries.append(
-            TimelineEntry(
-                id=message.id,
-                source="chat",
-                entry_kind=message.message_type,
-                author_user_id=message.author_user_id,
-                author_name=author.display_name if author else None,
-                mentioned_user_id=message.mentioned_user_id,
-                mentioned_user_name=mentioned.display_name if mentioned else None,
-                question_status=message.question_status,
-                body=message.body,
-                created_at=message.created_at,
-                seen_by_count=seen_by_message.get(message.id, 0),
+        try:
+            author = users_by_id.get(message.author_user_id) if message.author_user_id else None
+            mentioned = users_by_id.get(message.mentioned_user_id) if message.mentioned_user_id else None
+            entries.append(
+                TimelineEntry(
+                    id=message.id,
+                    source="chat",
+                    entry_kind=message.message_type,
+                    author_user_id=message.author_user_id,
+                    author_name=author.display_name if author else None,
+                    mentioned_user_id=message.mentioned_user_id,
+                    mentioned_user_name=mentioned.display_name if mentioned else None,
+                    question_status=_effective_question_status(message.question_status, message.due_at),
+                    answered_message_id=message.answered_message_id,
+                    body=message.body,
+                    area=message.area,
+                    due_at=message.due_at,
+                    viewed_at=message.viewed_at,
+                    cancelled_at=message.cancelled_at,
+                    cancellation_reason=message.cancellation_reason,
+                    is_important=message.is_important,
+                    created_at=message.created_at,
+                    seen_by_count=seen_by_message.get(message.id, 0),
+                )
             )
-        )
+        except Exception:
+            logger.exception("Mensagem invalida no timeline: message_id=%r conversation_id=%r", message.id, conversation.id)
 
-    history = await proposals_service.list_proposal_history(session, proposal_id=proposal_id, limit=5000, offset=0)
-    for item in history:
-        entries.append(
-            TimelineEntry(
-                id=item.id,
-                source=item.source,
-                entry_kind="OBSERVACAO" if item.observation else "EVENTO_SISTEMA",
-                author_user_id=item.actor_user_id,
-                author_name=item.actor_name,
-                body=item.observation,
-                area=item.area,
-                event_type=item.event_type,
-                from_status=item.from_status,
-                to_status=item.to_status,
-                created_at=item.created_at,
-            )
-        )
-
-    entries.sort(key=lambda entry: entry.created_at)
-    return TimelineList(conversation_id=conversation.id, items=entries)
+    # Atividade operacional da proposta (producao/galvanizacao/expedicao/
+    # fiscal) NAO entra mais aqui — o chat so mostra comunicacao humana
+    # (mensagens, perguntas/respostas, notas internas). Ver
+    # proposals_service.list_proposal_activities para o feed operacional.
+    entries.sort(key=lambda entry: (entry.created_at, entry.id))
+    if before is not None:
+        entries = [entry for entry in entries if entry.created_at < before]
+    has_more = len(entries) > limit
+    if has_more:
+        entries = entries[-limit:]
+    return TimelineList(conversation_id=conversation.id, items=entries, has_more=has_more)
 
 
 async def _unread_counts(session: AsyncSession, actor: User, conversation_ids: list[int]) -> dict[int, int]:
@@ -374,7 +792,8 @@ async def _last_messages(session: AsyncSession, conversation_ids: list[int]) -> 
         select(
             ChatMessage,
             func.row_number()
-            .over(partition_by=ChatMessage.conversation_id, order_by=ChatMessage.created_at.desc())
+            # ETAPA 9: id como desempate, mesma razao de list_messages.
+            .over(partition_by=ChatMessage.conversation_id, order_by=(ChatMessage.created_at.desc(), ChatMessage.id.desc()))
             .label("rn"),
         )
         .where(ChatMessage.conversation_id.in_(conversation_ids))
@@ -401,6 +820,7 @@ async def list_conversations(
     if status:
         stmt = stmt.where(ChatConversation.status == status)
     rows = (await session.execute(stmt)).all()
+    rows = [(conversation, proposal) for conversation, proposal in rows if _conversation_visible_in_listings(actor, conversation)]
 
     search_normalized = (search or "").strip().lower()
     filtered = []
@@ -423,7 +843,7 @@ async def list_conversations(
     conversation_ids = [conversation.id for conversation, _ in filtered]
     unread_by_conversation = await _unread_counts(session, actor, conversation_ids)
     message_counts_by_conversation = await _message_counts(session, conversation_ids)
-    filtered.sort(key=lambda pair: (pair[0].kind != GENERAL_CHAT_KIND, -pair[0].last_activity_at.timestamp()))
+    filtered.sort(key=lambda pair: (pair[0].kind != GENERAL_CHAT_KIND, -(pair[0].last_activity_at.timestamp() if pair[0].last_activity_at else 0)))
 
     total = len(filtered)
     page = filtered[offset : offset + limit]
@@ -434,26 +854,34 @@ async def list_conversations(
 
     items = []
     for conversation, proposal in page:
-        last_message = last_message_by_conversation.get(conversation.id)
-        last_author = authors_by_id.get(last_message.author_user_id) if last_message and last_message.author_user_id else None
-        items.append(
-            ConversationOut(
-                id=conversation.id,
-                kind=conversation.kind,
-                proposal_id=conversation.proposal_id,
-                proposal_number=proposal.proposal_number if proposal else None,
-                customer_name=proposal.customer_name if proposal else None,
-                proposal_area=proposal.current_area if proposal else None,
-                proposal_status=proposal.current_status if proposal else None,
-                status=conversation.status,
-                last_activity_at=conversation.last_activity_at,
-                created_at=conversation.created_at,
-                unread_count=unread_by_conversation.get(conversation.id, 0),
-                message_count=message_counts_by_conversation.get(conversation.id, 0),
-                last_message_preview=last_message.body if last_message else None,
-                last_message_author=last_author.display_name if last_author else None,
+        # Uma conversa com dado legado/inconsistente nao pode derrubar a
+        # listagem inteira — registra qual conversa falhou e segue para as
+        # demais (a Central de Conversas nunca pode abrir vazia por causa de
+        # um unico registro ruim).
+        try:
+            last_message = last_message_by_conversation.get(conversation.id)
+            last_author = authors_by_id.get(last_message.author_user_id) if last_message and last_message.author_user_id else None
+            items.append(
+                ConversationOut(
+                    id=conversation.id,
+                    kind=conversation.kind,
+                    proposal_id=conversation.proposal_id,
+                    proposal_number=proposal.proposal_number if proposal else None,
+                    customer_name=proposal.customer_name if proposal else None,
+                    proposal_area=proposal.current_area if proposal else None,
+                    proposal_status=proposal.current_status if proposal else None,
+                    status=conversation.status,
+                    last_activity_at=conversation.last_activity_at,
+                    created_at=conversation.created_at,
+                    unread_count=unread_by_conversation.get(conversation.id, 0),
+                    message_count=message_counts_by_conversation.get(conversation.id, 0),
+                    last_message_preview=last_message.body if last_message else None,
+                    last_message_author=last_author.display_name if last_author else None,
+                    last_message_author_user_id=last_message.author_user_id if last_message else None,
+                )
             )
-        )
+        except Exception:
+            logger.exception("Conversa invalida na listagem: conversation_id=%r", conversation.id)
     return ConversationList(items=items, total=total)
 
 
@@ -470,23 +898,91 @@ async def _message_counts(session: AsyncSession, conversation_ids: list[int]) ->
     return {conversation_id: int(count) for conversation_id, count in rows}
 
 
-async def mark_read(session: AsyncSession, conversation_id: int, actor: User, last_read_message_id: int) -> None:
+async def mark_read(session: AsyncSession, conversation_id: int, actor: User, last_read_message_id: int) -> ConversationReadState:
     conversation = await get_conversation(session, conversation_id)
+    _ensure_can_view_conversation(actor, conversation)
     message = await session.get(ChatMessage, last_read_message_id)
     if message is None or message.conversation_id != conversation.id:
         raise ApiError(error_codes.CHAT_MESSAGE_NOT_FOUND, "Mensagem informada nao pertence a esta conversa.", status_code=404)
 
-    read = (
-        await session.execute(
-            select(ChatMessageRead).where(ChatMessageRead.conversation_id == conversation.id, ChatMessageRead.user_id == actor.id)
+    # ETAPA 9: upsert atomico no banco -- nunca SELECT + compara em Python +
+    # UPDATE, que sob concorrencia real (duas conexoes lendo o mesmo cursor
+    # antigo antes de qualquer uma commitar) deixa o cursor regredir se a
+    # requisicao com o valor MENOR commitar por ultimo. O ON CONFLICT ...
+    # DO UPDATE ... WHERE inteiro roda dentro do Postgres: sob colisao real
+    # a segunda espera o lock da primeira liberar e so aplica se o valor
+    # dela ainda for maior que o que acabou de ser commitado -- convergencia
+    # pro maior cursor garantida independente da ordem de chegada/commit.
+    upsert = (
+        pg_insert(ChatMessageRead)
+        .values(conversation_id=conversation.id, user_id=actor.id, last_read_message_id=last_read_message_id, updated_at=func.now())
+        .on_conflict_do_update(
+            index_elements=["conversation_id", "user_id"],
+            set_={"last_read_message_id": last_read_message_id, "updated_at": func.now()},
+            where=or_(
+                ChatMessageRead.last_read_message_id.is_(None),
+                ChatMessageRead.last_read_message_id < last_read_message_id,
+            ),
         )
-    ).scalars().first()
-    if read is None:
-        session.add(ChatMessageRead(conversation_id=conversation.id, user_id=actor.id, last_read_message_id=last_read_message_id))
-    elif (read.last_read_message_id or 0) < last_read_message_id:
-        read.last_read_message_id = last_read_message_id
-        read.updated_at = func.now()
+        .returning(ChatMessageRead.last_read_message_id, ChatMessageRead.updated_at)
+    )
+    applied = (await session.execute(upsert)).first()
+    if applied is not None:
+        final_cursor, final_read_at = applied
+    else:
+        # O WHERE do DO UPDATE nao bateu: o request chegou com um cursor
+        # igual ou mais antigo que o que ja estava persistido (replay
+        # idempotente ou resposta atrasada de outro dispositivo). Nao
+        # aplicamos nada, mas a resposta precisa contar a verdade -- busca
+        # o que realmente esta salvo, nunca ecoa de volta o valor pedido.
+        final_cursor, final_read_at = (
+            await session.execute(
+                select(ChatMessageRead.last_read_message_id, ChatMessageRead.updated_at).where(
+                    ChatMessageRead.conversation_id == conversation.id, ChatMessageRead.user_id == actor.id
+                )
+            )
+        ).one()
+
+    # Sincroniza a notificacao (ChatNotification.read_at) ate o cursor FINAL
+    # persistido (nao o valor pedido, que pode estar atrasado) — para TODOS
+    # os tipos, ver a mensagem ja e suficiente pra marcar a notificacao dela
+    # como visualizada. Isso nunca toca em ChatMessage.question_status:
+    # notification e a pendencia (ETAPA 5) sao campos completamente
+    # separados, entao marcar a notificacao ACTION_REQUIRED como lida aqui
+    # NAO resolve/cancela a pergunta correspondente — ela so muda via
+    # answer_question/cancel_question, explicitamente. A clausula
+    # read_at IS NULL garante que isso nunca "deslê" nada nem depende de o
+    # cursor ter avancado nesta chamada (idempotente e seguro mesmo com um
+    # last_read_message_id antigo, que so vai casar com 0 linhas).
+    notifications_changed = False
+    if final_cursor is not None:
+        notification_update = await session.execute(
+            update(ChatNotification)
+            .where(
+                ChatNotification.user_id == actor.id,
+                ChatNotification.conversation_id == conversation.id,
+                ChatNotification.read_at.is_(None),
+                ChatNotification.message_id <= final_cursor,
+            )
+            .values(read_at=func.now())
+        )
+        notifications_changed = bool((getattr(notification_update, "rowcount", 0) or 0) > 0)
     await session.commit()
+
+    # ETAPA 7: avisa as OUTRAS conexoes do mesmo usuario (ex.: dois
+    # computadores) que o cursor avancou — ninguem mais precisa disso, ler
+    # nao muda o que outros participantes veem, so o proprio ator. Sempre
+    # com o cursor FINAL persistido, nunca com o valor pedido (que pode
+    # estar atrasado e nao ter mudado nada).
+    if applied is not None or notifications_changed:
+        await ws_manager.broadcast(
+            {actor.id},
+            _realtime_envelope(
+                "conversation.read",
+                {"conversation_id": conversation.id, "last_read_message_id": final_cursor},
+            ),
+        )
+    return ConversationReadState(conversation_id=conversation.id, last_read_message_id=final_cursor, last_read_at=final_read_at)
 
 
 async def _pending_question_count(session: AsyncSession, actor: User) -> int:
@@ -502,152 +998,10 @@ async def _pending_question_count(session: AsyncSession, actor: User) -> int:
     return int(count)
 
 
-async def _recent_history_by_proposal(session: AsyncSession, proposal_ids: list[int], *, per_proposal_limit: int = HISTORY_ITEMS_PER_PROPOSAL_LIMIT):
-    """Busca, em consultas fixas (uma por tabela de evento, nunca uma por
-    proposta), os `per_proposal_limit` eventos mais recentes de CADA
-    proposta — os mesmos 4 tipos de evento e o mesmo criterio de ordenacao
-    e corte que proposals_service.list_proposal_history usa para uma unica
-    proposta, so que aplicados a todas de uma vez via UNION ALL + ROW_NUMBER
-    particionado por proposal_id. Retorna um dict proposal_id -> lista de
-    linhas (id, proposal_id, source, created_at, metadata_, actor_user_id,
-    area), da mais recente para a mais antiga."""
-    if not proposal_ids:
-        return {}
-
-    proposal_q = select(
-        ProposalEvent.id.label("id"),
-        ProposalEvent.proposal_id.label("proposal_id"),
-        literal("proposal").label("source"),
-        ProposalEvent.created_at.label("created_at"),
-        ProposalEvent.metadata_.label("metadata_"),
-        ProposalEvent.actor_user_id.label("actor_user_id"),
-        func.coalesce(ProposalEvent.to_area, ProposalEvent.from_area).label("area"),
-    ).where(ProposalEvent.proposal_id.in_(proposal_ids))
-
-    expedition_q = select(
-        ExpeditionEvent.id.label("id"),
-        ExpeditionEvent.proposal_id.label("proposal_id"),
-        literal("expedition").label("source"),
-        ExpeditionEvent.created_at.label("created_at"),
-        ExpeditionEvent.metadata_.label("metadata_"),
-        ExpeditionEvent.actor_user_id.label("actor_user_id"),
-        literal("EXPEDICAO").label("area"),
-    ).where(ExpeditionEvent.proposal_id.in_(proposal_ids))
-
-    galvanization_q = select(
-        GalvanizationLoadEvent.id.label("id"),
-        GalvanizationLoadEvent.proposal_id.label("proposal_id"),
-        literal("galvanization").label("source"),
-        GalvanizationLoadEvent.created_at.label("created_at"),
-        GalvanizationLoadEvent.metadata_.label("metadata_"),
-        GalvanizationLoadEvent.actor_user_id.label("actor_user_id"),
-        literal("GALVANIZACAO").label("area"),
-    ).where(GalvanizationLoadEvent.proposal_id.in_(proposal_ids))
-
-    # join com fiscal_records (nao um indice novo em fiscal_events) para
-    # reaproveitar os indices ja existentes em uq_fiscal_records_proposal e
-    # ix_fiscal_events_record_created, igual list_proposal_history ja faz.
-    fiscal_q = (
-        select(
-            FiscalEvent.id.label("id"),
-            FiscalRecord.proposal_id.label("proposal_id"),
-            literal("fiscal").label("source"),
-            FiscalEvent.created_at.label("created_at"),
-            FiscalEvent.metadata_.label("metadata_"),
-            FiscalEvent.actor_user_id.label("actor_user_id"),
-            literal("FISCAL").label("area"),
-        )
-        .select_from(FiscalEvent)
-        .join(FiscalRecord, FiscalRecord.id == FiscalEvent.fiscal_record_id)
-        .where(FiscalRecord.proposal_id.in_(proposal_ids))
-    )
-
-    combined = union_all(proposal_q, expedition_q, galvanization_q, fiscal_q).subquery("combined_history")
-    ranked = select(
-        combined,
-        func.row_number()
-        .over(
-            partition_by=combined.c.proposal_id,
-            order_by=(combined.c.created_at.desc(), combined.c.source.desc(), combined.c.id.desc()),
-        )
-        .label("rn"),
-    ).subquery("ranked_history")
-
-    rows = (
-        await session.execute(
-            select(ranked).where(ranked.c.rn <= per_proposal_limit).order_by(ranked.c.proposal_id, ranked.c.created_at.desc())
-        )
-    ).all()
-
-    result: dict[int, list] = {}
-    for row in rows:
-        result.setdefault(row.proposal_id, []).append(row)
-    return result
-
-
-async def _new_observation_entries(session: AsyncSession, actor: User, conversations: list[ChatConversation]) -> list[dict]:
-    """Observacoes de area publicadas depois da ultima vez que o usuario abriu
-    aquela conversa. Nao existe uma tabela propria para isso: reaproveita o
-    mesmo conjunto de eventos que a Timeline usa (_recent_history_by_proposal,
-    equivalente em lote a proposals_service.list_proposal_history) e a mesma
-    regra de extracao de observacao (_history_observation), comparando contra
-    o cursor de leitura (ChatMessageRead.updated_at) que ja existe."""
-    proposal_conversations = [c for c in conversations if c.kind == PROPOSAL_CHAT_KIND and c.proposal_id]
-    if not proposal_conversations:
-        return []
-    conversation_by_proposal = {c.proposal_id: c for c in proposal_conversations}
-    conversation_ids = [c.id for c in proposal_conversations]
-    reads = (
-        await session.execute(
-            select(ChatMessageRead).where(ChatMessageRead.user_id == actor.id, ChatMessageRead.conversation_id.in_(conversation_ids))
-        )
-    ).scalars().all()
-    last_seen_by_conversation = {read.conversation_id: read.updated_at for read in reads}
-
-    # so proposta cujo chat o usuario ja abriu pelo menos uma vez entra na
-    # busca (sem isso nao ha "ultima vez visto" pra comparar).
-    relevant_proposal_ids = [
-        proposal_id
-        for proposal_id, conversation in conversation_by_proposal.items()
-        if last_seen_by_conversation.get(conversation.id) is not None
-    ]
-    if not relevant_proposal_ids:
-        return []
-
-    history_by_proposal = await _recent_history_by_proposal(session, relevant_proposal_ids)
-
-    actor_ids = {row.actor_user_id for rows in history_by_proposal.values() for row in rows if row.actor_user_id}
-    users_by_id = await _users_by_id(session, actor_ids)
-
-    entries: list[dict] = []
-    for proposal_id in relevant_proposal_ids:
-        conversation = conversation_by_proposal[proposal_id]
-        last_seen_at = last_seen_by_conversation[conversation.id]
-        for item in history_by_proposal.get(proposal_id, []):
-            metadata = item.metadata_ if isinstance(item.metadata_, dict) else {}
-            observation = _history_observation(metadata)
-            if not observation or item.created_at <= last_seen_at:
-                continue
-            actor_row = users_by_id.get(item.actor_user_id) if item.actor_user_id else None
-            entries.append(
-                {
-                    "notification_type": "OBSERVACAO",
-                    "conversation_id": conversation.id,
-                    "kind": conversation.kind,
-                    "proposal_id": proposal_id,
-                    "message_id": None,
-                    "message_body": observation,
-                    "area": item.area,
-                    "author_name": actor_row.display_name if actor_row else None,
-                    "created_at": item.created_at,
-                    "read_at": None,
-                }
-            )
-    return entries
-
-
 async def unread_summary(session: AsyncSession, actor: User) -> UnreadSummary:
+    await _ensure_overdue_notifications(session, actor)
     conversations = (await session.execute(select(ChatConversation))).scalars().all()
+    conversations = [conversation for conversation in conversations if _conversation_visible_in_listings(actor, conversation)]
     conversation_ids = [conversation.id for conversation in conversations]
     unread_by_conversation = await _unread_counts(session, actor, conversation_ids)
 
@@ -677,11 +1031,64 @@ async def unread_summary(session: AsyncSession, actor: User) -> UnreadSummary:
     entries.sort(key=lambda entry: entry.unread_count, reverse=True)
 
     pending_questions = await _pending_question_count(session, actor)
-    new_observations = len(await _new_observation_entries(session, actor, conversations))
-    return UnreadSummary(total_unread=total, conversations=entries, pending_questions=pending_questions, new_observations=new_observations)
+    notification_unread_count = await _notification_unread_count(session, actor)
+    unread_mentions = await _notification_unread_count(session, actor, notification_type="MENCAO")
+    return UnreadSummary(
+        total_unread=total,
+        conversations=entries,
+        pending_questions=pending_questions,
+        notification_unread_count=notification_unread_count,
+        unread_mentions=unread_mentions,
+        # ETAPA 8: carimbo de hora do servidor no snapshot — so
+        # diagnostico/evolucao futura, o desktop nunca usa isso pra decidir
+        # o que e "novo" (quem manda e o estado absoluto vindo do Postgres).
+        server_time=utcnow().isoformat(),
+    )
 
 
-async def list_notifications(session: AsyncSession, actor: User, *, limit: int = 50, offset: int = 0) -> NotificationList:
+async def _notification_unread_count(session: AsyncSession, actor: User, notification_type: str | None = None) -> int:
+    """COUNT agregado (nao uma lista carregada e contada em Python) — mesma
+    regra de visibilidade de conversas finalizadas usada no total de chat.
+    notification_type opcional filtra por tipo (ex.: so MENCAO, pro resumo
+    de mencoes da ETAPA 6) sem duplicar a regra de visibilidade em dois
+    lugares diferentes."""
+    stmt = (
+        select(func.count())
+        .select_from(ChatNotification)
+        .join(ChatConversation, ChatConversation.id == ChatNotification.conversation_id)
+        .where(ChatNotification.user_id == actor.id, ChatNotification.read_at.is_(None))
+    )
+    if notification_type is not None:
+        stmt = stmt.where(ChatNotification.notification_type == notification_type)
+    if not actor_can_view_finalized(actor):
+        stmt = stmt.where(ChatConversation.status != "FINALIZADA")
+    return int((await session.execute(stmt)).scalar_one())
+
+
+async def list_notifications(
+    session: AsyncSession, actor: User, *, status: str | None = None, limit: int = 50, offset: int = 0
+) -> NotificationList:
+    """ETAPA 10: listagem paginada pra Central de Notificacoes. `status="unread"`
+    filtra read_at IS NULL (mesma semantica do filtro "Nao lidas"); qualquer
+    outro valor (None/"all") lista tudo. Igual a `_notification_unread_count`/
+    `unread_summary`, esconde conversas FINALIZADA de quem nao tem
+    CHAT_VIEW_FINALIZED -- sem esse guard, uma Notification antiga continuaria
+    vazando corpo de mensagem/autor de uma conversa que o usuario nao pode
+    mais ver."""
+    await _ensure_overdue_notifications(session, actor)
+
+    count_stmt = (
+        select(func.count())
+        .select_from(ChatNotification)
+        .join(ChatConversation, ChatConversation.id == ChatNotification.conversation_id)
+        .where(ChatNotification.user_id == actor.id)
+    )
+    if status == "unread":
+        count_stmt = count_stmt.where(ChatNotification.read_at.is_(None))
+    if not actor_can_view_finalized(actor):
+        count_stmt = count_stmt.where(ChatConversation.status != "FINALIZADA")
+    total = int((await session.execute(count_stmt)).scalar_one())
+
     stmt = (
         select(ChatNotification, ChatMessage, ChatConversation, Proposal)
         .select_from(ChatNotification)
@@ -689,61 +1096,47 @@ async def list_notifications(session: AsyncSession, actor: User, *, limit: int =
         .join(ChatConversation, ChatConversation.id == ChatNotification.conversation_id)
         .outerjoin(Proposal, Proposal.id == ChatConversation.proposal_id)
         .where(ChatNotification.user_id == actor.id)
-        .order_by(ChatNotification.created_at.desc())
-        .limit(max(limit, 200))
     )
+    if status == "unread":
+        stmt = stmt.where(ChatNotification.read_at.is_(None))
+    if not actor_can_view_finalized(actor):
+        stmt = stmt.where(ChatConversation.status != "FINALIZADA")
+    # ETAPA 9-style desempate por id: created_at sozinho nao garante ordem
+    # deterministica entre notificacoes com timestamp igual/muito proximo.
+    stmt = stmt.order_by(ChatNotification.created_at.desc(), ChatNotification.id.desc()).limit(limit).offset(offset)
+
     rows = (await session.execute(stmt)).all()
     author_ids = {message.author_user_id for _notification, message, _conversation, _proposal in rows if message.author_user_id}
     users_by_id = await _users_by_id(session, author_ids)
 
-    real_items = []
+    items = []
     for notification, message, conversation, proposal in rows:
-        author = users_by_id.get(message.author_user_id) if message.author_user_id else None
-        real_items.append(
-            NotificationOut(
-                id=notification.id,
-                notification_type=notification.notification_type,
-                conversation_id=conversation.id,
-                kind=conversation.kind,
-                proposal_id=conversation.proposal_id,
-                proposal_number=proposal.proposal_number if proposal else None,
-                message_id=message.id,
-                message_body=message.body,
-                author_name=author.display_name if author else None,
-                created_at=notification.created_at,
-                read_at=notification.read_at,
+        try:
+            author = users_by_id.get(message.author_user_id) if message.author_user_id else None
+            items.append(
+                NotificationOut(
+                    id=notification.id,
+                    notification_type=notification.notification_type,
+                    priority=NOTIFICATION_PRIORITIES.get(notification.notification_type, "normal"),
+                    conversation_id=conversation.id,
+                    kind=conversation.kind,
+                    proposal_id=conversation.proposal_id,
+                    proposal_number=proposal.proposal_number if proposal else None,
+                    customer_name=proposal.customer_name if proposal else None,
+                    message_id=message.id,
+                    message_body=message.body,
+                    question_status=message.question_status,
+                    area=message.area,
+                    author_name=author.display_name if author else None,
+                    created_at=notification.created_at,
+                    read_at=notification.read_at,
+                )
             )
-        )
+        except Exception:
+            logger.exception("Notificacao invalida na listagem: notification_id=%r", notification.id)
 
-    all_conversations = (await session.execute(select(ChatConversation))).scalars().all()
-    observation_entries = await _new_observation_entries(session, actor, all_conversations)
-    proposal_ids = {entry["proposal_id"] for entry in observation_entries if entry.get("proposal_id")}
-    proposals_by_id: dict[int, Proposal] = {}
-    if proposal_ids:
-        proposal_rows = (await session.execute(select(Proposal).where(Proposal.id.in_(proposal_ids)))).scalars().all()
-        proposals_by_id = {row.id: row for row in proposal_rows}
-    observation_items = [
-        NotificationOut(
-            id=-(index + 1),
-            notification_type=entry["notification_type"],
-            conversation_id=entry["conversation_id"],
-            kind=entry["kind"],
-            proposal_id=entry["proposal_id"],
-            proposal_number=(proposals_by_id.get(entry["proposal_id"]).proposal_number if entry.get("proposal_id") in proposals_by_id else None),
-            message_id=entry["message_id"],
-            message_body=entry["message_body"],
-            area=entry["area"],
-            author_name=entry["author_name"],
-            created_at=entry["created_at"],
-            read_at=entry["read_at"],
-        )
-        for index, entry in enumerate(observation_entries)
-    ]
-
-    merged = sorted(real_items + observation_items, key=lambda item: item.created_at, reverse=True)
-    total = len(merged)
-    page = merged[offset : offset + limit]
-    return NotificationList(items=page, total=total)
+    has_more = offset + len(rows) < total
+    return NotificationList(items=items, total=total, has_more=has_more)
 
 
 async def mark_all_notifications_read(session: AsyncSession, actor: User) -> int:
@@ -753,7 +1146,13 @@ async def mark_all_notifications_read(session: AsyncSession, actor: User) -> int
         .values(read_at=func.now())
     )
     await session.commit()
-    return int(result.rowcount or 0)
+    rowcount = int(result.rowcount or 0)
+    if rowcount > 0:
+        # ETAPA 10: um evento agregado so -- nao precisa listar centenas de
+        # notification_id pras outras conexoes do mesmo usuario, elas so
+        # reconciliam buscando o estado atual via REST.
+        await _publish_user_event(actor.id, "notification.read_all", {})
+    return rowcount
 
 
 SECTOR_MODULE_LABELS = {
@@ -781,12 +1180,24 @@ def _primary_sector(user: User) -> str | None:
 
 async def list_mentionable_users(session: AsyncSession, search: str | None = None) -> MentionableUserList:
     rows = (await session.execute(select(User).where(User.active.is_(True)).order_by(User.display_name))).scalars().all()
+    # so oferece no autocomplete quem realmente pode ser mencionado — mesma
+    # regra que post_message ja valida no envio (CHAT_VIEW), pra nao deixar
+    # o usuario escolher alguem que so vai ser rejeitado depois com um 422.
+    rows = [user for user in rows if user_has_permission(user, CHAT_VIEW)]
     normalized = (search or "").strip().lower()
     if normalized:
         rows = [user for user in rows if normalized in user.display_name.lower() or normalized in user.username.lower()]
+    online_ids = ws_manager.online_user_ids()
     return MentionableUserList(
         items=[
-            MentionableUserOut(id=user.id, username=user.username, display_name=user.display_name, sector=_primary_sector(user))
+            MentionableUserOut(
+                id=user.id,
+                username=user.username,
+                display_name=user.display_name,
+                sector=_primary_sector(user),
+                is_online=user.id in online_ids,
+                avatar_available=bool(user.avatar_bytes),
+            )
             for user in rows
         ]
     )

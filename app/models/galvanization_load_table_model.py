@@ -21,8 +21,8 @@ LOAD_COLUMNS = [
     ("id", "Carga"),
     ("status", "Status"),
     ("motorista", "Motorista"),
-    ("peso_total", "Peso"),
-    ("item_count", "Propostas"),
+    ("peso_informado_carga", "Peso da carga"),
+    ("proposal_count", "Propostas"),
     ("data_prevista_retorno", "Prev. retorno"),
     ("data_retorno", "Retorno"),
     ("criado_em", "Criada em"),
@@ -71,15 +71,16 @@ class GalvanizationLoadTableModel(QAbstractTableModel):
                 return ""
             if key == "status":
                 return self.service.load_status_label(row.get("status") or "")
-            if key == "peso_total":
+            if key == "peso_informado_carga":
                 return _display_weight(row.get(key))
             return self.service.display_cell(key, row.get(key), row)
         if role == Qt.ToolTipRole:
             if key == "status_icon":
-                return "Abrir acoes da carga"
+                status_text = self.service.load_status_label(row.get("status") or "")
+                return f"{status_text}\nAbrir acoes da carga" if status_text else "Abrir acoes da carga"
             return self.data(index, Qt.DisplayRole)
         if role == Qt.TextAlignmentRole:
-            if key in {"id", "peso_total", "item_count"}:
+            if key in {"id", "peso_informado_carga", "proposal_count"}:
                 return Qt.AlignCenter
             return Qt.AlignVCenter | Qt.AlignLeft
         return None

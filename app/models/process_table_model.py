@@ -3,6 +3,9 @@ from __future__ import annotations
 from typing import Any
 
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
+from PySide6.QtGui import QBrush, QColor
+
+from app.ui.components.batch_selection import BatchSelectionController
 
 
 DEFAULT_COLUMNS = [
@@ -60,8 +63,22 @@ class ProcessTableModel(QAbstractTableModel):
         super().__init__()
         self.service = service
         self.area = area
-        self.columns = AREA_COLUMNS.get(area or "", DEFAULT_COLUMNS)
+        self._base_columns = list(AREA_COLUMNS.get(area or "", DEFAULT_COLUMNS))
+        self.columns = list(self._base_columns)
         self.rows = rows or []
+        self.batch_selection: BatchSelectionController | None = None
+
+    def set_batch_selection_controller(self, controller: BatchSelectionController) -> None:
+        self.batch_selection = controller
+        controller.selection_changed.connect(self._batch_selection_changed)
+
+    def set_batch_selection_mode(self, active: bool) -> None:
+        expected = [("batch_select", ""), *self._base_columns] if active else list(self._base_columns)
+        if self.columns == expected:
+            return
+        self.beginResetModel()
+        self.columns = expected
+        self.endResetModel()
 
     def set_rows(self, rows: list[dict[str, Any]]):
         self.beginResetModel()
@@ -79,6 +96,12 @@ class ProcessTableModel(QAbstractTableModel):
             return None
         row = self.rows[index.row()]
         key, _label = self.columns[index.column()]
+        process_id = int(row.get("id") or 0)
+        if key == "batch_select":
+            if role == Qt.CheckStateRole:
+                return Qt.Checked if self.batch_selection and self.batch_selection.is_selected(process_id) else Qt.Unchecked
+            if role in (Qt.DisplayRole, Qt.EditRole):
+                return ""
         if role == Qt.UserRole:
             return row
         if role == Qt.UserRole + 1:
@@ -112,16 +135,48 @@ class ProcessTableModel(QAbstractTableModel):
             return self.service.display_cell(key, row.get(key), row)
         if role == Qt.ToolTipRole:
             if key == "status_icon":
-                return "Abrir acoes da proposta"
+                area, _label, status = self.service.current_location(row)
+                status_text = self.service.area_status_label(area, status) if status else ""
+                return f"{status_text}\nAbrir acoes da proposta" if status_text else "Abrir acoes da proposta"
             if key == "chat_icon":
                 unread = row.get("_chat_unread", 0)
                 return f"{unread} mensagem(ns) nao lida(s)" if unread else "Abrir chat da proposta"
             return self.data(index, Qt.DisplayRole)
         if role == Qt.TextAlignmentRole:
-            if key in {"id", "peso", "peso_parcial", "saldo_pendente"}:
+            if key in {"batch_select", "id", "peso", "peso_parcial", "saldo_pendente"}:
                 return Qt.AlignCenter
             return Qt.AlignVCenter | Qt.AlignLeft
+        if (
+            role == Qt.BackgroundRole
+            and self.batch_selection
+            and self.batch_selection.active
+            and self.batch_selection.is_selected(process_id)
+        ):
+            return QBrush(QColor(self.service.palette.get("tree_selected", self.service.palette.get("surface_alt"))))
         return None
+
+    def flags(self, index: QModelIndex):
+        flags = super().flags(index)
+        if index.isValid() and self.columns[index.column()][0] == "batch_select":
+            return flags | Qt.ItemIsUserCheckable | Qt.ItemIsEnabled | Qt.ItemIsSelectable
+        return flags
+
+    def setData(self, index: QModelIndex, value, role=Qt.EditRole):
+        if (
+            index.isValid()
+            and role == Qt.CheckStateRole
+            and self.columns[index.column()][0] == "batch_select"
+            and self.batch_selection
+        ):
+            row = self.rows[index.row()]
+            process_id = int(row.get("id") or 0)
+            check_value = getattr(value, "value", value)
+            if check_value == Qt.CheckState.Checked.value:
+                self.batch_selection.select(process_id, row)
+            else:
+                self.batch_selection.deselect(process_id)
+            return True
+        return False
 
     def headerData(self, section: int, orientation: Qt.Orientation, role=Qt.DisplayRole):
         if role != Qt.DisplayRole:
@@ -141,3 +196,12 @@ class ProcessTableModel(QAbstractTableModel):
         if row < 0 or row >= len(self.rows):
             return None
         return int(self.rows[row]["id"])
+
+    def _batch_selection_changed(self) -> None:
+        if not self.rows or not self.columns:
+            return
+        self.dataChanged.emit(
+            self.index(0, 0),
+            self.index(len(self.rows) - 1, len(self.columns) - 1),
+            [Qt.CheckStateRole, Qt.BackgroundRole],
+        )

@@ -3,21 +3,34 @@ from __future__ import annotations
 from PySide6.QtCore import QRegularExpression, Qt
 from PySide6.QtGui import QAction, QTextDocument
 from PySide6.QtPrintSupport import QPrinter
-from PySide6.QtWidgets import QFileDialog, QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMenu, QStackedLayout, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QAbstractItemView, QFileDialog, QComboBox, QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMenu, QStackedLayout, QVBoxLayout, QWidget
 
 from app.controllers.process_controller import ProcessController
 from app.models.process_table_model import ProcessTableModel
+from app.services.app_logging import get_logger
+from app.ui.action_center.batch_action_center import BatchProposalActionCenter
 from app.ui.background_worker import start_worker
 from app.ui.components.empty_state import EmptyState
 from app.ui.components.modern_button import ModernButton
 from app.ui.components.modern_table import ModernTable, ProcessFilterProxy
-from app.ui.status_dialog import StatusDialog
+from app.ui.components.batch_selection import BatchSelectionController, BatchSelectionHeader
+from app.ui.status_dialog import open_proposal_action_center
 from app.ui.components.toast_notification import ToastNotification
 from app.ui.process_form_dialog import ProcessFormDialog
 from app.ui.batch_status_dialog import BatchStatusDialog
 from app.ui.early_remanagement_dialog import EarlyRemanagementDeliveryDialog
+from app.ui.flow_review_dialog import FlowReviewDialog
 from app.ui.process_detail_dialog import ProcessDetailDialog
 from app.ui.proposal_chat_dialog import ProposalChatDialog
+from app.ui.batch_selection_review_dialog import BatchSelectionReviewDialog
+
+log = get_logger("process_page")
+
+# Areas onde "Acoes em lote" usa selecao por checkbox na propria tabela
+# (BatchSelectionController) e abre a BatchProposalActionCenter (mesma
+# linguagem visual de cards da Central individual) em vez do
+# BatchStatusDialog antigo com o painel de busca/adicionar.
+_CHECKBOX_BATCH_AREAS = ("PRODUCAO", "CONTROLE GERAL", "EXPEDICAO", "ALMOXARIFADO", "GALVANIZACAO")
 
 
 class ProcessPage(QWidget):
@@ -28,6 +41,8 @@ class ProcessPage(QWidget):
         self.title = title
         self.controller = ProcessController(service)
         self.model = ProcessTableModel(service, area)
+        self.batch_selection = BatchSelectionController(parent=self)
+        self.model.set_batch_selection_controller(self.batch_selection)
         self.proxy = ProcessFilterProxy(self)
         self.proxy.setSourceModel(self.model)
         self.proxy.setFilterCaseSensitivity(Qt.CaseInsensitive)
@@ -57,8 +72,8 @@ class ProcessPage(QWidget):
         new_btn = ModernButton("Novo processo", "new", accent=True)
         edit_btn = ModernButton("Editar", "status")
         status_btn = ModernButton("Acoes", "status", accent=True)
-        batch_btn = ModernButton("Acoes em lote", "batch", accent=True)
-        remanage_btn = ModernButton("Entrega remanejada", "load", accent=True)
+        batch_btn = ModernButton("Ações em lote", "batch", accent=True)
+        remanage_btn = ModernButton("Remanejamento compensado", "load", accent=True)
         self.action_buttons = [
             apply_btn,
             clear_btn,
@@ -75,7 +90,9 @@ class ProcessPage(QWidget):
         new_btn.clicked.connect(self.new_process)
         edit_btn.clicked.connect(self.edit_process)
         status_btn.clicked.connect(self.change_status)
-        batch_btn.clicked.connect(self.change_status_batch)
+        batch_btn.clicked.connect(
+            self.activate_batch_selection if self.area in _CHECKBOX_BATCH_AREAS else self.change_status_batch
+        )
         remanage_btn.clicked.connect(self.open_early_remanagement_delivery)
         title = QLabel(self.title)
         title.setObjectName("FilterTitle")
@@ -111,6 +128,37 @@ class ProcessPage(QWidget):
         if self.area == "EXPEDICAO" and self._can_edit_area("EXPEDICAO"):
             proposal_actions.addWidget(remanage_btn)
 
+        self.normal_action_buttons = [details_btn, new_btn, edit_btn, status_btn, batch_btn, remanage_btn]
+        self.batch_mode_label = QLabel("Modo de seleção")
+        self.batch_mode_label.setObjectName("FilterTitle")
+        self.batch_count_label = QLabel("0 propostas selecionadas")
+        self.batch_count_label.setObjectName("Caption")
+        self.view_selected_button = ModernButton("Ver selecionadas", "search")
+        self.clear_selection_button = ModernButton("Limpar seleção", "clear")
+        self.batch_actions_button = ModernButton("Ações", "batch", accent=True)
+        self.cancel_selection_button = ModernButton("Cancelar", "close")
+        self.view_selected_button.clicked.connect(self.show_batch_selection)
+        self.clear_selection_button.clicked.connect(self.batch_selection.clear)
+        self.cancel_selection_button.clicked.connect(self.cancel_batch_selection)
+        # "Acoes" (lote) abre direto a mesma linguagem visual de cards da
+        # Central individual (BatchProposalActionCenter) - sem menu
+        # intermediario e sem o BatchStatusDialog antigo (picker de
+        # buscar/adicionar). A propria Central calcula, por area, quais
+        # cards fazem sentido (status comuns, registrar producao/retirada,
+        # definir fluxo, adicionar a carga).
+        self.batch_actions_button.clicked.connect(self.open_batch_action_center)
+        self.batch_mode_widgets = [
+            self.batch_mode_label,
+            self.batch_count_label,
+            self.view_selected_button,
+            self.clear_selection_button,
+            self.batch_actions_button,
+            self.cancel_selection_button,
+        ]
+        for widget in self.batch_mode_widgets:
+            widget.setVisible(False)
+            proposal_actions.addWidget(widget)
+
         field_row = QGridLayout()
         field_row.setHorizontalSpacing(10)
         field_row.setVerticalSpacing(3)
@@ -132,9 +180,17 @@ class ProcessPage(QWidget):
         root.addWidget(self.loading)
 
         self.table = ModernTable(self.service)
+        self.batch_header = BatchSelectionHeader(Qt.Horizontal, self.table)
+        self.table.setHorizontalHeader(self.batch_header)
+        self.batch_header.setMinimumHeight(26)
+        self.batch_header.setFixedHeight(28)
+        self.batch_header.setStretchLastSection(True)
+        self.batch_header.setSectionResizeMode(QHeaderView.Interactive)
         self.table.setModel(self.proxy)
         self.table.status_shortcut_requested.connect(self.change_status_for_id)
         self.table.chat_shortcut_requested.connect(self.open_chat_for_id)
+        self.table.clicked.connect(self._handle_table_click)
+        self.table.doubleClicked.connect(self._handle_table_double_click)
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self.open_context_menu)
         self.empty_state = EmptyState(
@@ -153,6 +209,16 @@ class ProcessPage(QWidget):
         root.addWidget(table_stack_frame, 1)
 
         self.search.textChanged.connect(self._apply_search_filter)
+        self.batch_selection.selection_changed.connect(self._on_batch_selection_changed)
+        self.batch_header.toggle_visible_requested.connect(self._toggle_visible_batch_rows)
+        for signal in (
+            self.proxy.rowsInserted,
+            self.proxy.rowsRemoved,
+            self.proxy.modelReset,
+            self.proxy.layoutChanged,
+        ):
+            signal.connect(lambda *_args: self._sync_batch_header())
+        self._update_batch_controls()
 
     def _area_subtitle(self) -> str:
         subtitles = {
@@ -167,6 +233,7 @@ class ProcessPage(QWidget):
     def _apply_search_filter(self, text: str):
         self.proxy.setFilterRegularExpression(QRegularExpression(text))
         self._update_empty_state()
+        self._sync_batch_header()
 
     def _update_empty_state(self):
         has_rows = self.proxy.rowCount() > 0
@@ -219,19 +286,41 @@ class ProcessPage(QWidget):
         try:
             conversations = self.service.chat_conversations({"limit": 200})
         except Exception:
-            return {}
-        return {int(item["proposal_id"]): item for item in conversations if item.get("proposal_id")}
+            conversations = []
+        status_by_proposal: dict[int, dict] = {
+            int(item["proposal_id"]): dict(item) for item in conversations if item.get("proposal_id")
+        }
+        # chat_conversations() e paginado (teto de 200, ordenado por atividade
+        # recente) e nao reflete corretamente o unread_count de propostas mais
+        # antigas quando ha mais de 200 conversas ativas. chat_unread_summary()
+        # varre todas as conversas numa unica consulta agregada, sem esse teto,
+        # entao ele e a fonte de verdade para o contador exibido no badge.
+        if hasattr(self.service, "chat_unread_summary"):
+            try:
+                summary = self.service.chat_unread_summary()
+            except Exception:
+                summary = None
+            for entry in (summary or {}).get("conversations", []):
+                proposal_id = entry.get("proposal_id")
+                if not proposal_id:
+                    continue
+                row = status_by_proposal.setdefault(int(proposal_id), {})
+                row["unread_count"] = entry.get("unread_count", 0)
+        return status_by_proposal
 
     def _refresh_success(self, result):
         rows, chat_status = result
         for row in rows:
             status = chat_status.get(int(row.get("id") or 0))
-            row["_chat_unread"] = int(status.get("unread_count") or 0) if status else 0
-            row["_chat_has_messages"] = bool(status and (status.get("message_count") or 0) > 0)
+            unread = int(status.get("unread_count") or 0) if status else 0
+            row["_chat_unread"] = unread
+            row["_chat_has_messages"] = bool(status and ((status.get("message_count") or 0) > 0 or unread > 0))
+        self.batch_selection.remember_rows(rows)
         self.model.set_rows(rows)
         self.table.apply_column_layout()
         self._update_empty_state()
         self._set_loading(False)
+        self._sync_batch_header()
 
     def _refresh_error(self, exc):
         self.model.set_rows([])
@@ -246,6 +335,7 @@ class ProcessPage(QWidget):
         self.table.setEnabled(not loading)
         for button in getattr(self, "action_buttons", []):
             button.setEnabled(not loading)
+        self._update_batch_controls()
 
     def clear(self):
         self.search.clear()
@@ -266,12 +356,160 @@ class ProcessPage(QWidget):
                 ids.append(process_id)
         return ids
 
+    def selected_row_data(self) -> dict | None:
+        selected = self.table.selectionModel().selectedRows()
+        if not selected:
+            return None
+        source_index = self.proxy.mapToSource(selected[0])
+        if not source_index.isValid() or source_index.row() >= len(self.model.rows):
+            return None
+        return self.model.rows[source_index.row()]
+
+    def activate_batch_selection(self):
+        if self.area not in _CHECKBOX_BATCH_AREAS:
+            self.change_status_batch()
+            return
+        if not self._can_edit_area(self.area or ""):
+            ToastNotification(self.window(), "Seu usuario tem apenas visualizacao nesta area.", "error")
+            return
+        self.batch_selection.activate()
+        self.model.set_batch_selection_mode(True)
+        self.table.apply_column_layout()
+        self.table.clearSelection()
+        self.table.setSelectionMode(QAbstractItemView.NoSelection)
+        self.table.status_shortcut_enabled = False
+        for widget in self.normal_action_buttons:
+            widget.setVisible(False)
+        for widget in self.batch_mode_widgets:
+            widget.setVisible(True)
+        self._update_batch_controls()
+
+    def cancel_batch_selection(self):
+        if not self.batch_selection.active:
+            return
+        self.batch_selection.deactivate(clear=True)
+        self.model.set_batch_selection_mode(False)
+        self.table.apply_column_layout()
+        self.table.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.table.status_shortcut_enabled = True
+        for widget in self.normal_action_buttons:
+            widget.setVisible(self._normal_button_should_be_visible(widget))
+        for widget in self.batch_mode_widgets:
+            widget.setVisible(False)
+        self.batch_header.set_batch_state(False)
+
+    def deactivate_transient_modes(self):
+        self.cancel_batch_selection()
+
+    def _normal_button_should_be_visible(self, widget) -> bool:
+        if widget is self.normal_action_buttons[1] or widget is self.normal_action_buttons[2]:
+            return self.area == "CONTROLE GERAL" and self.service.can_edit_process()
+        if widget is self.normal_action_buttons[3] or widget is self.normal_action_buttons[4]:
+            return self._can_edit_area(self.area or "")
+        if widget is self.normal_action_buttons[5]:
+            return self.area == "EXPEDICAO" and self._can_edit_area("EXPEDICAO")
+        return True
+
+    def _handle_table_click(self, proxy_index):
+        if not self.batch_selection.active or not proxy_index.isValid():
+            return
+        source_index = self.proxy.mapToSource(proxy_index)
+        row = self.model.rows[source_index.row()]
+        process_id = self.model.process_id_at(source_index.row())
+        if process_id:
+            self.batch_selection.toggle(process_id, row)
+
+    def _handle_table_double_click(self, _proxy_index):
+        if self.batch_selection.active:
+            return
+        self.show_details()
+
+    def _visible_batch_rows(self) -> list[dict]:
+        rows: list[dict] = []
+        for proxy_row in range(self.proxy.rowCount()):
+            source_index = self.proxy.mapToSource(self.proxy.index(proxy_row, 0))
+            if source_index.isValid():
+                rows.append(self.model.rows[source_index.row()])
+        return rows
+
+    def _toggle_visible_batch_rows(self, select: bool):
+        rows = self._visible_batch_rows()
+        if select:
+            self.batch_selection.select_many(rows)
+        else:
+            self.batch_selection.deselect_many(int(row["id"]) for row in rows if row.get("id"))
+
+    def _sync_batch_header(self):
+        if not hasattr(self, "batch_header"):
+            return
+        rows = self._visible_batch_rows() if self.batch_selection.active else []
+        visible_ids = [int(row["id"]) for row in rows if row.get("id")]
+        self.batch_header.set_batch_state(
+            self.batch_selection.active,
+            self.batch_selection.header_state(visible_ids),
+            has_visible_rows=bool(visible_ids),
+        )
+
+    def _on_batch_selection_changed(self):
+        self._update_batch_controls()
+        self._sync_batch_header()
+
+    def _update_batch_controls(self):
+        if not hasattr(self, "batch_count_label"):
+            return
+        count = self.batch_selection.count
+        if count == 1:
+            self.batch_count_label.setText("1 proposta selecionada")
+        else:
+            self.batch_count_label.setText(f"{count} propostas selecionadas")
+        enabled = count > 0 and not self._refreshing
+        self.view_selected_button.setEnabled(count > 0)
+        self.clear_selection_button.setEnabled(count > 0)
+        self.batch_actions_button.setEnabled(enabled)
+
+    def show_batch_selection(self):
+        if not self.batch_selection.count:
+            return
+        BatchSelectionReviewDialog(self.batch_selection, self).exec()
+
+    def open_batch_action_center(self):
+        if not self._can_edit_area(self.area or ""):
+            ToastNotification(self.window(), "Seu usuario tem apenas visualizacao nesta area.", "error")
+            return
+        process_ids = self.batch_selection.ordered_selected_ids
+        if not process_ids:
+            ToastNotification(self.window(), "Selecione ao menos uma proposta.", "error")
+            return
+        # selected_entities() ja vem do cache local da selecao (mesmas linhas
+        # que a tabela carregou) - nenhuma consulta nova ao service so para
+        # rotular as propostas nas mensagens de confirmacao/falha.
+        proposal_labels = {
+            int(row["id"]): row.get("proposta")
+            for row in self.batch_selection.selected_entities()
+            if row.get("id")
+        }
+        dialog = BatchProposalActionCenter(
+            self.service, process_ids, self.area or "", self, proposal_labels=proposal_labels
+        )
+        if dialog.exec() or dialog.changed:
+            self._complete_batch_action("Ações em lote aplicadas com sucesso.")
+
+    def _complete_batch_action(self, message: str):
+        self.cancel_batch_selection()
+        self.refresh()
+        ToastNotification(self.window(), message, "success")
+
     def show_details(self):
         process_id = self.selected_process_id()
         if not process_id:
-            ToastNotification(self.window(), "Selecione uma proposta.", "error")
+            ToastNotification(self.window(), "Selecione uma proposta para visualizar os detalhes.", "error")
             return
-        dialog = ProcessDetailDialog(self.service, process_id, self)
+        log.debug("Abrindo detalhes da proposta: process_id=%r, tipo=%s", process_id, type(process_id).__name__)
+        try:
+            dialog = ProcessDetailDialog(self.service, process_id, self)
+        except Exception as exc:
+            ToastNotification(self.window(), f"Nao foi possivel abrir os detalhes da proposta: {exc}", "error")
+            return
         if dialog.exec() or dialog.changed:
             self.refresh()
 
@@ -283,17 +521,29 @@ class ProcessPage(QWidget):
         if not process_id:
             ToastNotification(self.window(), "Selecione uma proposta.", "error")
             return
-        self.change_status_for_id(process_id)
+        row = self.selected_row_data() or {}
+        grouped_ids = [int(value) for value in (row.get("proposal_ids") or []) if value]
+        if len(grouped_ids) > 1:
+            labels = {int(value): str(row.get("proposta") or "") for value in grouped_ids}
+            dialog = BatchProposalActionCenter(self.service, grouped_ids, self.area or "", self, proposal_labels=labels)
+            if dialog.exec() or dialog.changed:
+                self.refresh()
+                ToastNotification(self.window(), "Ação aplicada aos lotes agrupados.", "success")
+            return
+        self.change_status_for_id(process_id, row_context=row)
 
-    def change_status_for_id(self, process_id: int):
+    def change_status_for_id(self, process_id: int, row_context: dict | None = None):
         if not self._can_edit_area(self.area or ""):
             ToastNotification(self.window(), "Seu usuario tem apenas visualizacao nesta area.", "error")
             return
-        area = self.area if self.area in self.service.visible_areas() else None
-        dialog = StatusDialog(self.service, process_id, area, self)
+        if row_context is None:
+            dialog = open_proposal_action_center(self.service, process_id, self, area=self.area)
+        else:
+            dialog = open_proposal_action_center(self.service, process_id, self, area=self.area, row_context=row_context)
         if dialog.exec():
             self.refresh()
-            ToastNotification(self.window(), "Acao registrada com sucesso.", "success")
+            if not dialog.success_message:
+                ToastNotification(self.window(), "Acao registrada com sucesso.", "success")
 
     def open_chat_for_id(self, process_id: int):
         dialog = ProposalChatDialog(self.service, process_id, self)
@@ -301,6 +551,9 @@ class ProcessPage(QWidget):
         self.refresh()
 
     def change_status_batch(self):
+        if self.area in _CHECKBOX_BATCH_AREAS and not self.batch_selection.active:
+            self.activate_batch_selection()
+            return
         if not self._can_edit_area(self.area or ""):
             ToastNotification(self.window(), "Seu usuario tem apenas visualizacao nesta area.", "error")
             return
@@ -311,17 +564,42 @@ class ProcessPage(QWidget):
             self.refresh()
             ToastNotification(self.window(), "Acoes em lote aplicadas com sucesso.", "success")
 
+    def open_flow_review_batch(self):
+        if not self._can_edit_area("PRODUCAO"):
+            ToastNotification(self.window(), "Seu usuario nao pode definir fluxo dos itens.", "error")
+            return
+        process_ids = self.selected_process_ids()
+        if not process_ids:
+            ToastNotification(self.window(), "Selecione ao menos uma proposta.", "error")
+            return
+        dialog = FlowReviewDialog(self.service, process_ids, self, origin="ProducaoLote")
+        if dialog.exec() or dialog.changed:
+            self.refresh()
+
     def open_early_remanagement_delivery(self):
         if not self._can_edit_area("EXPEDICAO"):
-            ToastNotification(self.window(), "Seu usuario nao pode registrar entrega remanejada.", "error")
+            ToastNotification(self.window(), "Seu usuario nao pode realizar remanejamentos.", "error")
             return
         dialog = EarlyRemanagementDeliveryDialog(self.service, self)
         if dialog.exec():
             self.refresh()
-            ToastNotification(self.window(), "Entrega remanejada registrada com sucesso.", "success")
+            ToastNotification(self.window(), "Remanejamento compensado registrado com sucesso.", "success")
 
     def open_context_menu(self, position):
         index = self.table.indexAt(position)
+        if self.batch_selection.active:
+            if index.isValid():
+                source_index = self.proxy.mapToSource(index)
+                row = self.model.rows[source_index.row()]
+                process_id = self.model.process_id_at(source_index.row())
+                menu = QMenu(self)
+                label = "Desmarcar proposta" if self.batch_selection.is_selected(process_id) else "Selecionar proposta"
+                menu.addAction(
+                    QAction(label, self, triggered=lambda: self.batch_selection.toggle(process_id, row))
+                )
+                menu.addAction(QAction("Ver selecionadas", self, triggered=self.show_batch_selection))
+                menu.exec(self.table.viewport().mapToGlobal(position))
+            return
         if index.isValid():
             if not self.table.selectionModel().isSelected(index):
                 self.table.selectRow(index.row())
@@ -336,6 +614,8 @@ class ProcessPage(QWidget):
         if self._can_edit_area(self.area or ""):
             menu.addAction(QAction(f"Acoes da proposta ({count})", self, triggered=self.change_status))
             menu.addAction(QAction("Acoes em lote...", self, triggered=self.change_status_batch))
+        if self.area == "PRODUCAO" and self._can_edit_area("PRODUCAO") and count > 1:
+            menu.addAction(QAction(f"Definir fluxo em lote ({count})", self, triggered=self.open_flow_review_batch))
         menu.addAction(QAction("Historico da proposta", self, triggered=self.show_details))
         menu.addAction(QAction("Exportar selecao Excel", self, triggered=lambda: self.export_selected("csv")))
         menu.addAction(QAction("Exportar selecao PDF", self, triggered=lambda: self.export_selected("pdf")))

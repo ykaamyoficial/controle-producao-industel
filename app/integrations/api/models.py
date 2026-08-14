@@ -23,6 +23,8 @@ class ApiUser:
     password_must_change: bool = False
     roles: list[ApiRole] = field(default_factory=list)
     permissions: list[str] = field(default_factory=list)
+    avatar_available: bool = False
+    avatar_mime: str | None = None
 
     @classmethod
     def from_payload(cls, payload: dict[str, Any]) -> "ApiUser":
@@ -38,6 +40,8 @@ class ApiUser:
             ),    
             roles=roles,
             permissions=[str(code) for code in payload.get("permissions") or []],
+            avatar_available=bool(payload.get("avatar_available", False)),
+            avatar_mime=payload.get("avatar_mime"),
         )
 
 
@@ -74,6 +78,88 @@ class SystemVersion:
             maximum_desktop_version=payload.get("maximum_desktop_version"),
             supported_features=[str(item) for item in payload.get("supported_features") or []],
         )
+
+
+@dataclass(frozen=True)
+class MaintenanceInfoDto:
+    """Desserializacao tipada do sub-objeto `maintenance` de
+    /system/compatibility (Fase 14, Secao 11). Ausente na resposta ->
+    tratado como OFF (API anterior a Fase 14, mesma politica de campo
+    aditivo com default seguro das demais fases)."""
+
+    state: str = "OFF"
+    maintenance_id: str = "mnt-none"
+    message: str = ""
+    expected_end_at: str | None = None
+    retry_after_seconds: int | None = None
+
+    @classmethod
+    def from_payload(cls, payload: dict[str, Any] | None) -> "MaintenanceInfoDto":
+        if not payload:
+            return cls()
+        return cls(
+            state=str(payload.get("state") or "OFF"),
+            maintenance_id=str(payload.get("maintenance_id") or "mnt-none"),
+            message=str(payload.get("message") or ""),
+            expected_end_at=payload.get("expected_end_at"),
+            retry_after_seconds=payload.get("retry_after_seconds"),
+        )
+
+
+@dataclass(frozen=True)
+class SystemCompatibilityDto:
+    """Desserializacao tipada de GET /api/v1/system/compatibility (contrato da Fase 02,
+    estendido na Fase 13 com os campos de politica de enforcement e na Fase 14
+    com o resumo de manutencao).
+
+    Nao espalhe acesso ao dicionario JSON cru pela UI: sempre construa via from_payload.
+    Os campos novos (desktop_state, enforcement, authorized_update_version,
+    policy_revision, grace_until, message, maintenance) tem default seguro -- uma
+    API anterior a essas fases (que nunca os envia) continua sendo desserializada
+    normalmente.
+    """
+
+    server_version: str
+    api_contract_version: str
+    database_revision: str
+    minimum_desktop_version: str
+    recommended_desktop_version: str
+    maintenance_mode: bool
+    desktop_state: str | None = None
+    enforcement: str = "NONE"
+    authorized_update_version: str | None = None
+    policy_revision: int = 0
+    grace_until: str | None = None
+    message: str = ""
+    maintenance: MaintenanceInfoDto = field(default_factory=MaintenanceInfoDto)
+    # Fase 15: aditivos, default seguro para uma API anterior que nunca os envia.
+    desktop_channel: str = "PRODUCTION"
+    production_version: str | None = None
+    pilot_version: str | None = None
+
+    @classmethod
+    def from_payload(cls, payload: dict[str, Any]) -> "SystemCompatibilityDto":
+        try:
+            return cls(
+                server_version=str(payload["server_version"]),
+                api_contract_version=str(payload["api_contract_version"]),
+                database_revision=str(payload["database_revision"]),
+                minimum_desktop_version=str(payload["minimum_desktop_version"]),
+                recommended_desktop_version=str(payload["recommended_desktop_version"]),
+                maintenance_mode=bool(payload["maintenance_mode"]),
+                desktop_state=payload.get("desktop_state"),
+                enforcement=str(payload.get("enforcement") or "NONE"),
+                authorized_update_version=payload.get("authorized_update_version"),
+                policy_revision=int(payload.get("policy_revision") or 0),
+                grace_until=payload.get("grace_until"),
+                message=str(payload.get("message") or ""),
+                maintenance=MaintenanceInfoDto.from_payload(payload.get("maintenance")),
+                desktop_channel=str(payload.get("desktop_channel") or "PRODUCTION"),
+                production_version=payload.get("production_version"),
+                pilot_version=payload.get("pilot_version"),
+            )
+        except (KeyError, TypeError) as exc:
+            raise ValueError(f"Resposta de /system/compatibility invalida: campo ausente ou malformado ({exc}).") from exc
 
 
 @dataclass(frozen=True)

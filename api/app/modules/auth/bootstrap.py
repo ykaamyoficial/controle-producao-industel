@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import logging
 
+from sqlalchemy import select
+
 from api.app.database.session import get_sessionmaker
 from api.app.modules.auth import repository
-from api.app.modules.auth.models import User
+from api.app.modules.auth.models import Permission, User
+from api.app.modules.auth.permissions import OFFICIAL_PERMISSIONS
 from api.app.modules.auth.security import hash_password
 from api.app.modules.auth.tokens import utcnow
 from api.app.modules.provisioning.service import _ensure_admin_role
@@ -12,6 +15,31 @@ from api.app.modules.provisioning.service import _ensure_admin_role
 log = logging.getLogger("api.auth.bootstrap")
 DEFAULT_ADMIN_USERNAME = "admin"
 DEFAULT_ADMIN_PASSWORD = "admin12345"
+
+
+async def sync_official_permissions() -> None:
+    """Garante que o catalogo oficial de permissoes (OFFICIAL_PERMISSIONS)
+    existe na tabela `permissions` — idempotente: so insere o que estiver
+    faltando, nunca apaga ou altera uma permissao ja existente (mesmo que
+    tenha sido criada por outra via). Historicamente cada modulo inseria seu
+    pedaco do catalogo direto numa migration (bulk_insert), sem um jeito de
+    "re-seedar" se a tabela for esvaziada por fora do Alembic (ex: reset de
+    dados de ambiente) — isso e o que da esse sync aqui, chamado sempre no
+    startup, antes de ensure_default_admin() (que depende das permissoes ja
+    existirem pra vincular o papel do admin corretamente)."""
+    session_factory = get_sessionmaker()
+    if session_factory is None:
+        raise RuntimeError("DATABASE_URL nao configurada.")
+
+    async with session_factory() as session:
+        existing_codes = set((await session.execute(select(Permission.code))).scalars().all())
+        missing = [(code, name, module) for code, name, module in OFFICIAL_PERMISSIONS if code not in existing_codes]
+        if not missing:
+            return
+        for code, name, module in missing:
+            session.add(Permission(code=code, name=name, module=module))
+        await session.commit()
+        log.warning("Catalogo de permissoes sincronizado | inseridas=%s", [code for code, _name, _module in missing])
 
 
 async def ensure_default_admin() -> None:

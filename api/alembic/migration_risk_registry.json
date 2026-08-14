@@ -1,0 +1,117 @@
+{
+  "20260720_0001": {
+    "classification": "ADDITIVE",
+    "summary": "Cria system_metadata (tabela nova, sem impacto em consumidores existentes).",
+    "justification": "Apenas CREATE TABLE de uma tabela nova. Nenhum consumidor pre-existente depende dela."
+  },
+  "20260720_0002": {
+    "classification": "ADDITIVE",
+    "summary": "Cria o modulo de autenticacao/RBAC (users, roles, permissions, user_roles, role_permissions, auth_sessions, security_events) e semeia permissoes.",
+    "justification": "Apenas CREATE TABLE + indices + bulk_insert de dados de seed. Migration congelada por incidente documentado em docs/architecture/API_MIGRATION_STABILITY_AND_REPLICA_VALIDATION.md; correcoes devem vir em migrations novas, nunca editando esta."
+  },
+  "20260720_0003": {
+    "classification": "ADDITIVE",
+    "summary": "Cria o modelo de leitura de propostas (proposals, proposal_items, sync_runs) e insere permissoes associadas.",
+    "justification": "Apenas CREATE TABLE + INSERT de permissoes novas. Nenhuma estrutura existente e alterada."
+  },
+  "20260720_0004": {
+    "classification": "DATA_MIGRATION",
+    "summary": "Vincula a role admin as permissoes de propostas criadas na migration anterior.",
+    "justification": "Somente DML (INSERT em role_permissions), sem DDL. Operacao idempotente (nao duplica vinculo ja existente)."
+  },
+  "20260720_0005": {
+    "classification": "DESTRUCTIVE",
+    "summary": "Torna propostas oficiais: TRUNCATE de proposal_items/proposals/sync_runs, ALTER COLUMN proposal_items.description para NOT NULL sem backfill previo, novas colunas/constraints/FKs e a tabela proposal_events.",
+    "justification": "TRUNCATE incondicional e ALTER ... SET NOT NULL sem guarda de backfill sao exatamente os padroes que a politica desta fase (Secoes 6-10 do prompt) proibe para migrations novas. Esta migration foi aplicada em 2026-07-20, antes do lancamento oficial do modulo de Propostas (as tabelas ainda estavam vazias em producao nesta janela, sem risco real de perda de dados na data de aplicacao). E historico imutavel (Secao 11): nao pode ser reescrita para seguir a politica retroativamente sem invalidar o checksum registrado e quebrar o encadeamento de revisoes ja aplicado em ambientes existentes. Documentada aqui para que revisoes futuras nao repitam o padrao. Novas migrations que precisarem de TRUNCATE ou de NOT NULL em coluna existente devem seguir EXPAND -> MIGRATE -> CONTRACT (ver docs/architecture/DATABASE_MIGRATIONS.md)."
+  },
+  "20260721_0006": {
+    "classification": "ADDITIVE",
+    "summary": "Cria o modulo de galvanizacao (galvanization_loads, galvanization_load_items, galvanization_load_events).",
+    "justification": "Apenas CREATE TABLE + constraints CHECK/FK em tabelas novas."
+  },
+  "20260721_0007": {
+    "classification": "ADDITIVE",
+    "summary": "Cria o modulo de expedicao (expedition_items, expedition_events).",
+    "justification": "Apenas CREATE TABLE em tabelas novas."
+  },
+  "20260721_0008": {
+    "classification": "ADDITIVE",
+    "summary": "Cria o modulo fiscal (fiscal_records, fiscal_items, fiscal_invoices, fiscal_invoice_items, fiscal_events) e semeia permissoes.",
+    "justification": "Apenas CREATE TABLE + bulk_insert de permissoes novas."
+  },
+  "20260722_0009": {
+    "classification": "ADDITIVE",
+    "summary": "Adiciona users.password_must_change (NOT NULL com server_default) e registra a revisao em system_metadata.",
+    "justification": "add_column com server_default nao exige backfill nem bloqueia linhas existentes (Postgres preenche o default para as linhas ja existentes na mesma operacao). O UPDATE em system_metadata e apenas um carimbo informativo, nao afeta dados operacionais."
+  },
+  "20260727_0010": {
+    "classification": "DATA_MIGRATION",
+    "summary": "Upsert de permissoes de setor (RBAC) e vinculo com roles.",
+    "justification": "Somente DML com ON CONFLICT DO UPDATE/DO NOTHING (idempotente), sem DDL."
+  },
+  "20260801_0011": {
+    "classification": "ADDITIVE",
+    "summary": "Cria o modulo de chat (chat_conversations, chat_messages, chat_message_reads, chat_notifications) e semeia permissoes.",
+    "justification": "Apenas CREATE TABLE + constraints CHECK em tabelas novas + upsert de permissoes novas."
+  },
+  "20260802_0012": {
+    "classification": "ADDITIVE",
+    "summary": "Cria indices de performance para consultas de chat.",
+    "justification": "Apenas CREATE INDEX, sem alteracao de dados ou de forma de tabelas existentes."
+  },
+  "20260803_0013": {
+    "classification": "TRANSITIONAL",
+    "summary": "Adiciona chat_messages.area (nullable) e amplia o conjunto de valores aceitos em duas CHECK constraints (question_status, notification_type).",
+    "justification": "add_column e nullable (sem exigir backfill). A troca de CHECK constraint e apenas alargamento do conjunto de valores permitidos (upgrade sempre superset do anterior) -- nenhuma linha existente pode violar a nova regra. O downgrade estreita de volta, o que e o sentido esperado para uma reversao."
+  },
+  "20260807_0014": {
+    "classification": "DESTRUCTIVE",
+    "summary": "Adiciona campos de prazo/visualizacao/cancelamento e importancia a chat_messages, alarga CHECK constraints e cria UNIQUE (user_id, message_id, notification_type) em chat_notifications.",
+    "justification": "op.create_unique_constraint foi adicionado sem uma query previa de validacao de duplicidade (padrao exigido pela Secao 13/18 desta fase para migrations novas). Na data de aplicacao (2026-08-07) a tabela chat_notifications era nova (criada em 20260801_0011, poucos dias antes) e ainda vazia/de baixo volume em producao, sem duplicidade real esperada. E historico imutavel (Secao 11): nao pode ser editada para adicionar a validacao retroativamente. Novas migrations que adicionarem UNIQUE em tabela com dados existentes devem validar ausencia de duplicidade antes (ver docs/architecture/DATABASE_MIGRATIONS.md, Secao 18)."
+  },
+  "20260810_0015": {
+    "classification": "ADDITIVE",
+    "summary": "Torna proposal_items.unit_weight/total_weight nullable (afrouxamento), adiciona colunas de origem/status de peso com server_default e cria product_catalog_entries.",
+    "justification": "Afrouxar NOT NULL para nullable e sempre seguro (nenhuma linha existente pode passar a violar a regra). Colunas novas tem server_default, dispensando backfill. product_catalog_entries e uma tabela nova."
+  },
+  "20260811_0016": {
+    "classification": "TRANSITIONAL",
+    "summary": "Adiciona peso informado independente na carga e permite NULL nos snapshots de peso da galvanizacao e do fiscal.",
+    "justification": "O upgrade apenas adiciona colunas nullable e afrouxa NOT NULL, sem UPDATE, backfill ou reinterpretacao de zeros historicos. O downgrade valida previamente a ausencia de NULL e aborta sem alterar dados quando nao for seguro reapertar as colunas."
+  },
+  "20260811_0017": {
+    "classification": "TRANSITIONAL",
+    "summary": "Adiciona metadados de cancelamento terminal em proposals.",
+    "justification": "As tres colunas sao nullable e a FK usa SET NULL. A FK referencia users.id ja unico e os valores novos iniciam NULL, portanto nao invalida linhas existentes. Nao existe UPDATE, backfill, exclusao nem reinterpretacao de historico operacional."
+  },
+  "20260811_0018": {
+    "classification": "TRANSITIONAL",
+    "summary": "Cria entidades aditivas de remanejamento compensado e transferencia de alocacao produtiva.",
+    "justification": "Somente cria tabelas, indices, checks, FKs e uniques novos. Nenhuma tabela ou linha historica existente e alterada; remanejamentos antigos sem vinculo comprovavel permanecem legados."
+  },
+  "20260812_0019": {
+    "classification": "TRANSITIONAL",
+    "summary": "Cria client_installations e pilot_client_reports (tabelas novas, canal piloto Fase 15).",
+    "justification": "Somente CREATE TABLE de duas tabelas novas com unique/indices proprios; nenhuma tabela ou linha existente e alterada. Classificado TRANSITIONAL (nao ADDITIVE) porque o script de seguranca sinaliza a UniqueConstraint como padrao a revisar, mas a constraint recai inteiramente sobre a tabela nova."
+  },
+  "20260812_0020": {
+    "classification": "TRANSITIONAL",
+    "summary": "Cria update_audit_events (tabela nova, historico de auditoria de atualizacoes da Fase 16).",
+    "justification": "Somente CREATE TABLE de uma tabela nova com unique/indices proprios; nenhuma tabela ou linha existente e alterada. Classificado TRANSITIONAL (nao ADDITIVE) porque o script de seguranca sinaliza a UniqueConstraint como padrao a revisar, mas a constraint recai inteiramente sobre a tabela nova."
+  },
+  "20260813_0010": {
+    "classification": "ADDITIVE",
+    "summary": "Adiciona avatar_bytes/avatar_mime a users (perfil de usuario).",
+    "justification": "Apenas ADD COLUMN nullable em tabela existente. Nenhum consumidor pre-existente e afetado; colunas novas comecam NULL para todas as linhas atuais."
+  },
+  "20260814_0021": {
+    "classification": "TRANSITIONAL",
+    "summary": "Cria a hierarquia proposta-mae/filha-parcial: relaxa proposals.legacy_id para nullable, adiciona parent_proposal_id (auto-FK) e seu indice.",
+    "justification": "O relaxamento de legacy_id e um alargamento de restricao (NOT NULL -> NULL), nunca destrutivo. parent_proposal_id e uma coluna nova, comeca NULL em todas as linhas e so e populada pela migration de backfill seguinte (20260814_0022). Classificado TRANSITIONAL (nao ADDITIVE) porque o script de seguranca sinaliza a FK nova (ADD_UNIQUE_OR_FK) como padrao a revisar, mas a constraint recai inteiramente sobre a coluna nova, com ondelete=SET NULL."
+  },
+  "20260814_0022": {
+    "classification": "DATA_MIGRATION",
+    "summary": "Backfill de parent_proposal_id para propostas parciais legadas, casando parent_legacy_id com o legacy_id da proposta-mae.",
+    "justification": "Somente SELECT + UPDATE (DML) sobre dados ja existentes; nenhuma alteracao de schema. So atualiza linhas onde parent_proposal_id ainda esta NULL e ha um parent_legacy_id resolvivel, e nunca aponta uma linha para si mesma. Downgrade e um no-op deliberado (Secao 11 documentada no proprio arquivo): desfazer o vinculo reexporia filhas legadas sem parent, o que seria pior que manter o backfill."
+  }
+}

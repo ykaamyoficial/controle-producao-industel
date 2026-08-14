@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from pathlib import Path
 import re
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QAbstractItemView, QComboBox, QDialog, QFrame, QGridLayout, QHBoxLayout,
+    QAbstractItemView, QComboBox, QDialog, QFileDialog, QFrame, QGridLayout, QHBoxLayout,
     QApplication, QHeaderView, QLineEdit, QLabel, QMessageBox, QScrollArea, QSpinBox,
     QStyledItemDelegate, QTableWidget, QTableWidgetItem, QTextEdit, QVBoxLayout, QWidget,
 )
@@ -82,8 +83,8 @@ class ProcessFormDialog(QDialog):
         heading_row.addWidget(heading)
         heading_row.addStretch()
         if not self.process_id:
-            import_button = ModernButton("Conferir PDF Nomus", "pdf")
-            import_button.setToolTip("Abrir conferencia sem gravar dados no cadastro")
+            import_button = ModernButton("Importar PDF Nomus", "pdf")
+            import_button.setToolTip("Selecionar PDF Nomus e preencher o cadastro para revisao antes de salvar")
             import_button.clicked.connect(self.open_nomus_preview)
             heading_row.addWidget(import_button)
             api_import_button = ModernButton("Importar do Nomus", "search")
@@ -238,23 +239,45 @@ class ProcessFormDialog(QDialog):
         return frame
 
     def open_nomus_preview(self):
-        dialog = ProposalImportDialog(self)
-        if dialog.exec() == QDialog.Accepted and dialog.prepared_data:
-            self.apply_import_data(dialog.prepared_data)
+        if hasattr(self.service, "can_edit_process") and not self.service.can_edit_process():
+            QMessageBox.warning(
+                self,
+                "Importar proposta Nomus",
+                "Seu usuario pode visualizar, mas nao importar/cadastrar propostas.",
+            )
+            return
+        start = str(Path.home() / "Downloads")
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Selecionar proposta Nomus",
+            start,
+            "Documentos PDF (*.pdf)",
+        )
+        if not path:
+            return
+        importer = ProposalImportDialog(self, allow_pdf_selection=False)
+        if not importer.load_pdf(path):
+            return
+        self._transfer_import_dialog_data(importer)
 
     def open_nomus_api_preview(self):
         lookup = NomusApiImportDialog(self)
         if lookup.exec() != QDialog.Accepted or not lookup.preview_payload:
             return
-        preview = ProposalImportDialog(
+        importer = ProposalImportDialog(
             self,
             initial_data=lookup.preview_payload,
             standard_result=lookup.standard_result,
             source_label="Origem dos dados",
             allow_pdf_selection=False,
         )
-        if preview.exec() == QDialog.Accepted and preview.prepared_data:
-            self.apply_import_data(preview.prepared_data)
+        self._transfer_import_dialog_data(importer)
+
+    def _transfer_import_dialog_data(self, importer: ProposalImportDialog) -> bool:
+        """Extract and validate data from a headless import dialog, then fill the form directly."""
+        importer.validate_import()
+        data = importer.prepared_data or importer.collect_data()
+        return self.apply_import_data(data)
 
     def _nomus_api_import_available(self) -> tuple[bool, str]:
         if hasattr(self.service, "can_edit_process") and not self.service.can_edit_process():
@@ -382,7 +405,7 @@ class ProcessFormDialog(QDialog):
                 weight_cell = self.items_table.item(self.items_table.rowCount() - 1, 4)
                 if weight_cell:
                     weight_cell.setToolTip(
-                        f"Peso nao informado no {source_name}; precisa de conferencia antes do cadastro."
+                        f"Peso nao informado no {source_name}; dado auxiliar que pode ser preenchido depois."
                     )
 
         if pending_weights:
@@ -400,7 +423,7 @@ class ProcessFormDialog(QDialog):
             )
         if pending_weights:
             notices.append(
-                f"{pending_weights} item(ns) permanecem sem peso e precisam de conferencia."
+                f"{pending_weights} item(ns) permanecem sem peso; isso nao impede o cadastro nem a movimentacao."
             )
         self.import_notice.setText(" ".join(notices))
         self.import_notice.show()
@@ -551,6 +574,8 @@ class ProcessFormDialog(QDialog):
     def update_items_total(self, *_args):
         units = 0
         total_weight = 0.0
+        known_weights = 0
+        total_items = self.items_table.rowCount()
         for row in range(self.items_table.rowCount()):
             quantity_cell = self.items_table.item(row, 3)
             weight_cell = self.items_table.item(row, 4)
@@ -558,15 +583,23 @@ class ProcessFormDialog(QDialog):
                 quantity = max(0, int((quantity_cell.text() if quantity_cell else "1") or 1))
             except ValueError:
                 quantity = 0
+            weight = None
             try:
-                weight = float(((weight_cell.text() if weight_cell else "") or "0").replace(",", "."))
+                text = (weight_cell.text() if weight_cell else "").strip().replace(",", ".")
+                parsed = float(text) if text else None
+                weight = parsed if parsed is not None and parsed > 0 else None
             except ValueError:
-                weight = 0
+                pass
             units += quantity
-            total_weight += quantity * weight
-        self.items_total.setText(f"{units} unidade(s) | {total_weight:g} kg")
-        if self.items_table.rowCount() and total_weight > 0:
+            if weight is not None:
+                total_weight += quantity * weight
+                known_weights += 1
+        weight_label = f"{total_weight:g} kg conhecidos" if known_weights else "peso nao informado"
+        self.items_total.setText(f"{units} unidade(s) | {weight_label} | cobertura {known_weights}/{total_items}")
+        if total_items and known_weights == total_items:
             self.fields["peso"].setText(f"{total_weight:g}")
+        else:
+            self.fields["peso"].clear()
 
     def _load(self, process_id: int):
         row = self.service.get_process_dict(process_id)

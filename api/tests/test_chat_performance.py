@@ -215,8 +215,6 @@ class ChatPerformanceTests(unittest.TestCase):
 
         summary, queries, proposal_count = asyncio.run(_run())
         self.assertLess(queries, 25, f"unread_summary fez {queries} consultas para {proposal_count} propostas — deveria ser um numero fixo, nao proporcional")
-        # 2 eventos com observacao por proposta, todas as propostas com leitura registrada
-        self.assertEqual(summary.new_observations, proposal_count * 2)
 
     def test_list_notifications_query_count_bounded_and_matches_unread_summary(self):
         async def _run():
@@ -229,20 +227,10 @@ class ChatPerformanceTests(unittest.TestCase):
 
         notifications, queries, proposal_count = asyncio.run(_run())
         self.assertLess(queries, 25, f"list_notifications fez {queries} consultas para {proposal_count} propostas")
-        self.assertEqual(notifications.total, proposal_count * 2)
-
-    def test_conversations_without_a_read_cursor_produce_no_observation_entries(self):
-        async def _run():
-            admin, proposal_ids = await self._seed(proposal_count=10, events_per_proposal=2, mark_read=False)
-            session_factory = get_sessionmaker()
-            async with session_factory() as session:
-                admin_row = (await session.execute(select(User).where(User.id == admin.id))).scalars().first()
-                summary = await chat_service.unread_summary(session, admin_row)
-            return summary
-
-        summary = asyncio.run(_run())
-        # ninguem nunca abriu nenhuma dessas conversas -> sem "ultima vez visto" -> sem novidade
-        self.assertEqual(summary.new_observations, 0)
+        # todas as mensagens seedadas sao MENSAGEM comuns do proprio admin, sem
+        # mencao/resposta — nao geram notificacao de sino nesta arquitetura
+        # (atividade operacional tambem nunca gerou notificacao aqui).
+        self.assertEqual(notifications.total, 0)
 
     def test_results_are_stable_across_repeated_calls(self):
         async def _run():
@@ -253,7 +241,7 @@ class ChatPerformanceTests(unittest.TestCase):
                 async with session_factory() as session:
                     admin_row = (await session.execute(select(User).where(User.id == admin.id))).scalars().first()
                     summary = await chat_service.unread_summary(session, admin_row)
-                    results.append((summary.total_unread, summary.new_observations, summary.pending_questions))
+                    results.append((summary.total_unread, summary.pending_questions))
             return results
 
         results = asyncio.run(_run())
@@ -321,7 +309,6 @@ class ChatPerformanceTests(unittest.TestCase):
         conversations, conv_queries, summary, summary_queries, timeline, timeline_queries, proposal_count = asyncio.run(_run())
         # 200 propostas x 6 mensagens = 1200 mensagens no total, +1 pelo Chat Geral sempre presente
         self.assertEqual(conversations.total, proposal_count + 1)
-        self.assertEqual(summary.new_observations, proposal_count * 2)
         self.assertGreater(len(timeline.items), 0)
         for label, queries in (("list_conversations", conv_queries), ("unread_summary", summary_queries), ("get_proposal_timeline", timeline_queries)):
             self.assertLess(queries, 40, f"{label} fez {queries} consultas com {proposal_count} propostas — nao pode crescer com o volume")

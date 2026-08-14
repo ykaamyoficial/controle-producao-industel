@@ -3,13 +3,15 @@ from __future__ import annotations
 import os
 import unittest
 from datetime import datetime
+from dataclasses import replace
+from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication, QLabel, QPushButton
+from PySide6.QtWidgets import QApplication, QLabel, QLineEdit, QMessageBox, QPushButton
 
 from app.services.nomus_api_config import NomusApiSettings, NomusConnectionTestResult
-from app.ui.nomus_api_settings_dialog import NomusApiSettingsDialog
+from app.ui.nomus_api_settings_dialog import NomusApiSettingsDialog, NomusIntegrationSettingsWidget
 from app.ui.settings_page import SettingsPage
 
 
@@ -17,8 +19,13 @@ class FakeNomusStore:
     def __init__(self, settings: NomusApiSettings):
         self.settings = settings
         self.test_calls = []
+        self.load_calls = 0
+        self.saved_keys = []
+        self.settings_calls = []
+        self.delete_calls = 0
 
     def load_settings(self):
+        self.load_calls += 1
         return self.settings
 
     def test_authenticated_connection(self, **kwargs):
@@ -35,6 +42,19 @@ class FakeNomusStore:
             content_type="application/json",
             authentication_confirmed=True,
         )
+
+    def save_api_key(self, value):
+        self.saved_keys.append(value)
+        self.settings = replace(self.settings, api_key_configured=True, masked_api_key="************1234")
+
+    def delete_api_key(self):
+        self.delete_calls += 1
+        self.settings = replace(self.settings, api_key_configured=False, masked_api_key=None)
+
+    def save_settings(self, *, enabled, base_url):
+        self.settings_calls.append({"enabled": enabled, "base_url": base_url})
+        self.settings = replace(self.settings, enabled=enabled, base_url=base_url)
+        return self.settings
 
 
 class FakeSettingsService:
@@ -85,12 +105,13 @@ class NomusApiSettingsDialogTests(unittest.TestCase):
             last_test_message="Conexao validada",
         )
 
-        dialog = NomusApiSettingsDialog(store=FakeNomusStore(settings))
+        widget = NomusIntegrationSettingsWidget(store=FakeNomusStore(settings))
 
-        self.assertEqual(dialog.base_url.text(), "https://example.nomus.com.br/rest")
-        self.assertIn("1234", dialog.key_status.text())
-        self.assertEqual(dialog.api_key.text(), "")
-        self.assertTrue(dialog.enabled_check.isChecked())
+        self.assertEqual(widget.base_url.text(), "https://example.nomus.com.br/rest")
+        self.assertIn("1234", widget.key_status.text())
+        self.assertEqual(widget.api_key.text(), "")
+        self.assertEqual(widget.api_key.echoMode(), QLineEdit.Password)
+        self.assertTrue(widget.enabled_check.isChecked())
 
     def test_dialog_test_button_uses_authenticated_client_path(self):
         settings = NomusApiSettings(
@@ -103,11 +124,11 @@ class NomusApiSettingsDialogTests(unittest.TestCase):
             last_test_message=None,
         )
         store = FakeNomusStore(settings)
-        dialog = NomusApiSettingsDialog(store=store)
-        dialog._run_background = lambda operation, on_success, _on_error: on_success(operation())
-        dialog._show_test_result = lambda _result: None
+        widget = NomusIntegrationSettingsWidget(store=store)
+        widget._run_background = lambda operation, on_success, _on_error: on_success(operation())
+        widget._show_test_result = lambda _result: None
 
-        dialog.test_connection()
+        widget.test_connection()
 
         self.assertEqual(len(store.test_calls), 1)
         self.assertEqual(store.test_calls[0]["base_url"], "https://example.nomus.com.br/rest")
@@ -119,12 +140,69 @@ class NomusApiSettingsDialogTests(unittest.TestCase):
         admin_buttons = [button.text() for button in admin_page.findChildren(QPushButton)]
         user_buttons = [button.text() for button in user_page.findChildren(QPushButton)]
 
-        self.assertIn("Configurar API Nomus", admin_buttons)
+        self.assertIsNotNone(admin_page.nomus_settings)
+        self.assertIsNone(user_page.nomus_settings)
+        self.assertIn("Testar conexao", admin_buttons)
+        self.assertIn("Salvar", admin_buttons)
         self.assertIn("Diagnostico da API", admin_buttons)
         self.assertIn("Consultar propostas na API", admin_buttons)
-        self.assertNotIn("Configurar API Nomus", user_buttons)
+        self.assertNotIn("Testar conexao", user_buttons)
         self.assertNotIn("Diagnostico da API", user_buttons)
         self.assertNotIn("Consultar propostas na API", user_buttons)
+
+    def test_embedded_widget_loads_only_when_nomus_category_is_first_selected(self):
+        settings = NomusApiSettings(False, "https://example.nomus.com.br/rest", False, None, None, None, None)
+        store = FakeNomusStore(settings)
+        page = SettingsPage(FakeSettingsService(admin=True))
+        page.nomus_settings.store = store
+
+        self.assertEqual(store.load_calls, 0)
+        page.select_category("nomus")
+        self.assertEqual(store.load_calls, 1)
+        self.assertIs(page.stack.currentWidget(), page.category_pages["nomus"])
+
+        page.select_category("appearance")
+        page.select_category("nomus")
+        self.assertEqual(store.load_calls, 1)
+
+    def test_legacy_dialog_wraps_the_same_widget(self):
+        settings = NomusApiSettings(False, "https://example.nomus.com.br/rest", False, None, None, None, None)
+        dialog = NomusApiSettingsDialog(store=FakeNomusStore(settings))
+
+        self.assertIsInstance(dialog.content, NomusIntegrationSettingsWidget)
+        cancel_buttons = [button for button in dialog.findChildren(QPushButton) if button.text() == "Cancelar"]
+        self.assertEqual(len(cancel_buttons), 1)
+
+    def test_embedded_save_preserves_key_and_settings_store_calls(self):
+        settings = NomusApiSettings(False, "https://example.nomus.com.br/rest", False, None, None, None, None)
+        store = FakeNomusStore(settings)
+        widget = NomusIntegrationSettingsWidget(store=store)
+        widget.api_key.setText("segredo-1234")
+        widget.api_key.textEdited.emit("segredo-1234")
+        widget.enabled_check.setChecked(True)
+
+        with patch("app.ui.nomus_api_settings_dialog.QMessageBox.information"):
+            widget.save()
+
+        self.assertEqual(store.saved_keys, ["segredo-1234"])
+        self.assertEqual(store.settings_calls, [{"enabled": True, "base_url": "https://example.nomus.com.br/rest"}])
+        self.assertEqual(widget.api_key.text(), "")
+        self.assertIn("1234", widget.key_status.text())
+
+    def test_remove_key_remains_pending_until_save(self):
+        settings = NomusApiSettings(False, "https://example.nomus.com.br/rest", True, "************1234", None, None, None)
+        store = FakeNomusStore(settings)
+        widget = NomusIntegrationSettingsWidget(store=store)
+
+        with patch("app.ui.nomus_api_settings_dialog.QMessageBox.question", return_value=QMessageBox.Yes):
+            widget.remove_key()
+        self.assertEqual(store.delete_calls, 0)
+        self.assertIn("marcada para remocao", widget.key_status.text())
+
+        with patch("app.ui.nomus_api_settings_dialog.QMessageBox.information"):
+            widget.save()
+        self.assertEqual(store.delete_calls, 1)
+        self.assertFalse(widget.remove_key_btn.isEnabled())
 
     def test_settings_page_no_longer_shows_sqlite_controls(self):
         page = SettingsPage(FakeSettingsService(admin=True))
@@ -140,8 +218,8 @@ class NomusApiSettingsDialogTests(unittest.TestCase):
         page = SettingsPage(FakeSettingsService(admin=True))
         buttons = {button.text(): button for button in page.findChildren(QPushButton)}
 
-        self.assertIn("Usuarios e permissoes", buttons)
-        self.assertTrue(buttons["Usuarios e permissoes"].isEnabled())
+        self.assertNotIn("Usuarios e permissoes", buttons)
+        self.assertIsNotNone(page.users_management)
 
 
 if __name__ == "__main__":

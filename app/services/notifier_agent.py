@@ -81,21 +81,18 @@ def _try_acquire_notifier_instance_lock() -> int | None:
 class NotifierState:
     total_unread: int = 0
     pending_questions: int = 0
-    new_observations: int = 0
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "NotifierState":
         return cls(
             total_unread=int(data.get("total_unread") or 0),
             pending_questions=int(data.get("pending_questions") or 0),
-            new_observations=int(data.get("new_observations") or 0),
         )
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "total_unread": self.total_unread,
             "pending_questions": self.pending_questions,
-            "new_observations": self.new_observations,
         }
 
 
@@ -123,14 +120,11 @@ def build_notification_message(previous: NotifierState, current: NotifierState) 
     """Funcao pura: decide se ha novidade desde o ciclo anterior e monta o texto do toast."""
     new_messages = max(0, current.total_unread - previous.total_unread)
     new_questions = max(0, current.pending_questions - previous.pending_questions)
-    new_observations = max(0, current.new_observations - previous.new_observations)
     parts = []
     if new_messages:
         parts.append(f"{new_messages} nova(s) mensagem(ns)")
     if new_questions:
         parts.append(f"{new_questions} pergunta(s) pendente(s)")
-    if new_observations:
-        parts.append(f"{new_observations} nova(s) observação(ões)")
     return ", ".join(parts) if parts else None
 
 
@@ -192,7 +186,6 @@ def run_cycle() -> None:
     current = NotifierState(
         total_unread=int(summary.get("total_unread") or 0),
         pending_questions=int(summary.get("pending_questions") or 0),
-        new_observations=int(summary.get("new_observations") or 0),
     )
     message = build_notification_message(previous, current)
     if message:

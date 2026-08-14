@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QButtonGroup,
     QCheckBox,
     QComboBox,
@@ -14,9 +15,12 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QRadioButton,
+    QSizePolicy,
+    QTableView,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
+    QWidget,
 )
 
 from app.ui.components.modern_button import ModernButton
@@ -175,30 +179,24 @@ class UserEditorDialog(QDialog):
             QMessageBox.warning(self, "Usuarios", str(exc))
 
 
-class UserManagerDialog(QDialog):
-    def __init__(self, service, parent=None):
+class UsersManagementWidget(QWidget):
+    """Gestao de usuarios reutilizavel sem criar uma segunda janela de listagem."""
+
+    def __init__(self, service, parent=None, *, auto_load: bool = True):
         super().__init__(parent)
         self.service = service
-        self.setWindowTitle("Usuarios e permissoes")
-        apply_large_dialog_geometry(self, parent)
-        style_dialog_from_parent(self, parent)
+        self._loaded = False
         self._build()
-        self.refresh()
+        if auto_load:
+            self.refresh()
 
     def _build(self):
         from app.models.generic_table_model import GenericTableModel
         from app.ui.components.modern_table import ProcessFilterProxy
-        from PySide6.QtWidgets import QAbstractItemView, QTableView
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(18, 18, 18, 16)
+        root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(12)
-        title = QLabel("Usuarios e controle de acesso")
-        title.setObjectName("SectionTitle")
-        root.addWidget(title)
-        subtitle = QLabel("Configure quem pode visualizar ou alterar cada area do sistema.")
-        subtitle.setObjectName("Caption")
-        root.addWidget(subtitle)
 
         self.model = GenericTableModel(
             [
@@ -220,31 +218,36 @@ class UserManagerDialog(QDialog):
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.table.doubleClicked.connect(lambda _idx: self.edit_user())
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
-        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self._apply_header_layout()
         root.addWidget(self.table, 1)
 
         actions = QHBoxLayout()
-        new = ModernButton("Novo usuario", "new", accent=True)
+        self.new_btn = ModernButton("Novo usuario", "new", accent=True)
         self.edit_btn = ModernButton("Editar usuario", "edit")
-        toggle = ModernButton("Ativar/Inativar", "status")
+        self.toggle_btn = ModernButton("Ativar/Inativar", "status")
         self.delete_btn = ModernButton("Excluir usuario", "clear")
-        close = ModernButton("Fechar", "clear")
-        new.clicked.connect(self.new_user)
+        self.new_btn.clicked.connect(self.new_user)
         self.edit_btn.clicked.connect(self.edit_user)
-        toggle.clicked.connect(self.toggle_user)
+        self.toggle_btn.clicked.connect(self.toggle_user)
         self.delete_btn.clicked.connect(self.delete_user)
-        close.clicked.connect(self.accept)
-        actions.addWidget(new)
+        actions.addWidget(self.new_btn)
         actions.addWidget(self.edit_btn)
-        actions.addWidget(toggle)
+        actions.addWidget(self.toggle_btn)
         actions.addWidget(self.delete_btn)
         actions.addStretch()
-        actions.addWidget(close)
         root.addLayout(actions)
         self.table.selectionModel().selectionChanged.connect(self._update_action_state)
         self._update_action_state()
+
+    def _apply_header_layout(self):
+        header = self.table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.Stretch)
+        header.setSectionResizeMode(2, QHeaderView.Stretch)
+        header.setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(4, QHeaderView.ResizeToContents)
 
     def selected_user_id(self):
         selected = self.table.selectionModel().selectedRows()
@@ -265,8 +268,13 @@ class UserManagerDialog(QDialog):
     def refresh(self):
         self.model.set_rows(self.service.user_rows())
         self.table.resizeColumnsToContents()
-        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self._apply_header_layout()
+        self._loaded = True
         self._update_action_state()
+
+    def ensure_loaded(self):
+        if not self._loaded:
+            self.refresh()
 
     def new_user(self):
         dialog = UserEditorDialog(self.service, None, self)
@@ -309,3 +317,61 @@ class UserManagerDialog(QDialog):
             self.refresh()
         except Exception as exc:
             QMessageBox.warning(self, "Usuarios", str(exc))
+
+
+class UserManagerDialog(QDialog):
+    """Contêiner legado que reutiliza a mesma gestao incorporada nas Configuracoes."""
+
+    def __init__(self, service, parent=None):
+        super().__init__(parent)
+        self.service = service
+        self.setWindowTitle("Usuarios e permissoes")
+        apply_large_dialog_geometry(self, parent)
+        style_dialog_from_parent(self, parent)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(18, 18, 18, 16)
+        root.setSpacing(12)
+        title = QLabel("Usuarios e controle de acesso")
+        title.setObjectName("SectionTitle")
+        root.addWidget(title)
+        subtitle = QLabel("Configure quem pode visualizar ou alterar cada area do sistema.")
+        subtitle.setObjectName("Caption")
+        root.addWidget(subtitle)
+
+        self.management = UsersManagementWidget(service, self)
+        root.addWidget(self.management, 1)
+
+        close_actions = QHBoxLayout()
+        close_actions.addStretch()
+        close = ModernButton("Fechar", "clear")
+        close.clicked.connect(self.accept)
+        close_actions.addWidget(close)
+        root.addLayout(close_actions)
+
+        # Mantem o contrato publico historico do dialogo para consumidores e testes existentes.
+        self.model = self.management.model
+        self.proxy = self.management.proxy
+        self.table = self.management.table
+        self.new_btn = self.management.new_btn
+        self.edit_btn = self.management.edit_btn
+        self.toggle_btn = self.management.toggle_btn
+        self.delete_btn = self.management.delete_btn
+
+    def selected_user_id(self):
+        return self.management.selected_user_id()
+
+    def refresh(self):
+        self.management.refresh()
+
+    def new_user(self):
+        self.management.new_user()
+
+    def edit_user(self):
+        self.management.edit_user()
+
+    def toggle_user(self):
+        self.management.toggle_user()
+
+    def delete_user(self):
+        self.management.delete_user()

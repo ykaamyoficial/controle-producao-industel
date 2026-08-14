@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from decimal import Decimal
+
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -16,13 +18,17 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.services.app_logging import get_logger
 from app.services.backend_adapter import legacy
 from app.ui.components.modern_button import ModernButton
 from app.ui.dialog_utils import apply_large_dialog_geometry, style_dialog_from_parent
-from app.ui.icons import make_icon
+from app.ui.icons import IconSize, status_icon
+from app.ui.numeric_utils import format_decimal, parse_decimal
 from app.ui.process_form_dialog import ProcessFormDialog
-from app.ui.status_dialog import StatusDialog
+from app.ui.status_dialog import open_proposal_action_center
 from app.ui.table_utils import configure_wrapping_table, item_product_code, resize_rows_to_contents
+
+log = get_logger("process_detail_dialog")
 
 
 class ProcessDetailDialog(QDialog):
@@ -53,18 +59,18 @@ class ProcessDetailDialog(QDialog):
         self.title.setStyleSheet("font-size: 18px; font-weight: 800;")
         self.subtitle = QLabel("")
         self.subtitle.setObjectName("Caption")
-        edit = ModernButton("Editar", "edit")
-        status = ModernButton("Acoes", "status", accent=True)
+        self.edit_button = ModernButton("Editar", "edit")
+        self.actions_button = ModernButton("Acoes", "status", accent=True)
         close = ModernButton("Fechar", "clear")
-        edit.clicked.connect(self.edit_process)
-        status.clicked.connect(self.change_status)
+        self.edit_button.clicked.connect(self.edit_process)
+        self.actions_button.clicked.connect(self.change_status)
         close.clicked.connect(self.accept)
         title_box.addWidget(self.title)
         title_box.addWidget(self.subtitle)
         header.addLayout(title_box, 1)
         header.addStretch()
-        header.addWidget(edit)
-        header.addWidget(status)
+        header.addWidget(self.edit_button)
+        header.addWidget(self.actions_button)
         header.addWidget(close)
         root.addWidget(header_panel)
 
@@ -161,6 +167,9 @@ class ProcessDetailDialog(QDialog):
             f"Obra/Site: {p.get('obra_site') or '-'} | Lote: {p.get('lote') or '-'} | "
             f"Prazo: {p.get('prazo_entrega') or '-'} | Situacao: {self.service.status_label(p.get('situacao_fluxo') or '')}"
         )
+        cancelled = bool(p.get("is_cancelled")) or (p.get("status_geral") or p.get("status_localizacao")) == "CANCELADA"
+        self.edit_button.setVisible(not cancelled)
+        self.actions_button.setVisible(not cancelled)
         self.load_status()
         self.load_info()
         self.load_items()
@@ -169,14 +178,26 @@ class ProcessDetailDialog(QDialog):
     def load_items(self):
         items = self.service.proposal_items(self.process_id)
         self.items_table.setRowCount(len(items))
-        total_units = sum(int(item.get("quantidade") or 1) for item in items)
-        total_weight = sum(int(item.get("quantidade") or 1) * float(item.get("peso") or 0) for item in items)
-        self.items_summary.setText(f"{len(items)} linha(s) | {total_units} unidade(s) | {total_weight:g} kg")
+        for item in items:
+            log.debug(
+                "Item recebido: id=%r quantidade=%r peso=%r",
+                item.get("id"), item.get("quantidade"), item.get("peso"),
+            )
+        total_units = sum((parse_decimal(item.get("quantidade"), "1") for item in items), Decimal("0"))
+        weighted_items = [item for item in items if parse_decimal(item.get("peso"), "0") > 0]
+        total_weight = sum(
+            (parse_decimal(item.get("quantidade"), "1") * parse_decimal(item.get("peso"), "0") for item in weighted_items),
+            Decimal("0"),
+        )
+        weight_label = f"{format_decimal(total_weight)} kg conhecidos" if weighted_items else "peso nao informado"
+        self.items_summary.setText(
+            f"{len(items)} linha(s) | {format_decimal(total_units)} unidade(s) | {weight_label} | cobertura {len(weighted_items)}/{len(items)}"
+        )
         process_names = {row.get("id"): row.get("proposta") for row in self.service.process_partials(self.process_id)}
         for row, item in enumerate(items):
             values = [
-                item.get("numero_item"), item_product_code(item), item.get("descricao"), item.get("quantidade") or 1,
-                f"{float(item.get('peso') or 0):g} kg",
+                item.get("numero_item"), item_product_code(item), item.get("descricao"), format_decimal(item.get("quantidade") or 1),
+                f"{format_decimal(item.get('peso'))} kg" if parse_decimal(item.get("peso"), "0") > 0 else "Nao informado",
                 process_names.get(item.get("processo_atual_id"), "-"),
                 "Sim" if item.get("produzido") else "Nao",
                 "Sim" if item.get("galvanizado") else "Nao",
@@ -203,7 +224,8 @@ class ProcessDetailDialog(QDialog):
             line.setContentsMargins(10, 7, 10, 7)
             line.setSpacing(8)
             icon = QLabel()
-            icon.setPixmap(make_icon(status or "status", self.service.palette["accent"], 18).pixmap(18, 18))
+            icon_size = int(IconSize.TABLE_STATUS)
+            icon.setPixmap(status_icon(status, area=area, palette=self.service.palette, size=icon_size).pixmap(icon_size, icon_size))
             icon.setFixedWidth(24)
             area_label = QLabel(area.title())
             area_label.setObjectName("Caption")
@@ -230,6 +252,14 @@ class ProcessDetailDialog(QDialog):
             ("Atualizado por", self.process.get("atualizado_por") or "-"),
             ("Atualizado em", self.process.get("atualizado_em") or "-"),
         ]
+        if self.process.get("is_cancelled") or self.process.get("status_geral") == "CANCELADA":
+            rows.extend(
+                [
+                    ("Cancelada em", self.process.get("cancelled_at") or "-"),
+                    ("Cancelada por (ID)", self.process.get("cancelled_by") or "-"),
+                    ("Motivo do cancelamento", self.process.get("cancellation_reason") or "-"),
+                ]
+            )
         for row, (label, value) in enumerate(rows):
             left = QLabel(label)
             left.setObjectName("Caption")
@@ -281,9 +311,11 @@ class ProcessDetailDialog(QDialog):
             self.load()
 
     def change_status(self):
-        area, _label, _status = self.service.current_location(self.process)
-        area = area if area in self.service.visible_areas() else None
-        dialog = StatusDialog(self.service, self.process_id, area, self)
+        # Sem area preferida: `open_proposal_action_center()` delega o
+        # auto-detect da area real para o proprio ProposalActionCenter (via
+        # `current_location()`) - este dialogo nao sabe de antemao em qual
+        # area a proposta esta, ao contrario de ProcessPage.
+        dialog = open_proposal_action_center(self.service, self.process_id, self)
         if dialog.exec():
             self.changed = True
             self.load()

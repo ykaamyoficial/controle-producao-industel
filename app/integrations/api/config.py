@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -17,6 +18,11 @@ API_CONFIG_KEY = "desktop_api"
 DEFAULT_API_BASE_URL = "http://127.0.0.1:8000"
 DEFAULT_CONNECT_TIMEOUT = 3.0
 DEFAULT_READ_TIMEOUT = 10.0
+# Fase 2 - Configuracao Central do Desktop (Secao 6): override explicito de
+# ambiente, apenas para desenvolvimento/testes/suporte tecnico. Reaproveita o
+# mesmo nome ja usado por tests/test_desktop_api_integration.py em vez de
+# introduzir uma segunda variavel para o mesmo conceito.
+API_BASE_URL_ENV_OVERRIDE = "DESKTOP_API_BASE_URL"
 
 
 class DesktopApiConfigError(ValueError):
@@ -45,19 +51,26 @@ class DesktopApiSettings:
         }
 
 
-def normalize_api_base_url(value: str, *, allow_http_local: bool = True) -> str:
+def normalize_api_base_url(value: str) -> str:
+    """Normaliza e valida a URL base da API interna do sistema (Fase 2, Secao 8).
+
+    HTTP e aceito para qualquer host (IP de LAN ou nome DNS interno), nao
+    apenas loopback: a Fase 1 estabeleceu ``http://<servidor>:8000`` como o
+    endereco oficial da rede interna, e HTTPS so chega na Fase 5. ``0.0.0.0``
+    e sempre rejeitado por ser endereco de bind do servidor, nunca um
+    endereco que o Desktop deva acessar.
+    """
     url = (value or "").strip()
     if not url:
         raise DesktopApiConfigError("Informe a URL base da API.")
     parsed = urlparse(url)
     if parsed.scheme not in {"http", "https"}:
         raise DesktopApiConfigError("A URL da API deve usar HTTP ou HTTPS.")
-    if parsed.scheme == "http":
-        host = (parsed.hostname or "").lower()
-        if not (allow_http_local and host in {"localhost", "127.0.0.1", "::1"}):
-            raise DesktopApiConfigError("Use HTTPS para servidores que nao sejam locais.")
     if not parsed.netloc:
         raise DesktopApiConfigError("Informe um host valido para a API.")
+    host = (parsed.hostname or "").lower()
+    if host == "0.0.0.0":
+        raise DesktopApiConfigError("0.0.0.0 e o endereco de bind do servidor; informe o IP ou nome real do servidor na rede.")
     path = "/" + "/".join(part for part in parsed.path.split("/") if part)
     if path == "/":
         path = ""
@@ -65,13 +78,36 @@ def normalize_api_base_url(value: str, *, allow_http_local: bool = True) -> str:
 
 
 class DesktopApiConfigStore:
-    def __init__(self, *, config_path: Path | None = None):
+    def __init__(self, *, config_path: Path | None = None, token_store: Any | None = None):
         self.config_path = Path(config_path) if config_path else get_config_path()
         self._service = get_configuration_service(self.config_path)
+        self._token_store = token_store
+
+    def _get_token_store(self) -> Any:
+        if self._token_store is None:
+            from app.integrations.api.token_store import ApiTokenStore
+
+            self._token_store = ApiTokenStore()
+        return self._token_store
+
+    def is_configured(self) -> bool:
+        """Fase 3 - Primeiro Acesso Automatico: diz se ja existe um
+        ``base_url`` persistido (por escrita explicita via ``save_settings``),
+        distinto de ``load_settings()`` sempre devolver um valor (que pode ser
+        apenas o default de fabrica em memoria, nunca gravado)."""
+        raw = dict(self._read_full_config().get(API_CONFIG_KEY) or {})
+        return bool(str(raw.get("base_url") or "").strip())
 
     def load_settings(self) -> DesktopApiSettings:
         raw = dict(self._read_full_config().get(API_CONFIG_KEY) or {})
         base_url = str(raw.get("base_url") or DEFAULT_API_BASE_URL)
+        env_override = (os.environ.get(API_BASE_URL_ENV_OVERRIDE) or "").strip()
+        if env_override:
+            log.info(
+                "Configuracao da API desktop: base_url sobrescrita por variavel de ambiente %s (uso de desenvolvimento/suporte)",
+                API_BASE_URL_ENV_OVERRIDE,
+            )
+            base_url = env_override
         return DesktopApiSettings(
             enabled=bool(raw.get("enabled", False)),
             base_url=base_url,
@@ -98,6 +134,8 @@ class DesktopApiConfigStore:
         if connect_timeout <= 0 or read_timeout <= 0:
             raise DesktopApiConfigError("Timeouts da API devem ser maiores que zero.")
 
+        previous_url = str((self._read_full_config().get(API_CONFIG_KEY) or {}).get("base_url") or "").strip()
+
         def _apply(config: dict[str, Any]) -> None:
             current = dict(config.get(API_CONFIG_KEY) or {})
             current["enabled"] = bool(enabled)
@@ -112,6 +150,16 @@ class DesktopApiConfigStore:
 
         self._service.update(_apply)
         log.info("Configuracao da API desktop atualizada | enabled=%s | base_url=%s", enabled, normalized_url)
+
+        if previous_url and normalized_url and previous_url != normalized_url:
+            # Fase 3 - Primeiro Acesso Automatico (Secao 17): uma sessao/token
+            # obtido do servidor anterior nunca pode ser reenviado ao novo host.
+            try:
+                self._get_token_store().clear()
+                log.info("Sessao local da API limpa apos troca de servidor oficial")
+            except Exception:
+                log.warning("Falha ao limpar sessao local apos troca de servidor", exc_info=True)
+
         return self.load_settings()
 
     def record_test_result(self, *, status: str, message: str) -> DesktopApiSettings:

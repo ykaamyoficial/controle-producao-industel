@@ -113,7 +113,7 @@ class ProposalImportDialogTests(unittest.TestCase):
         form = ProcessFormDialog(object())
         try:
             buttons = [button.text() for button in form.findChildren(QPushButton)]
-            self.assertIn("Conferir PDF Nomus", buttons)
+            self.assertIn("Importar PDF Nomus", buttons)
         finally:
             form.close()
 

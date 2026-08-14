@@ -23,6 +23,7 @@ class StatusBadgeColorTests(unittest.TestCase):
         self.assert_status_colors("FINALIZADO_PARCIAL", "#CA8A04", "#FACC15")
         self.assert_status_colors("ITEM_PENDENTE_FABRICACAO", "#CA8A04", "#FACC15")
         self.assert_status_colors("NOTA_FISCAL_PARCIAL", "#CA8A04", "#FACC15")
+        self.assert_status_colors("PARADO", "#CA8A04", "#FACC15")
 
     def test_completed_statuses_use_green(self):
         self.assert_status_colors("FINALIZADO", "#16A34A", "#4ADE80")
@@ -33,7 +34,6 @@ class StatusBadgeColorTests(unittest.TestCase):
         self.assert_status_colors("ALMOXARIFADO_ENTREGUE", "#0F766E", "#2DD4BF")
 
     def test_blocked_and_cancelled_statuses_use_red(self):
-        self.assert_status_colors("PARADO", "#DC2626", "#FB7185")
         self.assert_status_colors("SEM_PARAFUSOS", "#DC2626", "#FB7185")
         self.assert_status_colors("FALTA_EMITIR_NOTA_FISCAL", "#DC2626", "#FB7185")
 

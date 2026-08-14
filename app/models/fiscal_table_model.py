@@ -177,3 +177,9 @@ class FiscalProcessTableModel(QAbstractTableModel):
         if 0 <= row < len(self.rows):
             return int(self.rows[row].get("fiscal_processo_id") or 0)
         return None
+
+    def fiscal_ids_at(self, row: int) -> list[int]:
+        if 0 <= row < len(self.rows):
+            values = self.rows[row].get("fiscal_processo_ids") or [self.rows[row].get("fiscal_processo_id")]
+            return [int(value) for value in values if value]
+        return []

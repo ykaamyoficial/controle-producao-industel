@@ -3,15 +3,16 @@ from __future__ import annotations
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QCheckBox,
     QDialog,
     QFrame,
     QHBoxLayout,
-    QInputDialog,
     QLabel,
     QLineEdit,
     QMenu,
     QMessageBox,
+    QHeaderView,
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
@@ -23,10 +24,14 @@ from app.models.item_table_model import ItemTableModel
 from app.ui.background_worker import start_worker
 from app.ui.components.modern_button import ModernButton
 from app.ui.components.modern_table import ModernTable
+from app.ui.components.batch_selection import BatchSelectionController, BatchSelectionHeader
 from app.ui.components.toast_notification import ToastNotification
+from app.ui.flow_review_dialog import FlowReviewDialog
 from app.ui.galvanization_load_dialog import GalvanizationLoadDialog
+from app.ui.production_items_action_center import ProductionItemsActionCenter
 from app.ui.process_page import ProcessPage
-from app.ui.production_actions import complete_production_items, ensure_item_weights
+from app.ui.production_actions import complete_production_items
+from app.ui.production_registration_dialog import ProductionRegistrationDialog
 
 
 def _to_float(value) -> float:
@@ -55,7 +60,8 @@ def _group_by_product(rows: list[dict]) -> list[dict]:
         items = groups[key]
         representative = items[0]
         total_qty = sum(_to_float(item.get("quantidade")) for item in items)
-        total_weight = sum(_to_float(item.get("peso_total")) for item in items)
+        weighted_items = [item for item in items if _to_float(item.get("peso_total")) > 0]
+        total_weight = sum(_to_float(item.get("peso_total")) for item in weighted_items)
         proposal_ids = {item.get("api_proposal_id") for item in items}
         clients = {item.get("cliente") for item in items}
         sites = {item.get("obra_site") for item in items}
@@ -77,7 +83,8 @@ def _group_by_product(rows: list[dict]) -> list[dict]:
                 "proposta": representative.get("proposta") if len(proposal_ids) == 1 else f"{len(proposal_ids)} propostas",
                 "cliente": representative.get("cliente") if len(clients) == 1 else "-",
                 "quantidade": f"{total_qty:g}",
-                "peso_total": f"{total_weight:g}",
+                "peso_total": f"{total_weight:g}" if weighted_items else "",
+                "peso_cobertura": f"{len(weighted_items)}/{len(items)}",
                 "status_producao_item": status_value,
                 "obra_site": representative.get("obra_site") if len(sites) == 1 else "-",
                 "lote": representative.get("lote") if len(lots) == 1 else "-",
@@ -93,6 +100,10 @@ class ProductionItemsPage(QWidget):
         super().__init__(parent)
         self.service = service
         self.model = ItemTableModel(service, "PRODUCAO")
+        self.batch_selection = BatchSelectionController(id_getter=lambda row: row.get("id"), parent=self)
+        self.model.set_batch_selection_controller(self.batch_selection)
+        self.batch_selection.selection_changed.connect(self._update_batch_controls)
+        self._batch_mode = False
         self._refresh_thread = None
         self._refreshing = False
         self._flat_rows: list[dict] = []
@@ -129,12 +140,20 @@ class ProductionItemsPage(QWidget):
 
         actions = QHBoxLayout()
         actions.setSpacing(8)
-        self.register_button = ModernButton("Registrar producao (selecionados)", "status", accent=True)
-        self.register_button.clicked.connect(self.register_selected)
-        self.assemble_load_button = ModernButton("Montar carga", "load")
-        self.assemble_load_button.clicked.connect(self.open_assemble_load)
-        actions.addWidget(self.register_button)
-        actions.addWidget(self.assemble_load_button)
+        self.actions_button = ModernButton("Acoes", "status", accent=True)
+        self.actions_button.clicked.connect(self.open_action_center)
+        self.batch_actions_button = ModernButton("Acoes em lote", "batch", accent=True)
+        self.batch_actions_button.clicked.connect(self.activate_batch_selection)
+        self.cancel_batch_button = ModernButton("Cancelar selecao", "close")
+        self.cancel_batch_button.clicked.connect(self.cancel_batch_selection)
+        self.batch_count_label = QLabel("0 itens selecionados")
+        self.batch_count_label.setObjectName("Caption")
+        self.batch_count_label.setVisible(False)
+        self.cancel_batch_button.setVisible(False)
+        actions.addWidget(self.actions_button)
+        actions.addWidget(self.batch_actions_button)
+        actions.addWidget(self.batch_count_label)
+        actions.addWidget(self.cancel_batch_button)
         actions.addStretch()
         root.addLayout(actions)
 
@@ -144,6 +163,11 @@ class ProductionItemsPage(QWidget):
         root.addWidget(self.loading)
 
         self.table = ModernTable(self.service)
+        self.batch_header = BatchSelectionHeader(Qt.Horizontal, self.table)
+        self.table.setHorizontalHeader(self.batch_header)
+        self.batch_header.setFixedHeight(28)
+        self.batch_header.setSectionResizeMode(QHeaderView.Interactive)
+        self.batch_header.toggle_visible_requested.connect(self._toggle_visible_batch_rows)
         self.table.status_shortcut_enabled = False
         self.table.setToolTip("")
         self.table.setModel(self.model)
@@ -153,8 +177,9 @@ class ProductionItemsPage(QWidget):
         root.addWidget(self.table, 1)
 
         can_edit = self.service.can_edit("PRODUCAO")
-        self.register_button.setVisible(can_edit)
-        self.assemble_load_button.setVisible(self._can_mount_load())
+        visible = can_edit or self._can_mount_load()
+        self.actions_button.setVisible(visible)
+        self.batch_actions_button.setVisible(visible)
 
     def _can_mount_load(self) -> bool:
         if hasattr(self.service, "can_mount_galvanization_load"):
@@ -196,6 +221,7 @@ class ProductionItemsPage(QWidget):
         rows = _group_by_product(self._flat_rows) if self.group_by_product.isChecked() else self._flat_rows
         self.model.set_rows(rows)
         self.table.apply_column_layout()
+        self._sync_batch_header()
 
     def _on_row_double_clicked(self, index):
         row = self.model.item_row_at(index.row())
@@ -218,7 +244,8 @@ class ProductionItemsPage(QWidget):
             row_index = table.rowCount()
             table.insertRow(row_index)
             status_text = self.service.area_status_label("PRODUCAO", item.get("status_producao_item") or "")
-            values = [item.get("proposta"), item.get("cliente"), item.get("quantidade"), f"{item.get('peso_total')} kg", status_text]
+            weight = item.get("peso_total")
+            values = [item.get("proposta"), item.get("cliente"), item.get("quantidade"), f"{weight} kg" if weight not in (None, "") else "Nao informado", status_text]
             for col, value in enumerate(values):
                 cell = QTableWidgetItem(str(value if value not in (None, "") else "-"))
                 cell.setTextAlignment(Qt.AlignCenter)
@@ -236,7 +263,9 @@ class ProductionItemsPage(QWidget):
         self._refreshing = loading
         self.loading.setVisible(loading)
         self.table.setEnabled(not loading)
-        self.register_button.setEnabled(not loading and self.service.can_edit("PRODUCAO"))
+        enabled = not loading and (self.service.can_edit("PRODUCAO") or self._can_mount_load())
+        self.actions_button.setEnabled(enabled)
+        self.batch_actions_button.setEnabled(enabled)
 
     def selected_rows(self) -> list[dict]:
         """Devolve os itens reais selecionados — se a linha selecionada for
@@ -254,6 +283,109 @@ class ProductionItemsPage(QWidget):
                 rows.append(row)
         return rows
 
+    def selected_proposal_ids(self) -> list[int]:
+        proposal_ids = []
+        for row in self.selected_rows():
+            value = row.get("api_proposal_id") or row.get("processo_atual_id")
+            if value:
+                proposal_ids.append(int(value))
+        return list(dict.fromkeys(proposal_ids))
+
+    def open_action_center(self):
+        rows = self.selected_rows()
+        if self._batch_mode:
+            rows = [self.batch_selection.entity(item_id) for item_id in self.batch_selection.ordered_selected_ids]
+        if not rows:
+            ToastNotification(self.window(), "Selecione um ou mais itens.", "error")
+            return
+        dialog = ProductionItemsActionCenter(self, rows, self)
+        if dialog.exec() or dialog.changed:
+            self.cancel_batch_selection()
+
+    def activate_batch_selection(self):
+        if not (self.service.can_edit("PRODUCAO") or self._can_mount_load()):
+            ToastNotification(self.window(), "Seu usuario tem apenas visualizacao nesta area.", "error")
+            return
+        if self._batch_mode:
+            return
+        self._batch_mode = True
+        self._grouping_before_batch = self.group_by_product.isChecked()
+        if self.group_by_product.isChecked():
+            self.group_by_product.setChecked(False)
+        self.batch_selection.activate()
+        self.model.set_batch_selection_mode(True)
+        self.table.apply_column_layout()
+        self.table.clearSelection()
+        self.table.setSelectionMode(QAbstractItemView.NoSelection)
+        self.actions_button.setVisible(False)
+        self.batch_actions_button.setText("Acoes")
+        self.batch_count_label.setVisible(True)
+        self.cancel_batch_button.setVisible(True)
+        self._update_batch_controls()
+        self._sync_batch_header()
+
+    def cancel_batch_selection(self):
+        if not self._batch_mode:
+            return
+        self._batch_mode = False
+        self.batch_selection.deactivate(clear=True)
+        self.model.set_batch_selection_mode(False)
+        self.table.apply_column_layout()
+        self.table.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.batch_header.set_batch_state(False)
+        self.batch_actions_button.setText("Acoes em lote")
+        self.batch_count_label.setVisible(False)
+        self.cancel_batch_button.setVisible(False)
+        self.actions_button.setVisible(self.service.can_edit("PRODUCAO") or self._can_mount_load())
+        if getattr(self, "_grouping_before_batch", False):
+            self.group_by_product.setChecked(True)
+        self._update_batch_controls()
+
+    def _visible_batch_rows(self) -> list[dict]:
+        return [self.model.rows[row] for row in range(self.model.rowCount()) if self.model.rows[row].get("id")]
+
+    def _toggle_visible_batch_rows(self, select: bool):
+        rows = self._visible_batch_rows()
+        if select:
+            self.batch_selection.select_many(rows)
+        else:
+            self.batch_selection.deselect_many(int(row["id"]) for row in rows)
+
+    def _sync_batch_header(self):
+        if not hasattr(self, "batch_header"):
+            return
+        rows = self._visible_batch_rows() if self._batch_mode else []
+        ids = [int(row["id"]) for row in rows]
+        self.batch_header.set_batch_state(self._batch_mode, self.batch_selection.header_state(ids), has_visible_rows=bool(ids))
+
+    def _update_batch_controls(self):
+        if not self._batch_mode:
+            self._sync_batch_header()
+            return
+        count = self.batch_selection.count
+        self.batch_count_label.setText(f"{count} item(ns) selecionado(s)")
+        self.batch_actions_button.setEnabled(self.batch_selection.count > 0 and not self._refreshing)
+        self._sync_batch_header()
+
+    def open_flow_review(self, rows: list[dict] | None = None):
+        if not self.service.can_edit("PRODUCAO"):
+            ToastNotification(self.window(), "Seu usuario nao pode definir o fluxo dos itens.", "error")
+            return
+        rows = rows or self.selected_rows()
+        proposal_ids = list(dict.fromkeys(
+            int(row.get("api_proposal_id") or row.get("processo_atual_id"))
+            for row in rows if row.get("api_proposal_id") or row.get("processo_atual_id")
+        ))
+        if not proposal_ids:
+            ToastNotification(self.window(), "Selecione ao menos um item para definir o fluxo.", "error")
+            return
+        item_ids = {int(row["api_id"]) for row in rows if row.get("api_id")}
+        dialog = FlowReviewDialog(
+            self.service, proposal_ids, self, origin="ProducaoItens", preselected_item_ids=item_ids
+        )
+        if dialog.exec() or dialog.changed:
+            self.refresh()
+
     def open_context_menu(self, position):
         index = self.table.indexAt(position)
         if index.isValid() and not self.table.selectionModel().isSelected(index):
@@ -261,52 +393,100 @@ class ProductionItemsPage(QWidget):
         if not self.selected_rows():
             return
         menu = QMenu(self)
-        if self.service.can_edit("PRODUCAO"):
-            menu.addAction(QAction("Registrar producao", self, triggered=self.register_selected))
+        if self.service.can_edit("PRODUCAO") or self._can_mount_load():
+            menu.addAction(QAction("Acoes", self, triggered=self.open_action_center))
+        if (self.service.can_edit("PRODUCAO") or self._can_mount_load()) and any(
+            str(row.get("status_producao") or "").strip().upper() != "PARADO"
+            for row in self.selected_rows()
+        ):
+            menu.addAction(QAction("Acoes em lote", self, triggered=self.open_action_center))
         menu.exec(self.table.viewport().mapToGlobal(position))
 
-    def register_selected(self):
+    def register_selected(self, rows: list[dict] | None = None):
         if not self.service.can_edit("PRODUCAO"):
             ToastNotification(self.window(), "Seu usuario tem apenas visualizacao nesta area.", "error")
             return
-        rows = self.selected_rows()
+        rows = rows or self.selected_rows()
         if not rows:
             ToastNotification(self.window(), "Selecione um ou mais itens.", "error")
             return
-        if not ensure_item_weights(self, self.service, rows):
+        if any(not row.get("fluxo_definido") for row in rows):
+            QMessageBox.warning(self, "Registrar producao", "Defina primeiro o fluxo de todos os itens selecionados.")
             return
-
-        observation, ok = QInputDialog.getText(self, "Registrar producao", "Observacao (opcional):")
-        if not ok:
+        if any(str(row.get("status_producao") or "").strip().upper() == "PARADO" for row in rows):
+            QMessageBox.warning(self, "Registrar producao", "A producao selecionada esta pausada. Retome-a antes de registrar itens.")
             return
+        item_ids = {
+            int(row.get("api_id"))
+            for row in rows
+            if row.get("api_id")
+        }
+        proposal_ids = list(dict.fromkeys(
+            int(row.get("api_proposal_id") or row.get("processo_atual_id"))
+            for row in rows if row.get("api_proposal_id") or row.get("processo_atual_id")
+        ))
+        dialog = ProductionRegistrationDialog(
+            self.service,
+            proposal_ids,
+            self,
+            preselected_item_ids=item_ids,
+        )
+        if dialog.exec():
+            self.refresh()
 
-        _completed, failures = complete_production_items(self, self.service, rows, observation)
+    def start_selected(self, rows: list[dict], observation: str = ""):
+        proposal_ids = list(dict.fromkeys(
+            int(row["api_proposal_id"]) for row in rows if row.get("api_proposal_id")
+        ))
+        failures = []
+        for proposal_id in proposal_ids:
+            try:
+                # A regra de inicio e por proposta: iniciar um item inicia o
+                # restante da proposta, como no fluxo operacional existente.
+                self.service.update_status(proposal_id, "PRODUCAO", "INICIADO", observation)
+            except Exception as exc:
+                failures.append(str(exc))
         if failures:
-            QMessageBox.warning(self, "Registrar producao", "Falha em parte dos itens:\n\n" + "\n".join(failures))
+            QMessageBox.warning(self, "Iniciar producao", "Nao foi possivel iniciar toda a selecao:\n\n" + "\n".join(failures))
         else:
-            ToastNotification(self.window(), "Producao registrada com sucesso.", "success")
+            ToastNotification(self.window(), "Producao iniciada para as propostas selecionadas.", "success")
         self.refresh()
 
-    def open_assemble_load(self):
-        rows = self.selected_rows()
+    def open_assemble_load(self, rows: list[dict] | None = None, load_id: int | None = None):
+        rows = rows or self.selected_rows()
         if not rows:
-            dialog = GalvanizationLoadDialog(self.service, parent=self)
-            if dialog.exec():
-                ToastNotification(self.window(), "Carga de galvanizacao salva.", "success")
-                self.refresh()
+            QMessageBox.warning(self, "Montar carga", "Selecione um ou mais itens.")
             return
 
-        if not self.service.can_edit("PRODUCAO"):
+        if not self._can_mount_load():
             ToastNotification(self.window(), "Seu usuario tem apenas visualizacao nesta area.", "error")
+            return
+
+        if any(not row.get("fluxo_definido") for row in rows):
+            QMessageBox.warning(self, "Montar carga", "Defina primeiro o fluxo de todos os itens selecionados.")
+            return
+
+        if load_id:
+            try:
+                detail = self.service.add_items_to_galvanization_load(
+                    load_id,
+                    item_ids=[int(row["api_id"]) for row in rows if row.get("api_id")],
+                )
+            except Exception as exc:
+                QMessageBox.warning(self, "Adicionar a carga", str(exc))
+                return
+            self._show_load_addition_summary(detail)
+            self.refresh()
             return
 
         already_produced = [row for row in rows if row.get("produzido")]
         pending = [row for row in rows if not row.get("produzido")]
+        if any(str(row.get("status_producao") or "").strip().upper() == "PARADO" for row in pending):
+            QMessageBox.warning(self, "Montar carga", "Ha producao pausada na selecao. Retome-a antes de registrar e montar a carga.")
+            return
 
         newly_completed: list[dict] = []
         if pending:
-            if not ensure_item_weights(self, self.service, pending):
-                return
             newly_completed, failures = complete_production_items(self, self.service, pending, "Producao registrada automaticamente ao montar carga")
             if failures:
                 QMessageBox.warning(self, "Montar carga", "Falha ao registrar producao de parte dos itens:\n\n" + "\n".join(failures))
@@ -329,10 +509,26 @@ class ProductionItemsPage(QWidget):
                 "success",
             )
 
-        dialog = GalvanizationLoadDialog(self.service, preselected_item_ids=galvanization_item_ids or None, parent=self)
+        dialog = GalvanizationLoadDialog(
+            self.service,
+            preselected_item_ids=galvanization_item_ids or None,
+            load_id=load_id,
+            parent=self,
+        )
         if dialog.exec():
             ToastNotification(self.window(), "Carga de galvanizacao salva.", "success")
         self.refresh()
+
+    def _show_load_addition_summary(self, detail: dict):
+        added = len(detail.get("added_item_ids") or [])
+        lines = [f"{added} item(ns) adicionado(s) a carga.", "", "Resumo atualizado da carga:"]
+        for row in detail.get("proposals") or []:
+            lines.append(
+                f"- {row.get('proposal_number') or row.get('proposal_id')}: "
+                f"{row.get('item_count', 0)} item(ns) | "
+                f"saldo pendente: {row.get('pending_weight') or 0} kg"
+            )
+        QMessageBox.information(self, "Carga atualizada", "\n".join(lines))
 
 
 class ProductionAreaPage(QWidget):
@@ -353,8 +549,13 @@ class ProductionAreaPage(QWidget):
 
     def _on_tab_changed(self, _index: int):
         current = self.tabs.currentWidget()
+        if current is not self.proposals_page:
+            self.proposals_page.deactivate_transient_modes()
         if hasattr(current, "refresh"):
             current.refresh()
+
+    def deactivate_transient_modes(self):
+        self.proposals_page.deactivate_transient_modes()
 
     def refresh(self):
         current = self.tabs.currentWidget()

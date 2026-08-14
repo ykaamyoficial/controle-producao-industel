@@ -12,7 +12,7 @@ from alembic.config import Config
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 
-from api.app.core.config import EXPECTED_DATABASE_REVISION, get_settings
+from api.app.core.config import API_CONTRACT_VERSION, API_VERSION, EXPECTED_DATABASE_REVISION, get_settings
 from api.app.database.health import current_database_revision, database_check
 from api.app.database.session import dispose_engine, get_engine, get_sessionmaker
 from api.app.main import create_app
@@ -141,6 +141,18 @@ class PostgreSQLIntegrationTests(unittest.TestCase):
         self.assertEqual(response.json()["database_revision"], EXPECTED_DATABASE_REVISION)
         self.assertEqual(response.json()["database_status"], "compatible")
 
+    def test_compatibility_reports_current_state_from_real_database(self):
+        client = TestClient(create_app())
+        first = client.get("/api/v1/system/compatibility")
+        second = client.get("/api/v1/system/compatibility")
+
+        self.assertEqual(first.status_code, 200)
+        body = first.json()
+        self.assertEqual(body["database_revision"], EXPECTED_DATABASE_REVISION)
+        self.assertEqual(body["server_version"], API_VERSION)
+        self.assertEqual(body["api_contract_version"], API_CONTRACT_VERSION)
+        self.assertEqual(first.json(), second.json())
+
     def test_identity_reports_stable_instance_and_company_context(self):
         client = TestClient(create_app())
 
@@ -212,6 +224,7 @@ class PostgreSQLIntegrationTests(unittest.TestCase):
                         "galvanization_load_items",
                         "galvanization_loads",
                         "permissions",
+                        "product_catalog_entries",
                         "proposal_events",
                         "proposal_items",
                         "proposals",

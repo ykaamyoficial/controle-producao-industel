@@ -56,8 +56,13 @@ from api.app.modules.proposals.schemas import (
     PaginatedProposalResponse,
     PaginatedProductionItemResponse,
     PaginatedProductionResponse,
+    PaginatedRemanagementResponse,
     PaginatedWarehouseProposalResponse,
+    ProposalActivityItem,
     ProposalCancelRequest,
+    ProposalAdministrativeCorrectionOptionsResponse,
+    ProposalAdministrativeCorrectionPreviewRequest,
+    ProposalAdministrativeCorrectionPreviewResponse,
     ProposalAdministrativeCorrectionRequest,
     ProposalCreate,
     ProposalDetail,
@@ -71,8 +76,13 @@ from api.app.modules.proposals.schemas import (
     ProductionCompleteItemsRequest,
     ProductionItemFlowRequest,
     ProductionItemWeightsRequest,
+    ProductionPauseRequest,
     ProductionProposalDetail,
+    ProductionResumeRequest,
     ProductionStartRequest,
+    RemanagementCompatibleItem,
+    RemanagementPreview,
+    RemanagementSummary,
     WarehouseStatusRequest,
 )
 
@@ -145,6 +155,31 @@ async def administrative_correction(proposal_id: int, payload: ProposalAdministr
     return await service.administrative_correction(session, proposal_id, payload, actor, request_id=getattr(request.state, "request_id", None))
 
 
+@router.get(
+    "/proposals/{proposal_id}/administrative-corrections/options",
+    response_model=ProposalAdministrativeCorrectionOptionsResponse,
+)
+async def administrative_correction_options(
+    proposal_id: int,
+    session: AsyncSession = Depends(get_db_session),
+    _actor: User = Depends(require_superuser),
+):
+    return await service.get_allowed_administrative_corrections(session, proposal_id)
+
+
+@router.post(
+    "/proposals/{proposal_id}/administrative-corrections/preview",
+    response_model=ProposalAdministrativeCorrectionPreviewResponse,
+)
+async def administrative_correction_preview(
+    proposal_id: int,
+    payload: ProposalAdministrativeCorrectionPreviewRequest,
+    session: AsyncSession = Depends(get_db_session),
+    _actor: User = Depends(require_superuser),
+):
+    return await service.preview_administrative_correction(session, proposal_id, payload)
+
+
 @router.get("/production/proposals", response_model=PaginatedProductionResponse)
 async def list_production_proposals(
     search: str | None = Query(default=None, max_length=180),
@@ -211,6 +246,16 @@ async def get_production_detail(proposal_id: int, session: AsyncSession = Depend
 @router.post("/production/proposals/{proposal_id}/start", response_model=ProductionProposalDetail)
 async def start_production(proposal_id: int, payload: ProductionStartRequest, request: Request, session: AsyncSession = Depends(get_db_session), actor: User = Depends(require_permission(PRODUCTION_UPDATE))):
     return await service.start_production(session, proposal_id, payload, actor, request_id=getattr(request.state, "request_id", None))
+
+
+@router.post("/production/proposals/{proposal_id}/pause", response_model=ProductionProposalDetail)
+async def pause_production(proposal_id: int, payload: ProductionPauseRequest, request: Request, session: AsyncSession = Depends(get_db_session), actor: User = Depends(require_permission(PRODUCTION_UPDATE))):
+    return await service.pause_production(session, proposal_id, payload, actor, request_id=getattr(request.state, "request_id", None))
+
+
+@router.post("/production/proposals/{proposal_id}/resume", response_model=ProductionProposalDetail)
+async def resume_production(proposal_id: int, payload: ProductionResumeRequest, request: Request, session: AsyncSession = Depends(get_db_session), actor: User = Depends(require_permission(PRODUCTION_UPDATE))):
+    return await service.resume_production(session, proposal_id, payload, actor, request_id=getattr(request.state, "request_id", None))
 
 
 @router.patch("/production/proposals/{proposal_id}/item-flow", response_model=ProductionProposalDetail)
@@ -313,12 +358,32 @@ async def deliver_expedition_items(proposal_id: int, payload: ExpeditionItemsReq
     return await service.deliver_expedition_items(session, proposal_id, payload, actor, request_id=getattr(request.state, "request_id", None))
 
 
-@router.post("/shipping/proposals/{proposal_id}/remanage-items", response_model=ExpeditionProposalDetail)
-async def remanage_expedition_items(proposal_id: int, payload: ExpeditionRemanageRequest, request: Request, session: AsyncSession = Depends(get_db_session), actor: User = Depends(require_permission(EXPEDITION_UPDATE))):
-    return await service.remanage_expedition_items(session, proposal_id, payload, actor, request_id=getattr(request.state, "request_id", None))
+@router.post("/shipping/proposals/{proposal_id}/return-to-production", response_model=ExpeditionProposalDetail)
+async def return_expedition_items_to_production(proposal_id: int, payload: ExpeditionRemanageRequest, request: Request, session: AsyncSession = Depends(get_db_session), actor: User = Depends(require_permission(EXPEDITION_UPDATE))):
+    return await service.return_expedition_items_to_production(session, proposal_id, payload, actor, request_id=getattr(request.state, "request_id", None))
 
 
-@router.post("/shipping/proposals/{proposal_id}/deliver-by-remanagement", response_model=ProposalDetail)
+@router.post("/shipping/remanagements/preview", response_model=RemanagementPreview)
+async def preview_remanagement(payload: ExpeditionRemanagementDeliveryRequest, session: AsyncSession = Depends(get_db_session), _actor: User = Depends(require_permission(EXPEDITION_UPDATE))):
+    return await service.simulate_remanagement(session, payload)
+
+
+@router.post("/shipping/remanagements", response_model=RemanagementSummary, status_code=status.HTTP_201_CREATED)
+async def create_remanagement(payload: ExpeditionRemanagementDeliveryRequest, request: Request, session: AsyncSession = Depends(get_db_session), actor: User = Depends(require_permission(EXPEDITION_UPDATE))):
+    return await service.apply_remanagement(session, payload, actor, request_id=getattr(request.state, "request_id", None))
+
+
+@router.get("/shipping/remanagements/compatible-items", response_model=list[RemanagementCompatibleItem])
+async def get_compatible_remanagement_items(source_proposal_id: int = Query(gt=0), destination_proposal_id: int = Query(gt=0), session: AsyncSession = Depends(get_db_session), _actor: User = Depends(require_permission(EXPEDITION_UPDATE))):
+    return await service.compatible_remanagement_items(session, source_proposal_id, destination_proposal_id)
+
+
+@router.get("/shipping/remanagements", response_model=PaginatedRemanagementResponse)
+async def get_remanagement_history(proposal_id: int | None = Query(default=None, gt=0), limit: int = Query(50, ge=1, le=200), offset: int = Query(0, ge=0), session: AsyncSession = Depends(get_db_session), _actor: User = Depends(require_permission(EXPEDITION_VIEW))):
+    return await service.list_remanagements(session, proposal_id=proposal_id, limit=limit, offset=offset)
+
+
+@router.post("/shipping/proposals/{proposal_id}/deliver-by-remanagement", response_model=RemanagementSummary, deprecated=True)
 async def deliver_proposal_by_remanagement(proposal_id: int, payload: ExpeditionRemanagementDeliveryRequest, request: Request, session: AsyncSession = Depends(get_db_session), actor: User = Depends(require_permission(EXPEDITION_UPDATE))):
     return await service.deliver_proposal_by_remanagement(session, proposal_id, payload, actor, request_id=getattr(request.state, "request_id", None))
 
@@ -395,6 +460,21 @@ async def get_proposal_history(
     _actor: User = Depends(require_permission(PROPOSALS_VIEW)),
 ):
     return await service.list_proposal_history(session, proposal_id=proposal_id, limit=limit, offset=offset)
+
+
+@router.get("/proposals/{proposal_id}/activities", response_model=list[ProposalActivityItem])
+async def get_proposal_activities(
+    proposal_id: int,
+    area: str | None = Query(default=None, max_length=80),
+    before: datetime | None = Query(default=None),
+    limit: int = Query(50, ge=1, le=200),
+    session: AsyncSession = Depends(get_db_session),
+    _actor: User = Depends(require_permission(PROPOSALS_VIEW)),
+):
+    """Feed operacional legivel da proposta (Atividade), separado do chat —
+    reusa a mesma permissao de visualizacao da proposta ja usada pelo
+    historico de auditoria (/proposals/{id}/history)."""
+    return await service.list_proposal_activities(session, proposal_id, area=area, before=before, limit=limit)
 
 
 @router.get("/proposals/{proposal_id}", response_model=ProposalDetail)

@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from decimal import Decimal
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 
 
 class ProposalItemSummary(BaseModel):
@@ -14,8 +15,11 @@ class ProposalItemSummary(BaseModel):
     description: str | None = None
     quantity: Decimal
     unit: str | None = None
-    unit_weight: Decimal
-    total_weight: Decimal
+    unit_weight: Decimal | None = None
+    total_weight: Decimal | None = None
+    weight_source: str = "LEGACY"
+    weight_status: str = "LEGACY"
+    weight_synced_at: datetime | None = None
     produce_internally: str
     requires_galvanization: str
     flow_defined: bool
@@ -27,6 +31,8 @@ class ProposalItemSummary(BaseModel):
     version: int = 1
     active: bool = True
     notes: str | None = None
+    flow_editable: bool = True
+    flow_lock_reason: str | None = None
 
 
 class ProposalItemDetail(ProposalItemSummary):
@@ -49,6 +55,7 @@ class ProposalListItem(BaseModel):
     current_area: str | None = None
     current_status: str | None = None
     is_partial: bool
+    parent_proposal_id: int | None = None
     is_cancelled: bool
     is_completed: bool
     legacy_updated_at: datetime | None = None
@@ -72,6 +79,9 @@ class ProposalDetail(ProposalListItem):
     source_hash: str | None = None
     legacy_created_at: datetime | None = None
     notes: str | None = None
+    cancelled_at: datetime | None = None
+    cancelled_by: int | None = None
+    cancellation_reason: str | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
     items: list[ProposalItemSummary] = Field(default_factory=list)
@@ -119,6 +129,9 @@ class PartialProposalSummary(BaseModel):
     expedition_pending_weight: Decimal
     fiscal_billed_weight: Decimal
     fiscal_pending_weight: Decimal
+    weight_known_items: int = 0
+    weight_total_items: int = 0
+    weight_complete: bool = False
     partial_stage: str
     updated_at: datetime | None = None
     version: int = 1
@@ -145,6 +158,9 @@ class WarehouseProposalSummary(BaseModel):
     shipping_status: str | None = None
     total_items: int
     total_weight: Decimal
+    weight_known_items: int = 0
+    weight_total_items: int = 0
+    weight_complete: bool = False
     updated_at: datetime | None = None
     version: int = 1
 
@@ -172,6 +188,18 @@ class ProposalHistoryItem(BaseModel):
     created_at: datetime
 
 
+class ProposalActivityItem(BaseModel):
+    id: int
+    proposal_id: int
+    event_type: str
+    area: str | None = None
+    actor_name: str | None = None
+    headline: str
+    item_code: str | None = None
+    correlation_id: str | None = None
+    occurred_at: datetime
+
+
 class ProposalItemCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -180,8 +208,8 @@ class ProposalItemCreate(BaseModel):
     description: str = Field(min_length=1)
     quantity: Decimal = Field(gt=0)
     unit: str | None = Field(default="UN", max_length=40)
-    unit_weight: Decimal = Field(ge=0)
-    total_weight: Decimal = Field(ge=0)
+    unit_weight: Decimal | None = Field(default=None, ge=0)
+    total_weight: Decimal | None = Field(default=None, ge=0)
     produce_internally: bool | None = None
     non_production_reason: str | None = None
     requires_galvanization: bool | None = None
@@ -270,7 +298,12 @@ class ProposalCancelRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     version: int = Field(ge=1)
-    reason: str | None = Field(default=None, max_length=500)
+    reason: str = Field(min_length=1, max_length=1000)
+
+    @field_validator("reason", mode="before")
+    @classmethod
+    def strip_reason(cls, value):
+        return value.strip() if isinstance(value, str) else value
 
 
 class ProposalStatusChangeRequest(BaseModel):
@@ -290,19 +323,83 @@ class ProposalStatusChangeRequest(BaseModel):
 class ProposalAdministrativeCorrectionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    expected_version: int = Field(ge=1)
+    correction_type: Literal["STATE"] = "STATE"
     to_area: str = Field(max_length=80)
     to_status: str = Field(max_length=120)
-    justification: str = Field(min_length=1, max_length=1000)
+    reason: str = Field(
+        min_length=1,
+        max_length=1000,
+        validation_alias=AliasChoices("reason", "justification"),
+    )
+    idempotency_key: str = Field(min_length=8, max_length=100)
 
     @field_validator("to_area", "to_status", mode="before")
     @classmethod
     def strip_state(cls, value):
         return value.strip().upper().replace(" ", "_") if isinstance(value, str) else value
 
-    @field_validator("justification", mode="before")
+    @field_validator("reason", "idempotency_key", mode="before")
     @classmethod
-    def strip_justification(cls, value):
+    def strip_administrative_text(cls, value):
         return value.strip() if isinstance(value, str) else value
+
+
+class ProposalAdministrativeCorrectionPreviewRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expected_version: int = Field(ge=1)
+    correction_type: Literal["STATE"] = "STATE"
+    to_area: str = Field(max_length=80)
+    to_status: str = Field(max_length=120)
+
+    @field_validator("to_area", "to_status", mode="before")
+    @classmethod
+    def strip_state(cls, value):
+        return value.strip().upper().replace(" ", "_") if isinstance(value, str) else value
+
+
+class ProposalAdministrativeCorrectionBlocker(BaseModel):
+    code: str
+    message: str
+
+
+class ProposalAdministrativeCorrectionChange(BaseModel):
+    field: str
+    before: Any = None
+    after: Any = None
+
+
+class ProposalAdministrativeCorrectionOption(BaseModel):
+    target_area: str
+    target_status: str
+    label: str
+    description: str
+    changed_fields: list[str] = Field(default_factory=list)
+
+
+class ProposalAdministrativeCorrectionOptionsResponse(BaseModel):
+    proposal_id: int
+    proposal_number: str
+    version: int
+    correction_type: Literal["STATE"] = "STATE"
+    current_state: dict[str, Any]
+    facts: dict[str, Any]
+    options: list[ProposalAdministrativeCorrectionOption] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class ProposalAdministrativeCorrectionPreviewResponse(BaseModel):
+    allowed: bool
+    correction_type: Literal["STATE"] = "STATE"
+    expected_version: int
+    current_state: dict[str, Any]
+    requested_state: dict[str, Any]
+    changes: list[ProposalAdministrativeCorrectionChange] = Field(default_factory=list)
+    effects: list[str] = Field(default_factory=list)
+    unchanged_fields: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    blockers: list[ProposalAdministrativeCorrectionBlocker] = Field(default_factory=list)
 
 
 class ProposalStatusResponse(BaseModel):
@@ -325,6 +422,11 @@ class ProductionProgress(BaseModel):
     total_weight: Decimal
     produced_weight: Decimal
     pending_weight: Decimal
+    reallocated_production_pending: Decimal = Decimal("0")
+    reallocated_production_completed: Decimal = Decimal("0")
+    weight_known_items: int = 0
+    weight_total_items: int = 0
+    weight_complete: bool = False
     next_destination: str | None = None
     summary_status: str
 
@@ -369,12 +471,14 @@ class ProductionItemRow(BaseModel):
     description: str | None = None
     quantity: Decimal
     unit: str | None = None
-    unit_weight: Decimal
-    total_weight: Decimal
+    unit_weight: Decimal | None = None
+    total_weight: Decimal | None = None
     produce_internally: str
     requires_galvanization: str
     flow_defined: bool
     produced: bool
+    production_pending_quantity: Decimal = Decimal("0")
+    reallocated_production_pending: Decimal = Decimal("0")
     notes: str | None = None
     version: int
 
@@ -391,6 +495,32 @@ class ProductionStartRequest(BaseModel):
 
     version: int = Field(ge=1)
     observation: str | None = Field(default=None, max_length=500)
+
+
+class ProductionPauseRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    version: int = Field(ge=1)
+    reason: str = Field(min_length=1, max_length=1000)
+
+    @field_validator("reason", mode="before")
+    @classmethod
+    def strip_reason(cls, value):
+        return value.strip() if isinstance(value, str) else value
+
+
+class ProductionResumeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    version: int = Field(ge=1)
+    observation: str | None = Field(default=None, max_length=500)
+
+    @field_validator("observation", mode="before")
+    @classmethod
+    def strip_observation(cls, value):
+        if not isinstance(value, str):
+            return value
+        return value.strip() or None
 
 
 class ProductionItemFlowDefinition(BaseModel):
@@ -437,6 +567,8 @@ class ProductionCompleteItemsRequest(BaseModel):
 
 class GalvanizationCandidateItem(BaseModel):
     proposal_id: int
+    parent_proposal_id: int | None = None
+    partial_number: int | None = None
     proposal_number: str
     customer_name: str
     project_name: str | None = None
@@ -447,10 +579,10 @@ class GalvanizationCandidateItem(BaseModel):
     description: str
     quantity: Decimal
     available_quantity: Decimal
-    unit_weight: Decimal
-    available_weight: Decimal
+    unit_weight: Decimal | None = None
+    available_weight: Decimal | None = None
     sent_quantity: Decimal
-    sent_weight: Decimal
+    sent_weight: Decimal | None = None
     production_completed_at: datetime | None = None
     priority: str | None = None
     notes: str | None = None
@@ -469,6 +601,8 @@ class GalvanizationLoadItemSummary(BaseModel):
     id: int
     load_id: int
     proposal_id: int
+    parent_proposal_id: int | None = None
+    partial_number: int | None = None
     proposal_number: str
     customer_name: str
     proposal_item_id: int
@@ -478,10 +612,10 @@ class GalvanizationLoadItemSummary(BaseModel):
     sent_quantity: Decimal
     returned_quantity: Decimal
     pending_quantity: Decimal
-    unit_weight: Decimal
-    sent_weight: Decimal
-    returned_weight: Decimal
-    pending_weight: Decimal
+    unit_weight: Decimal | None = None
+    sent_weight: Decimal | None = None
+    returned_weight: Decimal | None = None
+    pending_weight: Decimal | None = None
     status: str
     version: int
     returned_at: datetime | None = None
@@ -496,9 +630,56 @@ class GalvanizationLoadProposalSummary(BaseModel):
     sent_weight: Decimal
     returned_weight: Decimal
     pending_weight: Decimal
+    weight_known_items: int = 0
+    weight_total_items: int = 0
     item_count: int
     pending_item_count: int
     status: str
+
+
+class GalvanizationLoadHistoryEntry(BaseModel):
+    id: int
+    event_type: str
+    load_item_id: int | None = None
+    proposal_id: int | None = None
+    proposal_item_id: int | None = None
+    actor_user_id: int | None = None
+    actor_name: str | None = None
+    request_id: str | None = None
+    from_status: str | None = None
+    to_status: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+
+
+class GalvanizationLoadReturnItemSummary(BaseModel):
+    event_id: int
+    load_item_id: int | None = None
+    proposal_id: int | None = None
+    proposal_number: str | None = None
+    proposal_item_id: int | None = None
+    item_number: str | None = None
+    product_code: str | None = None
+    description: str | None = None
+    returned_quantity: Decimal
+    unit_weight: Decimal | None = None
+    returned_weight: Decimal | None = None
+
+
+class GalvanizationLoadReturnSummary(BaseModel):
+    id: int
+    request_id: str | None = None
+    occurred_at: datetime
+    actor_user_id: int | None = None
+    actor_name: str | None = None
+    from_status: str | None = None
+    to_status: str | None = None
+    observation: str | None = None
+    return_type: str
+    returned_weight: Decimal | None = None
+    weight_known_items: int = 0
+    weight_total_items: int = 0
+    items: list[GalvanizationLoadReturnItemSummary] = Field(default_factory=list)
 
 
 class GalvanizationLoadSummary(BaseModel):
@@ -506,7 +687,14 @@ class GalvanizationLoadSummary(BaseModel):
     code: str | None = None
     driver_name: str
     max_weight: Decimal | None = None
+    load_weight: Decimal | None = None
+    load_weight_source: str | None = None
+    load_weight_updated_at: datetime | None = None
     total_weight: Decimal
+    known_items_weight: Decimal = Decimal("0")
+    weight_known_items: int = 0
+    weight_total_items: int = 0
+    weight_complete: bool = False
     status: str
     expected_return_date: date | None = None
     sent_at: datetime | None = None
@@ -533,8 +721,14 @@ class PaginatedGalvanizationLoadResponse(BaseModel):
 
 
 class GalvanizationLoadDetail(GalvanizationLoadSummary):
+    created_by_user_id: int | None = None
+    created_by_name: str | None = None
+    updated_by_user_id: int | None = None
+    updated_by_name: str | None = None
     proposals: list[GalvanizationLoadProposalSummary] = Field(default_factory=list)
     items: list[GalvanizationLoadItemSummary] = Field(default_factory=list)
+    returns: list[GalvanizationLoadReturnSummary] = Field(default_factory=list)
+    history: list[GalvanizationLoadHistoryEntry] = Field(default_factory=list)
 
 
 class GalvanizationLoadItemInput(BaseModel):
@@ -551,6 +745,8 @@ class GalvanizationLoadCreate(BaseModel):
 
     driver_name: str = Field(min_length=1, max_length=180)
     max_weight: Decimal | None = Field(default=None, gt=0)
+    load_weight: Decimal | None = Field(default=None, gt=0)
+    load_weight_source: str | None = Field(default="MANUAL", max_length=20)
     expected_return_date: date | None = None
     notes: str | None = Field(default=None, max_length=1000)
     items: list[GalvanizationLoadItemInput] = Field(min_length=1)
@@ -560,6 +756,16 @@ class GalvanizationLoadCreate(BaseModel):
     def strip_driver(cls, value):
         return value.strip() if isinstance(value, str) else value
 
+    @field_validator("load_weight_source")
+    @classmethod
+    def validate_load_weight_source(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip().upper()
+        if normalized not in {"MANUAL", "BALANCA", "GALVANIZADOR", "OUTRO"}:
+            raise ValueError("origem do peso da carga invalida")
+        return normalized
+
 
 class GalvanizationLoadUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -567,9 +773,21 @@ class GalvanizationLoadUpdate(BaseModel):
     version: int = Field(ge=1)
     driver_name: str | None = Field(default=None, min_length=1, max_length=180)
     max_weight: Decimal | None = Field(default=None, gt=0)
+    load_weight: Decimal | None = Field(default=None, gt=0)
+    load_weight_source: str | None = Field(default=None, max_length=20)
     expected_return_date: date | None = None
     notes: str | None = Field(default=None, max_length=1000)
     items: list[GalvanizationLoadItemInput] | None = None
+
+    @field_validator("load_weight_source")
+    @classmethod
+    def validate_load_weight_source(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip().upper()
+        if normalized not in {"MANUAL", "BALANCA", "GALVANIZADOR", "OUTRO"}:
+            raise ValueError("origem do peso da carga invalida")
+        return normalized
 
 
 class GalvanizationLoadVersionRequest(BaseModel):
@@ -608,8 +826,8 @@ class ExpeditionItemSummary(BaseModel):
     delivered_quantity: Decimal
     remanaged_quantity: Decimal
     pending_quantity: Decimal
-    unit_weight: Decimal
-    total_weight: Decimal
+    unit_weight: Decimal | None = None
+    total_weight: Decimal | None = None
     origin: str
     status: str
     version: int
@@ -617,6 +835,8 @@ class ExpeditionItemSummary(BaseModel):
 
 class ExpeditionProposalSummary(BaseModel):
     id: int
+    parent_proposal_id: int | None = None
+    partial_number: int | None = None
     proposal_number: str
     customer_name: str
     project_name: str | None = None
@@ -676,14 +896,95 @@ class ExpeditionRemanageRequest(BaseModel):
     reason: str = Field(min_length=1, max_length=1000)
 
 
+class RemanagementItemInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source_item_id: int = Field(gt=0)
+    destination_item_id: int = Field(gt=0)
+    quantity: Decimal = Field(gt=0)
+    source_item_version: int | None = Field(default=None, ge=1)
+    destination_item_version: int | None = Field(default=None, ge=1)
+
+
 class ExpeditionRemanagementDeliveryRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    version: int = Field(ge=1)
     source_proposal_id: int = Field(gt=0)
+    destination_proposal_id: int = Field(gt=0)
     source_version: int = Field(ge=1)
-    items: list[ExpeditionItemQuantityInput] = Field(min_length=1)
+    destination_version: int = Field(ge=1)
+    idempotency_key: str = Field(min_length=8, max_length=100)
+    items: list[RemanagementItemInput] = Field(min_length=1)
     reason: str = Field(min_length=1, max_length=1000)
+
+    @field_validator("reason", "idempotency_key", mode="before")
+    @classmethod
+    def strip_remanagement_text(cls, value):
+        return value.strip() if isinstance(value, str) else value
+
+
+class RemanagementItemBalance(BaseModel):
+    source_item_id: int
+    destination_item_id: int
+    product_code: str | None = None
+    unit: str | None = None
+    quantity: Decimal
+    max_remanageable: Decimal
+    source_ready_before: Decimal
+    source_ready_after: Decimal
+    destination_ready_before: Decimal
+    destination_ready_after: Decimal
+    destination_need_before: Decimal
+    destination_need_after: Decimal
+    destination_reallocatable_production_before: Decimal
+    destination_reallocatable_production_after: Decimal
+    production_reallocated_quantity: Decimal
+    weight_snapshot: Decimal | None = None
+
+
+class RemanagementPreview(BaseModel):
+    source_proposal_id: int
+    destination_proposal_id: int
+    source_version: int
+    destination_version: int
+    total_quantity: Decimal
+    items: list[RemanagementItemBalance]
+
+
+class RemanagementSummary(RemanagementPreview):
+    id: int
+    code: str
+    status: str
+    reason: str
+    idempotency_key: str
+    request_id: str | None = None
+    correlation_id: str | None = None
+    created_by: int | None = None
+    created_at: datetime
+
+
+class PaginatedRemanagementResponse(BaseModel):
+    items: list[RemanagementSummary]
+    total: int
+    limit: int
+    offset: int
+
+
+class RemanagementCompatibleItem(BaseModel):
+    source_item_id: int
+    destination_item_id: int
+    source_item_number: str
+    destination_item_number: str
+    product_code: str | None = None
+    description: str
+    unit: str | None = None
+    source_item_version: int
+    destination_item_version: int
+    source_ready_available: Decimal
+    destination_need: Decimal
+    destination_reallocatable_production: Decimal
+    max_remanageable: Decimal
+    weight_snapshot: Decimal | None = None
 
 
 class FiscalAction(BaseModel):
@@ -704,9 +1005,9 @@ class FiscalItemSummary(BaseModel):
     total_quantity: Decimal
     billed_quantity: Decimal
     pending_quantity: Decimal
-    total_weight: Decimal
+    total_weight: Decimal | None = None
     billed_weight: Decimal
-    pending_weight: Decimal
+    pending_weight: Decimal | None = None
     status: str
     version: int
 
@@ -718,7 +1019,7 @@ class FiscalInvoiceItemSummary(BaseModel):
     proposal_item_id: int
     item_number: str
     quantity: Decimal
-    weight: Decimal
+    weight: Decimal | None = None
     active: bool
     cancelled_at: datetime | None = None
     cancel_reason: str | None = None
@@ -756,6 +1057,8 @@ class FiscalEventSummary(BaseModel):
 class FiscalRecordSummary(BaseModel):
     id: int
     proposal_id: int
+    parent_proposal_id: int | None = None
+    partial_number: int | None = None
     proposal_number: str
     customer_name: str
     project_name: str | None = None
@@ -775,6 +1078,9 @@ class FiscalRecordSummary(BaseModel):
     total_weight: Decimal
     billed_weight: Decimal
     pending_weight: Decimal
+    weight_known_items: int = 0
+    weight_total_items: int = 0
+    weight_complete: bool = False
     critical_pending: bool = False
     older_than_7_days: bool = False
     actions: list[FiscalAction] = Field(default_factory=list)

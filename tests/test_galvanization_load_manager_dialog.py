@@ -7,11 +7,10 @@ from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication, QMessageBox, QTabWidget
+from PySide6.QtWidgets import QApplication, QMessageBox
 
 from app.services.backend_adapter import OFFICIAL_COLOR_PALETTES
-from app.ui.galvanization_load_dialog import GalvanizationLoadDetailsDialog, GalvanizationLoadManagerDialog, GalvanizationReturnDialog
+from app.ui.galvanization_load_dialog import GalvanizationLoadManagerDialog, GalvanizationReturnDialog
 
 
 class FakeGalvanizationLoadService:
@@ -73,8 +72,27 @@ class FakeGalvanizationLoadService:
                     "parcial": 0,
                 },
             ],
-            2: [],
+            2: [
+                {
+                    "processo_id": 201,
+                    "proposta": "CP00201",
+                    "cliente": "MNS",
+                    "peso_enviado": 0,
+                    "peso_retornado": 0,
+                    "peso_pendente": 0,
+                },
+            ],
             3: [],
+            4: [
+                {
+                    "processo_id": 401,
+                    "proposta": "CP00401",
+                    "cliente": "MNS",
+                    "peso_enviado": 0,
+                    "peso_retornado": 0,
+                    "peso_pendente": 0,
+                },
+            ],
         }
         self.items = {
             (1, 101): [
@@ -141,10 +159,31 @@ class FakeGalvanizationLoadService:
             ],
         }
         self.return_items = {
+            (2, 201): [
+                {
+                    "detail_id": 2011,
+                    "id": 2011,
+                    "processo_id": 201,
+                    "proposta_item_id": 20011,
+                    "proposta": "CP00201",
+                    "cliente": "MNS",
+                    "numero_item": "1",
+                    "codigo_produto": "COD-Z",
+                    "descricao": "Item unico da proposta",
+                    "peso_unitario": None,
+                    "quantidade_enviada": 100,
+                    "quantidade_retornada": 0,
+                    "quantidade_pendente": 100,
+                    "peso_pendente": 100,
+                    "status_retorno": "AGUARDANDO_RETORNO",
+                },
+            ],
             (4, 401): [
                 {
                     "id": 9001,
                     "processo_id": 401,
+                    "proposta": "CP00401",
+                    "cliente": "MNS",
                     "numero_item": "1",
                     "codigo_produto": "COD-A",
                     "descricao": "Item A",
@@ -157,6 +196,8 @@ class FakeGalvanizationLoadService:
                 {
                     "id": 9002,
                     "processo_id": 401,
+                    "proposta": "CP00401",
+                    "cliente": "MNS",
                     "numero_item": "2",
                     "codigo_produto": "COD-B",
                     "descricao": "Item B",
@@ -255,40 +296,157 @@ class GalvanizationLoadManagerDialogTests(unittest.TestCase):
         self.assertEqual(opened_menu, [0])
         self.assertEqual(opened_details, [2])
 
-    def test_details_dialog_has_tabs_proposals_and_consolidated_items(self):
-        dialog = GalvanizationLoadDetailsDialog(self.service, 1)
-        tabs = dialog.findChild(QTabWidget)
-
-        self.assertEqual([tabs.tabText(index) for index in range(tabs.count())], ["Resumo", "Propostas", "Itens da carga"])
-        self.assertEqual(dialog.proposals_table.rowCount(), 2)
-        self.assertEqual(dialog.proposal_items_table.rowCount(), 2)
-        dialog.proposals_table.selectRow(1)
-        dialog._fill_selected_proposal_items()
-        self.assertEqual(dialog.proposal_items_table.rowCount(), 1)
-        self.assertEqual(dialog.all_items_table.rowCount(), 3)
-
-    def test_return_dialog_selects_whole_proposal_from_row_click_even_without_items(self):
+    def test_return_dialog_defaults_to_full_pending_balance_of_the_whole_load(self):
         dialog = GalvanizationReturnDialog(self.service, 2)
 
-        dialog.handle_proposal_click(0, 1)
-        with patch.object(QMessageBox, "question", return_value=QMessageBox.Yes), patch.object(QMessageBox, "information"):
-            dialog.confirm_return()
+        # Sem nenhum ajuste manual, "carga completa" ja vem com o saldo
+        # pendente integral pronto para retornar - nao existe mais um passo
+        # de selecao por checkbox.
+        with patch.object(QMessageBox, "information"):
+            dialog._confirm()
 
         self.assertEqual(len(self.service.registered_returns), 1)
         _load_id, items, _observation = self.service.registered_returns[0]
-        self.assertEqual(items, [{"carga_item_id": 201, "processo_id": 201, "peso_retornado": 100.0, "proposal_level": True}])
+        self.assertEqual(items, [{"detail_id": 2011, "quantidade_retornada": 100.0}])
 
-    def test_return_dialog_item_selection_overrides_whole_proposal_selection(self):
+    def test_editing_one_item_down_to_zero_excludes_it_from_the_payload(self):
         dialog = GalvanizationReturnDialog(self.service, 4)
 
-        dialog.handle_proposal_click(0, 1)
-        dialog.open_items_from_row(0)
-        dialog.items_table.item(1, 0).setCheckState(Qt.Checked)
-        with patch.object(QMessageBox, "question", return_value=QMessageBox.Yes), patch.object(QMessageBox, "information"):
-            dialog.confirm_return()
+        # Duas unidades pendentes do item 9001, mas so o item 9002 deve
+        # retornar agora - equivalente ao antigo "selecionar so um item",
+        # so que via edicao de quantidade (0 = nao retorna desta vez).
+        dialog.cart[9001]["return_quantity"] = 0
+        dialog.refresh()
+        with patch.object(QMessageBox, "information"):
+            dialog._confirm()
 
         _load_id, items, _observation = self.service.registered_returns[0]
-        self.assertEqual(items, [{"detail_id": 9002, "processo_id": 401, "quantidade_retornada": 1.0}])
+        self.assertEqual(items, [{"detail_id": 9002, "quantidade_retornada": 1.0}])
+
+
+class _MultiLoadGalvanizationLoadService(FakeGalvanizationLoadService):
+    """Estende o fixture base com uma segunda carga (id 6) cujo item
+    compartilha o codigo COD-A com a carga 4, para testar que "Itens do
+    retorno" continua agrupando por codigo mesmo quando o retorno abrange
+    mais de uma carga."""
+
+    def __init__(self):
+        super().__init__()
+        self.proposals[6] = [
+            {
+                "processo_id": 601, "proposta": "CP00601", "cliente": "XPTO",
+                "peso_enviado": 0, "peso_retornado": 0, "peso_pendente": 0,
+            },
+        ]
+        self.return_items[(6, 601)] = [
+            {
+                "id": 9101,
+                "processo_id": 601,
+                "proposta": "CP00601",
+                "cliente": "XPTO",
+                "numero_item": "1",
+                "codigo_produto": "COD-A",
+                "descricao": "Item A",
+                "quantidade_enviada": 3,
+                "quantidade_retornada": 0,
+                "quantidade_pendente": 3,
+                "peso_pendente": 30,
+                "status_retorno": "AGUARDANDO_RETORNO",
+            },
+        ]
+
+
+class GalvanizationReturnDialogMultiLoadTests(unittest.TestCase):
+    """O retorno pode abranger mais de uma carga ao mesmo tempo
+    (`extra_load_ids`) - uma unica tela, com uma coluna "Carga" na tabela de
+    propostas para diferenciar, "Itens do retorno" continua agrupando por
+    codigo sem alteracao, e a confirmacao registra o retorno uma vez para
+    cada carga envolvida (o endpoint continua sendo por carga)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication([])
+
+    def test_cart_combines_both_loads_tagged_with_their_load_id(self):
+        service = FakeGalvanizationLoadService()
+        dialog = GalvanizationReturnDialog(service, 2, extra_load_ids=[4])
+        self.assertEqual(dialog.load_ids, [2, 4])
+        self.assertEqual({entry["load_id"] for entry in dialog.cart.values()}, {2, 4})
+        self.assertEqual(dialog.cart[2011]["load_id"], 2)
+        self.assertEqual(dialog.cart[9001]["load_id"], 4)
+        self.assertEqual(dialog.cart[9002]["load_id"], 4)
+
+    def test_proposals_table_has_a_carga_column_showing_the_right_load(self):
+        service = FakeGalvanizationLoadService()
+        dialog = GalvanizationReturnDialog(service, 2, extra_load_ids=[4])
+        headers = [
+            dialog.proposals_table.horizontalHeaderItem(i).text()
+            for i in range(dialog.proposals_table.columnCount())
+        ]
+        self.assertIn("Carga", headers)
+        carga_col = headers.index("Carga")
+        proposta_col = headers.index("Proposta")
+        rows = {
+            dialog.proposals_table.item(row, proposta_col).text(): dialog.proposals_table.item(row, carga_col).text()
+            for row in range(dialog.proposals_table.rowCount())
+        }
+        self.assertEqual(rows, {"CP00201": "#2", "CP00401": "#4"})
+
+    def test_single_load_still_works_without_extra_load_ids(self):
+        service = FakeGalvanizationLoadService()
+        dialog = GalvanizationReturnDialog(service, 2)
+        self.assertEqual(dialog.load_ids, [2])
+        headers = [
+            dialog.proposals_table.horizontalHeaderItem(i).text()
+            for i in range(dialog.proposals_table.columnCount())
+        ]
+        self.assertIn("Carga", headers)
+
+    def test_items_tab_still_groups_by_product_code_across_loads(self):
+        service = _MultiLoadGalvanizationLoadService()
+        dialog = GalvanizationReturnDialog(service, 4, extra_load_ids=[6])
+        groups = dialog._grouped_items()
+        coda_groups = [group for group in groups if group["code"] == "COD-A"]
+        self.assertEqual(len(coda_groups), 1)
+        self.assertEqual(set(coda_groups[0]["detail_ids"]), {9001, 9101})
+
+    def test_confirm_registers_return_once_per_load_with_its_own_items(self):
+        service = FakeGalvanizationLoadService()
+        dialog = GalvanizationReturnDialog(service, 2, extra_load_ids=[4])
+        with patch.object(QMessageBox, "information"):
+            dialog._confirm()
+        self.assertEqual(len(service.registered_returns), 2)
+        by_load = {load_id: items for load_id, items, _observation in service.registered_returns}
+        self.assertEqual(by_load[2], [{"detail_id": 2011, "quantidade_retornada": 100.0}])
+        self.assertEqual(
+            sorted(by_load[4], key=lambda item: item["detail_id"]),
+            [
+                {"detail_id": 9001, "quantidade_retornada": 2.0},
+                {"detail_id": 9002, "quantidade_retornada": 1.0},
+            ],
+        )
+        self.assertTrue(dialog.result())
+
+    def test_partial_failure_keeps_successful_load_and_does_not_accept(self):
+        service = FakeGalvanizationLoadService()
+        original_register = service.register_galvanization_partial_return
+
+        def flaky_register(load_id, items, observation):
+            if load_id == 4:
+                raise RuntimeError("carga fechada por outro usuario")
+            return original_register(load_id, items, observation)
+
+        service.register_galvanization_partial_return = flaky_register
+        dialog = GalvanizationReturnDialog(service, 2, extra_load_ids=[4])
+        with patch.object(QMessageBox, "critical") as critical:
+            dialog._confirm()
+        critical.assert_called_once()
+        self.assertFalse(dialog.result())
+        # A carga 2 (bem sucedida) ja foi gravada - nao e desfeita so porque
+        # a carga 4 falhou depois, ja que cada carga e uma chamada
+        # independente ao backend.
+        self.assertEqual(len(service.registered_returns), 1)
+        self.assertEqual(service.registered_returns[0][0], 2)
 
 
 if __name__ == "__main__":

@@ -1,14 +1,20 @@
 from __future__ import annotations
 
+from decimal import Decimal
+
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QAbstractItemView, QDialog, QDoubleSpinBox, QFrame, QHBoxLayout, QLabel, QMessageBox,
+    QAbstractItemView, QDialog, QHBoxLayout, QLabel, QMessageBox,
     QTableWidget, QTableWidgetItem, QVBoxLayout,
 )
 
+from app.services.app_logging import get_logger
 from app.ui.components.modern_button import ModernButton
 from app.ui.dialog_utils import apply_large_dialog_geometry, style_dialog_from_parent
+from app.ui.numeric_utils import format_decimal, parse_decimal, parse_whole_quantity
 from app.ui.table_utils import configure_wrapping_table, item_product_code, resize_rows_to_contents
+
+log = get_logger("item_selection_dialog")
 
 
 class ItemSelectionDialog(QDialog):
@@ -19,9 +25,7 @@ class ItemSelectionDialog(QDialog):
         self.mode = mode
         self.allow_full_selection = allow_full_selection
         self.selected_ids: list[int] = []
-        self.manual_weight: float | None = None
         titles = {
-            "production": "Selecionar itens produzidos",
             "delivery": "Selecionar itens entregues",
             "remanagement": "Selecionar itens para remanejamento",
         }
@@ -36,7 +40,6 @@ class ItemSelectionDialog(QDialog):
         root.setContentsMargins(22, 20, 22, 18)
         root.setSpacing(12)
         titles = {
-            "production": "Itens produzidos nesta parcial",
             "delivery": "Itens entregues ao cliente",
             "remanagement": "Itens prontos na Expedicao para remanejar",
         }
@@ -60,21 +63,6 @@ class ItemSelectionDialog(QDialog):
         self.table.itemChanged.connect(self._update_summary)
         self.summary = QLabel("0 item(ns) | 0 kg")
         self.summary.setStyleSheet("font-weight: 700;")
-        self.manual_weight_frame = QFrame()
-        self.manual_weight_frame.setObjectName("Panel")
-        manual_layout = QHBoxLayout(self.manual_weight_frame)
-        manual_layout.setContentsMargins(12, 8, 12, 8)
-        manual_label = QLabel("Peso total produzido nesta parcial")
-        manual_label.setStyleSheet("font-weight: 700;")
-        self.manual_weight_input = QDoubleSpinBox()
-        self.manual_weight_input.setRange(0, 999999999)
-        self.manual_weight_input.setDecimals(2)
-        self.manual_weight_input.setSuffix(" kg")
-        self.manual_weight_input.setMinimumWidth(160)
-        manual_layout.addWidget(manual_label)
-        manual_layout.addStretch()
-        manual_layout.addWidget(self.manual_weight_input)
-        self.manual_weight_frame.setVisible(False)
         buttons = QHBoxLayout()
         select_all = ModernButton("Selecionar todos", "status")
         clear = ModernButton("Limpar selecao", "clear")
@@ -93,18 +81,21 @@ class ItemSelectionDialog(QDialog):
         root.addWidget(caption)
         root.addWidget(self.table)
         root.addWidget(self.summary)
-        root.addWidget(self.manual_weight_frame)
         root.addLayout(buttons)
 
     def _load(self):
         rows = self.service.proposal_items(
             self.process_id,
-            pending_production=self.mode == "production",
             pending_delivery=self.mode in ("delivery", "remanagement"),
         )
         self.table.blockSignals(True)
         self.table.setRowCount(len(rows))
+        non_integer_items = []
         for row, item in enumerate(rows):
+            log.debug(
+                "Quantidade recebida para selecao de itens: item_id=%r quantidade=%r peso=%r",
+                item.get("id"), item.get("quantidade"), item.get("peso"),
+            )
             check = QTableWidgetItem()
             check.setFlags(Qt.ItemIsEnabled | Qt.ItemIsUserCheckable)
             check.setCheckState(Qt.Unchecked)
@@ -117,18 +108,35 @@ class ItemSelectionDialog(QDialog):
             description = QTableWidgetItem(item.get("descricao") or "")
             description.setTextAlignment(Qt.AlignTop | Qt.AlignLeft)
             self.table.setItem(row, 3, description)
-            quantity = int(item.get("quantidade") or 1)
-            quantity_cell = QTableWidgetItem(str(quantity))
+            quantity = parse_decimal(item.get("quantidade"), "1")
+            try:
+                parse_whole_quantity(quantity, default=1)
+            except ValueError:
+                non_integer_items.append(item.get("numero_item") or item.get("id"))
+                log.warning(
+                    "Quantidade fracionada recebida para item_id=%r quantidade=%r",
+                    item.get("id"), item.get("quantidade"),
+                )
+            quantity_cell = QTableWidgetItem(format_decimal(quantity))
             quantity_cell.setTextAlignment(Qt.AlignCenter)
+            quantity_cell.setData(Qt.UserRole, str(quantity))
             self.table.setItem(row, 4, quantity_cell)
-            total_weight = quantity * float(item.get("peso") or 0)
-            weight = QTableWidgetItem(f"{total_weight:g}")
+            unit_weight = parse_decimal(item.get("peso"), "0")
+            total_weight = float(quantity * unit_weight) if unit_weight > 0 else None
+            weight = QTableWidgetItem(f"{total_weight:g}" if total_weight is not None else "Nao informado")
             weight.setTextAlignment(Qt.AlignCenter)
             weight.setData(Qt.UserRole, total_weight)
             self.table.setItem(row, 5, weight)
         self.table.blockSignals(False)
         resize_rows_to_contents(self.table)
         self._update_summary()
+        if non_integer_items:
+            QMessageBox.warning(
+                self,
+                "Selecionar itens",
+                "Os seguintes itens possuem quantidade fracionada, o que nao e suportado: "
+                + ", ".join(str(value) for value in non_integer_items),
+            )
 
     def _set_all(self, checked: bool):
         self.table.blockSignals(True)
@@ -139,21 +147,17 @@ class ItemSelectionDialog(QDialog):
         self._update_summary()
 
     def _update_summary(self, *_args):
-        count = 0
+        count = Decimal("0")
         weight = 0.0
         missing_weight = False
         for row in range(self.table.rowCount()):
             if self.table.item(row, 0).checkState() == Qt.Checked:
-                count += int(self.table.item(row, 4).text() or 0)
+                count += parse_decimal(self.table.item(row, 4).data(Qt.UserRole), "0")
                 row_weight = float(self.table.item(row, 5).data(Qt.UserRole) or 0)
                 weight += row_weight
                 missing_weight = missing_weight or row_weight <= 0
-        request_manual_weight = self.mode == "production" and count > 0 and missing_weight
-        self.manual_weight_frame.setVisible(request_manual_weight)
-        if request_manual_weight:
-            self.summary.setText(f"{count} item(ns) | informe o peso total produzido")
-        else:
-            self.summary.setText(f"{count} item(ns) | {weight:g} kg")
+        count_text = format_decimal(count)
+        self.summary.setText(f"{count_text} item(ns) | {weight:g} kg" + (" | ha item(ns) sem peso" if missing_weight else ""))
 
     def _confirm(self):
         self.selected_ids = [
@@ -164,17 +168,6 @@ class ItemSelectionDialog(QDialog):
         if not self.selected_ids:
             QMessageBox.warning(self, "Selecionar itens", "Selecione pelo menos um item.")
             return
-        selected_missing_weight = any(
-            self.table.item(row, 0).checkState() == Qt.Checked
-            and float(self.table.item(row, 5).data(Qt.UserRole) or 0) <= 0
-            for row in range(self.table.rowCount())
-        )
-        if self.mode == "production" and selected_missing_weight:
-            self.manual_weight = float(self.manual_weight_input.value())
-            if self.manual_weight <= 0:
-                QMessageBox.warning(self, "Peso produzido", "Informe o peso total produzido nesta parcial.")
-                self.manual_weight_input.setFocus()
-                return
         if self.mode == "delivery" and not self.allow_full_selection and len(self.selected_ids) == self.table.rowCount():
             QMessageBox.warning(
                 self,

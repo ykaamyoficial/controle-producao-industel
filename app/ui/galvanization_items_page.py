@@ -23,10 +23,12 @@ from app.ui.components.modern_button import ModernButton
 from app.ui.components.modern_table import ModernTable
 from app.ui.components.toast_notification import ToastNotification
 from app.ui.galvanization_load_dialog import (
-    GalvanizationLoadDetailsDialog,
     GalvanizationLoadDialog,
     GalvanizationReturnDialog,
 )
+from app.ui.galvanization_load_details_dialog import GalvanizationLoadDetailsDialog
+from app.ui.action_center.handlers.galvanization import resolve_return_load_ids
+from app.ui.action_center.load_action_center import GalvanizationLoadActionCenter
 from app.ui.process_page import ProcessPage
 
 
@@ -73,7 +75,10 @@ class GalvanizationItemsPage(QWidget):
         actions.setSpacing(8)
         self.assemble_load_button = ModernButton("Montar carga", "load", accent=True)
         self.assemble_load_button.clicked.connect(self.open_assemble_load)
+        self.register_return_button = ModernButton("Registrar retorno", "status")
+        self.register_return_button.clicked.connect(self.open_register_return)
         actions.addWidget(self.assemble_load_button)
+        actions.addWidget(self.register_return_button)
         actions.addStretch()
         root.addLayout(actions)
 
@@ -89,6 +94,7 @@ class GalvanizationItemsPage(QWidget):
         root.addWidget(self.table, 1)
 
         self.assemble_load_button.setVisible(self._can_mount_load())
+        self.register_return_button.setVisible(self._can_mount_load())
 
     def _can_mount_load(self) -> bool:
         if hasattr(self.service, "can_mount_galvanization_load"):
@@ -105,9 +111,38 @@ class GalvanizationItemsPage(QWidget):
 
     def open_assemble_load(self):
         item_ids = [item_id for item_id in self.selected_item_ids() if item_id]
-        dialog = GalvanizationLoadDialog(self.service, preselected_item_ids=item_ids or None, parent=self)
+        if not item_ids:
+            QMessageBox.warning(self, "Montar carga", "Selecione um ou mais itens.")
+            return
+        dialog = GalvanizationLoadDialog(self.service, preselected_item_ids=item_ids, parent=self)
         if dialog.exec():
             ToastNotification(self.window(), "Carga de galvanizacao salva.", "success")
+            self.refresh()
+
+    def open_register_return(self):
+        rows = [
+            self.model.item_row_at(index.row())
+            for index in self.table.selectionModel().selectedRows()
+        ]
+        rows = [row for row in rows if row and row.get("api_id")]
+        if not rows:
+            QMessageBox.warning(self, "Registrar retorno", "Selecione um ou mais itens.")
+            return
+        item_ids = [int(row["api_id"]) for row in rows]
+        proposal_ids = list(dict.fromkeys(int(row["api_proposal_id"]) for row in rows if row.get("api_proposal_id")))
+        load_ids = resolve_return_load_ids(self.service, proposal_ids, self)
+        if not load_ids:
+            return
+        # Os itens selecionados podem pertencer a cargas diferentes de
+        # proposito - registra o retorno carga por carga; cada dialogo ja
+        # se limita sozinho aos itens que pertencem aquela carga.
+        any_changed = False
+        for load_id in load_ids:
+            dialog = GalvanizationReturnDialog(self.service, load_id, self, proposal_ids=proposal_ids, item_ids=item_ids)
+            if dialog.exec():
+                any_changed = True
+        if any_changed:
+            ToastNotification(self.window(), "Retorno da galvanizacao registrado.", "success")
             self.refresh()
 
     def clear(self):
@@ -192,14 +227,6 @@ class GalvanizationLoadsPage(QWidget):
         fl.addWidget(clear_btn)
         root.addWidget(filters)
 
-        actions = QHBoxLayout()
-        actions.setSpacing(8)
-        self.assemble_load_button = ModernButton("Montar carga", "load", accent=True)
-        self.assemble_load_button.clicked.connect(self.open_assemble_load)
-        actions.addWidget(self.assemble_load_button)
-        actions.addStretch()
-        root.addLayout(actions)
-
         self.loading = QLabel("Carregando...")
         self.loading.setObjectName("Caption")
         self.loading.setVisible(False)
@@ -212,16 +239,8 @@ class GalvanizationLoadsPage(QWidget):
         self.table.status_shortcut_requested.connect(self.open_actions_for_load)
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self.open_context_menu)
-        self.table.doubleClicked.connect(lambda *_args: self.show_details())
+        self.table.doubleClicked.connect(self._open_details_from_index)
         root.addWidget(self.table, 1)
-
-        self.assemble_load_button.setVisible(self._can_edit())
-
-    def open_assemble_load(self):
-        dialog = GalvanizationLoadDialog(self.service, parent=self)
-        if dialog.exec():
-            ToastNotification(self.window(), "Carga de galvanizacao salva.", "success")
-            self.refresh()
 
     def clear(self):
         self.search.clear()
@@ -271,11 +290,6 @@ class GalvanizationLoadsPage(QWidget):
         self.loading.setVisible(loading)
         self.table.setEnabled(not loading)
 
-    def _can_edit(self) -> bool:
-        if hasattr(self.service, "can_mount_galvanization_load"):
-            return bool(self.service.can_mount_galvanization_load())
-        return bool(self.service.can_edit("GALVANIZACAO"))
-
     def selected_load_id(self) -> int | None:
         return self.table.selected_process_id()
 
@@ -292,23 +306,25 @@ class GalvanizationLoadsPage(QWidget):
                 return
 
     def _menu_for_load(self, load_id: int) -> QMenu:
-        row = next((candidate for candidate in self.model.rows if int(candidate.get("id") or 0) == load_id), None)
-        status = (row or {}).get("status") or ""
+        """Compatibilidade para integrações antigas; a UI usa a Central visual."""
         menu = QMenu(self)
-        menu.addAction(QAction("Ver detalhes", self, triggered=self.show_details))
-        if self._can_edit() and status == "AGUARDANDO_LIBERACAO":
-            menu.addAction(QAction("Liberar carga", self, triggered=self.release_selected))
-        if self._can_edit() and status in ("LIBERADA_PARA_ENVIO", "RETORNO_PARCIAL"):
-            menu.addAction(QAction("Registrar retorno", self, triggered=self.return_selected))
+        details = QAction("Ver detalhes", self)
+        details.triggered.connect(lambda _checked=False: self.open_load_details(load_id))
+        menu.addAction(details)
         return menu
 
     def open_actions_for_load(self, load_id: int):
         self._select_load(load_id)
-        row_index = next((index for index, row in enumerate(self.model.rows) if int(row.get("id") or 0) == load_id), None)
-        if row_index is None:
+        row = next((candidate for candidate in self.model.rows if int(candidate.get("id") or 0) == load_id), None)
+        if row is None:
             return
-        rect = self.table.visualRect(self.table.model().index(row_index, 0))
-        self._menu_for_load(load_id).exec(self.table.viewport().mapToGlobal(rect.bottomLeft()))
+        handlers = {
+            "OPEN_LOAD_DETAILS": lambda: self.open_load_details(load_id),
+            "EDIT_LOAD": lambda: self.edit_load(load_id),
+            "RELEASE_LOAD": lambda: self.release_load(load_id),
+            "REGISTER_RETURN": lambda: self.return_load(load_id),
+        }
+        GalvanizationLoadActionCenter(self.service, row, handlers, self).exec()
 
     def open_context_menu(self, position):
         index = self.table.indexAt(position)
@@ -317,37 +333,71 @@ class GalvanizationLoadsPage(QWidget):
         load_id = self.selected_load_id()
         if not load_id:
             return
-        self._menu_for_load(load_id).exec(self.table.viewport().mapToGlobal(position))
+        self.open_actions_for_load(load_id)
+
+    def _open_details_from_index(self, index):
+        if not index or not index.isValid():
+            return
+        row = self.model.load_row_at(index.row())
+        load_id = int((row or {}).get("id") or 0)
+        if load_id:
+            self.open_load_details(load_id)
 
     def show_details(self):
         load_id = self.selected_load_id()
         if not load_id:
             ToastNotification(self.window(), "Selecione uma carga.", "error")
             return
-        dialog = GalvanizationLoadDetailsDialog(self.service, load_id, parent=self)
-        dialog.exec()
+        self.open_load_details(load_id)
+
+    def open_load_details(self, load_id: int) -> bool:
+        try:
+            dialog = GalvanizationLoadDetailsDialog(self.service, int(load_id), parent=self)
+            dialog.exec()
+        except Exception as exc:
+            QMessageBox.critical(self, "Detalhes da carga", f"Não foi possível abrir a carga #{load_id}.\n{exc}")
+            return False
+        if dialog.changed:
+            self.refresh()
+        return bool(dialog.changed)
+
+    def edit_load(self, load_id: int) -> bool:
+        dialog = GalvanizationLoadDialog(self.service, load_id=load_id, parent=self)
+        changed = bool(dialog.exec())
+        if changed:
+            self.refresh()
+        return changed
 
     def release_selected(self):
         load_id = self.selected_load_id()
         if not load_id:
             return
+        self.release_load(load_id)
+
+    def release_load(self, load_id: int) -> bool:
         if QMessageBox.question(self, "Liberar carga", f"Liberar a carga {load_id} para envio?") != QMessageBox.Yes:
-            return
+            return False
         try:
             self.service.release_galvanization_load(load_id)
         except Exception as exc:
             QMessageBox.critical(self, "Liberar carga", str(exc))
-            return
+            return False
         ToastNotification(self.window(), f"Carga {load_id} liberada para envio.", "success")
         self.refresh()
+        return True
 
     def return_selected(self):
         load_id = self.selected_load_id()
         if not load_id:
             return
+        self.return_load(load_id)
+
+    def return_load(self, load_id: int) -> bool:
         dialog = GalvanizationReturnDialog(self.service, load_id, parent=self)
         if dialog.exec():
             self.refresh()
+            return True
+        return False
 
 
 class GalvanizationAreaPage(QWidget):

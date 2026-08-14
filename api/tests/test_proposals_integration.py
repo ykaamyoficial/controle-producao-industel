@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 import os
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 from urllib.parse import urlparse
 
 from alembic import command
@@ -129,9 +131,158 @@ class ProposalsIntegrationTests(unittest.TestCase):
         self.assertEqual(cancelled.status_code, 200)
         self.assertEqual(cancelled.json()["current_status"], "CANCELADA")
         self.assertTrue(cancelled.json()["is_cancelled"])
+        self.assertEqual(cancelled.json()["cancellation_reason"], "Teste")
+        self.assertIsNotNone(cancelled.json()["cancelled_at"])
+        self.assertIsNotNone(cancelled.json()["cancelled_by"])
 
         events = asyncio.run(self._proposal_event_count(data["id"]))
         self.assertGreaterEqual(events, 4)
+
+    def test_cancel_is_terminal_preserves_production_and_disappears_from_operational_queues(self):
+        headers = self._headers()
+        proposal = self.client.post("/api/v1/proposals", json=_proposal_payload("CP-CANCEL-001", [_item_payload("1"), _item_payload("2")]), headers=headers).json()
+        released = self._release_to_production(proposal, headers)
+        started = self.client.post(f"/api/v1/production/proposals/{proposal['id']}/start", json={"version": released["version"]}, headers=headers).json()
+        first_item = started["items"][0]
+        partial = self.client.post(
+            f"/api/v1/production/proposals/{proposal['id']}/complete-items",
+            json={"version": started["version"], "item_ids": [first_item["id"]]},
+            headers=headers,
+        ).json()
+
+        cancelled = self.client.post(
+            f"/api/v1/proposals/{proposal['id']}/cancel",
+            json={"version": partial["version"], "reason": "Cliente encerrou o pedido"},
+            headers=headers,
+        )
+        self.assertEqual(cancelled.status_code, 200)
+        body = cancelled.json()
+        self.assertTrue(next(item for item in body["items"] if item["id"] == first_item["id"])["produced"])
+
+        blocked = self.client.post(
+            f"/api/v1/production/proposals/{proposal['id']}/complete-items",
+            json={"version": body["version"]},
+            headers=headers,
+        )
+        self.assertEqual(blocked.status_code, 409)
+        self.assertEqual(blocked.json()["error"]["code"], "PROPOSAL_CANCELLED_TERMINAL")
+
+        for operation, payload in (
+            ("start", {"version": body["version"]}),
+            ("pause", {"version": body["version"], "reason": "Tentativa apos cancelamento"}),
+            ("resume", {"version": body["version"]}),
+        ):
+            with self.subTest(operation=operation):
+                cancelled_operation = self.client.post(
+                    f"/api/v1/production/proposals/{proposal['id']}/{operation}",
+                    json=payload,
+                    headers=headers,
+                )
+                self.assertEqual(cancelled_operation.status_code, 409)
+                self.assertEqual(cancelled_operation.json()["error"]["code"], "PROPOSAL_CANCELLED_TERMINAL")
+
+        admin = self.client.post(
+            f"/api/v1/proposals/{proposal['id']}/administrative-correction",
+            json={
+                "expected_version": body["version"],
+                "to_area": "PRODUCAO",
+                "to_status": "INICIADO",
+                "reason": "Tentativa de reativacao",
+                "idempotency_key": "cancelled-admin-correction-0001",
+            },
+            headers=headers,
+        )
+        self.assertEqual(admin.status_code, 409)
+        self.assertEqual(admin.json()["error"]["code"], "PROPOSAL_CANCELLED_TERMINAL")
+
+        general = self.client.get(f"/api/v1/proposals/{proposal['id']}", headers=headers)
+        production = self.client.get("/api/v1/production/proposals", params={"search": "CP-CANCEL-001"}, headers=headers)
+        expedition = self.client.get("/api/v1/shipping/proposals", params={"search": "CP-CANCEL-001"}, headers=headers)
+        fiscal = self.client.get("/api/v1/fiscal/records", params={"search": "CP-CANCEL-001"}, headers=headers)
+        self.assertEqual(general.status_code, 200)
+        self.assertEqual(production.json()["total"], 0)
+        self.assertEqual(expedition.json()["total"], 0)
+        self.assertEqual(fiscal.json()["total"], 0)
+
+        # O item 1 ficou "produced=True" mesmo apos o cancelamento (linha
+        # 160), e a fila de galvanizacao agora e filtrada por elegibilidade
+        # de item, nao mais por area da proposta - _proposal_operational_clause()
+        # precisa continuar sendo o unico guarda-chuva que impede esse item
+        # de aparecer como candidato depois de cancelado.
+        galvanization_candidates = self.client.get(
+            "/api/v1/galvanization/candidates", params={"search": "CP-CANCEL-001"}, headers=headers
+        )
+        self.assertEqual(galvanization_candidates.json()["total"], 0)
+
+    def test_cancel_requires_reason_and_rejects_fully_delivered_proposal(self):
+        headers = self._headers()
+        proposal = self.client.post("/api/v1/proposals", json=_proposal_payload("CP-CANCEL-002"), headers=headers).json()
+        missing = self.client.post(f"/api/v1/proposals/{proposal['id']}/cancel", json={"version": proposal["version"]}, headers=headers)
+        blank = self.client.post(f"/api/v1/proposals/{proposal['id']}/cancel", json={"version": proposal["version"], "reason": "   "}, headers=headers)
+        self.assertEqual(missing.status_code, 422)
+        self.assertEqual(blank.status_code, 422)
+
+        delivered = self._proposal_ready_for_expedition("CP-CANCEL-003", headers, [_item_payload("1", requires_galvanization=False)])
+        started = self.client.post(f"/api/v1/shipping/proposals/{delivered['id']}/start-separation", json={"version": delivered["version"]}, headers=headers).json()
+        separated = self.client.post(f"/api/v1/shipping/proposals/{delivered['id']}/separate-items", json={"version": started["version"], "items": []}, headers=headers).json()
+        completed = self.client.post(f"/api/v1/shipping/proposals/{delivered['id']}/deliver-items", json={"version": separated["version"], "items": []}, headers=headers).json()
+        rejected = self.client.post(f"/api/v1/proposals/{delivered['id']}/cancel", json={"version": completed["version"], "reason": "Sem estorno"}, headers=headers)
+        self.assertEqual(rejected.status_code, 409)
+        self.assertEqual(rejected.json()["error"]["code"], "PROPOSAL_CANNOT_BE_CANCELLED")
+
+    def test_galvanization_return_preserves_cancelled_terminal_state_and_load_history(self):
+        headers = self._headers()
+        proposal = self._proposal_ready_for_galvanization("CP-CANCEL-GALV", headers, [_item_payload("1")])
+        item = proposal["items"][0]
+        load = self.client.post(
+            "/api/v1/galvanization/loads",
+            json={"driver_name": "Motorista", "items": [{"proposal_item_id": item["id"], "sent_quantity": "2.0000"}]},
+            headers=headers,
+        ).json()
+        released = self.client.post(f"/api/v1/galvanization/loads/{load['id']}/release", json={"version": load["version"]}, headers=headers).json()
+        current = self.client.get(f"/api/v1/proposals/{proposal['id']}", headers=headers).json()
+        cancelled = self.client.post(
+            f"/api/v1/proposals/{proposal['id']}/cancel",
+            json={"version": current["version"], "reason": "Cancelada durante transporte"},
+            headers=headers,
+        ).json()
+
+        returned = self.client.post(
+            f"/api/v1/galvanization/loads/{load['id']}/returns",
+            json={"version": released["version"], "proposal_ids": [proposal["id"]], "observation": "Retorno fisico"},
+            headers=headers,
+        )
+        self.assertEqual(returned.status_code, 200)
+        self.assertEqual(returned.json()["items"][0]["returned_quantity"], "2.0000")
+        after = self.client.get(f"/api/v1/proposals/{proposal['id']}", headers=headers).json()
+        self.assertEqual(after["current_status"], "CANCELADA")
+        self.assertEqual(after["current_area"], "CONTROLE_GERAL")
+        self.assertEqual(after["version"], cancelled["version"])
+        shipping = self.client.get("/api/v1/shipping/proposals", params={"search": "CP-CANCEL-GALV"}, headers=headers)
+        self.assertEqual(shipping.json()["total"], 0)
+
+    def test_cancelled_proposal_is_removed_from_fiscal_and_cannot_emit_invoice(self):
+        headers = self._headers()
+        proposal = self.client.post("/api/v1/proposals", json=_proposal_payload("CP-CANCEL-FISCAL"), headers=headers).json()
+        fiscal_before = self.client.get("/api/v1/fiscal/records", params={"search": "CP-CANCEL-FISCAL"}, headers=headers).json()
+        record = fiscal_before["items"][0]
+        detail = self.client.get(f"/api/v1/fiscal/records/{record['id']}", headers=headers).json()
+        cancelled = self.client.post(
+            f"/api/v1/proposals/{proposal['id']}/cancel",
+            json={"version": proposal["version"], "reason": "Cancelamento antes da emissao"},
+            headers=headers,
+        )
+        self.assertEqual(cancelled.status_code, 200)
+
+        blocked = self.client.post(
+            f"/api/v1/fiscal/records/{record['id']}/invoices",
+            json={"version": detail["version"], "invoice_number": "NF-BLOCKED", "items": []},
+            headers=headers,
+        )
+        self.assertEqual(blocked.status_code, 409)
+        self.assertEqual(blocked.json()["error"]["code"], "PROPOSAL_CANCELLED_TERMINAL")
+        fiscal_after = self.client.get("/api/v1/fiscal/records", params={"search": "CP-CANCEL-FISCAL"}, headers=headers)
+        self.assertEqual(fiscal_after.json()["total"], 0)
 
     def test_create_rejects_duplicate_proposal_number_and_financial_fields(self):
         headers = self._headers()
@@ -180,6 +331,78 @@ class ProposalsIntegrationTests(unittest.TestCase):
         detail = self.client.get(f"/api/v1/proposal-items/{item['id']}", headers=headers)
         self.assertFalse(detail.json()["active"])
 
+    def test_item_without_weight_is_pending_never_zero_and_can_enter_production(self):
+        headers = self._headers()
+        payload_no_weight = _item_payload("1")
+        del payload_no_weight["unit_weight"]
+        del payload_no_weight["total_weight"]
+        proposal = self.client.post("/api/v1/proposals", json=_proposal_payload("CP00050", [payload_no_weight]), headers=headers).json()
+        item = proposal["items"][0]
+        self.assertIsNone(item["unit_weight"])
+        self.assertIsNone(item["total_weight"])
+        self.assertEqual(item["weight_source"], "NONE")
+        self.assertEqual(item["weight_status"], "PENDING")
+
+        released = self.client.post(
+            f"/api/v1/proposals/{proposal['id']}/status",
+            json={"version": proposal["version"], "to_area": "PRODUCAO", "to_status": "LIBERADO_PRODUCAO", "reason": "Tentativa"},
+            headers=headers,
+        )
+        self.assertEqual(released.status_code, 200)
+        self.assertEqual(released.json()["current_area"], "PRODUCAO")
+
+    def test_item_manual_weight_is_respected_and_total_is_deterministic(self):
+        headers = self._headers()
+        payload = _item_payload("1")
+        payload["quantity"] = "3.0000"
+        payload["unit_weight"] = "2.5000"
+        payload["total_weight"] = "999.0000"  # deve ser ignorado: total sempre recalculado de qtd x peso unit.
+        proposal = self.client.post("/api/v1/proposals", json=_proposal_payload("CP00051", [payload]), headers=headers).json()
+        item = proposal["items"][0]
+        self.assertEqual(item["unit_weight"], "2.5000")
+        self.assertEqual(item["total_weight"], "7.5000")
+        self.assertEqual(item["weight_source"], "MANUAL")
+        self.assertEqual(item["weight_status"], "MANUAL")
+
+        released = self._release_to_production(proposal, headers)
+        self.assertEqual(released["current_area"], "PRODUCAO")
+
+    def test_item_code_change_invalidates_previous_manual_weight(self):
+        headers = self._headers()
+        proposal = self.client.post("/api/v1/proposals", json=_proposal_payload("CP00052"), headers=headers).json()
+        item = proposal["items"][0]
+        self.assertEqual(item["weight_source"], "MANUAL")
+
+        updated = self.client.patch(
+            f"/api/v1/proposal-items/{item['id']}",
+            json={"version": item["version"], "product_code": "OUTRO-CODIGO"},
+            headers=headers,
+        )
+        self.assertEqual(updated.status_code, 200)
+        body = updated.json()
+        self.assertEqual(body["product_code"], "OUTRO-CODIGO")
+        # sem cache local nem pedido Nomus vinculado para OUTRO-CODIGO: peso anterior nao sobrevive a troca de codigo.
+        self.assertIsNone(body["unit_weight"])
+        self.assertEqual(body["weight_source"], "NONE")
+        self.assertEqual(body["weight_status"], "PENDING")
+
+    def test_item_quantity_change_recomputes_total_without_new_resolution(self):
+        headers = self._headers()
+        proposal = self.client.post("/api/v1/proposals", json=_proposal_payload("CP00053"), headers=headers).json()
+        item = proposal["items"][0]
+        self.assertEqual(item["unit_weight"], "3.5000")
+
+        updated = self.client.patch(
+            f"/api/v1/proposal-items/{item['id']}",
+            json={"version": item["version"], "quantity": "5.0000"},
+            headers=headers,
+        )
+        self.assertEqual(updated.status_code, 200)
+        body = updated.json()
+        self.assertEqual(body["unit_weight"], "3.5000")
+        self.assertEqual(body["total_weight"], "17.5000")
+        self.assertEqual(body["weight_source"], "MANUAL")
+
     def test_proposal_pagination_has_stable_id_tiebreaker(self):
         headers = self._headers()
         for index in range(1, 6):
@@ -226,9 +449,43 @@ class ProposalsIntegrationTests(unittest.TestCase):
         self.assertEqual(partial.json()["current_area"], "PRODUCAO")
         self.assertEqual(partial.json()["progress"]["pending_items"], 1)
 
+        # O item ja produzido deve aparecer na fila de galvanizacao mesmo com
+        # a proposta ainda presa em PRODUCAO (irmao ainda pendente) -
+        # elegibilidade e por item, nao por area agregada da proposta.
+        candidates_while_partial = self.client.get(
+            "/api/v1/galvanization/candidates", params={"search": "CP01001"}, headers=headers
+        )
+        self.assertEqual(candidates_while_partial.status_code, 200)
+        candidate_items = candidates_while_partial.json()["items"]
+        self.assertEqual(len(candidate_items), 1)
+        self.assertEqual(candidate_items[0]["item_id"], first_item["id"])
+
+        # Regressao: montar uma carga (mesmo rascunho) com o item ja
+        # produzido nao pode "arrancar" a proposta inteira de PRODUCAO
+        # enquanto o item 2 ainda estiver pendente - senao nenhum endpoint
+        # de producao aceitaria mais essa proposta (inclusive o
+        # complete-items do item 2, logo abaixo).
+        produced_item_version = next(
+            item["version"] for item in partial.json()["items"] if item["id"] == first_item["id"]
+        )
+        draft_load = self.client.post(
+            "/api/v1/galvanization/loads",
+            json={
+                "driver_name": "Motorista",
+                "expected_return_date": "2026-08-20",
+                "items": [{"proposal_item_id": first_item["id"], "version": produced_item_version}],
+            },
+            headers=headers,
+        )
+        self.assertEqual(draft_load.status_code, 201)
+
+        proposal_after_draft_load = self.client.get(f"/api/v1/proposals/{proposal['id']}", headers=headers).json()
+        self.assertEqual(proposal_after_draft_load["current_area"], "PRODUCAO")
+        self.assertEqual(proposal_after_draft_load["galvanization_status"], "EM_CARGA")
+
         done = self.client.post(
             f"/api/v1/production/proposals/{proposal['id']}/complete-items",
-            json={"version": partial.json()["version"]},
+            json={"version": proposal_after_draft_load["version"]},
             headers=headers,
         )
         self.assertEqual(done.status_code, 200)
@@ -238,6 +495,264 @@ class ProposalsIntegrationTests(unittest.TestCase):
 
         events = asyncio.run(self._proposal_event_count(proposal["id"]))
         self.assertGreaterEqual(events, 6)
+
+    def test_production_pause_resume_preserves_data_actions_history_and_audit(self):
+        headers = self._headers()
+        proposal = self.client.post(
+            "/api/v1/proposals",
+            json=_proposal_payload("CP-PAUSE-001", [_item_payload("1", requires_galvanization=False)]),
+            headers=headers,
+        ).json()
+        released = self._release_to_production(proposal, headers)
+
+        waiting_actions = self.client.get(
+            f"/api/v1/production/proposals/{proposal['id']}", headers=headers
+        ).json()["actions"]
+        waiting_ids = {action["id"] for action in waiting_actions if action.get("enabled", True)}
+        self.assertIn("START_PRODUCTION", waiting_ids)
+        self.assertNotIn("PAUSE_PRODUCTION", waiting_ids)
+        self.assertNotIn("RESUME_PRODUCTION", waiting_ids)
+        self.assertNotIn("COMPLETE_ITEMS", waiting_ids)
+
+        pause_before_start = self.client.post(
+            f"/api/v1/production/proposals/{proposal['id']}/pause",
+            json={"version": released["version"], "reason": "Pausa invalida antes do inicio"},
+            headers=headers,
+        )
+        self.assertEqual(pause_before_start.status_code, 409)
+
+        started_response = self.client.post(
+            f"/api/v1/production/proposals/{proposal['id']}/start",
+            json={"version": released["version"], "observation": "Inicio normal"},
+            headers=headers,
+        )
+        self.assertEqual(started_response.status_code, 200, started_response.text)
+        started = started_response.json()
+        started_action_ids = {action["id"] for action in started["actions"] if action.get("enabled", True)}
+        self.assertIn("PAUSE_PRODUCTION", started_action_ids)
+        self.assertIn("COMPLETE_ITEMS", started_action_ids)
+        self.assertNotIn("START_PRODUCTION", started_action_ids)
+        self.assertNotIn("RESUME_PRODUCTION", started_action_ids)
+
+        blank_pause = self.client.post(
+            f"/api/v1/production/proposals/{proposal['id']}/pause",
+            json={"version": started["version"], "reason": "   "},
+            headers=headers,
+        )
+        self.assertEqual(blank_pause.status_code, 422)
+
+        item_before = started["items"][0]
+        protected_item_fields = {
+            key: item_before.get(key)
+            for key in (
+                "quantity",
+                "unit_weight",
+                "total_weight",
+                "produced",
+                "galvanized",
+                "delivered",
+                "produce_internally",
+                "requires_galvanization",
+                "version",
+            )
+        }
+        protected_proposal_fields = {
+            key: started.get(key)
+            for key in ("current_area", "general_status", "galvanization_status", "shipping_status", "warehouse_status")
+        }
+        progress_before = {key: value for key, value in started["progress"].items() if key != "summary_status"}
+
+        paused_response = self.client.post(
+            f"/api/v1/production/proposals/{proposal['id']}/pause",
+            json={"version": started["version"], "reason": "Aguardando materia-prima"},
+            headers=headers,
+        )
+        self.assertEqual(paused_response.status_code, 200, paused_response.text)
+        paused = paused_response.json()
+        self.assertEqual(paused["production_status"], "PARADO")
+        self.assertEqual(paused["current_area"], "PRODUCAO")
+        self.assertEqual(paused["current_status"], "PARADO")
+        self.assertEqual(
+            {key: paused.get(key) for key in protected_proposal_fields},
+            protected_proposal_fields,
+        )
+        self.assertEqual(
+            {key: paused["items"][0].get(key) for key in protected_item_fields},
+            protected_item_fields,
+        )
+        self.assertEqual(
+            {key: value for key, value in paused["progress"].items() if key != "summary_status"},
+            progress_before,
+        )
+
+        paused_action_ids = {action["id"] for action in paused["actions"] if action.get("enabled", True)}
+        self.assertIn("RESUME_PRODUCTION", paused_action_ids)
+        self.assertNotIn("START_PRODUCTION", paused_action_ids)
+        self.assertNotIn("PAUSE_PRODUCTION", paused_action_ids)
+        self.assertNotIn("COMPLETE_ITEMS", paused_action_ids)
+
+        paused_list = self.client.get(
+            "/api/v1/production/proposals", params={"search": "CP-PAUSE-001", "status": "PARADO"}, headers=headers
+        )
+        self.assertEqual(paused_list.status_code, 200)
+        self.assertEqual(paused_list.json()["total"], 1)
+
+        complete_while_paused = self.client.post(
+            f"/api/v1/production/proposals/{proposal['id']}/complete-items",
+            json={"version": paused["version"]},
+            headers=headers,
+        )
+        self.assertEqual(complete_while_paused.status_code, 409)
+        self.assertIn("Retome", complete_while_paused.json()["error"]["message"])
+
+        start_while_paused = self.client.post(
+            f"/api/v1/production/proposals/{proposal['id']}/start",
+            json={"version": paused["version"]},
+            headers=headers,
+        )
+        self.assertEqual(start_while_paused.status_code, 409)
+        self.assertIn("Retomar", start_while_paused.json()["error"]["message"])
+
+        repeated_pause = self.client.post(
+            f"/api/v1/production/proposals/{proposal['id']}/pause",
+            json={"version": paused["version"], "reason": "Pausa repetida"},
+            headers=headers,
+        )
+        self.assertEqual(repeated_pause.status_code, 409)
+
+        resumed_response = self.client.post(
+            f"/api/v1/production/proposals/{proposal['id']}/resume",
+            json={"version": paused["version"], "observation": "Material disponivel"},
+            headers=headers,
+        )
+        self.assertEqual(resumed_response.status_code, 200, resumed_response.text)
+        resumed = resumed_response.json()
+        self.assertEqual(resumed["production_status"], "INICIADO")
+        self.assertEqual(resumed["current_area"], "PRODUCAO")
+        self.assertEqual(resumed["items"][0]["version"], item_before["version"])
+        self.assertEqual(
+            {key: value for key, value in resumed["progress"].items() if key != "summary_status"},
+            progress_before,
+        )
+
+        repeated_resume = self.client.post(
+            f"/api/v1/production/proposals/{proposal['id']}/resume",
+            json={"version": resumed["version"]},
+            headers=headers,
+        )
+        self.assertEqual(repeated_resume.status_code, 409)
+
+        completed_response = self.client.post(
+            f"/api/v1/production/proposals/{proposal['id']}/complete-items",
+            json={"version": resumed["version"]},
+            headers=headers,
+        )
+        self.assertEqual(completed_response.status_code, 200, completed_response.text)
+        completed = completed_response.json()
+        self.assertEqual(completed["production_status"], "FINALIZADO")
+        for operation, payload in (
+            ("pause", {"version": completed["version"], "reason": "Pausa depois da conclusao"}),
+            ("resume", {"version": completed["version"]}),
+        ):
+            with self.subTest(operation=operation):
+                terminal_operation = self.client.post(
+                    f"/api/v1/production/proposals/{proposal['id']}/{operation}",
+                    json=payload,
+                    headers=headers,
+                )
+                self.assertEqual(terminal_operation.status_code, 409)
+
+        history = self.client.get(f"/api/v1/proposals/{proposal['id']}/history", headers=headers).json()
+        production_events = [
+            row for row in reversed(history)
+            if row["event_type"] in {"PRODUCTION_STARTED", "PRODUCTION_PAUSED", "PRODUCTION_RESUMED", "PRODUCTION_COMPLETED"}
+        ]
+        self.assertEqual(
+            [row["event_type"] for row in production_events],
+            ["PRODUCTION_STARTED", "PRODUCTION_PAUSED", "PRODUCTION_RESUMED", "PRODUCTION_COMPLETED"],
+        )
+        self.assertEqual(
+            [(row["from_status"], row["to_status"]) for row in production_events],
+            [
+                ("NAO_INICIADO", "INICIADO"),
+                ("INICIADO", "PARADO"),
+                ("PARADO", "INICIADO"),
+                ("INICIADO", "FINALIZADO"),
+            ],
+        )
+        self.assertEqual(production_events[1]["observation"], "Aguardando materia-prima")
+
+        security = self.client.get(
+            "/api/v1/security-events", params={"event_type": "PRODUCTION_PAUSED"}, headers=headers
+        ).json()
+        pause_audit = next(row for row in security["items"] if row["details"]["proposal_id"] == proposal["id"])
+        self.assertEqual(pause_audit["details"]["from_status"], "INICIADO")
+        self.assertEqual(pause_audit["details"]["to_status"], "PARADO")
+        self.assertEqual(pause_audit["details"]["metadata"]["reason"], "Aguardando materia-prima")
+
+    def test_concurrent_pause_with_same_version_applies_once(self):
+        headers = self._headers()
+        proposal = self.client.post(
+            "/api/v1/proposals",
+            json=_proposal_payload("CP-PAUSE-CONCURRENCY"),
+            headers=headers,
+        ).json()
+        released = self._release_to_production(proposal, headers)
+        started = self.client.post(
+            f"/api/v1/production/proposals/{proposal['id']}/start",
+            json={"version": released["version"]},
+            headers=headers,
+        ).json()
+
+        def pause(reason: str):
+            with TestClient(create_app()) as concurrent_client:
+                return concurrent_client.post(
+                    f"/api/v1/production/proposals/{proposal['id']}/pause",
+                    json={"version": started["version"], "reason": reason},
+                    headers=headers,
+                )
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            responses = list(executor.map(pause, ["Pausa concorrente A", "Pausa concorrente B"]))
+        self.assertEqual(sorted(response.status_code for response in responses), [200, 409])
+        self.assertEqual(
+            next(response for response in responses if response.status_code == 409).json()["error"]["code"],
+            "PROPOSAL_VERSION_CONFLICT",
+        )
+        current = self.client.get(f"/api/v1/production/proposals/{proposal['id']}", headers=headers).json()
+        self.assertEqual(current["production_status"], "PARADO")
+        history = self.client.get(f"/api/v1/proposals/{proposal['id']}/history", headers=headers).json()
+        self.assertEqual(sum(row["event_type"] == "PRODUCTION_PAUSED" for row in history), 1)
+
+    def test_pause_rolls_back_status_when_event_recording_fails(self):
+        headers = self._headers()
+        proposal = self.client.post(
+            "/api/v1/proposals", json=_proposal_payload("CP-PAUSE-ROLLBACK"), headers=headers
+        ).json()
+        released = self._release_to_production(proposal, headers)
+        started = self.client.post(
+            f"/api/v1/production/proposals/{proposal['id']}/start",
+            json={"version": released["version"]},
+            headers=headers,
+        ).json()
+
+        with patch(
+            "api.app.modules.proposals.service._record_event",
+            new=AsyncMock(side_effect=RuntimeError("falha de auditoria simulada")),
+        ):
+            with TestClient(create_app(), raise_server_exceptions=False) as failing_client:
+                failed = failing_client.post(
+                    f"/api/v1/production/proposals/{proposal['id']}/pause",
+                    json={"version": started["version"], "reason": "Teste de rollback"},
+                    headers=headers,
+                )
+        self.assertEqual(failed.status_code, 500)
+
+        current = self.client.get(f"/api/v1/production/proposals/{proposal['id']}", headers=headers).json()
+        self.assertEqual(current["production_status"], "INICIADO")
+        self.assertEqual(current["version"], started["version"])
+        history = self.client.get(f"/api/v1/proposals/{proposal['id']}/history", headers=headers).json()
+        self.assertFalse(any(row["event_type"] == "PRODUCTION_PAUSED" for row in history))
 
     def test_official_production_items_endpoint_lists_flat_pending_and_produced_items(self):
         headers = self._headers()
@@ -296,6 +811,62 @@ class ProposalsIntegrationTests(unittest.TestCase):
         self.assertEqual(done.json()["progress"]["needs_galvanization_items"], 1)
         self.assertEqual(done.json()["progress"]["no_galvanization_items"], 1)
 
+    def test_regression_cp05378_partial_hierarchy_mixed_destinations_and_replay(self):
+        """Cobre a criacao repetida de filhas e destinos simultaneos da CP05378."""
+        headers = self._headers()
+        proposal = self.client.post(
+            "/api/v1/proposals",
+            json=_proposal_payload(
+                "CP05378",
+                [
+                    _item_payload("1", requires_galvanization=True),
+                    _item_payload("2", requires_galvanization=False),
+                    _item_payload("3", requires_galvanization=True),
+                ],
+            ),
+            headers=headers,
+        ).json()
+        released = self._release_to_production(proposal, headers)
+        started = self.client.post(
+            f"/api/v1/production/proposals/{proposal['id']}/start",
+            json={"version": released["version"]},
+            headers=headers,
+        ).json()
+        first_item = started["items"][0]
+        first = self.client.post(
+            f"/api/v1/production/proposals/{proposal['id']}/complete-items",
+            json={"version": started["version"], "item_ids": [first_item["id"]]},
+            headers={**headers, "X-Request-ID": "cp05378-production-1"},
+        )
+        self.assertEqual(first.status_code, 200)
+        first_body = first.json()
+        self.assertEqual(first_body["current_area"], "PRODUCAO")
+
+        second = self.client.post(
+            f"/api/v1/production/proposals/{proposal['id']}/complete-items",
+            json={"version": first_body["version"]},
+            headers={**headers, "X-Request-ID": "cp05378-production-2"},
+        )
+        self.assertEqual(second.status_code, 200)
+        second_body = second.json()
+        self.assertEqual(second_body["current_area"], "CONTROLE_GERAL")
+
+        hierarchy = asyncio.run(self._proposal_hierarchy(proposal["id"]))
+        self.assertEqual([row["proposal_number"] for row in hierarchy["children"]], ["CP05378-1", "CP05378-2"])
+        self.assertEqual(hierarchy["mother_item_count"], 0)
+        self.assertEqual(hierarchy["child_item_count"], 3)
+        self.assertEqual({row["current_area"] for row in hierarchy["children"]}, {"GALVANIZACAO", "EXPEDICAO"})
+
+        replay = self.client.post(
+            f"/api/v1/production/proposals/{proposal['id']}/complete-items",
+            json={"version": first_body["version"]},
+            headers={**headers, "X-Request-ID": "cp05378-production-2"},
+        )
+        self.assertEqual(replay.status_code, 200)
+        replay_hierarchy = asyncio.run(self._proposal_hierarchy(proposal["id"]))
+        self.assertEqual(len(replay_hierarchy["children"]), 2)
+        self.assertGreaterEqual(asyncio.run(self._proposal_event_count(proposal["id"])), 3)
+
     def test_official_production_flow_definition_reason_weights_and_undefined_block(self):
         headers = self._headers()
         payload = _proposal_payload("CP01004", [_item_payload("1", produce_internally=None, requires_galvanization=None), _item_payload("2", produce_internally=True, requires_galvanization=False)])
@@ -347,6 +918,245 @@ class ProposalsIntegrationTests(unittest.TestCase):
         done = self.client.post(f"/api/v1/production/proposals/{proposal['id']}/complete-items", json={"version": weights.json()["version"]}, headers=headers)
         self.assertEqual(done.status_code, 200)
         self.assertEqual(done.json()["current_area"], "EXPEDICAO")
+
+    def test_undefined_flow_stays_visible_in_production_queues(self):
+        headers = self._headers()
+        proposal = self.client.post(
+            "/api/v1/proposals",
+            json=_proposal_payload(
+                "CP01004-U",
+                [_item_payload("1", produce_internally=None, requires_galvanization=None)],
+            ),
+            headers=headers,
+        ).json()
+
+        released = self._release_to_production(proposal, headers)
+
+        proposals = self.client.get(
+            "/api/v1/production/proposals",
+            params={"search": "CP01004-U"},
+            headers=headers,
+        )
+        self.assertEqual(proposals.status_code, 200)
+        self.assertEqual(proposals.json()["total"], 1)
+        row = proposals.json()["items"][0]
+        self.assertEqual(row["progress"]["undefined_flow_items"], 1)
+        self.assertEqual(row["progress"]["internal_items"], 0)
+        start_action = next(action for action in row["actions"] if action["id"] == "START_PRODUCTION")
+        self.assertFalse(start_action["enabled"])
+
+        items = self.client.get(
+            "/api/v1/production/items",
+            params={"pending": "true", "search": "CP01004-U"},
+            headers=headers,
+        )
+        self.assertEqual(items.status_code, 200)
+        self.assertEqual(items.json()["total"], 1)
+        self.assertFalse(items.json()["items"][0]["flow_defined"])
+        self.assertEqual(items.json()["items"][0]["production_pending_quantity"], "0.0000")
+        self.assertEqual(released["current_area"], "PRODUCAO")
+
+    def test_defining_external_flow_routes_automatically_to_expedition(self):
+        headers = self._headers()
+        proposal = self.client.post(
+            "/api/v1/proposals",
+            json=_proposal_payload(
+                "CP01004-E",
+                [_item_payload("1", produce_internally=None, requires_galvanization=None)],
+            ),
+            headers=headers,
+        ).json()
+        released = self._release_to_production(proposal, headers)
+        item = released["items"][0]
+
+        flow = self.client.patch(
+            f"/api/v1/production/proposals/{proposal['id']}/item-flow",
+            json={
+                "version": released["version"],
+                "origin": "Teste",
+                "items": [
+                    {
+                        "item_id": item["id"],
+                        "version": item["version"],
+                        "produce_internally": False,
+                        "non_production_reason": "pronta_entrega",
+                        "requires_galvanization": False,
+                    }
+                ],
+            },
+            headers=headers,
+        )
+
+        self.assertEqual(flow.status_code, 200)
+        self.assertEqual(flow.json()["current_area"], "EXPEDICAO")
+        self.assertEqual(flow.json()["current_status"], "EM_SEPARACAO")
+        self.assertEqual(flow.json()["production_status"], "FINALIZADO")
+        production = self.client.get(
+            "/api/v1/production/proposals",
+            params={"search": "CP01004-E"},
+            headers=headers,
+        )
+        self.assertEqual(production.json()["total"], 0)
+        shipping = self.client.get(
+            "/api/v1/shipping/proposals",
+            params={"search": "CP01004-E"},
+            headers=headers,
+        )
+        self.assertEqual(shipping.status_code, 200)
+        self.assertEqual(shipping.json()["total"], 1)
+
+    def test_defining_external_galvanized_flow_routes_automatically_to_galvanization(self):
+        headers = self._headers()
+        proposal = self.client.post(
+            "/api/v1/proposals",
+            json=_proposal_payload(
+                "CP01004-G",
+                [_item_payload("1", produce_internally=None, requires_galvanization=None)],
+            ),
+            headers=headers,
+        ).json()
+        released = self._release_to_production(proposal, headers)
+        item = released["items"][0]
+
+        flow = self.client.patch(
+            f"/api/v1/production/proposals/{proposal['id']}/item-flow",
+            json={
+                "version": released["version"],
+                "items": [
+                    {
+                        "item_id": item["id"],
+                        "version": item["version"],
+                        "produce_internally": False,
+                        "non_production_reason": "terceirizado",
+                        "requires_galvanization": True,
+                    }
+                ],
+            },
+            headers=headers,
+        )
+
+        self.assertEqual(flow.status_code, 200)
+        self.assertEqual(flow.json()["current_area"], "GALVANIZACAO")
+        self.assertEqual(flow.json()["current_status"], "AGUARDANDO_ENVIO")
+        candidates = self.client.get(
+            "/api/v1/galvanization/candidates",
+            params={"search": "CP01004-G"},
+            headers=headers,
+        )
+        self.assertEqual(candidates.status_code, 200)
+        self.assertEqual(candidates.json()["total"], 1)
+
+    def test_defining_internal_flow_keeps_proposal_in_production(self):
+        headers = self._headers()
+        proposal = self.client.post(
+            "/api/v1/proposals",
+            json=_proposal_payload(
+                "CP01004-P",
+                [_item_payload("1", produce_internally=None, requires_galvanization=None)],
+            ),
+            headers=headers,
+        ).json()
+        released = self._release_to_production(proposal, headers)
+        item = released["items"][0]
+
+        flow = self.client.patch(
+            f"/api/v1/production/proposals/{proposal['id']}/item-flow",
+            json={
+                "version": released["version"],
+                "items": [
+                    {
+                        "item_id": item["id"],
+                        "version": item["version"],
+                        "produce_internally": True,
+                        "requires_galvanization": False,
+                    }
+                ],
+            },
+            headers=headers,
+        )
+
+        self.assertEqual(flow.status_code, 200)
+        self.assertEqual(flow.json()["current_area"], "PRODUCAO")
+        self.assertEqual(flow.json()["progress"]["internal_items"], 1)
+        self.assertEqual(flow.json()["progress"]["pending_items"], 1)
+        production = self.client.get(
+            "/api/v1/production/proposals",
+            params={"search": "CP01004-P"},
+            headers=headers,
+        )
+        self.assertEqual(production.json()["total"], 1)
+
+    def test_release_with_predefined_external_flow_skips_empty_production(self):
+        headers = self._headers()
+        item = _item_payload("1", produce_internally=False, requires_galvanization=False)
+        item["non_production_reason"] = "pronta_entrega"
+        proposal = self.client.post(
+            "/api/v1/proposals",
+            json=_proposal_payload("CP01004-D", [item]),
+            headers=headers,
+        ).json()
+
+        released = self._release_to_production(proposal, headers)
+
+        self.assertEqual(released["current_area"], "EXPEDICAO")
+        self.assertEqual(released["current_status"], "EM_SEPARACAO")
+        self.assertEqual(released["production_status"], "FINALIZADO")
+
+    def test_official_production_item_flow_locked_after_real_production(self):
+        headers = self._headers()
+        payload = _proposal_payload("CP01005", [_item_payload("1"), _item_payload("2")])
+        proposal = self.client.post("/api/v1/proposals", json=payload, headers=headers).json()
+        released = self._release_to_production(proposal, headers)
+        started = self.client.post(f"/api/v1/production/proposals/{proposal['id']}/start", json={"version": released["version"]}, headers=headers).json()
+
+        first_item = started["items"][0]
+        second_item = started["items"][1]
+        self.assertTrue(first_item["flow_editable"])
+        self.assertIsNone(first_item["flow_lock_reason"])
+
+        partial = self.client.post(
+            f"/api/v1/production/proposals/{proposal['id']}/complete-items",
+            json={"version": started["version"], "item_ids": [first_item["id"]], "observation": "Parcial"},
+            headers=headers,
+        )
+        self.assertEqual(partial.status_code, 200)
+        locked_item = next(item for item in partial.json()["items"] if item["id"] == first_item["id"])
+        unlocked_item = next(item for item in partial.json()["items"] if item["id"] == second_item["id"])
+        self.assertTrue(locked_item["produced"])
+        self.assertFalse(locked_item["flow_editable"])
+        self.assertIn("producao registrada", locked_item["flow_lock_reason"])
+        self.assertTrue(unlocked_item["flow_editable"])
+        self.assertIsNone(unlocked_item["flow_lock_reason"])
+
+        blocked = self.client.patch(
+            f"/api/v1/production/proposals/{proposal['id']}/item-flow",
+            json={
+                "version": partial.json()["version"],
+                "items": [
+                    {"item_id": locked_item["id"], "version": locked_item["version"], "produce_internally": False, "non_production_reason": "pronta_entrega"},
+                ],
+            },
+            headers=headers,
+        )
+        self.assertEqual(blocked.status_code, 409)
+        self.assertEqual(blocked.json()["error"]["code"], "PRODUCTION_ITEM_FLOW_LOCKED")
+
+        # A locked item included WITHOUT an actual change must not prevent the rest of the
+        # proposal (an unlocked item with a real change) from being saved.
+        mixed = self.client.patch(
+            f"/api/v1/production/proposals/{proposal['id']}/item-flow",
+            json={
+                "version": partial.json()["version"],
+                "items": [
+                    {"item_id": locked_item["id"], "version": locked_item["version"], "produce_internally": True, "requires_galvanization": True},
+                    {"item_id": unlocked_item["id"], "version": unlocked_item["version"], "produce_internally": False, "non_production_reason": "terceirizado"},
+                ],
+            },
+            headers=headers,
+        )
+        self.assertEqual(mixed.status_code, 200)
+        saved_unlocked = next(item for item in mixed.json()["items"] if item["id"] == unlocked_item["id"])
+        self.assertEqual(saved_unlocked["produce_internally"], "NAO")
 
     def test_official_galvanization_load_partial_and_total_return(self):
         headers = self._headers()
@@ -405,6 +1215,13 @@ class ProposalsIntegrationTests(unittest.TestCase):
         self.assertEqual(partial.status_code, 200)
         self.assertEqual(partial.json()["status"], "RETORNO_PARCIAL")
         self.assertEqual(next(item for item in partial.json()["items"] if item["id"] == first_load_item["id"])["status"], "RETORNADO")
+        self.assertEqual(len(partial.json()["returns"]), 1)
+        first_return = partial.json()["returns"][0]
+        self.assertEqual(first_return["return_type"], "PARCIAL")
+        self.assertEqual(len(first_return["items"]), 1)
+        self.assertEqual(first_return["items"][0]["load_item_id"], first_load_item["id"])
+        self.assertEqual(first_return["items"][0]["returned_quantity"], "1.0000")
+        self.assertTrue(any(row["event_type"] == "GALVANIZATION_RETURN_REGISTERED" for row in partial.json()["history"]))
 
         proposal_after_partial = self.client.get(f"/api/v1/proposals/{first['id']}", headers=headers).json()
         self.assertEqual(proposal_after_partial["galvanization_status"], "RETORNOU_PARCIAL")
@@ -417,6 +1234,19 @@ class ProposalsIntegrationTests(unittest.TestCase):
         )
         self.assertEqual(total.status_code, 200)
         self.assertEqual(total.json()["status"], "RETORNADA_GALVANIZACAO")
+        self.assertEqual(len(total.json()["returns"]), 2)
+        self.assertEqual(total.json()["returns"][0]["id"], first_return["id"])
+        self.assertEqual(total.json()["returns"][1]["return_type"], "TOTAL")
+        self.assertEqual(len(total.json()["returns"][1]["items"]), 1)
+        self.assertEqual(total.json()["returns"][1]["items"][0]["proposal_id"], second["id"])
+
+        history_ids_before_read = [row["id"] for row in total.json()["history"]]
+        read_only_detail = self.client.get(
+            f"/api/v1/galvanization/loads/{load.json()['id']}", headers=headers
+        )
+        self.assertEqual(read_only_detail.status_code, 200)
+        self.assertEqual([row["id"] for row in read_only_detail.json()["history"]], history_ids_before_read)
+        self.assertEqual([row["id"] for row in read_only_detail.json()["returns"]], [row["id"] for row in total.json()["returns"]])
         proposal_after_total = self.client.get(f"/api/v1/proposals/{second['id']}", headers=headers).json()
         self.assertEqual(proposal_after_total["current_area"], "EXPEDICAO")
         self.assertEqual(proposal_after_total["shipping_status"], "EM_SEPARACAO")
@@ -424,6 +1254,303 @@ class ProposalsIntegrationTests(unittest.TestCase):
         closed = self.client.post(f"/api/v1/galvanization/loads/{load.json()['id']}/close", json={"version": total.json()["version"]}, headers=headers)
         self.assertEqual(closed.status_code, 200)
         self.assertIsNotNone(closed.json()["closed_at"])
+
+    def test_galvanization_load_edit_recalculates_removed_kept_and_added_proposals(self):
+        headers = self._headers()
+        removed = self._proposal_ready_for_galvanization(
+            "CP-LOAD-EDIT-REMOVED", headers, [_item_payload("1"), _item_payload("2")]
+        )
+        kept = self._proposal_ready_for_galvanization("CP-LOAD-EDIT-KEPT", headers, [_item_payload("1")])
+        added = self._proposal_ready_for_galvanization("CP-LOAD-EDIT-ADDED", headers, [_item_payload("1")])
+        load = self.client.post(
+            "/api/v1/galvanization/loads",
+            json={
+                "driver_name": "Motorista",
+                "items": [
+                    {"proposal_item_id": removed["items"][0]["id"]},
+                    {"proposal_item_id": removed["items"][1]["id"]},
+                    {"proposal_item_id": kept["items"][0]["id"], "sent_quantity": "1.0000"},
+                ],
+            },
+            headers=headers,
+        ).json()
+        kept_load_item_id = next(
+            item["id"] for item in load["items"] if item["proposal_id"] == kept["id"]
+        )
+
+        edited = self.client.patch(
+            f"/api/v1/galvanization/loads/{load['id']}",
+            json={
+                "version": load["version"],
+                "items": [
+                    {"proposal_item_id": kept["items"][0]["id"], "sent_quantity": "1.5000"},
+                    {"proposal_item_id": added["items"][0]["id"]},
+                ],
+            },
+            headers=headers,
+        )
+        self.assertEqual(edited.status_code, 200, edited.text)
+        edited_body = edited.json()
+        self.assertEqual(
+            next(item["id"] for item in edited_body["items"] if item["proposal_id"] == kept["id"]),
+            kept_load_item_id,
+            "item inalterado na composicao deve preservar sua identidade",
+        )
+        self.assertEqual(
+            next(item["sent_quantity"] for item in edited_body["items"] if item["proposal_id"] == kept["id"]),
+            "1.5000",
+        )
+
+        removed_after = self.client.get(f"/api/v1/proposals/{removed['id']}", headers=headers).json()
+        kept_after = self.client.get(f"/api/v1/proposals/{kept['id']}", headers=headers).json()
+        added_after = self.client.get(f"/api/v1/proposals/{added['id']}", headers=headers).json()
+        self.assertEqual(removed_after["galvanization_status"], "AGUARDANDO_ENVIO")
+        self.assertEqual(kept_after["galvanization_status"], "EM_CARGA")
+        self.assertEqual(added_after["galvanization_status"], "EM_CARGA")
+
+        candidates = self.client.get(
+            "/api/v1/galvanization/candidates", params={"search": "CP-LOAD-EDIT-REMOVED"}, headers=headers
+        ).json()
+        self.assertEqual({row["item_id"] for row in candidates["items"]}, {item["id"] for item in removed["items"]})
+        self.assertTrue(all(row["situation"] == "DISPONIVEL" for row in candidates["items"]))
+
+        audit = asyncio.run(self._galvanization_load_update_metadata(load["id"]))
+        self.assertEqual(set(audit["items_removed"]), {item["id"] for item in removed["items"]})
+        self.assertEqual(audit["items_added"], [added["items"][0]["id"]])
+        self.assertEqual(audit["items_updated"], [kept["items"][0]["id"]])
+        self.assertEqual(set(audit["proposals_affected"]), {removed["id"], kept["id"], added["id"]})
+        self.assertEqual(audit["proposal_states_before"][str(removed["id"])]["current_status"], "EM_CARGA")
+        self.assertEqual(audit["proposal_states_after"][str(removed["id"])]["current_status"], "AGUARDANDO_ENVIO")
+
+        emptied = self.client.patch(
+            f"/api/v1/galvanization/loads/{load['id']}",
+            json={"version": edited_body["version"], "items": []},
+            headers=headers,
+        )
+        self.assertEqual(emptied.status_code, 200, emptied.text)
+        self.assertEqual(emptied.json()["items"], [])
+        for proposal_id in (kept["id"], added["id"]):
+            proposal_after = self.client.get(f"/api/v1/proposals/{proposal_id}", headers=headers).json()
+            self.assertEqual(proposal_after["galvanization_status"], "AGUARDANDO_ENVIO")
+
+    def test_galvanization_load_edit_keeps_status_when_another_draft_link_exists(self):
+        headers = self._headers()
+        proposal = self._proposal_ready_for_galvanization(
+            "CP-LOAD-EDIT-OTHER", headers, [_item_payload("1"), _item_payload("2")]
+        )
+        first_load = self.client.post(
+            "/api/v1/galvanization/loads",
+            json={"driver_name": "Motorista 1", "items": [{"proposal_item_id": proposal["items"][0]["id"]}]},
+            headers=headers,
+        ).json()
+        second_load = self.client.post(
+            "/api/v1/galvanization/loads",
+            json={"driver_name": "Motorista 2", "items": [{"proposal_item_id": proposal["items"][1]["id"]}]},
+            headers=headers,
+        )
+        self.assertEqual(second_load.status_code, 201, second_load.text)
+
+        removed_from_first = self.client.patch(
+            f"/api/v1/galvanization/loads/{first_load['id']}",
+            json={"version": first_load["version"], "items": []},
+            headers=headers,
+        )
+        self.assertEqual(removed_from_first.status_code, 200, removed_from_first.text)
+        proposal_after = self.client.get(f"/api/v1/proposals/{proposal['id']}", headers=headers).json()
+        self.assertEqual(proposal_after["galvanization_status"], "EM_CARGA")
+
+        released_other = self.client.post(
+            f"/api/v1/galvanization/loads/{second_load.json()['id']}/release",
+            json={"version": second_load.json()["version"]},
+            headers=headers,
+        )
+        self.assertEqual(released_other.status_code, 200, released_other.text)
+        rebuilt_first = self.client.patch(
+            f"/api/v1/galvanization/loads/{first_load['id']}",
+            json={
+                "version": removed_from_first.json()["version"],
+                "items": [{"proposal_item_id": proposal["items"][0]["id"]}],
+            },
+            headers=headers,
+        )
+        self.assertEqual(rebuilt_first.status_code, 200, rebuilt_first.text)
+        removed_again = self.client.patch(
+            f"/api/v1/galvanization/loads/{first_load['id']}",
+            json={"version": rebuilt_first.json()["version"], "items": []},
+            headers=headers,
+        )
+        self.assertEqual(removed_again.status_code, 200, removed_again.text)
+        proposal_sent = self.client.get(f"/api/v1/proposals/{proposal['id']}", headers=headers).json()
+        self.assertEqual(proposal_sent["galvanization_status"], "ENVIADO_GALVANIZACAO")
+
+        other_load_item = released_other.json()["items"][0]
+        partial_return = self.client.post(
+            f"/api/v1/galvanization/loads/{released_other.json()['id']}/returns",
+            json={
+                "version": released_other.json()["version"],
+                "items": [{"load_item_id": other_load_item["id"], "quantity_returned": "1.0000"}],
+            },
+            headers=headers,
+        )
+        self.assertEqual(partial_return.status_code, 200, partial_return.text)
+        rebuilt_after_partial = self.client.patch(
+            f"/api/v1/galvanization/loads/{first_load['id']}",
+            json={
+                "version": removed_again.json()["version"],
+                "items": [{"proposal_item_id": proposal["items"][0]["id"]}],
+            },
+            headers=headers,
+        ).json()
+        removed_after_partial = self.client.patch(
+            f"/api/v1/galvanization/loads/{first_load['id']}",
+            json={"version": rebuilt_after_partial["version"], "items": []},
+            headers=headers,
+        )
+        self.assertEqual(removed_after_partial.status_code, 200, removed_after_partial.text)
+        proposal_partial = self.client.get(f"/api/v1/proposals/{proposal['id']}", headers=headers).json()
+        self.assertEqual(proposal_partial["galvanization_status"], "RETORNOU_PARCIAL")
+
+    def test_galvanization_load_edit_preserves_cancelled_terminal_state_and_rejects_addition(self):
+        headers = self._headers()
+        linked = self._proposal_ready_for_galvanization("CP-LOAD-EDIT-CANCELLED", headers, [_item_payload("1")])
+        load = self.client.post(
+            "/api/v1/galvanization/loads",
+            json={"driver_name": "Motorista", "items": [{"proposal_item_id": linked["items"][0]["id"]}]},
+            headers=headers,
+        ).json()
+        linked_current = self.client.get(f"/api/v1/proposals/{linked['id']}", headers=headers).json()
+        cancelled = self.client.post(
+            f"/api/v1/proposals/{linked['id']}/cancel",
+            json={"version": linked_current["version"], "reason": "Cancelamento terminal"},
+            headers=headers,
+        )
+        self.assertEqual(cancelled.status_code, 200, cancelled.text)
+
+        removed = self.client.patch(
+            f"/api/v1/galvanization/loads/{load['id']}",
+            json={"version": load["version"], "items": []},
+            headers=headers,
+        )
+        self.assertEqual(removed.status_code, 200, removed.text)
+        cancelled_after = self.client.get(f"/api/v1/proposals/{linked['id']}", headers=headers).json()
+        self.assertTrue(cancelled_after["is_cancelled"])
+        self.assertEqual(cancelled_after["current_status"], "CANCELADA")
+
+        rejected = self.client.post(
+            "/api/v1/galvanization/loads",
+            json={"driver_name": "Outro", "items": [{"proposal_item_id": linked["items"][0]["id"]}]},
+            headers=headers,
+        )
+        self.assertEqual(rejected.status_code, 409)
+        self.assertEqual(rejected.json()["error"]["code"], "PROPOSAL_CANCELLED_TERMINAL")
+
+    def test_galvanization_load_edit_is_atomic_and_sent_load_remains_immutable(self):
+        headers = self._headers()
+        first = self._proposal_ready_for_galvanization("CP-LOAD-EDIT-ROLLBACK-A", headers, [_item_payload("1")])
+        second = self._proposal_ready_for_galvanization("CP-LOAD-EDIT-ROLLBACK-B", headers, [_item_payload("1")])
+        load = self.client.post(
+            "/api/v1/galvanization/loads",
+            json={"driver_name": "Motorista", "items": [{"proposal_item_id": first["items"][0]["id"]}]},
+            headers=headers,
+        ).json()
+
+        with patch(
+            "api.app.modules.proposals.service._recalculate_proposal_after_load_change",
+            new=AsyncMock(side_effect=RuntimeError("falha de recalculo simulada")),
+        ):
+            with TestClient(create_app(), raise_server_exceptions=False) as failing_client:
+                failed = failing_client.patch(
+                    f"/api/v1/galvanization/loads/{load['id']}",
+                    json={"version": load["version"], "items": [{"proposal_item_id": second["items"][0]["id"]}]},
+                    headers=headers,
+                )
+        self.assertEqual(failed.status_code, 500)
+        load_after = self.client.get(f"/api/v1/galvanization/loads/{load['id']}", headers=headers).json()
+        self.assertEqual(load_after["version"], load["version"])
+        self.assertEqual([item["proposal_id"] for item in load_after["items"]], [first["id"]])
+        self.assertEqual(
+            self.client.get(f"/api/v1/proposals/{first['id']}", headers=headers).json()["galvanization_status"],
+            "EM_CARGA",
+        )
+        self.assertEqual(
+            self.client.get(f"/api/v1/proposals/{second['id']}", headers=headers).json()["galvanization_status"],
+            "AGUARDANDO_ENVIO",
+        )
+
+        released = self.client.post(
+            f"/api/v1/galvanization/loads/{load['id']}/release",
+            json={"version": load["version"]},
+            headers=headers,
+        ).json()
+        historical_edit = self.client.patch(
+            f"/api/v1/galvanization/loads/{load['id']}",
+            json={"version": released["version"], "items": []},
+            headers=headers,
+        )
+        self.assertEqual(historical_edit.status_code, 409)
+        self.assertEqual(historical_edit.json()["error"]["code"], "GALVANIZATION_LOAD_INVALID_STATE")
+
+    def test_concurrent_galvanization_load_edits_do_not_overwrite_and_balance_is_not_reserved_twice(self):
+        headers = self._headers()
+        proposal = self._proposal_ready_for_galvanization("CP-LOAD-EDIT-CONCURRENCY", headers, [_item_payload("1")])
+        item_id = proposal["items"][0]["id"]
+        load = self.client.post(
+            "/api/v1/galvanization/loads",
+            json={"driver_name": "Motorista", "items": [{"proposal_item_id": item_id}]},
+            headers=headers,
+        ).json()
+
+        clients = [TestClient(create_app()), TestClient(create_app())]
+        for client in clients:
+            client.__enter__()
+        try:
+            def edit(args):
+                client, items = args
+                return client.patch(
+                    f"/api/v1/galvanization/loads/{load['id']}",
+                    json={"version": load["version"], "items": items},
+                    headers=headers,
+                )
+
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                responses = list(executor.map(edit, [(clients[0], []), (clients[1], [{"proposal_item_id": item_id}])]))
+        finally:
+            for client in clients:
+                client.__exit__(None, None, None)
+        self.assertEqual(sorted(response.status_code for response in responses), [200, 409])
+        self.assertEqual(
+            next(response for response in responses if response.status_code == 409).json()["error"]["code"],
+            "GALVANIZATION_LOAD_VERSION_CONFLICT",
+        )
+
+        reserve_proposal = self._proposal_ready_for_galvanization(
+            "CP-LOAD-DOUBLE-RESERVE", headers, [_item_payload("1")]
+        )
+        reserve_item_id = reserve_proposal["items"][0]["id"]
+        available = self.client.get(
+            "/api/v1/galvanization/candidates", params={"search": "CP-LOAD-DOUBLE-RESERVE"}, headers=headers
+        ).json()["items"][0]["available_quantity"]
+        clients = [TestClient(create_app()), TestClient(create_app())]
+        for client in clients:
+            client.__enter__()
+        try:
+            def reserve(client):
+                return client.post(
+                    "/api/v1/galvanization/loads",
+                    json={"driver_name": "Concorrente", "items": [{"proposal_item_id": reserve_item_id, "sent_quantity": available}]},
+                    headers=headers,
+                )
+
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                reserve_responses = list(executor.map(reserve, clients))
+        finally:
+            for client in clients:
+                client.__exit__(None, None, None)
+        self.assertEqual(sorted(response.status_code for response in reserve_responses), [201, 409])
+        self.assertEqual(
+            next(response for response in reserve_responses if response.status_code == 409).json()["error"]["code"],
+            "GALVANIZATION_ITEM_NOT_ELIGIBLE",
+        )
 
     def test_official_galvanization_rejects_non_galvanization_item(self):
         headers = self._headers()
@@ -436,7 +1563,7 @@ class ProposalsIntegrationTests(unittest.TestCase):
         self.assertEqual(response.status_code, 409)
         self.assertEqual(response.json()["error"]["code"], "GALVANIZATION_ITEM_NOT_ELIGIBLE")
 
-    def test_official_galvanization_load_exceeding_max_weight_capacity_is_blocked(self):
+    def test_official_galvanization_load_weight_is_informational_and_independent(self):
         headers = self._headers()
         proposal = self._proposal_ready_for_galvanization("CP02010", headers, [_item_payload("1")])
         item = proposal["items"][0]
@@ -446,15 +1573,15 @@ class ProposalsIntegrationTests(unittest.TestCase):
             json={
                 "driver_name": "Motorista",
                 "max_weight": "5.0000",
+                "load_weight": "9.0000",
                 "items": [{"proposal_item_id": item["id"], "version": item["version"]}],
             },
             headers=headers,
         )
-        self.assertEqual(response.status_code, 409)
-        self.assertEqual(response.json()["error"]["code"], "GALVANIZATION_LOAD_INVALID_STATE")
-
-        loads = self.client.get("/api/v1/galvanization/loads", headers=headers)
-        self.assertEqual(loads.json()["items"], [])
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["load_weight"], "9.0000")
+        self.assertEqual(response.json()["max_weight"], "5.0000")
+        self.assertNotEqual(response.json()["load_weight"], response.json()["known_items_weight"])
 
     def test_official_galvanization_sent_quantity_above_available_balance_is_blocked(self):
         headers = self._headers()
@@ -627,31 +1754,153 @@ class ProposalsIntegrationTests(unittest.TestCase):
         self.assertEqual(delivered.json()["shipping_status"], "ENTREGUE_PARCIAL")
         self.assertEqual(delivered.json()["general_status"], "EM_EXPEDICAO")
 
-    def test_official_expedition_remanagement_returns_source_to_production(self):
+    def test_compensated_remanagement_moves_ready_and_productive_allocation_without_delivery(self):
         headers = self._headers()
         destination = self.client.post("/api/v1/proposals", json=_proposal_payload("CP03003", [_item_payload("1", requires_galvanization=False)]), headers=headers).json()
         source = self._proposal_ready_for_expedition("CP03004", headers, [_item_payload("1", requires_galvanization=False)])
         source_detail = self.client.get(f"/api/v1/shipping/proposals/{source['id']}", headers=headers).json()
         source_item = source_detail["items"][0]
+        destination = self.client.get(f"/api/v1/proposals/{destination['id']}", headers=headers).json()
+        destination_item = destination["items"][0]
+        compatible = self.client.get(
+            f"/api/v1/shipping/remanagements/compatible-items?source_proposal_id={source['id']}&destination_proposal_id={destination['id']}",
+            headers=headers,
+        ).json()[0]
 
         remanaged = self.client.post(
-            f"/api/v1/shipping/proposals/{destination['id']}/deliver-by-remanagement",
+            "/api/v1/shipping/remanagements",
             json={
-                "version": destination["version"],
                 "source_proposal_id": source["id"],
+                "destination_proposal_id": destination["id"],
                 "source_version": source_detail["version"],
-                "items": [{"proposal_item_id": source_item["proposal_item_id"], "version": source_item["version"]}],
+                "destination_version": destination["version"],
+                "idempotency_key": "test-remanagement-main-0001",
+                "items": [{
+                    "source_item_id": source_item["proposal_item_id"],
+                    "destination_item_id": destination_item["id"],
+                    "source_item_version": compatible["source_item_version"],
+                    "destination_item_version": compatible["destination_item_version"],
+                    "quantity": "2.0000",
+                }],
                 "reason": "Cliente retirou material de outra proposta",
             },
             headers=headers,
         )
-        self.assertEqual(remanaged.status_code, 200)
-        self.assertEqual(remanaged.json()["current_status"], "ENTREGUE")
+        self.assertEqual(remanaged.status_code, 201, remanaged.text)
+        self.assertEqual(remanaged.json()["total_quantity"], "2.0000")
 
         source_after = self.client.get(f"/api/v1/proposals/{source['id']}", headers=headers).json()
-        self.assertEqual(source_after["current_area"], "PRODUCAO")
+        self.assertEqual(source_after["current_area"], "EXPEDICAO")
         self.assertEqual(source_after["production_status"], "ITEM_PENDENTE_FABRICACAO")
         self.assertTrue(source_after["has_production_pending"])
+        self.assertTrue(source_after["items"][0]["produced"])
+
+        destination_shipping = self.client.get(f"/api/v1/shipping/proposals/{destination['id']}", headers=headers).json()
+        self.assertEqual(destination_shipping["items"][0]["available_quantity"], "2.0000")
+        self.assertEqual(destination_shipping["items"][0]["delivered_quantity"], "0.0000")
+        self.assertFalse(self.client.get(f"/api/v1/proposals/{destination['id']}", headers=headers).json()["items"][0]["delivered"])
+
+        production = self.client.get("/api/v1/production/proposals?limit=200&offset=0", headers=headers).json()
+        source_row = next(row for row in production["items"] if row["id"] == source["id"])
+        self.assertEqual(source_row["progress"]["reallocated_production_pending"], "2.0000")
+
+        repeated = self.client.post("/api/v1/shipping/remanagements", json={
+            "source_proposal_id": source["id"], "destination_proposal_id": destination["id"],
+            "source_version": source_detail["version"], "destination_version": destination["version"],
+            "idempotency_key": "test-remanagement-main-0001", "reason": "Cliente retirou material de outra proposta",
+            "items": [{"source_item_id": source_item["proposal_item_id"], "destination_item_id": destination_item["id"], "quantity": "2.0000"}],
+        }, headers=headers)
+        self.assertEqual(repeated.status_code, 201)
+        self.assertEqual(repeated.json()["id"], remanaged.json()["id"])
+
+        source_for_production = self.client.get(f"/api/v1/proposals/{source['id']}", headers=headers).json()
+        started_reallocated = self.client.post(
+            f"/api/v1/production/proposals/{source['id']}/start",
+            json={"version": source_for_production["version"]},
+            headers=headers,
+        )
+        self.assertEqual(started_reallocated.status_code, 200, started_reallocated.text)
+        started_reallocated_body = started_reallocated.json()
+        self.assertEqual(started_reallocated_body["current_area"], "EXPEDICAO")
+        preserved_expedition = {
+            key: started_reallocated_body.get(key)
+            for key in ("current_area", "current_status", "general_status", "shipping_status", "galvanization_status")
+        }
+        production_balance = {
+            key: value for key, value in started_reallocated_body["progress"].items() if key != "summary_status"
+        }
+        paused_reallocated = self.client.post(
+            f"/api/v1/production/proposals/{source['id']}/pause",
+            json={"version": started_reallocated_body["version"], "reason": "Pausa da fabricacao remanejada"},
+            headers=headers,
+        )
+        self.assertEqual(paused_reallocated.status_code, 200, paused_reallocated.text)
+        paused_reallocated_body = paused_reallocated.json()
+        self.assertEqual(paused_reallocated_body["production_status"], "PARADO")
+        self.assertEqual(
+            {key: paused_reallocated_body.get(key) for key in preserved_expedition},
+            preserved_expedition,
+        )
+        self.assertEqual(
+            {key: value for key, value in paused_reallocated_body["progress"].items() if key != "summary_status"},
+            production_balance,
+        )
+        resumed_reallocated = self.client.post(
+            f"/api/v1/production/proposals/{source['id']}/resume",
+            json={"version": paused_reallocated_body["version"]},
+            headers=headers,
+        )
+        self.assertEqual(resumed_reallocated.status_code, 200, resumed_reallocated.text)
+        self.assertEqual(
+            {key: resumed_reallocated.json().get(key) for key in preserved_expedition},
+            preserved_expedition,
+        )
+        completed_reallocated = self.client.post(
+            f"/api/v1/production/proposals/{source['id']}/complete-items",
+            json={"version": resumed_reallocated.json()["version"], "item_ids": [source_item["proposal_item_id"]]},
+            headers=headers,
+        )
+        self.assertEqual(completed_reallocated.status_code, 200, completed_reallocated.text)
+        self.assertEqual(completed_reallocated.json()["current_area"], "EXPEDICAO")
+        self.assertEqual(completed_reallocated.json()["progress"]["reallocated_production_pending"], "0.0000")
+        self.assertEqual(completed_reallocated.json()["progress"]["reallocated_production_completed"], "2.0000")
+        source_shipping = self.client.get(f"/api/v1/shipping/proposals/{source['id']}", headers=headers).json()
+        self.assertEqual(source_shipping["items"][0]["pending_quantity"], "2.0000")
+
+    def test_compensated_remanagement_concurrency_never_overspends_source_ready_balance(self):
+        headers = self._headers()
+        destination = self.client.post("/api/v1/proposals", json=_proposal_payload("CP03005", [_item_payload("1", requires_galvanization=False)]), headers=headers).json()
+        source = self._proposal_ready_for_expedition("CP03006", headers, [_item_payload("1", requires_galvanization=False)])
+        source_detail = self.client.get(f"/api/v1/shipping/proposals/{source['id']}", headers=headers).json()
+        destination = self.client.get(f"/api/v1/proposals/{destination['id']}", headers=headers).json()
+        compatible = self.client.get(
+            f"/api/v1/shipping/remanagements/compatible-items?source_proposal_id={source['id']}&destination_proposal_id={destination['id']}",
+            headers=headers,
+        ).json()[0]
+
+        def send(key: str):
+            with TestClient(create_app()) as concurrent_client:
+                return concurrent_client.post("/api/v1/shipping/remanagements", json={
+                    "source_proposal_id": source["id"],
+                    "destination_proposal_id": destination["id"],
+                    "source_version": source_detail["version"],
+                    "destination_version": destination["version"],
+                    "idempotency_key": key,
+                    "reason": "Disputa concorrente controlada",
+                    "items": [{
+                        "source_item_id": compatible["source_item_id"],
+                        "destination_item_id": compatible["destination_item_id"],
+                        "quantity": "2.0000",
+                    }],
+                }, headers=headers)
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            responses = list(executor.map(send, ["concurrency-remanagement-0001", "concurrency-remanagement-0002"]))
+        self.assertEqual(sorted(response.status_code for response in responses), [201, 409])
+        history = self.client.get(f"/api/v1/shipping/remanagements?proposal_id={source['id']}", headers=headers).json()
+        self.assertEqual(history["total"], 1)
+        source_after = self.client.get(f"/api/v1/shipping/proposals/{source['id']}", headers=headers).json()
+        self.assertEqual(source_after["items"][0]["remanaged_quantity"], "2.0000")
 
     def test_official_fiscal_partial_total_duplicate_cancel_and_withdrawal(self):
         headers = self._headers()
@@ -728,44 +1977,140 @@ class ProposalsIntegrationTests(unittest.TestCase):
 
     def test_administrative_correction_uses_api_postgresql_state_and_audit(self):
         headers = self._headers()
-        proposal = self.client.post("/api/v1/proposals", json=_proposal_payload("CP05001"), headers=headers).json()
-        released = self._release_to_production(proposal, headers)
+        proposal = self._proposal_ready_for_expedition(
+            "CP05001",
+            headers,
+            [_item_payload("1", requires_galvanization=False)],
+        )
+        asyncio.run(
+            self._force_projection(
+                proposal["id"],
+                current_area="PRODUCAO",
+                current_status="FINALIZADO",
+                general_status="EM_PRODUCAO",
+                shipping_status=None,
+            )
+        )
+        stuck = self.client.get(f"/api/v1/proposals/{proposal['id']}", headers=headers).json()
+
+        options = self.client.get(
+            f"/api/v1/proposals/{proposal['id']}/administrative-corrections/options",
+            headers=headers,
+        )
+        self.assertEqual(options.status_code, 200, options.text)
+        available = {
+            (row["target_area"], row["target_status"])
+            for row in options.json()["options"]
+        }
+        self.assertEqual(available, {("EXPEDICAO", "EM_SEPARACAO")})
+
+        events_before_preview = asyncio.run(self._proposal_event_count(proposal["id"]))
+        preview = self.client.post(
+            f"/api/v1/proposals/{proposal['id']}/administrative-corrections/preview",
+            json={
+                "expected_version": stuck["version"],
+                "correction_type": "STATE",
+                "to_area": "EXPEDICAO",
+                "to_status": "EM_SEPARACAO",
+            },
+            headers=headers,
+        )
+        self.assertEqual(preview.status_code, 200, preview.text)
+        self.assertTrue(preview.json()["allowed"])
+        self.assertTrue(any(row["field"] == "current_area" for row in preview.json()["changes"]))
+        self.assertIn("quantidades produzidas", preview.json()["unchanged_fields"])
+        self.assertEqual(asyncio.run(self._proposal_event_count(proposal["id"])), events_before_preview)
+        self.assertEqual(
+            self.client.get(f"/api/v1/proposals/{proposal['id']}", headers=headers).json()["current_area"],
+            "PRODUCAO",
+        )
+
+        impossible_delivery = self.client.post(
+            f"/api/v1/proposals/{proposal['id']}/administrative-corrections/preview",
+            json={
+                "expected_version": stuck["version"],
+                "to_area": "EXPEDICAO",
+                "to_status": "ENTREGUE",
+            },
+            headers=headers,
+        )
+        self.assertEqual(impossible_delivery.status_code, 200)
+        self.assertFalse(impossible_delivery.json()["allowed"])
+        self.assertIn(
+            "DELIVERY_FACTS_MISSING",
+            {row["code"] for row in impossible_delivery.json()["blockers"]},
+        )
 
         corrected = self.client.post(
             f"/api/v1/proposals/{proposal['id']}/administrative-correction",
-            json={"to_area": "PRODUCAO", "to_status": "INICIADO", "justification": "Ajuste administrativo homologado"},
+            json={
+                "expected_version": stuck["version"],
+                "correction_type": "STATE",
+                "to_area": "EXPEDICAO",
+                "to_status": "EM_SEPARACAO",
+                "reason": "Falha de sincronizacao deixou a proposta na fila produtiva",
+                "idempotency_key": "admin-correction-cp05001-0001",
+            },
             headers=headers,
         )
-        self.assertEqual(corrected.status_code, 200)
-        self.assertEqual(corrected.json()["current_area"], "PRODUCAO")
-        self.assertEqual(corrected.json()["current_status"], "INICIADO")
-        self.assertEqual(corrected.json()["production_status"], "INICIADO")
-        self.assertEqual(corrected.json()["version"], released["version"] + 1)
+        self.assertEqual(corrected.status_code, 200, corrected.text)
+        self.assertEqual(corrected.json()["current_area"], "EXPEDICAO")
+        self.assertEqual(corrected.json()["current_status"], "EM_SEPARACAO")
+        self.assertEqual(corrected.json()["production_status"], "FINALIZADO")
+        self.assertEqual(corrected.json()["version"], stuck["version"] + 1)
 
         repeated = self.client.post(
             f"/api/v1/proposals/{proposal['id']}/administrative-correction",
-            json={"to_area": "PRODUCAO", "to_status": "INICIADO", "justification": "Repeticao indevida"},
+            json={
+                "expected_version": stuck["version"],
+                "to_area": "EXPEDICAO",
+                "to_status": "EM_SEPARACAO",
+                "reason": "Falha de sincronizacao deixou a proposta na fila produtiva",
+                "idempotency_key": "admin-correction-cp05001-0001",
+            },
             headers=headers,
         )
-        self.assertEqual(repeated.status_code, 409)
+        self.assertEqual(repeated.status_code, 200, repeated.text)
+        self.assertEqual(repeated.json()["version"], corrected.json()["version"])
+        self.assertEqual(asyncio.run(self._proposal_event_count(proposal["id"])), events_before_preview + 1)
 
         blank_reason = self.client.post(
             f"/api/v1/proposals/{proposal['id']}/administrative-correction",
-            json={"to_area": "PRODUCAO", "to_status": "PARADO", "justification": "   "},
+            json={
+                "expected_version": corrected.json()["version"],
+                "to_area": "PRODUCAO",
+                "to_status": "FINALIZADO",
+                "reason": "   ",
+                "idempotency_key": "admin-correction-blank-0001",
+            },
             headers=headers,
         )
         self.assertEqual(blank_reason.status_code, 422)
 
         invalid_status = self.client.post(
             f"/api/v1/proposals/{proposal['id']}/administrative-correction",
-            json={"to_area": "PRODUCAO", "to_status": "STATUS_INVALIDO", "justification": "Teste"},
+            json={
+                "expected_version": corrected.json()["version"],
+                "to_area": "PRODUCAO",
+                "to_status": "STATUS_INVALIDO",
+                "reason": "Teste de bloqueio",
+                "idempotency_key": "admin-correction-invalid-0001",
+            },
             headers=headers,
         )
         self.assertEqual(invalid_status.status_code, 409)
+        self.assertEqual(invalid_status.json()["error"]["code"], "ADMIN_CORRECTION_BLOCKED")
+        self.assertTrue(invalid_status.json()["error"]["details"]["blockers"])
 
         not_found = self.client.post(
             "/api/v1/proposals/999999/administrative-correction",
-            json={"to_area": "PRODUCAO", "to_status": "PARADO", "justification": "Teste"},
+            json={
+                "expected_version": 1,
+                "to_area": "PRODUCAO",
+                "to_status": "PARADO",
+                "reason": "Teste de proposta ausente",
+                "idempotency_key": "admin-correction-missing-0001",
+            },
             headers=headers,
         )
         self.assertEqual(not_found.status_code, 404)
@@ -773,16 +2118,145 @@ class ProposalsIntegrationTests(unittest.TestCase):
         operator_headers = asyncio.run(self._operator_headers())
         denied = self.client.post(
             f"/api/v1/proposals/{proposal['id']}/administrative-correction",
-            json={"to_area": "PRODUCAO", "to_status": "PARADO", "justification": "Sem permissao"},
+            json={
+                "expected_version": corrected.json()["version"],
+                "to_area": "PRODUCAO",
+                "to_status": "FINALIZADO",
+                "reason": "Sem permissao administrativa",
+                "idempotency_key": "admin-correction-denied-0001",
+            },
             headers=operator_headers,
         )
         self.assertEqual(denied.status_code, 403)
+        denied_options = self.client.get(
+            f"/api/v1/proposals/{proposal['id']}/administrative-corrections/options",
+            headers=operator_headers,
+        )
+        self.assertEqual(denied_options.status_code, 403)
 
         history = self.client.get(f"/api/v1/proposals/{proposal['id']}/history", headers=headers)
         self.assertEqual(history.status_code, 200)
         self.assertTrue(any(row["event_type"] == "PROPOSAL_ADMINISTRATIVE_CORRECTION" for row in history.json()))
+        metadata = asyncio.run(self._administrative_event_metadata(proposal["id"]))
+        self.assertEqual(metadata["before_snapshot"]["current_area"], "PRODUCAO")
+        self.assertEqual(metadata["after_snapshot"]["current_area"], "EXPEDICAO")
+        self.assertEqual(metadata["expected_version"], stuck["version"])
+        self.assertEqual(metadata["resulting_version"], corrected.json()["version"])
+        self.assertIn("current_area", metadata["changed_fields"])
         security_events = self.client.get("/api/v1/security-events?limit=20&offset=0", headers=headers)
         self.assertTrue(any(row["event_type"] == "PROPOSAL_ADMINISTRATIVE_CORRECTION" for row in security_events.json()["items"]))
+
+    def test_administrative_correction_blocks_impossible_facts_cancelled_and_stale_version(self):
+        headers = self._headers()
+        proposal = self.client.post(
+            "/api/v1/proposals",
+            json=_proposal_payload("CP05002", [_item_payload("1", requires_galvanization=True)]),
+            headers=headers,
+        ).json()
+        released = self._release_to_production(proposal, headers)
+
+        production_complete = self.client.post(
+            f"/api/v1/proposals/{proposal['id']}/administrative-corrections/preview",
+            json={"expected_version": released["version"], "to_area": "PRODUCAO", "to_status": "FINALIZADO"},
+            headers=headers,
+        ).json()
+        total_return = self.client.post(
+            f"/api/v1/proposals/{proposal['id']}/administrative-corrections/preview",
+            json={"expected_version": released["version"], "to_area": "GALVANIZACAO", "to_status": "RETORNOU_GALVANIZACAO"},
+            headers=headers,
+        ).json()
+        self.assertIn("PRODUCTION_INCOMPLETE", {row["code"] for row in production_complete["blockers"]})
+        self.assertIn("GALVANIZATION_RETURN_MISSING", {row["code"] for row in total_return["blockers"]})
+
+        started = self.client.post(
+            f"/api/v1/production/proposals/{proposal['id']}/start",
+            json={"version": released["version"]},
+            headers=headers,
+        )
+        self.assertEqual(started.status_code, 200, started.text)
+        stale = self.client.post(
+            f"/api/v1/proposals/{proposal['id']}/administrative-correction",
+            json={
+                "expected_version": released["version"],
+                "to_area": "PRODUCAO",
+                "to_status": "INICIADO",
+                "reason": "Tentativa baseada em versao antiga",
+                "idempotency_key": "admin-correction-stale-0001",
+            },
+            headers=headers,
+        )
+        self.assertEqual(stale.status_code, 409)
+        self.assertEqual(stale.json()["error"]["code"], "PROPOSAL_VERSION_CONFLICT")
+
+        cancellable = self.client.post(
+            "/api/v1/proposals",
+            json=_proposal_payload("CP05003", [_item_payload("1", requires_galvanization=False)]),
+            headers=headers,
+        ).json()
+        cancelled = self.client.post(
+            f"/api/v1/proposals/{cancellable['id']}/cancel",
+            json={"version": cancellable["version"], "reason": "Cancelamento oficial"},
+            headers=headers,
+        ).json()
+        cancelled_options = self.client.get(
+            f"/api/v1/proposals/{cancellable['id']}/administrative-corrections/options",
+            headers=headers,
+        )
+        self.assertEqual(cancelled_options.status_code, 200)
+        self.assertEqual(cancelled_options.json()["options"], [])
+        reactivation = self.client.post(
+            f"/api/v1/proposals/{cancellable['id']}/administrative-correction",
+            json={
+                "expected_version": cancelled["version"],
+                "to_area": "PRODUCAO",
+                "to_status": "NAO_INICIADO",
+                "reason": "Tentativa de reativacao generica",
+                "idempotency_key": "admin-correction-cancelled-0001",
+            },
+            headers=headers,
+        )
+        self.assertEqual(reactivation.status_code, 409)
+        blockers = reactivation.json()["error"]["details"]["blockers"]
+        self.assertEqual(blockers[0]["code"], "PROPOSAL_CANCELLED_TERMINAL")
+
+    def test_administrative_correction_rolls_back_projection_when_audit_fails(self):
+        headers = self._headers()
+        proposal = self._proposal_ready_for_expedition(
+            "CP05004",
+            headers,
+            [_item_payload("1", requires_galvanization=False)],
+        )
+        asyncio.run(
+            self._force_projection(
+                proposal["id"],
+                current_area="PRODUCAO",
+                current_status="FINALIZADO",
+                general_status="EM_PRODUCAO",
+                shipping_status=None,
+            )
+        )
+        before = self.client.get(f"/api/v1/proposals/{proposal['id']}", headers=headers).json()
+        with patch(
+            "api.app.modules.proposals.service._record_event",
+            new=AsyncMock(side_effect=RuntimeError("audit unavailable")),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "audit unavailable"):
+                self.client.post(
+                    f"/api/v1/proposals/{proposal['id']}/administrative-correction",
+                    json={
+                        "expected_version": before["version"],
+                        "to_area": "EXPEDICAO",
+                        "to_status": "EM_SEPARACAO",
+                        "reason": "Teste de atomicidade da auditoria",
+                        "idempotency_key": "admin-correction-rollback-0001",
+                    },
+                    headers=headers,
+                )
+        after = self.client.get(f"/api/v1/proposals/{proposal['id']}", headers=headers).json()
+        self.assertEqual(after["current_area"], before["current_area"])
+        self.assertEqual(after["current_status"], before["current_status"])
+        self.assertEqual(after["shipping_status"], before["shipping_status"])
+        self.assertEqual(after["version"], before["version"])
 
     def _release_to_production(self, proposal: dict, headers: dict) -> dict:
         response = self.client.post(
@@ -815,6 +2289,81 @@ class ProposalsIntegrationTests(unittest.TestCase):
         async with session_factory() as session:
             result = await session.execute(text("SELECT count(*) FROM proposal_events WHERE proposal_id = :proposal_id").bindparams(proposal_id=proposal_id))
             return int(result.scalar_one())
+
+    async def _proposal_hierarchy(self, proposal_id: int) -> dict:
+        session_factory = get_sessionmaker()
+        async with session_factory() as session:
+            mother = (
+                await session.execute(
+                    text("SELECT count(*) AS item_count FROM proposal_items WHERE proposal_id = :id"),
+                    {"id": proposal_id},
+                )
+            ).scalar_one()
+            children = (
+                await session.execute(
+                    text(
+                        "SELECT p.proposal_number, p.current_area, count(i.id) AS item_count "
+                        "FROM proposals p LEFT JOIN proposal_items i ON i.proposal_id = p.id "
+                        "WHERE p.parent_proposal_id = :id AND p.active = true "
+                        "GROUP BY p.id ORDER BY p.partial_number"
+                    ),
+                    {"id": proposal_id},
+                )
+            ).mappings().all()
+            return {
+                "mother_item_count": int(mother or 0),
+                "child_item_count": sum(int(row["item_count"] or 0) for row in children),
+                "children": [dict(row) for row in children],
+            }
+
+    async def _force_projection(self, proposal_id: int, **fields) -> None:
+        allowed = {
+            "current_area",
+            "current_status",
+            "general_status",
+            "production_status",
+            "galvanization_status",
+            "shipping_status",
+            "flow_situation",
+        }
+        if not fields or not set(fields).issubset(allowed):
+            raise AssertionError("Projection test helper received an unsupported field.")
+        assignments = ", ".join(f"{field} = :{field}" for field in fields)
+        session_factory = get_sessionmaker()
+        async with session_factory() as session:
+            await session.execute(
+                text(f"UPDATE proposals SET {assignments} WHERE id = :proposal_id"),
+                {**fields, "proposal_id": proposal_id},
+            )
+            await session.commit()
+
+    async def _administrative_event_metadata(self, proposal_id: int) -> dict:
+        session_factory = get_sessionmaker()
+        async with session_factory() as session:
+            result = await session.execute(
+                text(
+                    "SELECT metadata FROM proposal_events "
+                    "WHERE proposal_id = :proposal_id "
+                    "AND event_type = 'PROPOSAL_ADMINISTRATIVE_CORRECTION' "
+                    "ORDER BY id DESC LIMIT 1"
+                ),
+                {"proposal_id": proposal_id},
+            )
+            return dict(result.scalar_one())
+
+    async def _galvanization_load_update_metadata(self, load_id: int) -> dict:
+        session_factory = get_sessionmaker()
+        async with session_factory() as session:
+            result = await session.execute(
+                text(
+                    "SELECT metadata FROM galvanization_load_events "
+                    "WHERE load_id = :load_id "
+                    "AND event_type = 'GALVANIZATION_LOAD_UPDATED' "
+                    "ORDER BY id DESC LIMIT 1"
+                ),
+                {"load_id": load_id},
+            )
+            return dict(result.scalar_one())
 
     async def _operator_headers(self) -> dict:
         session_factory = get_sessionmaker()

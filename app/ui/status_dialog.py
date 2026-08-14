@@ -1,281 +1,137 @@
 from __future__ import annotations
 
+from uuid import uuid4
+
 from PySide6.QtWidgets import (
-    QComboBox, QDialog, QFrame, QFormLayout, QHBoxLayout, QLabel, QMessageBox, QTextEdit, QVBoxLayout,
+    QComboBox, QDialog, QFormLayout, QFrame, QHBoxLayout, QLabel, QMessageBox, QTextEdit, QVBoxLayout,
 )
 
+from app.ui.action_center.handlers.control_general import ControlGeneralStatusHandler
+from app.ui.action_center.handlers.expedition import ExpeditionStatusHandler, RegisterDeliveryHandler
+from app.ui.action_center.handlers.galvanization import (
+    ManageGalvanizationLoadExistingHandler, ManageGalvanizationLoadNewHandler, OpenRelatedGalvanizationLoadHandler,
+    register_galvanization_return_legacy,
+)
+from app.ui.action_center.handlers.legacy import LegacyActionHandler
+from app.ui.action_center.handlers.production import (
+    DefineItemFlowHandler, EditItemWeightsHandler, ProductionPauseDialog, ProductionStatusHandler,
+    RegisterProductionHandler,
+)
+from app.ui.action_center.handlers.warehouse import WarehouseStatusHandler
+from app.ui.action_center.provider import (
+    CATEGORY_TO_CARD_TYPE, GalvanizationActionProvider, action_category, action_description, action_icon,
+    primary_action_index,
+)
+from app.ui.action_center.proposal_action_center import ProposalActionCenter
+from app.ui.action_center.registry import ActionRegistry
 from app.ui.components.modern_button import ModernButton
-from app.ui.background_worker import start_worker
-from app.ui.galvanization_load_dialog import GalvanizationLoadManagerDialog, GalvanizationReturnDialog
-from app.ui.icons import make_icon
-from app.ui.item_flow_dialog import ItemFlowDialog
-from app.ui.item_selection_dialog import ItemSelectionDialog
-from app.ui.item_weight_dialog import ItemWeightDialog
+
+# Re-exported for backwards compatibility: callers/tests that imported
+# ProductionPauseDialog from this module keep working - the dialog itself
+# now lives with the production handler that opens it
+# (app/ui/action_center/handlers/production.py).
+__all__ = ["ManualStatusDialog", "ProductionPauseDialog", "StatusDialog", "open_proposal_action_center"]
 
 
-class StatusDialog(QDialog):
-    """Operator-facing workflow actions. Internal status names stay out of daily use."""
+def open_proposal_action_center(service, process_id: int, parent, area: str | None = None, row_context: dict | None = None) -> "StatusDialog":
+    """Ponto unico de abertura da Central de Acoes por proposal_id (Fase 8,
+    secao 6) - botao "Acoes", menu contextual, atalho de tabela e o botao
+    "Acoes" de `ProcessDetailDialog` convergem todos para esta funcao em vez
+    de cada um resolver a area e instanciar `StatusDialog` por conta propria.
 
-    def __init__(self, service, process_id: int, area: str | None, parent=None):
-        super().__init__(parent)
-        self.service = service
-        self.process_id = process_id
-        self._action_thread = None
-        self._running_action = False
-        self._action_buttons = []
-        base_process = service.get_process_dict(process_id)
-        self.area = area or service.current_location(base_process)[0] or "CONTROLE GERAL"
-        self.process = service.get_process_area_dict(process_id, self.area)
-        self.setWindowTitle("Acoes da proposta")
-        self.setMinimumWidth(580)
-        self._build()
+    `area` e a area preferida de quem esta chamando (ex.: a area da pagina
+    atual) - so e usada se estiver entre as areas visiveis ao usuario
+    corrente; caso contrario (incluindo area=None, o caso de
+    `ProcessDetailDialog`, que nao sabe de antemao em qual area a proposta
+    esta) a area real e resolvida pelo proprio `ProposalActionCenter` via
+    `service.current_location()`, exatamente como antes desta fase - nenhum
+    comportamento mudou, so o local onde a checagem `in visible_areas()`
+    vive deixou de estar duplicado."""
+    resolved_area = area if area in service.visible_areas() else None
+    return StatusDialog(service, process_id, resolved_area, parent, row_context=row_context)
 
-    def _build(self):
-        root = QVBoxLayout(self)
-        root.setContentsMargins(24, 22, 24, 20)
-        root.setSpacing(12)
-        title = QLabel(f"{self.process.get('proposta', '')} | {self.process.get('cliente', '')}")
-        title.setStyleSheet("font-size: 18px; font-weight: 800;")
-        area_key = self.area
-        area_label = self.area.title()
-        current_status = self.service.status_for_area(self.process, self.area)
-        current = QLabel(
-            f"Etapa atual: {area_label or '-'}  |  "
-            f"{self.service.area_status_label(area_key, current_status) if current_status else '-'}"
+
+class StatusDialog(ProposalActionCenter):
+    """Instancia de Producao da Central de Acoes (`ProposalActionCenter`):
+    apresentacao + descoberta ficam na classe base; aqui so registramos os
+    handlers de dominio e a camada de compatibilidade (`LegacyActionHandler`)
+    para as acoes de Galvanizacao que esta fase ainda nao migra."""
+
+    def __init__(self, service, process_id: int, area: str | None, parent=None, row_context: dict | None = None):
+        provider = GalvanizationActionProvider(service)
+        registry = self._build_registry()
+        super().__init__(service, process_id, area, provider, registry, parent, row_context=row_context)
+
+    @staticmethod
+    def _build_registry() -> ActionRegistry:
+        registry = ActionRegistry()
+        registry.register("REGISTER_PRODUCTION", RegisterProductionHandler())
+        registry.register("DEFINE_ITEM_FLOW", DefineItemFlowHandler())
+        registry.register("EDIT_ITEM_WEIGHTS", EditItemWeightsHandler())
+        registry.register("STATUS", ProductionStatusHandler(), area="PRODUCAO")
+        registry.register("STATUS", ControlGeneralStatusHandler(), area="CONTROLE GERAL")
+        registry.register("STATUS", WarehouseStatusHandler(), area="ALMOXARIFADO")
+        registry.register("STATUS", ExpeditionStatusHandler(), area="EXPEDICAO")
+        registry.register("REGISTER_DELIVERY", RegisterDeliveryHandler())
+        # MANAGE_LOAD chega do backend como uma unica acao, mas
+        # GalvanizationActionProvider ja a divide em dois descriptors de UI
+        # antes de renderizar os cards (Fase 8) - cada um com handler proprio.
+        registry.register(
+            "MANAGE_LOAD_EXISTING", ManageGalvanizationLoadExistingHandler(), area="GALVANIZACAO"
         )
-        current.setObjectName("Caption")
-        instruction = QLabel("O que deseja registrar agora?")
-        instruction.setStyleSheet("font-weight: 700;")
-        root.addWidget(title)
-        root.addWidget(current)
-        root.addSpacing(4)
-        root.addWidget(instruction)
-
-        actions = self.service.process_actions(self.process_id, self.area)
-        if not actions:
-            message = "Nao ha nenhuma acao disponivel nesta etapa."
-            if self.area == "GALVANIZACAO":
-                message = "Esta movimentacao e controlada pela tela Cargas."
-            empty = QLabel(message)
-            empty.setObjectName("Caption")
-            root.addWidget(empty)
-        for action in actions:
-            button = ModernButton(action["label"], action["icon"], accent=True)
-            button.setMinimumHeight(42)
-            button.clicked.connect(lambda _checked=False, data=action: self.run_action(data))
-            self._action_buttons.append(button)
-            root.addWidget(button)
-
-        root.addWidget(QLabel("Observacao (opcional)"))
-        self.observation = QTextEdit()
-        self.observation.setPlaceholderText("Acrescente uma informacao importante sobre esta operacao")
-        self.observation.setMaximumHeight(82)
-        root.addWidget(self.observation)
-
-        footer = QHBoxLayout()
-        if self.service.can_admin():
-            manual = ModernButton("Correcao administrativa", "settings")
-            manual.clicked.connect(self.open_manual_correction)
-            footer.addWidget(manual)
-        footer.addStretch()
-        close = ModernButton("Fechar", "clear")
-        close.clicked.connect(self.reject)
-        footer.addWidget(close)
-        root.addLayout(footer)
-
-    def run_action(self, action: dict[str, str]):
-        if self._running_action:
-            return
-        try:
-            action_id = action["id"]
-            if action_id == "MANAGE_LOAD":
-                dialog = GalvanizationLoadManagerDialog(self.service, [self.process_id], self)
-                if dialog.exec() or dialog.changed:
-                    self.accept()
-                return
-            if action_id == "REGISTER_GALVANIZATION_RETURN":
-                self._register_galvanization_return()
-                return
-            if action_id == "REGISTER_PRODUCTION":
-                self._register_production()
-                return
-            if action_id == "EDIT_ITEM_WEIGHTS":
-                dialog = ItemWeightDialog(self.service, self.process_id, self)
-                if dialog.exec():
-                    self.accept()
-                return
-            if action_id == "DEFINE_ITEM_FLOW":
-                dialog = ItemFlowDialog(self.service, self.process_id, self, origin="Producao")
-                if dialog.exec():
-                    self.accept()
-                return
-            if action_id == "REGISTER_DELIVERY":
-                self._register_delivery()
-                return
-            status = action["status"]
-            if status == "CANCELADA" and not self.observation.toPlainText().strip():
-                QMessageBox.warning(self, "Cancelar proposta", "Informe o motivo do cancelamento na observacao.")
-                return
-            self._run_background_action(
-                lambda: self.service.update_status(
-                    self.process_id,
-                    action["area"],
-                    status,
-                    self.observation.toPlainText().strip(),
-                )
-            )
-        except Exception as exc:
-            QMessageBox.warning(self, "Acao da proposta", str(exc))
-
-    def _run_background_action(self, operation):
-        self._set_action_running(True)
-        self._action_thread = start_worker(self, operation, self._action_success, self._action_error)
-
-    def _action_success(self, _result):
-        self._set_action_running(False)
-        self.accept()
-
-    def _action_error(self, exc):
-        self._set_action_running(False)
-        QMessageBox.warning(self, "Acao da proposta", str(exc))
-
-    def _set_action_running(self, running: bool):
-        self._running_action = running
-        self.observation.setEnabled(not running)
-        for button in self._action_buttons:
-            button.setEnabled(not running)
-
-    def _register_galvanization_return(self):
-        active_loads = [
-            row for row in self.service.process_loads(self.process_id)
-            if (row.get("status") or "") in ("LIBERADA_PARA_ENVIO", "RETORNO_PARCIAL")
-        ]
-        if not active_loads:
-            QMessageBox.information(
-                self,
-                "Retorno da galvanizacao",
-                "Esta proposta nao possui carga ativa liberada para retorno.",
-            )
-            return
-        if len(active_loads) > 1:
-            dialog = GalvanizationLoadManagerDialog(self.service, [self.process_id], self)
-            if dialog.exec() or dialog.changed:
-                self.accept()
-            return
-        dialog = GalvanizationReturnDialog(self.service, int(active_loads[0]["id"]), self)
-        if dialog.exec():
-            self.accept()
-
-    def _register_production(self):
-        summary = self.service.item_flow_summary(self.process_id)
-        if summary.get("undefined_count"):
-            answer = QMessageBox.question(
-                self,
-                "Fluxo dos itens",
-                "Existem itens sem definicao de fluxo. Deseja definir agora antes de registrar a producao?",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.Yes,
-            )
-            if answer == QMessageBox.Yes:
-                dialog = ItemFlowDialog(self.service, self.process_id, self, origin="Producao")
-                if dialog.exec():
-                    self.accept()
-            return
-        available = self.service.proposal_items(self.process_id, pending_production=True)
-        options = self.service.next_status_options("PRODUCAO", self.process_id)
-        if not available:
-            status = "FINALIZADO"
-            if "FINALIZADO_PARCIAL" in options:
-                answer = QMessageBox.question(
-                    self,
-                    "Registrar producao",
-                    "A producao desta proposta foi concluida por completo?\n\n"
-                    "Escolha Nao para registrar uma producao parcial.",
-                    QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
-                    QMessageBox.Yes,
-                )
-                if answer == QMessageBox.Cancel:
-                    return
-                status = "FINALIZADO" if answer == QMessageBox.Yes else "FINALIZADO_PARCIAL"
-            self._run_background_action(
-                lambda: self.service.update_status(
-                    self.process_id, "PRODUCAO", status, self.observation.toPlainText().strip()
-                )
-            )
-            return
-        selector = ItemSelectionDialog(self.service, self.process_id, "production", self)
-        selector.setWindowTitle("Registrar itens produzidos")
-        if not selector.exec():
-            return
-        all_selected = len(selector.selected_ids) == len(available)
-        status = "FINALIZADO" if all_selected else "FINALIZADO_PARCIAL"
-        if status not in options:
-            raise RuntimeError("Esta selecao nao e permitida para o processo atual. Conclua todos os itens deste subprocesso.")
-        selected_ids = list(selector.selected_ids)
-        manual_weight = selector.manual_weight
-        self._run_background_action(
-            lambda: self.service.update_status(
-                self.process_id,
-                "PRODUCAO",
-                status,
-                self.observation.toPlainText().strip(),
-                selected_ids,
-                produced_weight=manual_weight,
-            )
+        registry.register("MANAGE_LOAD_NEW", ManageGalvanizationLoadNewHandler(), area="GALVANIZACAO")
+        # REGISTER_GALVANIZATION_RETURN continua no LegacyActionHandler de proposito
+        # (Fase 6, secoes 21-25): o fluxo preferencial passa a ser navegar ate a carga
+        # e registrar o retorno por la (OPEN_RELATED_GALVANIZATION_LOAD abaixo); a
+        # entrada direta so sera desativada apos essa navegacao estar comprovada.
+        registry.register("REGISTER_GALVANIZATION_RETURN", LegacyActionHandler(register_galvanization_return_legacy))
+        registry.register(
+            "OPEN_RELATED_GALVANIZATION_LOAD", OpenRelatedGalvanizationLoadHandler(), area="GALVANIZACAO"
         )
+        return registry
 
-    def _register_delivery(self):
-        available = self.service.proposal_items(self.process_id, pending_delivery=True)
-        if available:
-            selector = ItemSelectionDialog(
-                self.service, self.process_id, "delivery", self, allow_full_selection=True
-            )
-            selector.setWindowTitle("Registrar itens retirados pelo cliente")
-            if not selector.exec():
-                return
-            status = "ENTREGUE" if len(selector.selected_ids) == len(available) else "ENTREGUE_PARCIAL"
-            selected_ids = list(selector.selected_ids)
-            self._run_background_action(
-                lambda: self.service.update_status(
-                    self.process_id,
-                    "EXPEDICAO",
-                    status,
-                    self.observation.toPlainText().strip(),
-                    selected_ids,
-                )
-            )
-        else:
-            self._run_background_action(
-                lambda: self.service.update_status(
-                    self.process_id, "EXPEDICAO", "ENTREGUE", self.observation.toPlainText().strip()
-                )
-            )
+    # Pure presentation-mapping helpers kept here as thin delegates so
+    # existing call sites/tests that use them as StatusDialog staticmethods
+    # keep working - the single source of truth is
+    # app/ui/action_center/provider.py.
+    @staticmethod
+    def _primary_action_index(actions: list[dict[str, str]]) -> int:
+        return primary_action_index(actions)
 
-    def open_manual_correction(self):
-        dialog = ManualStatusDialog(self.service, self.process_id, self.area, self)
-        if dialog.exec():
-            self.accept()
+    @staticmethod
+    def _action_type(action: dict[str, str], index: int, primary_index: int) -> str:
+        return CATEGORY_TO_CARD_TYPE[action_category(action, index, primary_index)]
+
+    @staticmethod
+    def _action_icon(action: dict[str, str]):
+        return action_icon(action)
+
+    @staticmethod
+    def _action_description(action: dict[str, str]) -> str:
+        return action_description(action)
 
 
 class ManualStatusDialog(QDialog):
-    """Administrative correction tool for explicit, audited flow repairs."""
+    """Administrative state repair driven exclusively by API-calculated options."""
 
     def __init__(self, service, process_id: int, area: str | None, parent=None):
         super().__init__(parent)
         self.service = service
         self.process_id = process_id
-        self.process = service.get_process_dict(process_id)
-        current_area, current_area_label, current_status = service.current_location(self.process)
-        self.current_area = current_area or area or "CONTROLE GERAL"
-        self.current_area_label = current_area_label or self.current_area.title()
-        self.current_status = current_status or service.status_for_area(self.process, self.current_area)
-        self.area = area or self.current_area
+        self.idempotency_key = str(uuid4())
+        self.options_response = service.administrative_correction_options(process_id)
+        self.expected_version = int(self.options_response.get("version") or 0)
+        self.current_state = self.options_response.get("current_state") or {}
+        self.preview: dict | None = None
         self.setWindowTitle("Correcao administrativa")
-        self.setMinimumWidth(620)
+        self.setMinimumWidth(720)
         root = QVBoxLayout(self)
         root.setContentsMargins(24, 22, 24, 20)
         root.setSpacing(12)
-        warning = QLabel("Uso administrativo. Esta acao altera manualmente o fluxo e fica registrada no historico.")
+        warning = QLabel(
+            "Esta e uma operacao administrativa auditada. Use somente para corrigir "
+            "uma projecao incompativel com os fatos reais do processo."
+        )
         warning.setWordWrap(True)
         warning.setStyleSheet("font-weight: 700;")
 
@@ -284,70 +140,105 @@ class ManualStatusDialog(QDialog):
         current_layout = QFormLayout(current_frame)
         current_layout.setContentsMargins(14, 12, 14, 12)
         current_layout.setSpacing(8)
-        current_layout.addRow("Area atual", QLabel(self.current_area_label or "-"))
-        current_layout.addRow(
-            "Status atual",
-            QLabel(
-                service.area_status_label(self.current_area, self.current_status)
-                if self.current_status
-                else "-"
-            ),
-        )
+        current_layout.addRow("Area atual", QLabel(self._display(self.current_state.get("current_area"))))
+        current_layout.addRow("Status atual", QLabel(self._display(self.current_state.get("current_status"))))
+        current_layout.addRow("Producao", QLabel(self._display(self.current_state.get("production_status"))))
+        current_layout.addRow("Galvanizacao", QLabel(self._display(self.current_state.get("galvanization_status"))))
+        current_layout.addRow("Expedicao", QLabel(self._display(self.current_state.get("shipping_status"))))
+        current_layout.addRow("Fiscal", QLabel(self._display(self.current_state.get("fiscal_status"))))
 
-        self.area_combo = QComboBox()
-        for area_name in service.visible_areas():
-            self.area_combo.addItem(area_name.title(), area_name)
-        self.area_combo.setCurrentIndex(max(0, self.area_combo.findData(self.area)))
-        self.status_combo = QComboBox()
+        self.option_combo = QComboBox()
+        for option in self.options_response.get("options") or []:
+            self.option_combo.addItem(option.get("label") or "Correcao compativel", option)
+        if self.option_combo.count() == 0:
+            self.option_combo.addItem("Nenhuma correcao de estado compativel", None)
+            self.option_combo.setEnabled(False)
+
+        self.impact = QTextEdit()
+        self.impact.setReadOnly(True)
+        self.impact.setMinimumHeight(210)
         self.reason = QTextEdit()
-        self.reason.setPlaceholderText("Justificativa obrigatoria")
+        self.reason.setPlaceholderText("Motivo obrigatorio da inconsistencia e da correcao")
         self.reason.setMinimumHeight(94)
-        save = ModernButton("Aplicar correcao", "status", accent=True)
+        self.save_button = ModernButton("Aplicar correcao", "status", accent=True)
         cancel = ModernButton("Cancelar", "clear")
-        save.clicked.connect(self.save)
+        self.save_button.clicked.connect(self.save)
         cancel.clicked.connect(self.reject)
-        self.area_combo.currentIndexChanged.connect(self.load_status)
+        self.option_combo.currentIndexChanged.connect(self.load_preview)
         root.addWidget(warning)
         root.addWidget(current_frame)
-        root.addWidget(QLabel("Nova area"))
-        root.addWidget(self.area_combo)
-        root.addWidget(QLabel("Novo status"))
-        root.addWidget(self.status_combo)
-        root.addWidget(QLabel("Justificativa"))
+        root.addWidget(QLabel("Estado desejado (opcoes calculadas pela API)"))
+        root.addWidget(self.option_combo)
+        root.addWidget(QLabel("Impacto da correcao"))
+        root.addWidget(self.impact)
+        root.addWidget(QLabel("Motivo"))
         root.addWidget(self.reason)
         footer = QHBoxLayout()
         footer.addStretch()
         footer.addWidget(cancel)
-        footer.addWidget(save)
+        footer.addWidget(self.save_button)
         root.addLayout(footer)
-        self.load_status()
+        self.load_preview()
 
-    def load_status(self):
-        area = self.area_combo.currentData()
-        self.status_combo.clear()
-        options = self.service.administrative_status_options(area)
-        if not options:
-            options = self.service.next_status_options(area, self.process_id)
-        for status in options:
-            self.status_combo.addItem(
-                make_icon(status, self.service.palette["accent"]),
-                self.service.area_status_label(area, status),
-                status,
+    @staticmethod
+    def _display(value) -> str:
+        return str(value or "-").replace("_", " ").title()
+
+    def load_preview(self):
+        option = self.option_combo.currentData()
+        self.preview = None
+        self.save_button.setEnabled(False)
+        if not option:
+            warnings = self.options_response.get("warnings") or []
+            self.impact.setPlainText("\n".join(warnings) or "Nao existe correcao de estado disponivel.")
+            return
+        try:
+            self.preview = self.service.preview_administrative_correction(
+                self.process_id,
+                self.expected_version,
+                option.get("target_area"),
+                option.get("target_status"),
             )
+        except Exception as exc:
+            self.impact.setPlainText(str(exc))
+            return
+
+        lines = ["O que sera alterado:"]
+        changes = self.preview.get("changes") or []
+        if changes:
+            lines.extend(
+                f"- {row.get('field')}: {row.get('before') or '-'} -> {row.get('after') or '-'}"
+                for row in changes
+            )
+        else:
+            lines.append("- Nenhum campo de projecao.")
+        lines.extend(["", "O que NAO sera alterado:"])
+        lines.extend(f"- {field}" for field in (self.preview.get("unchanged_fields") or [])[:12])
+        blockers = self.preview.get("blockers") or []
+        if blockers:
+            lines.extend(["", "Bloqueadores:"])
+            lines.extend(f"- {row.get('message')}" for row in blockers)
+        effects = self.preview.get("effects") or []
+        if effects:
+            lines.extend(["", "Efeitos:"])
+            lines.extend(f"- {effect}" for effect in effects)
+        self.impact.setPlainText("\n".join(lines))
+        self.save_button.setEnabled(bool(self.preview.get("allowed")))
 
     def save(self):
         reason = self.reason.toPlainText().strip()
         if not reason:
-            QMessageBox.warning(self, "Correcao administrativa", "Informe a justificativa da correcao.")
+            QMessageBox.warning(self, "Correcao administrativa", "Informe o motivo da correcao.")
             return
-        status = self.status_combo.currentData()
-        if not status:
-            QMessageBox.warning(self, "Correcao administrativa", "Informe o novo status.")
+        option = self.option_combo.currentData()
+        if not option or not self.preview or not self.preview.get("allowed"):
+            QMessageBox.warning(self, "Correcao administrativa", "A correcao selecionada nao esta autorizada pela previa.")
             return
         answer = QMessageBox.question(
             self,
             "Correcao administrativa",
-            "Esta ação altera manualmente o fluxo da proposta e ficará registrada no histórico. Deseja continuar?",
+            "A API validara novamente os fatos e a versao antes de aplicar. "
+            "A operacao ficara registrada no historico e na auditoria. Deseja continuar?",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,
         )
@@ -356,9 +247,11 @@ class ManualStatusDialog(QDialog):
         try:
             self.service.administrative_correction(
                 self.process_id,
-                self.area_combo.currentData(),
-                status,
+                self.expected_version,
+                option.get("target_area"),
+                option.get("target_status"),
                 reason,
+                self.idempotency_key,
             )
             self.accept()
         except Exception as exc:

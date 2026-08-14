@@ -10,13 +10,13 @@ from app.services.notifier_agent import NotifierState, build_notification_messag
 
 class BuildNotificationMessageTest(unittest.TestCase):
     def test_no_change_returns_none(self):
-        previous = NotifierState(total_unread=3, pending_questions=1, new_observations=2)
-        current = NotifierState(total_unread=3, pending_questions=1, new_observations=2)
+        previous = NotifierState(total_unread=3, pending_questions=1)
+        current = NotifierState(total_unread=3, pending_questions=1)
         self.assertIsNone(build_notification_message(previous, current))
 
     def test_decrease_does_not_notify(self):
-        previous = NotifierState(total_unread=5, pending_questions=2, new_observations=1)
-        current = NotifierState(total_unread=1, pending_questions=0, new_observations=0)
+        previous = NotifierState(total_unread=5, pending_questions=2)
+        current = NotifierState(total_unread=1, pending_questions=0)
         self.assertIsNone(build_notification_message(previous, current))
 
     def test_new_messages_are_reported(self):
@@ -25,12 +25,11 @@ class BuildNotificationMessageTest(unittest.TestCase):
         message = build_notification_message(previous, current)
         self.assertIn("2 nova(s) mensagem(ns)", message)
 
-    def test_new_questions_and_observations_combine(self):
+    def test_new_questions_are_reported(self):
         previous = NotifierState(total_unread=1)
-        current = NotifierState(total_unread=1, pending_questions=1, new_observations=3)
+        current = NotifierState(total_unread=1, pending_questions=1)
         message = build_notification_message(previous, current)
         self.assertIn("pergunta(s) pendente(s)", message)
-        self.assertIn("3 nova(s) observação(ões)", message)
         self.assertNotIn("mensagem", message)
 
 
@@ -39,12 +38,11 @@ class NotifierStateSerializationTest(unittest.TestCase):
         state = NotifierState.from_dict({"total_unread": 4})
         self.assertEqual(state.total_unread, 4)
         self.assertEqual(state.pending_questions, 0)
-        self.assertEqual(state.new_observations, 0)
 
     def test_round_trips_through_disk(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             with patch.object(notifier_agent, "get_app_data_dir", return_value=Path(temp_dir)):
-                original = NotifierState(total_unread=7, pending_questions=2, new_observations=1)
+                original = NotifierState(total_unread=7, pending_questions=2)
                 notifier_agent.save_state(original)
                 loaded = notifier_agent.load_state()
                 self.assertEqual(loaded, original)
@@ -120,7 +118,7 @@ class RunCycleStatePersistenceTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             toast_mock, state = self._run_with_mocks(
                 temp_dir=temp_dir,
-                summary={"total_unread": 2, "pending_questions": 0, "new_observations": 0},
+                summary={"total_unread": 2, "pending_questions": 0},
                 send_toast_result=True,
             )
             toast_mock.assert_called_once()
@@ -130,7 +128,7 @@ class RunCycleStatePersistenceTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             toast_mock, state = self._run_with_mocks(
                 temp_dir=temp_dir,
-                summary={"total_unread": 3, "pending_questions": 0, "new_observations": 0},
+                summary={"total_unread": 3, "pending_questions": 0},
                 send_toast_result=False,
             )
             toast_mock.assert_called_once()
@@ -146,7 +144,7 @@ class RunCycleStatePersistenceTest(unittest.TestCase):
                 notifier_agent.save_state(NotifierState(total_unread=4))
             toast_mock, state = self._run_with_mocks(
                 temp_dir=temp_dir,
-                summary={"total_unread": 4, "pending_questions": 0, "new_observations": 0},
+                summary={"total_unread": 4, "pending_questions": 0},
             )
             toast_mock.assert_not_called()
             self.assertEqual(state, NotifierState(total_unread=4))

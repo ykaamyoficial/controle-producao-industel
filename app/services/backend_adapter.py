@@ -2,14 +2,15 @@ from __future__ import annotations
 import json
 from typing import Any
 from urllib.parse import urlparse, urlunparse
+from app.integrations.api.exceptions import ApiBusinessError
 from app.services.api_proposal_storage import OfficialProposalApiStorage, api_permission_level, user_message_for_api_error
 from app.services.api_reports import ApiExecutiveDashboardService, ApiOperationalReportsService
 from app.services.status_sorting import sort_fiscal_rows, sort_process_rows
 from app.services.app_paths import ensure_app_data_dirs, get_config_example_path, get_config_path
 from app.services.app_logging import get_logger
 from app.services.configuration_service import get_configuration_service
-from app.services.login_preferences import save_login_preferences
 log = get_logger('backend')
+_UNSET = object()
 PERMISSION_LEVEL_NONE = 'NONE'
 PERMISSION_LEVEL_VIEW = 'VIEW'
 PERMISSION_LEVEL_EDIT = 'EDIT'
@@ -20,16 +21,22 @@ PERMISSION_AREAS = [('dashboard', 'Painel Geral', 'PAINEL GERAL'), ('executive_d
 NAV_PERMISSION_KEYS = {nav: key for key, _label, nav in PERMISSION_AREAS}
 LEGACY_AREA_PERMISSION_KEYS = {'CONTROLE GERAL': 'control_general', 'PRODUCAO': 'production', 'GALVANIZACAO': 'galvanization', 'EXPEDICAO': 'expedition', 'ALMOXARIFADO': 'warehouse'}
 PERMISSION_LEGACY_AREAS = {value: key for key, value in LEGACY_AREA_PERMISSION_KEYS.items()}
-STATUS_LABELS = {'': '', 'AGUARDANDO_LIBERACAO': 'Aguardando liberacao', 'NAO_LIBERADO': 'Nao liberado', 'LIBERADO_PRODUCAO': 'Liberado para producao', 'EM_PRODUCAO': 'Em producao', 'EM_GALVANIZACAO': 'Em galvanizacao', 'EM_EXPEDICAO': 'Em expedicao', 'ENTREGUE': 'Entregue', 'CANCELADA': 'Cancelada', 'NAO_INICIADO': 'Aguardando inicio', 'ITEM_PENDENTE_FABRICACAO': 'Item pendente de fabricacao', 'INICIADO': 'Em producao', 'FINALIZADO': 'Producao concluida', 'FINALIZADO_PARCIAL': 'Produzido parcialmente', 'PARADO': 'Producao pausada', 'AGUARDANDO_ENVIO': 'Aguardando montagem de carga', 'DISPONIVEL_PARCIAL': 'Disponivel parcialmente', 'EM_CARGA': 'Em carga', 'ENVIADO_GALVANIZACAO': 'Enviado para galvanizacao', 'RETORNOU_GALVANIZACAO': 'Retornou da galvanizacao', 'RETORNOU_PARCIAL': 'Retornou parcialmente', 'EM_SEPARACAO': 'Aguardando separacao', 'AGUARDANDO_SEPARACAO_PARCIAL': 'Aguardando separacao parcial', 'SEPARACAO_INICIADA': 'Em separacao', 'SEPARADO': 'Separado para entrega', 'ENTREGUE_PARCIAL': 'Entregue parcialmente', 'AGUARDANDO_CONFIRMACAO': 'Aguardando confirmacao', 'SEM_PARAFUSOS': 'Sem almoxarifado', 'ALMOXARIFADO_ENTREGUE': 'Almoxarifado entregue', 'ALMOXARIFADO_ENTREGUE_PARCIAL': 'Almoxarifado entregue parcial', 'NAO_DEFINIDO': 'Nao definido', 'SIM': 'Sim', 'NAO': 'Nao', 'PRINCIPAL': 'Principal', 'PARCIAL': 'Parcial'}
-AREA_STATUS_LABEL_OVERRIDES = {'ALMOXARIFADO': {'AGUARDANDO_CONFIRMACAO': 'Aguardando confirmacao', 'EM_SEPARACAO': 'Em separacao', 'SEM_PARAFUSOS': 'Sem almoxarifado', 'SEPARADO': 'Separado', 'ALMOXARIFADO_ENTREGUE_PARCIAL': 'Entregue parcial', 'ALMOXARIFADO_ENTREGUE': 'Entregue', 'FINALIZADO': 'Entregue'}, 'PRODUCAO': {'FINALIZADO': 'Producao concluida', 'FINALIZADO_PARCIAL': 'Produzido parcialmente'}, 'GALVANIZACAO': {'RETORNOU_GALVANIZACAO': 'Retornou da galvanizacao', 'RETORNOU_PARCIAL': 'Retornou parcialmente', 'DISPONIVEL': 'Disponivel para carga'}, 'EXPEDICAO': {'ENTREGUE': 'Entregue', 'ENTREGUE_PARCIAL': 'Entregue parcial'}}
+STATUS_LABELS = {'': '', 'AGUARDANDO_LIBERACAO': 'Aguardando liberacao', 'NAO_LIBERADO': 'Nao liberado', 'LIBERADO_PRODUCAO': 'Liberado para producao', 'EM_PRODUCAO': 'Em producao', 'EM_GALVANIZACAO': 'Em galvanizacao', 'EM_EXPEDICAO': 'Em expedicao', 'ENTREGUE': 'Entregue', 'CANCELADA': 'Cancelada', 'NAO_INICIADO': 'Aguardando inicio', 'FLUXO_INDEFINIDO': 'Fluxo indefinido', 'ITEM_PENDENTE_FABRICACAO': 'Item pendente de fabricacao', 'INICIADO': 'Em producao', 'FINALIZADO': 'Producao concluida', 'FINALIZADO_PARCIAL': 'Produzido parcialmente', 'PARADO': 'Producao pausada', 'AGUARDANDO_ENVIO': 'Aguardando montagem de carga', 'AGUARDANDO_RETORNO': 'Aguardando retorno', 'DISPONIVEL_PARCIAL': 'Disponivel parcialmente', 'EM_CARGA': 'Em carga', 'ENVIADO_GALVANIZACAO': 'Enviado para galvanizacao', 'RETORNO_PARCIAL': 'Retorno parcial', 'RETORNADO': 'Retornado', 'RETORNOU_GALVANIZACAO': 'Retornou da galvanizacao', 'RETORNOU_PARCIAL': 'Retornou parcialmente', 'EM_SEPARACAO': 'Aguardando separacao', 'AGUARDANDO_SEPARACAO_PARCIAL': 'Aguardando separacao parcial', 'SEPARACAO_INICIADA': 'Em separacao', 'SEPARADO': 'Separado para entrega', 'ENTREGUE_PARCIAL': 'Entregue parcialmente', 'AGUARDANDO_CONFIRMACAO': 'Aguardando confirmacao', 'SEM_PARAFUSOS': 'Sem almoxarifado', 'ALMOXARIFADO_ENTREGUE': 'Almoxarifado entregue', 'ALMOXARIFADO_ENTREGUE_PARCIAL': 'Almoxarifado entregue parcial', 'NAO_DEFINIDO': 'Nao definido', 'SIM': 'Sim', 'NAO': 'Nao', 'PRINCIPAL': 'Principal', 'PARCIAL': 'Parcial'}
+AREA_STATUS_LABEL_OVERRIDES = {'ALMOXARIFADO': {'NAO_DEFINIDO': 'Aguardando definicao', '': 'Aguardando definicao', 'AGUARDANDO_CONFIRMACAO': 'Aguardando confirmacao', 'EM_SEPARACAO': 'Em separacao', 'SEM_PARAFUSOS': 'Sem almoxarifado', 'SEPARADO': 'Separado', 'ALMOXARIFADO_ENTREGUE_PARCIAL': 'Entregue parcial', 'ALMOXARIFADO_ENTREGUE': 'Entregue', 'FINALIZADO': 'Entregue'}, 'PRODUCAO': {'FINALIZADO': 'Producao concluida', 'FINALIZADO_PARCIAL': 'Produzido parcialmente'}, 'GALVANIZACAO': {'RETORNOU_GALVANIZACAO': 'Retornou da galvanizacao', 'RETORNOU_PARCIAL': 'Retornou parcialmente', 'DISPONIVEL': 'Disponivel para carga'}, 'EXPEDICAO': {'ENTREGUE': 'Entregue', 'ENTREGUE_PARCIAL': 'Entregue parcial'}}
 LOAD_STATUS_LABELS = {'AGUARDANDO_LIBERACAO': 'Aguardando liberacao', 'LIBERADA_PARA_ENVIO': 'Liberada para envio', 'RETORNO_PARCIAL': 'Retorno parcial', 'RETORNADA_GALVANIZACAO': 'Retornada da galvanizacao'}
+STATUS_LABELS['SEPARADO_COM_PENDENCIA'] = 'Separado com pendencia'
 DEFAULT_REPORT_DEFINITIONS = [{'name': 'Processos em andamento', 'source': 'ANDAMENTO', 'columns': ['proposta', 'cliente', 'obra_site', 'lote', 'peso', 'prazo_entrega', 'status_geral', 'status_producao', 'status_galvanizacao', 'status_expedicao', 'situacao_fluxo']}, {'name': 'Parciais e pendencias', 'source': 'PARCIAIS', 'columns': ['proposta', 'tipo_processo', 'cliente', 'obra_site', 'peso_parcial', 'saldo_pendente', 'status_producao', 'status_galvanizacao', 'status_expedicao', 'situacao_fluxo', 'origem_remanejamento', 'observacao_remanejamento']}, {'name': 'Galvanizacao enviada/retorno', 'source': 'GALVANIZACAO', 'columns': ['proposta', 'cliente', 'obra_site', 'lote', 'peso', 'data_envio_galv', 'data_prevista_retorno_galv', 'data_retorno_galv', 'status_galvanizacao', 'status_expedicao']}, {'name': 'Entregas por cliente', 'source': 'ENTREGAS', 'columns': ['cliente', 'proposta', 'pedido_compra', 'obra_site', 'prazo_entrega', 'data_retirada', 'status_expedicao', 'status_geral']}]
 ITEM_NO_PRODUCTION_LABELS = {'pronta_entrega': 'Pronta entrega', 'comprado_terceiro': 'Comprado de terceiro', 'terceirizado': 'Terceirizado', 'outro': 'Outro'}
 AREA_FINISHED_STATUS = {'PRODUCAO': {'FINALIZADO'}, 'GALVANIZACAO': {'RETORNOU_GALVANIZACAO'}, 'EXPEDICAO': {'ENTREGUE'}, 'ALMOXARIFADO': {'ALMOXARIFADO_ENTREGUE', 'SEM_PARAFUSOS'}}
 STATUS_FLOW_ORDER = {'CONTROLE GERAL': ['AGUARDANDO_LIBERACAO', 'LIBERADO_PRODUCAO', 'EM_PRODUCAO', 'EM_GALVANIZACAO', 'EM_EXPEDICAO', 'ENTREGUE', 'CANCELADA'], 'PRODUCAO': ['NAO_INICIADO', 'INICIADO', 'PARADO', 'FINALIZADO_PARCIAL', 'FINALIZADO', 'ITEM_PENDENTE_FABRICACAO'], 'GALVANIZACAO': ['AGUARDANDO_ENVIO', 'DISPONIVEL_PARCIAL', 'EM_CARGA', 'ENVIADO_GALVANIZACAO', 'RETORNOU_PARCIAL', 'RETORNOU_GALVANIZACAO'], 'EXPEDICAO': ['EM_SEPARACAO', 'AGUARDANDO_SEPARACAO_PARCIAL', 'SEPARACAO_INICIADA', 'SEPARADO', 'ENTREGUE_PARCIAL', 'ENTREGUE'], 'ALMOXARIFADO': ['AGUARDANDO_CONFIRMACAO', 'EM_SEPARACAO', 'SEPARADO', 'SEM_PARAFUSOS', 'ALMOXARIFADO_ENTREGUE_PARCIAL', 'ALMOXARIFADO_ENTREGUE']}
-COLOR_PALETTES = {'aurora': {'label': 'Aurora profissional', 'bg': '#f5f7fb', 'surface': '#ffffff', 'surface_alt': '#e8f1ff', 'text': '#0f172a', 'muted': '#475569', 'border': '#cbd5e1', 'accent': '#006fc9', 'accent_hover': '#005aa3', 'accent_text': '#ffffff', 'secondary': '#be123c', 'success': '#047857', 'warning': '#b45309', 'danger': '#b91c1c', 'area_control': '#006fc9', 'area_production': '#047857', 'area_galvanization': '#7c3aed', 'area_expedition': '#c2410c', 'area_stock': '#64748b', 'tree_selected': '#bfdbfe', 'tree_heading': '#dbeafe'}, 'grafite': {'label': 'Grafite alto contraste', 'bg': '#0f172a', 'surface': '#172033', 'surface_alt': '#24324a', 'text': '#f8fafc', 'muted': '#cbd5e1', 'border': '#475569', 'accent': '#38bdf8', 'accent_hover': '#7dd3fc', 'accent_text': '#0f172a', 'secondary': '#fb923c', 'success': '#34d399', 'warning': '#facc15', 'danger': '#fb7185', 'area_control': '#38bdf8', 'area_production': '#34d399', 'area_galvanization': '#a78bfa', 'area_expedition': '#fb923c', 'area_stock': '#94a3b8', 'tree_selected': '#0e7490', 'tree_heading': '#1e293b'}}
+STATUS_FLOW_ORDER['EXPEDICAO'].insert(3, 'SEPARADO_COM_PENDENCIA')
+COLOR_PALETTES = {'aurora': {'label': 'Aurora profissional', 'bg': '#f5f7fb', 'surface': '#ffffff', 'surface_alt': '#e8f1ff', 'text': '#0f172a', 'muted': '#475569', 'border': '#cbd5e1', 'accent': '#006fc9', 'accent_hover': '#005aa3', 'accent_text': '#ffffff', 'secondary': '#be123c', 'success': '#047857', 'warning': '#b45309', 'danger': '#b91c1c', 'info': '#0369a1', 'disabled': '#94a3b8', 'area_control': '#006fc9', 'area_production': '#047857', 'area_galvanization': '#7c3aed', 'area_expedition': '#c2410c', 'area_stock': '#64748b', 'tree_selected': '#bfdbfe', 'tree_heading': '#dbeafe'}, 'grafite': {'label': 'Grafite alto contraste', 'bg': '#0f172a', 'surface': '#172033', 'surface_alt': '#24324a', 'text': '#f8fafc', 'muted': '#cbd5e1', 'border': '#475569', 'accent': '#38bdf8', 'accent_hover': '#7dd3fc', 'accent_text': '#0f172a', 'secondary': '#fb923c', 'success': '#34d399', 'warning': '#facc15', 'danger': '#fb7185', 'info': '#7dd3fc', 'disabled': '#64748b', 'area_control': '#38bdf8', 'area_production': '#34d399', 'area_galvanization': '#a78bfa', 'area_expedition': '#fb923c', 'area_stock': '#94a3b8', 'tree_selected': '#0e7490', 'tree_heading': '#1e293b'}}
 
 class AppError(Exception):
+    pass
+
+class VersionConflictError(AppError):
+    """Raised when the API rejects a write because its optimistic-locking `version` is stale."""
     pass
 
 def normalize_status(status: str | None) -> str:
@@ -137,7 +144,11 @@ def load_app_config() -> dict[str, Any]:
     data = service.load() if service.exists() else _load_config_example()
     data.setdefault('company', 'Industel')
     data.setdefault('color_palette', 'claro')
-    data.setdefault('desktop_api', {'enabled': True, 'base_url': 'http://127.0.0.1:8000', 'connect_timeout': 3, 'read_timeout': 10})
+    # Fase 3 - Primeiro Acesso Automatico (Secao 21): nao persistir um servidor
+    # "validado" por default -- esse default so serve para exibicao quando
+    # nada foi configurado ainda; a gravacao real de um endereco valido e
+    # sempre feita pelo bootstrap ou pelo diagnostico via DesktopApiConfigStore.
+    data.setdefault('desktop_api', {'enabled': False, 'base_url': 'http://127.0.0.1:8000', 'connect_timeout': 3, 'read_timeout': 10})
     data.setdefault('platform_api', {'enabled': False, 'base_url': 'http://127.0.0.1:8100', 'environment_type': 'production', 'company_code': '', 'company_name': ''})
     data.setdefault('saved_reports', legacy.DEFAULT_REPORT_DEFINITIONS)
     data['color_palette'] = normalize_palette_name(data.get('color_palette'))
@@ -179,6 +190,12 @@ class BackendService:
         self.user = None
         self._api_access_token: str | None = None
         self._api_refresh_token: str | None = None
+        self._avatar_cache: dict[int, bytes | None] = {}
+        # Callback opcional, setado pela MainWindow: chamado depois que uma
+        # conversa e confirmada como lida no backend, para que o badge global
+        # do cabecalho seja atualizado sem o dialog de chat precisar conhecer
+        # o widget do header diretamente.
+        self.on_conversation_marked_read = None
         log.info('Backend inicializado | banco_operacional=PostgreSQL via API')
 
     @property
@@ -204,6 +221,12 @@ class BackendService:
         except Exception:
             log.warning('Nao foi possivel encerrar sessao ativa na API antes da troca de empresa')
 
+    def logout(self) -> None:
+        self._logout_current_api_session_best_effort()
+        self.user = None
+        self._api_access_token = None
+        self._api_refresh_token = None
+
     def authenticate(self, login: str, password: str) -> bool:
         try:
             state = self.official_proposal_storage.start_session(login, password)
@@ -213,8 +236,7 @@ class BackendService:
                 self._api_access_token = None
                 self._api_refresh_token = None
                 return False
-            permissions = set(api_user.permissions or [])
-            self.user = {'id': api_user.id, 'nome': api_user.display_name, 'login': api_user.username, 'perfil': 'admin' if api_user.is_superuser or '*' in permissions else 'usuario', 'ativo': 1 if api_user.active else 0, 'areas_acesso': ','.join(legacy.AREAS.keys()), 'api_permissions': permissions, 'api_superuser': bool(api_user.is_superuser or '*' in permissions), 'password_must_change': api_user.password_must_change}
+            self._apply_current_api_user(api_user)
             self._api_access_token = state.access_token
             try:
                 self._api_refresh_token = self.official_proposal_storage.token_store.get_refresh_token()
@@ -237,6 +259,49 @@ class BackendService:
         if not self.user:
             return '-'
         return 'Administrador' if legacy.user_can_admin(self.user) else 'Usuario'
+
+    def update_current_user(self, *, username: str | None = None, display_name: str | None = None) -> dict[str, Any]:
+        api_user = self.official_proposal_storage.update_current_user(username=username, display_name=display_name)
+        self._apply_current_api_user(api_user)
+        return dict(self.user or {})
+
+    def change_current_password(self, current_password: str, new_password: str, confirm_password: str) -> None:
+        self.official_proposal_storage.change_current_password(current_password, new_password, confirm_password)
+
+    def upload_current_avatar(self, filename: str, content: bytes, mime: str) -> dict[str, Any]:
+        api_user = self.official_proposal_storage.upload_current_avatar(filename, content, mime)
+        self._apply_current_api_user(api_user)
+        self.invalidate_avatar_cache(api_user.id)
+        return dict(self.user or {})
+
+    def remove_current_avatar(self) -> dict[str, Any]:
+        api_user = self.official_proposal_storage.remove_current_avatar()
+        self._apply_current_api_user(api_user)
+        self.invalidate_avatar_cache(api_user.id)
+        return dict(self.user or {})
+
+    def avatar_bytes_for_user(self, user_id: int) -> bytes | None:
+        key = int(user_id)
+        if key not in self._avatar_cache:
+            self._avatar_cache[key] = self.official_proposal_storage.avatar_bytes_for_user(key)
+        return self._avatar_cache[key]
+
+    def invalidate_avatar_cache(self, user_id: int | None = None) -> None:
+        if user_id is None:
+            self._avatar_cache.clear()
+        else:
+            self._avatar_cache.pop(int(user_id), None)
+
+    def _apply_current_api_user(self, api_user) -> None:
+        permissions = set(api_user.permissions or [])
+        self.user = {
+            'id': api_user.id, 'nome': api_user.display_name, 'login': api_user.username,
+            'perfil': 'admin' if api_user.is_superuser or '*' in permissions else 'usuario',
+            'ativo': 1 if api_user.active else 0, 'areas_acesso': ','.join(legacy.AREAS.keys()),
+            'api_permissions': permissions, 'api_superuser': bool(api_user.is_superuser or '*' in permissions),
+            'password_must_change': api_user.password_must_change,
+            'avatar_available': api_user.avatar_available, 'avatar_mime': api_user.avatar_mime,
+        }
 
     def visible_areas(self) -> list[str]:
         if not self.user:
@@ -266,6 +331,12 @@ class BackendService:
 
     def can_view_nav(self, nav_key: str) -> bool:
         return self.can_view(self.permission_key(nav_key))
+
+    def can_admin_chat(self) -> bool:
+        if not self.user:
+            return False
+        permissions = set(self.user.get('api_permissions') or [])
+        return bool(self.user.get('api_superuser')) or '*' in permissions or 'chat.admin' in permissions
 
     def can_edit_process(self) -> bool:
         return self.can_edit('control_general')
@@ -333,11 +404,11 @@ class BackendService:
         if area == 'GALVANIZACAO':
             return ['AGUARDANDO_ENVIO', 'DISPONIVEL_PARCIAL', 'EM_CARGA', 'ENVIADO_GALVANIZACAO', 'RETORNOU_GALVANIZACAO']
         if area == 'EXPEDICAO':
-            return ['EM_SEPARACAO', 'SEPARACAO_INICIADA', 'SEPARADO', 'ENTREGUE_PARCIAL', 'ENTREGUE']
+            return ['EM_SEPARACAO', 'SEPARACAO_INICIADA', 'SEPARADO_COM_PENDENCIA', 'SEPARADO', 'ENTREGUE_PARCIAL', 'ENTREGUE']
         if area == 'PARCIAIS':
             return ['FINALIZADO_PARCIAL', 'ITEM_PENDENTE_FABRICACAO', 'DISPONIVEL_PARCIAL', 'RETORNOU_PARCIAL', 'AGUARDANDO_SEPARACAO_PARCIAL', 'ENTREGUE_PARCIAL', 'NOTA_FISCAL_PARCIAL', 'ALMOXARIFADO_ENTREGUE_PARCIAL']
         if area == 'ALMOXARIFADO':
-            return ['AGUARDANDO_CONFIRMACAO', 'EM_SEPARACAO', 'SEPARADO', 'SEM_PARAFUSOS', 'ALMOXARIFADO_ENTREGUE', 'ALMOXARIFADO_ENTREGUE_PARCIAL']
+            return ['NAO_DEFINIDO', 'AGUARDANDO_CONFIRMACAO', 'EM_SEPARACAO', 'SEPARADO', 'SEM_PARAFUSOS', 'ALMOXARIFADO_ENTREGUE', 'ALMOXARIFADO_ENTREGUE_PARCIAL']
         return []
 
     def status_label(self, status: str) -> str:
@@ -351,6 +422,7 @@ class BackendService:
         if area == 'CONTROLE GERAL':
             try:
                 rows = self.official_proposal_storage.list_proposals(customer=filters.get('cliente') or None, current_status=filters.get('status') or None, sort_by='updated_at', sort_dir='desc', limit=200, offset=0)
+                rows = [row for row in rows if not row.get('parent_proposal_id')]
                 text = (filters.get('text') or '').upper()
                 if text:
                     rows = [row for row in rows if text in (row.get('proposta') or '').upper() or text in (row.get('cliente') or '').upper() or text in (row.get('obra_site') or '').upper() or (text in (row.get('lote') or '').upper())]
@@ -360,7 +432,7 @@ class BackendService:
         if area == 'PRODUCAO':
             try:
                 rows = self.official_proposal_storage.list_production_proposals(search=filters.get('text') or None, status=filters.get('status') or None, limit=200, offset=0)
-                return sort_process_rows(area, rows)
+                return sort_process_rows(area, self._merge_partial_operational_rows(rows, area))
             except Exception as exc:
                 raise AppError(user_message_for_api_error(exc)) from exc
         if area == 'EXPEDICAO':
@@ -392,7 +464,74 @@ class BackendService:
     def sort_process_rows(self, area: str | None, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return sort_process_rows(area, rows)
 
+    def _merge_partial_operational_rows(self, rows: list[dict[str, Any]], area: str) -> list[dict[str, Any]]:
+        """Une filhas somente no mesmo bloco operacional.
+
+        A linha resultante preserva os ids reais em ``proposal_ids`` para que
+        uma acao posterior possa atingir exatamente os lotes representados.
+        Sem parent_proposal_id, a linha continua com o comportamento antigo.
+        """
+        status_key = {
+            'EXPEDICAO': 'status_expedicao',
+            'FISCAL': 'status_fiscal',
+            'GALVANIZACAO': 'status_galvanizacao',
+        }.get(area, 'status_localizacao')
+        groups: dict[tuple[int, str, str], list[dict[str, Any]]] = {}
+        for row in rows:
+            process_id = int(row.get('id') or row.get('processo_id') or row.get('proposal_id') or 0)
+            parent_id = int(row.get('parent_proposal_id') or process_id)
+            status = str(row.get(status_key) or row.get('current_status') or '').upper()
+            load_key = str(row.get('carga_galvanizacao') or '') if area == 'GALVANIZACAO' else ''
+            groups.setdefault((parent_id, status, load_key), []).append(row)
+        merged: list[dict[str, Any]] = []
+        parent_group_count: dict[int, int] = {}
+        for parent_id, _status, _load_key in groups:
+            parent_group_count[parent_id] = parent_group_count.get(parent_id, 0) + 1
+        for (_parent_id, _status, _load_key), group in groups.items():
+            # A mãe é uma linha própria no Fiscal. Separe-a antes de agrupar
+            # as filhas; status igual não transforma a mãe em alvo das ações
+            # das filhas.
+            mother_rows = [row for row in group if not row.get('parent_proposal_id')]
+            child_rows = [row for row in group if row.get('parent_proposal_id')]
+            merged.extend(mother_rows)
+            if len(child_rows) <= 1:
+                merged.extend(child_rows)
+                continue
+            group = sorted(child_rows, key=lambda row: int(row.get('partial_number') or 0))
+            base_row = next((row for row in group if not row.get('parent_proposal_id')), group[0])
+            ids = [int(row.get('id') or row.get('processo_id') or row.get('proposal_id')) for row in group]
+            partials = [int(row.get('partial_number') or 0) for row in group if row.get('partial_number')]
+            display = str(base_row.get('proposta') or base_row.get('proposal_number') or '')
+            if partials and base_row.get('parent_proposal_id') and parent_group_count.get(_parent_id, 0) > 1:
+                root = display.rsplit('-', 1)[0] if '-' in display else display
+                display = f"{root}-{','.join(str(value) for value in partials)}"
+            elif partials and base_row.get('parent_proposal_id'):
+                display = display.rsplit('-', 1)[0] if '-' in display else display
+            combined = dict(base_row)
+            combined['id'] = ids[0]
+            combined['processo_id'] = ids[0]
+            combined['proposal_ids'] = ids
+            combined['fiscal_processo_ids'] = [
+                int(row.get('fiscal_processo_id') or row.get('id') or 0)
+                for row in group
+                if row.get('fiscal_processo_id') or row.get('id')
+            ]
+            combined['proposta'] = display
+            combined['proposal_number'] = display
+            combined['grouped_partial'] = len(ids) > 1
+            combined['group_partial_numbers'] = partials
+            for numeric_key in ('quantidade_itens', 'item_count', 'itens_pendentes', 'quantidade_disponivel', 'quantidade_separada', 'quantidade_entregue', 'saldo_pendente'):
+                values = [row.get(numeric_key) for row in group if row.get(numeric_key) not in (None, '')]
+                if values and all(isinstance(value, (int, float)) for value in values):
+                    combined[numeric_key] = sum(values)
+            merged.append(combined)
+        return merged
+
     def process_visible_in_area(self, process: dict[str, Any] | Any, area: str) -> bool:
+        if isinstance(process, dict):
+            cancelled = bool(process.get('is_cancelled')) or (process.get('status_geral') or process.get('current_status') or '') == 'CANCELADA'
+            if cancelled:
+                return area == 'CONTROLE GERAL'
         return True
 
     def batch_status_candidates(self, area: str, text: str='', exclude_ids: set[int] | None=None) -> list[dict[str, Any]]:
@@ -422,6 +561,91 @@ class BackendService:
             return [status for status in ordered if common and status in common and valid_ids]
         return []
 
+    def validate_batch_selection(
+        self,
+        area: str,
+        process_ids: list[int],
+        action_id: str = 'STATUS',
+    ) -> dict[str, Any]:
+        """Revalida no estado oficial atual uma seleção acumulada da interface.
+
+        A função apenas consulta as regras já expostas por ``next_status_options``
+        e ``process_actions``; não cria transições ou políticas de lote novas.
+        """
+
+        ordered_ids = list(dict.fromkeys(int(value) for value in process_ids if value))
+        if not self.can_edit(area):
+            return {
+                'valid_ids': [],
+                'incompatible': [
+                    {'id': process_id, 'proposta': '', 'reason': 'sem permissão para alterar esta área'}
+                    for process_id in ordered_ids
+                ],
+                'common_statuses': [],
+                'global_reason': '',
+            }
+
+        valid_ids: list[int] = []
+        incompatible: list[dict[str, Any]] = []
+        status_options: dict[int, list[str]] = {}
+        rows: list[dict[str, Any]] = []
+        for process_id in ordered_ids:
+            try:
+                process = self.get_process_area_dict(process_id, area)
+            except Exception as exc:
+                incompatible.append({'id': process_id, 'proposta': '', 'reason': str(exc) or 'não encontrada'})
+                continue
+            if not process:
+                incompatible.append({'id': process_id, 'proposta': '', 'reason': 'não encontrada'})
+                continue
+            proposal = process.get('proposta') or process.get('proposal_number') or str(process_id)
+            if not self.process_visible_in_area(process, area):
+                incompatible.append({'id': process_id, 'proposta': proposal, 'reason': 'não está mais disponível nesta área'})
+                continue
+            try:
+                if action_id == 'DEFINE_ITEM_FLOW':
+                    allowed = any(
+                        action.get('id') == 'DEFINE_ITEM_FLOW'
+                        for action in self.process_actions(process_id, area)
+                    )
+                    options = ['DEFINE_ITEM_FLOW'] if allowed else []
+                else:
+                    options = self.next_status_options(area, process_id)
+            except Exception as exc:
+                incompatible.append({'id': process_id, 'proposta': proposal, 'reason': str(exc) or 'estado indisponível'})
+                continue
+            if not options:
+                incompatible.append({'id': process_id, 'proposta': proposal, 'reason': 'não possui ação compatível no estado atual'})
+                continue
+            valid_ids.append(process_id)
+            status_options[process_id] = list(options)
+            rows.append(process)
+
+        common_statuses: list[str] = []
+        global_reason = ''
+        if action_id == 'STATUS' and valid_ids:
+            common = set(status_options[valid_ids[0]])
+            for process_id in valid_ids[1:]:
+                common.intersection_update(status_options[process_id])
+            common_statuses = [
+                status for status in STATUS_FLOW_ORDER.get(area, []) if status in common
+            ]
+            if not common_statuses and not incompatible:
+                summaries = []
+                for process, process_id in zip(rows, valid_ids):
+                    proposal = process.get('proposta') or process.get('proposal_number') or process_id
+                    labels = ', '.join(self.action_label(area, status) for status in status_options[process_id])
+                    summaries.append(f'{proposal}: {labels}')
+                global_reason = 'Não existe uma ação comum para todas as propostas.\n' + '\n'.join(summaries[:20])
+
+        return {
+            'valid_ids': valid_ids,
+            'incompatible': incompatible,
+            'common_statuses': common_statuses,
+            'global_reason': global_reason,
+            'rows': rows,
+        }
+
     def load_status_label(self, status: str) -> str:
         return legacy.load_status_label(status) 
 
@@ -432,7 +656,12 @@ class BackendService:
         filters = filters or {}
         text = (filters.get('text') or '').strip().upper()
         status_filter = (filters.get('status') or '').strip().upper()
-        grouped: dict[int, dict[str, Any]] = {}
+        # A proposta pode ocupar mais de um bloco operacional ao mesmo tempo:
+        # itens ainda aguardando carga e itens que ja pertencem a uma carga.
+        # Agrupar apenas pelo processo fazia os itens restantes desaparecerem
+        # assim que o primeiro lote era colocado em uma carga.
+        grouped: dict[tuple[int, str], dict[str, Any]] = {}
+        block_states: dict[tuple[int, str], set[str]] = {}
 
         def matches(row: dict[str, Any]) -> bool:
             if status_filter and (row.get('status_galvanizacao') or '').upper() != status_filter:
@@ -443,12 +672,30 @@ class BackendService:
             return text in haystack
         for row in self.official_proposal_storage.galvanization_load_candidates('', ''):
             normalized = dict(row)
+            process_id = int(normalized.get('processo_id') or normalized.get('id') or 0)
+            if not process_id:
+                continue
             normalized.setdefault('status_galvanizacao', 'AGUARDANDO_ENVIO')
             normalized.setdefault('status_geral', 'EM_GALVANIZACAO')
             normalized['localizacao_atual'] = 'GALVANIZACAO'
             normalized['status_localizacao'] = normalized.get('status_galvanizacao') or 'AGUARDANDO_ENVIO'
-            grouped[int(normalized['id'])] = normalized
+            normalized['processo_id'] = process_id
+            normalized['id'] = process_id
+            normalized.pop('carga_galvanizacao', None)
+            grouped[(process_id, 'CANDIDATE')] = normalized
         load_status_to_area_status = {'AGUARDANDO_LIBERACAO': 'EM_CARGA', 'LIBERADA_PARA_ENVIO': 'ENVIADO_GALVANIZACAO', 'RETORNO_PARCIAL': 'RETORNOU_PARCIAL'}
+        # Quando a carga esta em retorno parcial, o status de CADA proposta
+        # reflete o retorno DAQUELA proposta especifica (item['status_retorno'],
+        # ja calculado pela API por proposta em _galvanization_load_detail),
+        # nao o status agregado da carga inteira - uma proposta sem nenhum
+        # item retornado ainda continua "Enviado para galvanizacao", nunca
+        # "Retornou parcialmente" so porque outra proposta da mesma carga
+        # ja retornou. O status da carga (load_status) permanece intocado.
+        return_status_to_area_status = {
+            'RETORNADO': 'RETORNOU_GALVANIZACAO',
+            'RETORNO_PARCIAL': 'RETORNOU_PARCIAL',
+            'AGUARDANDO_RETORNO': 'ENVIADO_GALVANIZACAO',
+        }
         for load in self.official_proposal_storage.galvanization_loads():
             load_status = load.get('status') or ''
             area_status = load_status_to_area_status.get(load_status)
@@ -458,9 +705,27 @@ class BackendService:
                 process_id = int(item.get('processo_id') or 0)
                 if not process_id:
                     continue
-                row = grouped.setdefault(process_id, {'id': process_id, 'processo_id': process_id, 'proposta': item.get('proposta') or '', 'cliente': item.get('cliente') or '', 'obra_site': item.get('obra_site') or '', 'lote': item.get('lote') or '', 'peso': item.get('peso_pendente') or item.get('peso_enviado') or ''})
-                row.update({'status_galvanizacao': area_status, 'status_geral': 'EM_GALVANIZACAO', 'localizacao_atual': 'GALVANIZACAO', 'status_localizacao': area_status, 'carga_galvanizacao': int(load['id']), 'data_envio_galv': load.get('data_envio') or '', 'data_prevista_retorno_galv': load.get('data_prevista_retorno') or '', 'data_retorno_galv': load.get('data_retorno') or ''})
-        return [row for row in grouped.values() if matches(row)]
+                if load_status == 'RETORNO_PARCIAL':
+                    proposal_area_status = return_status_to_area_status.get(item.get('status_retorno') or '', area_status)
+                else:
+                    proposal_area_status = area_status
+                block_key = (process_id, f"LOAD:{int(load['id'])}")
+                block_states.setdefault(block_key, set()).add(proposal_area_status)
+                row = grouped.setdefault(block_key, {'id': process_id, 'processo_id': process_id, 'proposta': item.get('proposta') or '', 'cliente': item.get('cliente') or '', 'obra_site': item.get('obra_site') or '', 'lote': item.get('lote') or '', 'peso': item.get('peso_pendente') or item.get('peso_enviado') or ''})
+                row.update({'status_galvanizacao': proposal_area_status, 'status_geral': 'EM_GALVANIZACAO', 'localizacao_atual': 'GALVANIZACAO', 'status_localizacao': proposal_area_status, 'carga_galvanizacao': int(load['id']), 'data_envio_galv': load.get('data_envio') or '', 'data_prevista_retorno_galv': load.get('data_prevista_retorno') or '', 'data_retorno_galv': load.get('data_retorno') or ''})
+        # Um bloco de carga totalmente retornado deixa de aparecer na
+        # galvanizacao. Um bloco parcialmente retornado continua visivel.
+        for block_key, states in block_states.items():
+            if states == {'RETORNOU_GALVANIZACAO'}:
+                grouped.pop(block_key, None)
+            elif len(states) > 1:
+                grouped[block_key]['status_galvanizacao'] = 'RETORNOU_PARCIAL'
+                grouped[block_key]['status_localizacao'] = 'RETORNOU_PARCIAL'
+        rows = [
+            row for row in grouped.values()
+            if matches(row)
+        ]
+        return self._merge_partial_operational_rows(rows, 'GALVANIZACAO')
 
     def galvanization_load_candidates(self, proposal: str='', client: str='') -> list[dict[str, Any]]:
         try:
@@ -519,9 +784,21 @@ class BackendService:
         except Exception as exc:
             raise self._api_app_error(exc) from exc
 
-    def chat_send_message(self, conversation_id: int, body: str, message_type: str = 'MENSAGEM', mentioned_user_id: int | None = None) -> dict[str, Any]:
+    def chat_send_message(
+        self,
+        conversation_id: int,
+        body: str,
+        message_type: str = 'MENSAGEM',
+        mentioned_user_id: int | None = None,
+        reply_to_message_id: int | None = None,
+        area: str | None = None,
+        due_at=None,
+        is_important: bool = False,
+    ) -> dict[str, Any]:
         try:
-            return self.official_proposal_storage.chat_send_message(conversation_id, body, message_type, mentioned_user_id)
+            return self.official_proposal_storage.chat_send_message(
+                conversation_id, body, message_type, mentioned_user_id, reply_to_message_id, area, due_at, is_important
+            )
         except Exception as exc:
             raise self._api_app_error(exc) from exc
 
@@ -531,9 +808,9 @@ class BackendService:
         except Exception as exc:
             raise self._api_app_error(exc) from exc
 
-    def chat_proposal_timeline(self, proposal_id: int) -> dict[str, Any]:
+    def chat_proposal_timeline(self, proposal_id: int, **filters) -> dict[str, Any]:
         try:
-            return self.official_proposal_storage.chat_proposal_timeline(proposal_id)
+            return self.official_proposal_storage.chat_proposal_timeline(proposal_id, **filters)
         except Exception as exc:
             raise self._api_app_error(exc) from exc
 
@@ -561,9 +838,45 @@ class BackendService:
         except Exception as exc:
             raise self._api_app_error(exc) from exc
 
+    def chat_notifications_page(self, *, status: str | None = None, limit: int = 30, offset: int = 0) -> dict[str, Any]:
+        try:
+            return self.official_proposal_storage.chat_notifications_page(status=status, limit=limit or 30, offset=offset or 0)
+        except Exception as exc:
+            raise self._api_app_error(exc) from exc
+
     def chat_mark_all_notifications_read(self) -> None:
         try:
             self.official_proposal_storage.chat_mark_all_notifications_read()
+        except Exception as exc:
+            raise self._api_app_error(exc) from exc
+
+    def chat_mark_notification_read(self, notification_id: int) -> None:
+        try:
+            self.official_proposal_storage.chat_mark_notification_read(notification_id)
+        except Exception as exc:
+            raise self._api_app_error(exc) from exc
+
+    def chat_mark_question_viewed(self, message_id: int) -> dict[str, Any]:
+        try:
+            return self.official_proposal_storage.chat_mark_question_viewed(message_id)
+        except Exception as exc:
+            raise self._api_app_error(exc) from exc
+
+    def chat_cancel_question(self, message_id: int, reason: str) -> dict[str, Any]:
+        try:
+            return self.official_proposal_storage.chat_cancel_question(message_id, reason)
+        except Exception as exc:
+            raise self._api_app_error(exc) from exc
+
+    def chat_reassign_question(self, message_id: int, assignee_user_id: int, reason: str) -> dict[str, Any]:
+        try:
+            return self.official_proposal_storage.chat_reassign_question(message_id, assignee_user_id, reason)
+        except Exception as exc:
+            raise self._api_app_error(exc) from exc
+
+    def proposal_activities(self, proposal_id: int, area: str | None = None, before: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
+        try:
+            return self.official_proposal_storage.proposal_activities(proposal_id, area=area or None, before=before or None, limit=limit or 50)
         except Exception as exc:
             raise self._api_app_error(exc) from exc
 
@@ -597,11 +910,86 @@ class BackendService:
         except Exception as exc:
             raise self._api_app_error(exc) from exc
 
-    def save_galvanization_load(self, driver: str, max_weight: str, expected_return_date: str, items: list[dict[str, Any]], load_id: int | None=None) -> int:
+    def galvanization_load_details(self, load_id: int) -> dict[str, Any]:
+        try:
+            return self.official_proposal_storage.galvanization_load_details(load_id)
+        except Exception as exc:
+            raise self._api_app_error(exc) from exc
+
+    def galvanization_load_actions(self, load: dict[str, Any]) -> list[str]:
+        """Ações que a UI pode oferecer; a API segue como autoridade final."""
+
+        if not self.can_edit("GALVANIZACAO"):
+            return []
+        status = normalize_status(load.get("status"))
+        if status == "AGUARDANDO_LIBERACAO":
+            return ["EDIT", "RELEASE"]
+        if status in {"LIBERADA_PARA_ENVIO", "RETORNO_PARCIAL"}:
+            return ["RETURN"]
+        return []
+
+    def save_galvanization_load(
+        self,
+        driver: str,
+        max_weight: str,
+        expected_return_date: str,
+        items: list[dict[str, Any]],
+        load_id: int | None = None,
+        *,
+        load_weight: str | None | object = _UNSET,
+        load_weight_source: str | None = "MANUAL",
+        expected_version: int | None = None,
+    ) -> int:
         if not self.can_edit('GALVANIZACAO'):
             raise AppError('Seu usuario nao pode alterar cargas de galvanizacao.')
         try:
-            return self.official_proposal_storage.save_galvanization_load(driver, max_weight, expected_return_date, items, load_id)
+            if load_weight is _UNSET:
+                if expected_version is None:
+                    return self.official_proposal_storage.save_galvanization_load(driver, max_weight, expected_return_date, items, load_id)
+                return self.official_proposal_storage.save_galvanization_load(
+                    driver,
+                    max_weight,
+                    expected_return_date,
+                    items,
+                    load_id,
+                    expected_version=expected_version,
+                )
+            if expected_version is None:
+                return self.official_proposal_storage.save_galvanization_load(
+                    driver,
+                    max_weight,
+                    expected_return_date,
+                    items,
+                    load_id,
+                    load_weight=load_weight,
+                    load_weight_source=load_weight_source,
+                )
+            return self.official_proposal_storage.save_galvanization_load(
+                driver,
+                max_weight,
+                expected_return_date,
+                items,
+                load_id,
+                load_weight=load_weight,
+                load_weight_source=load_weight_source,
+                expected_version=expected_version,
+            )
+        except Exception as exc:
+            raise self._api_app_error(exc) from exc
+
+    def add_items_to_galvanization_load(
+        self,
+        load_id: int,
+        *,
+        item_ids: list[int] | None = None,
+        proposal_ids: list[int] | None = None,
+    ) -> dict[str, Any]:
+        if not self.can_edit("GALVANIZACAO"):
+            raise AppError("Seu usuario nao pode alterar cargas de galvanizacao.")
+        try:
+            return self.official_proposal_storage.add_items_to_galvanization_load(
+                load_id, item_ids=item_ids, proposal_ids=proposal_ids
+            )
         except Exception as exc:
             raise self._api_app_error(exc) from exc
 
@@ -634,7 +1022,8 @@ class BackendService:
 
     def fiscal_rows(self, filters: dict[str, Any] | None=None) -> list[dict[str, Any]]:
         try:
-            return sort_fiscal_rows(self.official_proposal_storage.fiscal_rows(filters))
+            rows = self.official_proposal_storage.fiscal_rows(filters)
+            return sort_fiscal_rows(self._merge_partial_operational_rows(rows, 'FISCAL'))
         except Exception as exc:
             raise self._api_app_error(exc) from exc
 
@@ -741,10 +1130,30 @@ class BackendService:
         if not self.user:
             raise legacy.AppError('Usuario nao autenticado.')
         if not self.can_edit('EXPEDICAO'):
-            raise legacy.AppError('Seu usuario nao pode registrar entrega remanejada.')
+            raise legacy.AppError('Seu usuario nao pode realizar remanejamentos.')
         try:
             self.official_proposal_storage.deliver_by_material_remanagement(destination_id, source_id, observation, item_ids=item_ids)
             return
+        except Exception as exc:
+            raise self._api_app_error(exc) from exc
+
+    def remanagement_compatible_items(self, source_id: int, destination_id: int) -> list[dict[str, Any]]:
+        try:
+            return self.official_proposal_storage.remanagement_compatible_items(source_id, destination_id)
+        except Exception as exc:
+            raise self._api_app_error(exc) from exc
+
+    def preview_material_remanagement(self, payload: dict[str, Any]) -> dict[str, Any]:
+        try:
+            return self.official_proposal_storage.preview_material_remanagement(payload)
+        except Exception as exc:
+            raise self._api_app_error(exc) from exc
+
+    def apply_material_remanagement(self, payload: dict[str, Any]) -> dict[str, Any]:
+        if not self.user or not self.can_edit('EXPEDICAO'):
+            raise legacy.AppError('Seu usuario nao pode realizar remanejamentos.')
+        try:
+            return self.official_proposal_storage.apply_material_remanagement(payload)
         except Exception as exc:
             raise self._api_app_error(exc) from exc
 
@@ -771,7 +1180,11 @@ class BackendService:
 
     def process_loads(self, process_id: int) -> list[dict[str, Any]]:
         loads = []
-        for load in self.official_proposal_storage.galvanization_loads():
+        try:
+            galvanization_loads = self.official_proposal_storage.galvanization_loads()
+        except Exception:
+            return loads
+        for load in galvanization_loads:
             try:
                 items = self.official_proposal_storage.galvanization_load_items(int(load['id']))
             except Exception:
@@ -869,7 +1282,7 @@ class BackendService:
         if not user_id and (not password):
             raise legacy.AppError('Informe a senha inicial.')
         if password and (not self._valid_api_password(password)):
-            raise legacy.AppError('A senha deve ter pelo menos 10 caracteres e nao pode ser uma sequencia simples.')
+            raise legacy.AppError('A senha deve ter pelo menos 4 caracteres e nao pode ser uma sequencia simples.')
         try:
             self.official_proposal_storage.save_user({'nome': nome, 'login': login, 'password': password, 'perfil': profile, 'ativo': bool(ativo), 'permissions': dict(data.get('permissions') or {})}, user_id)
             return
@@ -879,7 +1292,7 @@ class BackendService:
     def _valid_api_password(self, password: str) -> bool:
         compact = ''.join(str(password or '').split()).lower()
         weak_passwords = {'1234567890', '123456789', 'password123', 'senha12345', 'administrador', 'admin123456'}
-        return len(password) >= 10 and compact not in weak_passwords and (len(set(compact)) > 2)
+        return len(password) >= 4 and compact not in weak_passwords and (len(set(compact)) > 2)
 
     def toggle_user(self, user_id: int):
         try:
@@ -941,19 +1354,24 @@ class BackendService:
         if area == 'CONTROLE GERAL':
             process = self._official_control_process(process_id)
             status = process.get('status_geral') or process.get('current_status') or ''
+            if process.get('is_cancelled') or status == 'CANCELADA':
+                return []
+            completed = bool(process.get('is_completed')) or status == 'ENTREGUE' or (process.get('status_expedicao') or '') == 'ENTREGUE'
+            if completed:
+                return []
             if status == 'AGUARDANDO_LIBERACAO':
                 return ['LIBERADO_PRODUCAO', 'CANCELADA']
-            if status == 'LIBERADO_PRODUCAO':
-                return ['CANCELADA']
-            return []
+            return ['CANCELADA']
         if area == 'PRODUCAO':
             process = self.official_proposal_storage.get_production_process(process_id)
             status = process.get('status_producao') or process.get('current_status') or ''
             actions = {str(action.get('id') or ''): bool(action.get('enabled', True)) for action in process.get('actions') or []}
             options: list[str] = []
-            if status in {'LIBERADO_PRODUCAO', 'NAO_INICIADO', 'ITEM_PENDENTE_FABRICACAO', 'PARADO'} and actions.get('START_PRODUCTION', True):
+            if status in {'LIBERADO_PRODUCAO', 'NAO_INICIADO', 'ITEM_PENDENTE_FABRICACAO'} and actions.get('START_PRODUCTION', True):
                 options.append('INICIADO')
-            if status == 'INICIADO':
+            if status == 'PARADO' and actions.get('RESUME_PRODUCTION', True):
+                options.append('INICIADO')
+            if status == 'INICIADO' and actions.get('PAUSE_PRODUCTION', True):
                 options.append('PARADO')
             if status in {'INICIADO', 'FINALIZADO_PARCIAL'} and actions.get('COMPLETE_ITEMS', True):
                 options.extend(['FINALIZADO_PARCIAL', 'FINALIZADO'])
@@ -967,7 +1385,7 @@ class BackendService:
             options: list[str] = []
             if status in {'EM_SEPARACAO', 'AGUARDANDO_SEPARACAO_PARCIAL'} and actions.get('START_SEPARATION', True):
                 options.append('SEPARACAO_INICIADA')
-            if status in {'EM_SEPARACAO', 'AGUARDANDO_SEPARACAO_PARCIAL', 'SEPARACAO_INICIADA', 'ENTREGUE_PARCIAL'} and actions.get('SEPARATE_ITEMS', True):
+            if status in {'EM_SEPARACAO', 'AGUARDANDO_SEPARACAO_PARCIAL', 'SEPARACAO_INICIADA', 'SEPARADO_COM_PENDENCIA', 'ENTREGUE_PARCIAL'} and actions.get('SEPARATE_ITEMS', True):
                 options.append('SEPARADO')
             if status in {'SEPARADO', 'ENTREGUE_PARCIAL'} and actions.get('REGISTER_DELIVERY', True):
                 options.extend(['ENTREGUE_PARCIAL', 'ENTREGUE'])
@@ -975,7 +1393,7 @@ class BackendService:
         if area == 'ALMOXARIFADO':
             process = self.official_proposal_storage.get_process(process_id)
             status = process.get('status_almoxarifado') or ''
-            if status == 'AGUARDANDO_CONFIRMACAO':
+            if status in ('AGUARDANDO_CONFIRMACAO', 'NAO_DEFINIDO', ''):
                 return ['EM_SEPARACAO', 'SEM_PARAFUSOS']
             if status == 'EM_SEPARACAO':
                 return ['SEPARADO']
@@ -986,47 +1404,73 @@ class BackendService:
             return []
         return []
 
-    def administrative_status_options(self, area: str) -> list[str]:
-        if area not in legacy.AREAS:
-            return []
-        ordered = legacy.STATUS_FLOW_ORDER.get(area, [])
-        available = set(self.list_status(area))
-        ordered_options = [status for status in ordered if status in available]
-        remaining = sorted(available - set(ordered_options))
-        return ordered_options + remaining
+    def administrative_correction_options(self, process_id: int) -> dict[str, Any]:
+        if not self.user:
+            raise legacy.AppError('Usuario nao autenticado.')
+        if not self.can_admin():
+            raise legacy.AppError('Apenas administradores podem consultar correcoes administrativas.')
+        try:
+            return self.official_proposal_storage.administrative_correction_options(process_id)
+        except Exception as exc:
+            raise self._api_app_error(exc) from exc
 
-    def administrative_correction(self, process_id: int, new_area: str, new_status: str, justification: str):
+    def preview_administrative_correction(
+        self,
+        process_id: int,
+        expected_version: int,
+        new_area: str,
+        new_status: str,
+    ) -> dict[str, Any]:
+        if not self.user or not self.can_admin():
+            raise legacy.AppError('Apenas administradores podem visualizar a previa da correcao.')
+        try:
+            return self.official_proposal_storage.preview_administrative_correction(
+                process_id, expected_version, new_area, new_status
+            )
+        except Exception as exc:
+            raise self._api_app_error(exc) from exc
+
+    def administrative_correction(
+        self,
+        process_id: int,
+        expected_version: int,
+        new_area: str,
+        new_status: str,
+        reason: str,
+        idempotency_key: str,
+    ):
         if not self.user:
             raise legacy.AppError('Usuario nao autenticado.')
         if not self.can_admin():
             raise legacy.AppError('Apenas administradores podem aplicar correcao administrativa.')
-        new_area = (new_area or '').strip().upper()
-        new_status = legacy.normalize_status(new_status or '')
-        justification = (justification or '').strip()
-        if new_area not in legacy.AREAS:
-            raise legacy.AppError('Nova area invalida.')
-        if not new_status:
-            raise legacy.AppError('Informe o novo status.')
-        if new_status not in self.list_status(new_area):
-            raise legacy.AppError('Status invalido para a nova area.')
-        if not justification:
-            raise legacy.AppError('Informe a justificativa da correcao.')
+        reason = (reason or '').strip()
+        if not reason:
+            raise legacy.AppError('Informe o motivo da correcao.')
         try:
-            self.official_proposal_storage.administrative_correction(process_id, new_area, new_status, justification)
-            return
+            return self.official_proposal_storage.administrative_correction(
+                process_id,
+                expected_version,
+                new_area,
+                new_status,
+                reason,
+                idempotency_key,
+            )
         except Exception as exc:
             raise self._api_app_error(exc) from exc
 
-    def process_actions(self, process_id: int, area: str | None=None) -> list[dict[str, str]]:
+    def process_actions(self, process_id: int, area: str | None=None, row_context: dict[str, Any] | None = None) -> list[dict[str, str]]:
         if area == 'CONTROLE GERAL':
             if not self.can_edit(area):
                 return []
             process = self._official_control_process(process_id)
             status = process.get('status_geral') or process.get('current_status') or ''
+            if process.get('is_cancelled') or status == 'CANCELADA':
+                return []
             actions: list[dict[str, str]] = []
             if status == 'AGUARDANDO_LIBERACAO':
                 actions.append({'id': 'STATUS', 'label': 'Liberar para producao', 'icon': 'production', 'status': 'LIBERADO_PRODUCAO', 'area': 'CONTROLE GERAL'})
-            if status in {'AGUARDANDO_LIBERACAO', 'LIBERADO_PRODUCAO'}:
+            completed = bool(process.get('is_completed')) or status == 'ENTREGUE' or (process.get('status_expedicao') or '') == 'ENTREGUE'
+            if not completed:
                 actions.append({'id': 'STATUS', 'label': 'Cancelar proposta', 'icon': 'delete', 'status': 'CANCELADA', 'area': 'CONTROLE GERAL'})
             return actions
         if area == 'EXPEDICAO':
@@ -1044,7 +1488,7 @@ class BackendService:
                 actions.append({'id': action_id, 'label': label, 'icon': icon, 'status': status_value, 'area': 'EXPEDICAO'})
             if status in ('EM_SEPARACAO', 'AGUARDANDO_SEPARACAO_PARCIAL') and enabled_actions.get('START_SEPARATION', True):
                 add('STATUS', 'Iniciar separacao', 'status', 'SEPARACAO_INICIADA')
-            if status in ('EM_SEPARACAO', 'AGUARDANDO_SEPARACAO_PARCIAL', 'SEPARACAO_INICIADA', 'ENTREGUE_PARCIAL') and enabled_actions.get('SEPARATE_ITEMS', True):
+            if status in ('EM_SEPARACAO', 'AGUARDANDO_SEPARACAO_PARCIAL', 'SEPARACAO_INICIADA', 'SEPARADO_COM_PENDENCIA', 'ENTREGUE_PARCIAL') and enabled_actions.get('SEPARATE_ITEMS', True):
                 add('STATUS', 'Registrar separacao', 'status', 'SEPARADO')
             if status in ('SEPARADO', 'ENTREGUE_PARCIAL') and enabled_actions.get('REGISTER_DELIVERY', True):
                 add('REGISTER_DELIVERY', 'Registrar retirada do cliente', 'status')
@@ -1065,9 +1509,11 @@ class BackendService:
             summary = process.get('progresso_producao') or {}
             if enabled_actions.get('DEFINE_ITEM_FLOW', status != 'FINALIZADO'):
                 add('DEFINE_ITEM_FLOW', 'Definir fluxo dos itens pendentes' if summary.get('undefined_flow_items') else 'Definir fluxo dos itens', 'settings')
-            if status in ('NAO_INICIADO', 'LIBERADO_PRODUCAO', 'ITEM_PENDENTE_FABRICACAO', 'PARADO') and enabled_actions.get('START_PRODUCTION', True):
-                add('STATUS', 'Retomar producao' if status == 'PARADO' else 'Iniciar producao', 'production', 'INICIADO')
-            if status == 'INICIADO':
+            if status in ('NAO_INICIADO', 'LIBERADO_PRODUCAO', 'ITEM_PENDENTE_FABRICACAO') and enabled_actions.get('START_PRODUCTION', True):
+                add('STATUS', 'Iniciar producao', 'production', 'INICIADO')
+            if status == 'PARADO' and enabled_actions.get('RESUME_PRODUCTION', True):
+                add('STATUS', 'Retomar producao', 'production', 'INICIADO')
+            if status == 'INICIADO' and enabled_actions.get('PAUSE_PRODUCTION', True):
                 add('STATUS', 'Pausar producao', 'pause', 'PARADO')
             if status in ('INICIADO', 'FINALIZADO_PARCIAL') and enabled_actions.get('COMPLETE_ITEMS', True):
                 add('REGISTER_PRODUCTION', 'Registrar producao', 'status')
@@ -1077,7 +1523,13 @@ class BackendService:
         if area == 'GALVANIZACAO':
             if not self.can_edit(area):
                 return []
-            process = next((row for row in self._official_galvanization_rows({}) if int(row.get('id') or 0) == int(process_id)), None)
+            candidate_rows = [row for row in self._official_galvanization_rows({}) if int(row.get('id') or 0) == int(process_id)]
+            process = None
+            if row_context:
+                desired_load = row_context.get('carga_galvanizacao')
+                desired_status = row_context.get('status_galvanizacao')
+                process = next((row for row in candidate_rows if str(row.get('carga_galvanizacao') or '') == str(desired_load or '') and (not desired_status or row.get('status_galvanizacao') == desired_status)), None)
+            process = process or next((row for row in candidate_rows if row.get('carga_galvanizacao')), None) or (candidate_rows[0] if candidate_rows else None)
             if not process:
                 return []
             status = process.get('status_galvanizacao') or ''
@@ -1096,7 +1548,12 @@ class BackendService:
             if not self.can_edit(area):
                 return []
             options = self.next_status_options(area, process_id)
-            labels = {'EM_SEPARACAO': ('Confirmar que possui almoxarifado', 'stock'), 'SEM_PARAFUSOS': ('Confirmar sem almoxarifado', 'clear'), 'SEPARADO': ('Confirmar separacao concluida', 'status'), 'ALMOXARIFADO_ENTREGUE': ('Confirmar entrega do almoxarifado', 'status'), 'ALMOXARIFADO_ENTREGUE_PARCIAL': ('Registrar entrega parcial', 'status')}
+            process = self.official_proposal_storage.get_process(process_id)
+            current_status = process.get('status_almoxarifado') or ''
+            if current_status in ('NAO_DEFINIDO', ''):
+                labels = {'EM_SEPARACAO': ('Precisa de Almoxarifado', 'stock'), 'SEM_PARAFUSOS': ('Nao precisa de Almoxarifado', 'clear')}
+            else:
+                labels = {'EM_SEPARACAO': ('Confirmar que possui almoxarifado', 'stock'), 'SEM_PARAFUSOS': ('Confirmar sem almoxarifado', 'clear'), 'SEPARADO': ('Confirmar separacao concluida', 'status'), 'ALMOXARIFADO_ENTREGUE': ('Confirmar entrega do almoxarifado', 'status'), 'ALMOXARIFADO_ENTREGUE_PARCIAL': ('Registrar entrega parcial', 'status')}
             actions: list[dict[str, str]] = []
             for status in options:
                 label, icon = labels.get(status, (self.area_status_label(area, status), 'status'))
@@ -1108,6 +1565,8 @@ class BackendService:
         if area == 'ALMOXARIFADO' and status == 'EM_SEPARACAO':
             return 'Confirmar que possui almoxarifado'
         labels = {'LIBERADO_PRODUCAO': 'Liberar para producao', 'CANCELADA': 'Cancelar proposta', 'INICIADO': 'Iniciar ou retomar producao', 'PARADO': 'Pausar producao', 'FINALIZADO': 'Concluir producao', 'FINALIZADO_PARCIAL': 'Registrar producao parcial', 'EM_CARGA': 'Adicionar a carga', 'ENVIADO_GALVANIZACAO': 'Liberar carga para envio', 'RETORNOU_GALVANIZACAO': 'Confirmar retorno da carga', 'SEPARADO': 'Confirmar separacao concluida', 'ENTREGUE': 'Confirmar entrega completa', 'ENTREGUE_PARCIAL': 'Registrar retirada parcial', 'SEPARACAO_INICIADA': 'Iniciar separacao', 'SEM_PARAFUSOS': 'Confirmar sem almoxarifado', 'ALMOXARIFADO_ENTREGUE': 'Confirmar entrega do almoxarifado', 'ALMOXARIFADO_ENTREGUE_PARCIAL': 'Registrar entrega parcial do almoxarifado'}
+        if status == 'SEPARADO_COM_PENDENCIA':
+            return 'Separado com pendencia'
         return labels.get(status, self.area_status_label(area, status))
 
     def update_status(self, process_id: int, area: str, status: str, observation: str='', item_ids: list[int] | None=None, produced_weight: float | None=None):
@@ -1121,7 +1580,7 @@ class BackendService:
                     self.official_proposal_storage.release_to_production(process_id, version)
                     return
                 if status == 'CANCELADA':
-                    self.official_proposal_storage.cancel_process(process_id, version, observation or 'Cancelamento pelo Controle Geral')
+                    self.official_proposal_storage.cancel_process(process_id, version, observation)
                     return
                 raise legacy.AppError('Status do Controle Geral nao suportado no fluxo oficial.')
             except legacy.AppError:
@@ -1132,8 +1591,18 @@ class BackendService:
             try:
                 process = self.official_proposal_storage.get_production_process(process_id)
                 version = int(process.get('api_version') or 0)
+                current_status = str(process.get('status_producao') or process.get('current_status') or '').strip().upper()
                 if status == 'INICIADO':
-                    self.official_proposal_storage.start_production(process_id, version, observation)
+                    if current_status == 'PARADO':
+                        self.official_proposal_storage.resume_production(process_id, version, observation)
+                    else:
+                        self.official_proposal_storage.start_production(process_id, version, observation)
+                    return
+                if status == 'PARADO':
+                    reason = (observation or '').strip()
+                    if not reason:
+                        raise legacy.AppError('Informe o motivo da pausa.')
+                    self.official_proposal_storage.pause_production(process_id, version, reason)
                     return
                 if status in ('FINALIZADO', 'FINALIZADO_PARCIAL'):
                     self.official_proposal_storage.complete_production_items(process_id, version, item_ids=item_ids, observation=observation)
@@ -1229,14 +1698,30 @@ class BackendService:
     def item_no_production_reasons(self) -> list[tuple[str, str]]:
         return [(key, legacy.ITEM_NO_PRODUCTION_LABELS[key]) for key in ('pronta_entrega', 'comprado_terceiro', 'terceirizado', 'outro')]
 
-    def update_item_flow(self, process_id: int, definitions: list[dict[str, Any]], origin: str='Producao') -> int:
+    def flow_review_data(self, process_id: int) -> dict[str, Any]:
         if not self.user:
             raise legacy.AppError('Usuario nao autenticado.')
         if not self.can_edit('PRODUCAO'):
             raise legacy.AppError('Seu usuario nao pode definir fluxo dos itens.')
         try:
-            process = self.official_proposal_storage.get_production_process(process_id)
-            return self.official_proposal_storage.update_production_item_flow(process_id, int(process.get('api_version') or 0), definitions, origin)
+            return self.official_proposal_storage.flow_review_data(process_id)
+        except Exception as exc:
+            raise AppError(user_message_for_api_error(exc)) from exc
+
+    def update_item_flow(self, process_id: int, definitions: list[dict[str, Any]], origin: str='Producao') -> int:
+        if not self.user:
+            raise legacy.AppError('Usuario nao autenticado.')
+        if not self.can_edit('PRODUCAO'):
+            raise legacy.AppError('Seu usuario nao pode definir fluxo dos itens.')
+        process = self.official_proposal_storage.get_production_process(process_id)
+        version = int(process.get('api_version') or 0)
+        log.debug('Salvando fluxo: process_id=%r version_enviada=%r itens=%d', process_id, version, len(definitions))
+        try:
+            return self.official_proposal_storage.update_production_item_flow(process_id, version, definitions, origin)
+        except ApiBusinessError as exc:
+            if exc.error_code == 'PROPOSAL_VERSION_CONFLICT':
+                raise VersionConflictError(user_message_for_api_error(exc)) from exc
+            raise AppError(user_message_for_api_error(exc)) from exc
         except Exception as exc:
             raise AppError(user_message_for_api_error(exc)) from exc
 
@@ -1297,6 +1782,10 @@ class BackendService:
         if key == 'status_localizacao' and row:
             area, _label, status = self.current_location(row)
             return self.area_status_label(area, status) if status else '-'
+        if key == 'status_almoxarifado' and row:
+            return self.area_status_label('ALMOXARIFADO', value) if value else '-'
+        if key == 'necessita_almoxarifado' and row:
+            return self.status_label(value) if value else '-'
         if key == 'almoxarifado_info':
             status = (row or {}).get('status_almoxarifado', '') if row else ''
             need = legacy.normalize_stockroom_need((row or {}).get('necessita_almoxarifado', '') if row else '')

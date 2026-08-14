@@ -9,12 +9,65 @@ from api.app.core import error_codes
 from api.app.core.exceptions import ApiError
 from api.app.modules.auth import repository
 from api.app.modules.auth.models import Permission, Role, RolePermission, User, UserRole
-from api.app.modules.auth.security import hash_password
+from api.app.modules.auth.security import hash_password, validate_password_policy, verify_password
 from api.app.modules.auth.service import effective_permissions, public_user
 from api.app.modules.auth.tokens import utcnow
 from api.app.modules.auth.permissions import USERS_MANAGE_PERMISSIONS
 from api.app.modules.provisioning.service import _ensure_admin_role
-from api.app.modules.users.schemas import UserCreate, UserList, UserUpdate
+from api.app.modules.users.schemas import ChangePassword, MeUpdate, UserCreate, UserList, UserUpdate
+
+
+async def update_me(session: AsyncSession, actor: User, payload: MeUpdate) -> User:
+    if payload.username is not None:
+        actor.username = repository.normalize_username(payload.username)
+    if payload.display_name is not None:
+        actor.display_name = payload.display_name.strip()
+    actor.updated_by = actor.id
+    await repository.create_security_event(session, "PROFILE_UPDATED", actor_user_id=actor.id, target_user_id=actor.id)
+    try:
+        await session.commit()
+    except IntegrityError as exc:
+        raise ApiError(error_codes.USERNAME_ALREADY_EXISTS, "Este nome de usuario ja esta sendo utilizado.", status_code=409) from exc
+    return await get_user(session, actor.id)
+
+
+async def change_my_password(session: AsyncSession, actor: User, payload: ChangePassword) -> User:
+    if not verify_password(payload.current_password, actor.password_hash):
+        raise ApiError(error_codes.INVALID_CREDENTIALS, "A senha atual esta incorreta.", status_code=400)
+    validate_password_policy(payload.new_password)
+    if verify_password(payload.new_password, actor.password_hash):
+        raise ApiError(error_codes.PASSWORD_POLICY_VIOLATION, "A nova senha deve ser diferente da senha atual.", status_code=400)
+    actor.password_hash = hash_password(payload.new_password)
+    actor.password_changed_at = utcnow()
+    actor.password_must_change = False
+    actor.failed_login_attempts = 0
+    actor.locked_until = None
+    await repository.create_security_event(session, "PASSWORD_CHANGED", actor_user_id=actor.id, target_user_id=actor.id)
+    await session.commit()
+    return await get_user(session, actor.id)
+
+
+async def update_avatar(session: AsyncSession, actor: User, content: bytes, mime: str) -> User:
+    if len(content) > 5 * 1024 * 1024:
+        raise ApiError(error_codes.VALIDATION_ERROR, "A foto deve ter no maximo 5 MB.", status_code=422)
+    allowed = {"image/jpeg", "image/png", "image/webp"}
+    if mime not in allowed:
+        raise ApiError(error_codes.VALIDATION_ERROR, "Formato de foto nao suportado.", status_code=422)
+    if not content.startswith((b"\xff\xd8\xff", b"\x89PNG\r\n\x1a\n", b"RIFF")):
+        raise ApiError(error_codes.VALIDATION_ERROR, "O arquivo enviado nao e uma imagem valida.", status_code=422)
+    actor.avatar_bytes = content
+    actor.avatar_mime = mime
+    await repository.create_security_event(session, "AVATAR_UPDATED", actor_user_id=actor.id, target_user_id=actor.id)
+    await session.commit()
+    return await get_user(session, actor.id)
+
+
+async def remove_avatar(session: AsyncSession, actor: User) -> User:
+    actor.avatar_bytes = None
+    actor.avatar_mime = None
+    await repository.create_security_event(session, "AVATAR_REMOVED", actor_user_id=actor.id, target_user_id=actor.id)
+    await session.commit()
+    return await get_user(session, actor.id)
 
 
 async def list_users(session: AsyncSession, limit: int, offset: int) -> UserList:

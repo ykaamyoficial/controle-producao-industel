@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 from datetime import datetime, timedelta
+from unittest.mock import MagicMock
 
 from app.integrations.api.client import ApiResponse
 from app.integrations.api.config import DesktopApiSettings
@@ -16,12 +17,74 @@ from app.services.api_proposal_storage import (
     _expedition_remanagement_item_payload,
     _filter_fiscal_rows,
     _api_history_to_legacy,
+    _item_create_payload,
     _proposal_create_payload,
     user_message_for_api_error,
 )
 
 
 class ApiProposalStorageTests(unittest.TestCase):
+    def test_galvanization_load_details_uses_one_official_read_and_maps_all_sections(self):
+        storage = OfficialProposalApiStorage.__new__(OfficialProposalApiStorage)
+        client = MagicMock()
+        proposals = MagicMock()
+        proposals.get_galvanization_load.return_value = {
+            "id": 4,
+            "status": "RETORNO_PARCIAL",
+            "driver_name": "Motorista",
+            "created_by_name": "Maria",
+            "proposals": [{"proposal_id": 10, "proposal_number": "CP10", "customer_name": "Cliente"}],
+            "items": [{"id": 20, "proposal_id": 10, "proposal_number": "CP10", "description": "Item"}],
+            "returns": [{"id": 30, "occurred_at": "2026-08-11T12:00:00Z", "return_type": "PARCIAL", "items": []}],
+            "history": [{"id": 40, "event_type": "GALVANIZATION_LOAD_CREATED", "created_at": "2026-08-11T11:00:00Z"}],
+        }
+        storage._client = lambda: (client, proposals, "token")
+
+        details = storage.galvanization_load_details(4)
+
+        proposals.get_galvanization_load.assert_called_once_with("token", 4)
+        client.close.assert_called_once()
+        self.assertEqual(details["load"]["criado_por"], "Maria")
+        self.assertEqual(details["proposals"][0]["processo_id"], 10)
+        self.assertEqual(details["items"][0]["id"], 20)
+        self.assertEqual(details["returns"][0]["numero_retorno"], 1)
+        self.assertEqual(details["history"][0]["evento"], "GALVANIZATION_LOAD_CREATED")
+
+    def test_galvanization_load_edit_uses_version_captured_when_dialog_opened(self):
+        storage = OfficialProposalApiStorage.__new__(OfficialProposalApiStorage)
+        client = MagicMock()
+        proposals = MagicMock()
+        proposals.update_galvanization_load.return_value = {"id": 7}
+        storage._client = lambda: (client, proposals, "token")
+
+        saved_id = storage.save_galvanization_load(
+            "Motorista",
+            "",
+            "",
+            [{"item_id": 11, "sent_quantity": "1.0000"}],
+            7,
+            expected_version=4,
+        )
+
+        self.assertEqual(saved_id, 7)
+        proposals.get_galvanization_load.assert_not_called()
+        payload = proposals.update_galvanization_load.call_args.args[2]
+        self.assertEqual(payload["version"], 4)
+        client.close.assert_called_once()
+
+    def test_blank_or_legacy_zero_weight_is_serialized_as_unknown(self):
+        base = {"numero_item": "1", "descricao": "Item", "quantidade": "2"}
+
+        for value in ("", None, "0", "0,0000"):
+            payload = _item_create_payload({**base, "peso": value})
+            self.assertIsNone(payload["unit_weight"])
+            self.assertIsNone(payload["total_weight"])
+
+    def test_positive_weight_keeps_deterministic_total(self):
+        payload = _item_create_payload({"numero_item": "1", "descricao": "Item", "quantidade": "3", "peso": "2,5"})
+        self.assertEqual(payload["unit_weight"], "2.5000")
+        self.assertEqual(payload["total_weight"], "7.5000")
+
     def test_official_storage_reuses_persistent_client_without_refreshing_valid_token(self):
         settings = DesktopApiSettings(enabled=True, base_url="http://127.0.0.1:8000", connect_timeout=1, read_timeout=1)
         client = _FakePersistentClient()
@@ -87,11 +150,14 @@ class ApiProposalStorageTests(unittest.TestCase):
         self.assertIn("Ja existe", user_message_for_api_error(duplicate))
         self.assertIn("servidor esta indisponivel", user_message_for_api_error(offline))
 
-    def test_expedition_payload_uses_official_queue_item_ids_and_remanagement_quantity(self):
-        self.assertEqual(_expedition_item_payload([7]), [{"expedition_item_id": 7}])
+    def test_expedition_payload_uses_proposal_item_ids_and_remanagement_quantity(self):
+        # item_ids passed to these helpers come from the desktop selection UI, which stores
+        # ProposalItem.id (see _api_expedition_item_to_process_item's "id"), not
+        # ExpeditionItem.id, so the payload must key them as proposal_item_id.
+        self.assertEqual(_expedition_item_payload([7]), [{"proposal_item_id": 7}])
         self.assertEqual(
-            _expedition_remanagement_item_payload([7], [{"id": 7, "pending_quantity": "2.0000"}]),
-            [{"expedition_item_id": 7, "quantity": "2.0000"}],
+            _expedition_remanagement_item_payload([7], [{"proposal_item_id": 7, "pending_quantity": "2.0000"}]),
+            [{"proposal_item_id": 7, "quantity": "2.0000"}],
         )
 
     def test_production_item_row_maps_proposal_context_and_item_fields(self):
@@ -128,9 +194,33 @@ class ApiProposalStorageTests(unittest.TestCase):
         self.assertEqual(row["proposta"], "CP05228")
         self.assertEqual(row["cliente"], "MNS ENGENHARIA")
         self.assertEqual(row["status_producao"], "INICIADO")
+        self.assertEqual(row["status_producao_item"], "INICIADO")
         self.assertEqual(row["produzir_internamente"], "sim")
         self.assertEqual(row["precisa_galvanizacao"], "sim")
         self.assertFalse(row["produzido"])
+
+    def test_undefined_production_item_is_identified_as_flow_pending(self):
+        row = _api_production_item_row_to_process_item(
+            {
+                "proposal_id": 12,
+                "proposal_number": "CP 05236",
+                "proposal_version": 2,
+                "proposal_status": "NAO_INICIADO",
+                "item_id": 41,
+                "item_number": "1",
+                "description": "Item sem fluxo",
+                "quantity": "2.0000",
+                "produce_internally": "INDEFINIDO",
+                "requires_galvanization": "INDEFINIDO",
+                "flow_defined": False,
+                "produced": False,
+                "version": 1,
+            }
+        )
+
+        self.assertFalse(row["fluxo_definido"])
+        self.assertEqual(row["status_producao"], "NAO_INICIADO")
+        self.assertEqual(row["status_producao_item"], "FLUXO_INDEFINIDO")
 
     def test_galvanization_item_row_exposes_situation_under_status_column_key(self):
         api_row = {

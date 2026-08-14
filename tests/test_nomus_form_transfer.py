@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
+from PySide6.QtWidgets import QApplication, QMessageBox
 
 from app.ui.process_form_dialog import ProcessFormDialog
 
@@ -123,15 +123,28 @@ class NomusFormTransferTests(unittest.TestCase):
         self.assertEqual(self.form.fields["obra_site"].text(), "")
         self.assertEqual(self.form.fields["proposta"].text(), "CP05228")
 
-    def test_open_nomus_preview_transfers_prepared_data_to_form(self):
+    def test_open_nomus_preview_transfers_prepared_data_to_form_without_intermediate_dialog(self):
         class FakeImportDialog:
-            def __init__(self, parent=None):
+            def __init__(self, parent=None, allow_pdf_selection=True):
+                self.allow_pdf_selection = allow_pdf_selection
+                self.prepared_data = None
+                self._loaded_path = None
+
+            def load_pdf(self, path):
+                self._loaded_path = path
+                return True
+
+            def validate_import(self):
                 self.prepared_data = reviewed_data()
+                return True
 
-            def exec(self):
-                return QDialog.Accepted
+            def collect_data(self):
+                return reviewed_data()
 
-        with patch("app.ui.process_form_dialog.ProposalImportDialog", FakeImportDialog):
+        with patch(
+            "app.ui.process_form_dialog.QFileDialog.getOpenFileName",
+            return_value=("C:/tmp/proposta.pdf", "Documentos PDF (*.pdf)"),
+        ), patch("app.ui.process_form_dialog.ProposalImportDialog", FakeImportDialog):
             self.form.open_nomus_preview()
 
         self.assertEqual(self.form.fields["proposta"].text(), "CP05228")
@@ -140,6 +153,16 @@ class NomusFormTransferTests(unittest.TestCase):
         self.assertEqual(self.form.fields["prazo_entrega"].text(), "15/06/2026")
         self.assertEqual(self.form.items_table.rowCount(), 2)
         self.assertEqual(self.service.save_calls, [])
+
+    def test_open_nomus_preview_does_nothing_when_file_dialog_is_cancelled(self):
+        with patch(
+            "app.ui.process_form_dialog.QFileDialog.getOpenFileName",
+            return_value=("", ""),
+        ):
+            self.form.open_nomus_preview()
+
+        self.assertEqual(self.form.fields["proposta"].text(), "")
+        self.assertEqual(self.form.items_table.rowCount(), 0)
 
     def test_missing_required_data_prevents_transfer(self):
         data = reviewed_data()

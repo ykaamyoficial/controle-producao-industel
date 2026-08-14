@@ -28,6 +28,8 @@ def public_user(user: User) -> UserOut:
         locked_until=user.locked_until,
         roles=[RoleOut(id=role.id, code=role.code, name=role.name, active=role.active) for role in user.roles],
         permissions=codes,
+        avatar_available=user.avatar_bytes is not None,
+        avatar_mime=user.avatar_mime,
     )
 
 

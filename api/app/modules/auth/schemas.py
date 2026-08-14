@@ -42,6 +42,8 @@ class UserOut(BaseModel):
     locked_until: datetime | None = None
     roles: list[RoleOut] = Field(default_factory=list)
     permissions: list[str] = Field(default_factory=list)
+    avatar_available: bool = False
+    avatar_mime: str | None = None
 
 
 class TokenResponse(BaseModel):

@@ -1,5 +1,14 @@
 from __future__ import annotations
 
+import re
+
+
+_SENSITIVE_JSON_VALUE_RE = re.compile(
+    r'"(authorization|access_token|refresh_token|password|senha|secret_key)"\s*:\s*"[^"]*"',
+    re.IGNORECASE,
+)
+_BEARER_TOKEN_RE = re.compile(r"(?i)bearer\s+[A-Za-z0-9\-._~+/]+=*")
+
 
 class ApiClientError(RuntimeError):
     def __init__(
@@ -79,6 +88,13 @@ def sanitize_secret(value: str | None) -> str | None:
     if not value:
         return value
     sanitized = value.replace("\r", " ").replace("\n", " ")
+    # Corpo em formato JSON: mascara o VALOR de campos sensiveis (o
+    # replace de marcador abaixo so apagava a palavra-chave, deixando o
+    # segredo em si intacto em algo como {"access_token": "abc123"}).
+    sanitized = _SENSITIVE_JSON_VALUE_RE.sub(lambda m: f'"{m.group(1)}": "[redigido]"', sanitized)
+    # Texto livre tipo "Authorization: Bearer <token>" — mascara o token que
+    # vem depois de "Bearer ", nao so a palavra em si.
+    sanitized = _BEARER_TOKEN_RE.sub("Bearer [redigido]", sanitized)
     for marker in ("Authorization", "Bearer", "access_token", "refresh_token", "password", "senha", "SECRET_KEY"):
         sanitized = sanitized.replace(marker, "[redigido]")
     return sanitized[:700]

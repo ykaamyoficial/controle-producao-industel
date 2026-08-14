@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from fastapi import Depends
+from fastapi import Depends, WebSocket
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -71,3 +71,37 @@ def require_all_permissions(*required: str) -> Callable:
         return current_user
 
     return dependency
+
+
+async def get_current_user_ws(websocket: WebSocket, session: AsyncSession) -> tuple[User, int] | None:
+    """Autentica uma conexao websocket a partir do header Authorization do
+    handshake. Nao usa Depends()/HTTPBearer (nao se comportam da mesma forma
+    numa rota WebSocket) nem levanta excecao — quem chama decide como fechar
+    a conexao, chamado manualmente antes de aceitar o socket.
+
+    Devolve tambem o `exp` (unix timestamp) do access token: a conexao fica
+    aberta bem mais tempo que a validade do token (ETAPA 7 — so autentica
+    no handshake), entao quem chama usa esse valor pra fechar a conexao
+    quando o token expirar, forcando o cliente a reconectar com um token
+    novo em vez de manter um socket "autenticado" com credencial vencida."""
+    auth_header = websocket.headers.get("authorization")
+    if not auth_header or not auth_header.lower().startswith("bearer "):
+        return None
+    token = auth_header[7:].strip()
+    if not token:
+        return None
+    try:
+        payload = decode_access_token(token)
+        user = await repository.get_user_by_id(session, int(payload["sub"]))
+    except Exception:
+        return None
+    if user is None or not user.active:
+        return None
+    expires_at = payload.get("exp")
+    if not isinstance(expires_at, (int, float)):
+        return None
+    return user, int(expires_at)
+
+
+def user_has_permission(user: User, permission: str) -> bool:
+    return user.is_superuser or permission in effective_permissions(user)

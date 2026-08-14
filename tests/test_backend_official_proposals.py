@@ -29,8 +29,21 @@ class FakeOfficialProposalStorage:
         self.calls.append(("toggle_user", user_id))
         return {"id": user_id}
 
-    def administrative_correction(self, process_id, new_area, new_status, justification):
-        self.calls.append(("administrative_correction", process_id, new_area, new_status, justification))
+    def administrative_correction_options(self, process_id):
+        self.calls.append(("administrative_correction_options", process_id))
+        return {
+            "proposal_id": process_id,
+            "version": 5,
+            "current_state": {"current_area": "PRODUCAO", "current_status": "FINALIZADO"},
+            "options": [{"target_area": "EXPEDICAO", "target_status": "EM_SEPARACAO"}],
+        }
+
+    def preview_administrative_correction(self, process_id, expected_version, new_area, new_status):
+        self.calls.append(("preview_administrative_correction", process_id, expected_version, new_area, new_status))
+        return {"allowed": True, "changes": [{"field": "current_area", "before": "PRODUCAO", "after": "EXPEDICAO"}]}
+
+    def administrative_correction(self, process_id, expected_version, new_area, new_status, reason, idempotency_key):
+        self.calls.append(("administrative_correction", process_id, expected_version, new_area, new_status, reason, idempotency_key))
         return {"id": process_id, "status_geral": "EM_PRODUCAO", "status_producao": new_status}
 
     def save_process(self, data, process_id=None, import_metadata=None):
@@ -89,7 +102,9 @@ class FakeOfficialProposalStorage:
     def get_production_process(self, process_id):
         self.calls.append(("get_production_process", process_id))
         actions = [
-            {"id": "START_PRODUCTION", "enabled": self.production_status in {"NAO_INICIADO", "LIBERADO_PRODUCAO", "ITEM_PENDENTE_FABRICACAO", "PARADO"}},
+            {"id": "START_PRODUCTION", "enabled": self.production_status in {"NAO_INICIADO", "LIBERADO_PRODUCAO", "ITEM_PENDENTE_FABRICACAO"}},
+            {"id": "PAUSE_PRODUCTION", "enabled": self.production_status == "INICIADO"},
+            {"id": "RESUME_PRODUCTION", "enabled": self.production_status == "PARADO"},
             {"id": "DEFINE_ITEM_FLOW", "enabled": self.production_status != "FINALIZADO"},
             {"id": "UPDATE_ITEM_WEIGHTS", "enabled": self.production_status != "FINALIZADO"},
             {"id": "COMPLETE_ITEMS", "enabled": self.production_status in {"INICIADO", "FINALIZADO_PARCIAL"}},
@@ -106,6 +121,16 @@ class FakeOfficialProposalStorage:
 
     def start_production(self, process_id, version, observation=""):
         self.calls.append(("start_production", process_id, version, observation))
+        self.production_status = "INICIADO"
+        return {"id": process_id, "status_producao": "INICIADO"}
+
+    def pause_production(self, process_id, version, reason):
+        self.calls.append(("pause_production", process_id, version, reason))
+        self.production_status = "PARADO"
+        return {"id": process_id, "status_producao": "PARADO"}
+
+    def resume_production(self, process_id, version, observation=""):
+        self.calls.append(("resume_production", process_id, version, observation))
         self.production_status = "INICIADO"
         return {"id": process_id, "status_producao": "INICIADO"}
 
@@ -401,21 +426,52 @@ class BackendOfficialProposalTests(unittest.TestCase):
         self.assertEqual(service.common_next_statuses("CONTROLE GERAL", [10]), [])
         self.assertEqual(service.process_actions(10, "CONTROLE GERAL"), [])
 
+    def test_control_general_can_cancel_after_operational_start_but_not_after_completion(self):
+        service, _storage = official_service()
+        service._official_control_process = lambda _process_id: {
+            "id": 10,
+            "status_geral": "EM_GALVANIZACAO",
+            "current_status": "ENVIADO_GALVANIZACAO",
+            "is_cancelled": False,
+            "is_completed": False,
+        }
+        self.assertEqual(service.next_status_options("CONTROLE GERAL", 10), ["CANCELADA"])
+        self.assertEqual([action["status"] for action in service.process_actions(10, "CONTROLE GERAL")], ["CANCELADA"])
+
+        service._official_control_process = lambda _process_id: {"id": 10, "status_geral": "ENTREGUE", "is_completed": True}
+        self.assertEqual(service.next_status_options("CONTROLE GERAL", 10), [])
+        self.assertEqual(service.process_actions(10, "CONTROLE GERAL"), [])
+
+    def test_cancelled_process_has_no_actions_and_is_visible_only_in_control_general(self):
+        service, _storage = official_service()
+        cancelled = {"id": 10, "status_geral": "CANCELADA", "is_cancelled": True}
+        service._official_control_process = lambda _process_id: cancelled
+        self.assertEqual(service.next_status_options("CONTROLE GERAL", 10), [])
+        self.assertEqual(service.process_actions(10, "CONTROLE GERAL"), [])
+        self.assertTrue(service.process_visible_in_area(cancelled, "CONTROLE GERAL"))
+        self.assertFalse(service.process_visible_in_area(cancelled, "PRODUCAO"))
+
     def test_official_administrative_correction_uses_api_without_legacy_sqlite(self):
         service, storage = official_service()
         service.user["api_superuser"] = True
 
-        service.administrative_correction(20, "PRODUCAO", "INICIADO", "Ajuste homologacao")
+        options = service.administrative_correction_options(20)
+        preview = service.preview_administrative_correction(20, 5, "EXPEDICAO", "EM_SEPARACAO")
+        service.administrative_correction(20, 5, "EXPEDICAO", "EM_SEPARACAO", "Ajuste homologacao", "admin-key-0001")
 
-        self.assertIn(("administrative_correction", 20, "PRODUCAO", "INICIADO", "Ajuste homologacao"), storage.calls)
+        self.assertEqual(options["version"], 5)
+        self.assertTrue(preview["allowed"])
+        self.assertIn(("administrative_correction_options", 20), storage.calls)
+        self.assertIn(("preview_administrative_correction", 20, 5, "EXPEDICAO", "EM_SEPARACAO"), storage.calls)
+        self.assertIn(("administrative_correction", 20, 5, "EXPEDICAO", "EM_SEPARACAO", "Ajuste homologacao", "admin-key-0001"), storage.calls)
 
     def test_official_administrative_correction_requires_superuser_before_api_call(self):
         service, storage = official_service()
 
         with self.assertRaisesRegex(Exception, "administradores"):
-            service.administrative_correction(20, "PRODUCAO", "INICIADO", "Ajuste homologacao")
+            service.administrative_correction(20, 5, "EXPEDICAO", "EM_SEPARACAO", "Ajuste homologacao", "admin-key-0001")
 
-        self.assertNotIn(("administrative_correction", 20, "PRODUCAO", "INICIADO", "Ajuste homologacao"), storage.calls)
+        self.assertFalse(any(call[0] == "administrative_correction" for call in storage.calls))
 
     def test_official_production_rows_and_start_use_api_without_legacy_sqlite(self):
         service, storage = official_service()
@@ -435,6 +491,33 @@ class BackendOfficialProposalTests(unittest.TestCase):
 
         service.update_status(20, "PRODUCAO", "FINALIZADO", "Fim", [9002])
         self.assertIn(("complete_production_items", 20, 5, [9002], "Fim"), storage.calls)
+
+    def test_official_pause_and_resume_use_distinct_api_commands(self):
+        service, storage = official_service()
+        storage.production_status = "INICIADO"
+
+        started_actions = service.process_actions(20, "PRODUCAO")
+        self.assertIn("Pausar producao", [action["label"] for action in started_actions])
+        self.assertNotIn("Iniciar producao", [action["label"] for action in started_actions])
+        service.update_status(20, "PRODUCAO", "PARADO", "Manutencao preventiva")
+        self.assertIn(("pause_production", 20, 5, "Manutencao preventiva"), storage.calls)
+
+        paused_actions = service.process_actions(20, "PRODUCAO")
+        self.assertIn("Retomar producao", [action["label"] for action in paused_actions])
+        self.assertNotIn("Pausar producao", [action["label"] for action in paused_actions])
+        self.assertNotIn("Registrar producao", [action["label"] for action in paused_actions])
+        self.assertEqual(service.next_status_options("PRODUCAO", 20), ["INICIADO"])
+
+        service.update_status(20, "PRODUCAO", "INICIADO", "Material liberado")
+        self.assertIn(("resume_production", 20, 5, "Material liberado"), storage.calls)
+
+    def test_official_pause_requires_reason_before_calling_api(self):
+        service, storage = official_service()
+        storage.production_status = "INICIADO"
+
+        with self.assertRaisesRegex(Exception, "motivo da pausa"):
+            service.update_status(20, "PRODUCAO", "PARADO", "   ")
+        self.assertFalse(any(call[0] == "pause_production" for call in storage.calls))
 
     def test_official_production_item_flow_and_weights_use_api_without_backup(self):
         service, storage = official_service()
@@ -491,9 +574,9 @@ class BackendOfficialProposalTests(unittest.TestCase):
         self.assertEqual(service.next_status_options("EXPEDICAO", 40), [])
         self.assertEqual(service.common_next_statuses("EXPEDICAO", [40]), [])
         self.assertEqual(service.process_actions(40, "EXPEDICAO"), [])
-        with self.assertRaisesRegex(Exception, "Expedicao|entrega remanejada"):
+        with self.assertRaisesRegex(Exception, "Expedicao|remanejamentos"):
             service.update_status(40, "EXPEDICAO", "ENTREGUE", "sem permissao")
-        with self.assertRaisesRegex(Exception, "entrega remanejada"):
+        with self.assertRaisesRegex(Exception, "remanejamentos"):
             service.deliver_by_material_remanagement(50, 40, "obs", [9003])
 
     def test_official_fiscal_uses_api_storage_without_legacy_sqlite(self):
@@ -517,6 +600,23 @@ class BackendOfficialProposalTests(unittest.TestCase):
         self.assertIn(("register_fiscal_emission", 60, [{"fiscal_item_id": 6001}], "NF-1", "obs"), storage.calls)
         self.assertIn(("mark_fiscal_invoice_withdrawn", 60, "retirada"), storage.calls)
         self.assertIn(("cancel_latest_fiscal_emission", 60, "correcao"), storage.calls)
+
+    def test_fiscal_partial_group_never_hides_mother_row(self):
+        service = BackendService.__new__(BackendService)
+        rows = service._merge_partial_operational_rows(
+            [
+                {"id": 100, "fiscal_processo_id": 500, "proposta": "CP05378", "status_fiscal": "NOTA_FISCAL_PARCIAL"},
+                {"id": 101, "fiscal_processo_id": 501, "proposta": "CP05378-1", "parent_proposal_id": 100, "partial_number": 1, "status_fiscal": "NOTA_FISCAL_PARCIAL"},
+                {"id": 102, "fiscal_processo_id": 502, "proposta": "CP05378-2", "parent_proposal_id": 100, "partial_number": 2, "status_fiscal": "NOTA_FISCAL_PARCIAL"},
+            ],
+            "FISCAL",
+        )
+
+        assert len(rows) == 2
+        mother = next(row for row in rows if row["proposta"] == "CP05378")
+        grouped_children = next(row for row in rows if row.get("grouped_partial"))
+        assert mother["fiscal_processo_id"] == 500
+        assert grouped_children["fiscal_processo_ids"] == [501, 502]
 
     def test_official_fiscal_write_actions_respect_permission(self):
         service, _storage = official_service()
@@ -614,6 +714,40 @@ class BackendOfficialProposalTests(unittest.TestCase):
         self.assertEqual([action["id"] for action in candidate_actions], ["MANAGE_LOAD"])
         self.assertEqual([action["id"] for action in sent_actions], ["REGISTER_GALVANIZATION_RETURN"])
         self.assertIn(("galvanization_load_items", 7), storage.calls)
+
+    def test_galvanization_partial_load_return_reflects_each_proposal_own_state(self):
+        # Regressao: uma carga em RETORNO_PARCIAL nao deve marcar TODAS as
+        # propostas dela como "Retornou parcialmente" - cada proposta reflete
+        # seu proprio retorno (item['status_retorno'], ja calculado pela API
+        # por proposta), nunca o status agregado da carga inteira.
+        class FakePartialReturnStorage:
+            def galvanization_load_candidates(self, proposal='', client=''):
+                return []
+
+            def galvanization_loads(self):
+                return [{'id': 5, 'status': 'RETORNO_PARCIAL'}]
+
+            def galvanization_load_items(self, load_id):
+                return [
+                    {'processo_id': 10, 'proposta': 'CP00010', 'cliente': 'A', 'peso_enviado': '10', 'status_retorno': 'RETORNADO'},
+                    {'processo_id': 20, 'proposta': 'CP00020', 'cliente': 'B', 'peso_enviado': '10', 'status_retorno': 'RETORNO_PARCIAL'},
+                    {'processo_id': 30, 'proposta': 'CP00030', 'cliente': 'C', 'peso_enviado': '10', 'status_retorno': 'AGUARDANDO_RETORNO'},
+                ]
+
+        service = BackendService.__new__(BackendService)
+        service.official_proposal_storage = FakePartialReturnStorage()
+
+        rows = service._official_galvanization_rows({})
+        by_id = {row['id']: row for row in rows}
+
+        # Proposta totalmente retornada nao permanece na fila operacional da
+        # Galvanizacao; somente as propostas ainda pendentes sao projetadas.
+        self.assertNotIn(10, by_id)
+        self.assertEqual(by_id[20]['status_galvanizacao'], 'RETORNOU_PARCIAL')
+        self.assertEqual(by_id[30]['status_galvanizacao'], 'ENVIADO_GALVANIZACAO')
+        # A carga em si (carga_galvanizacao) e a mesma para as 3 - so a
+        # projecao de status por proposta muda, o status da carga nao.
+        self.assertTrue(all(row['carga_galvanizacao'] == 5 for row in by_id.values()))
 
     def test_official_galvanization_actions_respect_edit_permission(self):
         service, _storage = official_service()

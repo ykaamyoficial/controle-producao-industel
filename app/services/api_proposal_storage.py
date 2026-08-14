@@ -24,71 +24,116 @@ from app.integrations.api.session import ExperimentalApiSession
 from app.integrations.api.token_store import ApiTokenStore
 from app.services.app_logging import get_logger
 
+# Reaproveita os identificadores oficiais definidos no backend (unica fonte
+# de verdade dos codigos de permissao) em vez de duplicar as strings aqui —
+# api/app/modules/auth/permissions.py nao tem nenhuma dependencia pesada
+# (FastAPI/SQLAlchemy/etc), entao e seguro de importar direto do cliente
+# desktop sem puxar nada do servidor junto.
+from api.app.modules.auth.permissions import (
+    AUDIT_VIEW,
+    CHAT_SEND,
+    CHAT_VIEW,
+    EXPEDITION_UPDATE,
+    EXPEDITION_VIEW,
+    FISCAL_CANCEL_LINK,
+    FISCAL_REGISTER_EMISSION,
+    FISCAL_VIEW,
+    GALVANIZATION_UPDATE,
+    GALVANIZATION_VIEW,
+    PERMISSIONS_VIEW,
+    PRODUCTION_UPDATE,
+    PRODUCTION_VIEW,
+    PROPOSAL_ITEMS_CREATE,
+    PROPOSAL_ITEMS_DELETE,
+    PROPOSAL_ITEMS_UPDATE,
+    PROPOSAL_ITEMS_VIEW,
+    PROPOSALS_CANCEL,
+    PROPOSALS_CHANGE_STATUS,
+    PROPOSALS_CREATE,
+    PROPOSALS_UPDATE,
+    PROPOSALS_VIEW,
+    ROLES_VIEW,
+    SYSTEM_ADMIN,
+    USERS_CREATE,
+    USERS_DISABLE,
+    USERS_MANAGE_PERMISSIONS,
+    USERS_UPDATE,
+    USERS_VIEW,
+)
+
 
 log = get_logger("api_proposal_storage")
 
 AREA_VIEW_PERMISSIONS = {
-    "dashboard": {"proposals.view"},
-    "executive_dashboard": {"proposals.view"},
-    "control_general": {"proposals.view", "proposal_items.view"},
-    "production": {"production.view"},
-    "galvanization": {"galvanization.view"},
-    "expedition": {"expedition.view"},
-    "fiscal": {"fiscal.view"},
-    "partials": {"proposals.view", "proposal_items.view"},
-    "warehouse": {"proposals.view", "proposal_items.view"},
-    "operational_reports": {"proposals.view", "proposal_items.view", "fiscal.view"},
-    "history": {"audit.view"},
+    "dashboard": {PROPOSALS_VIEW},
+    "executive_dashboard": {PROPOSALS_VIEW},
+    "control_general": {PROPOSALS_VIEW, PROPOSAL_ITEMS_VIEW},
+    "production": {PRODUCTION_VIEW},
+    "galvanization": {GALVANIZATION_VIEW},
+    "expedition": {EXPEDITION_VIEW},
+    "fiscal": {FISCAL_VIEW},
+    "partials": {PROPOSALS_VIEW, PROPOSAL_ITEMS_VIEW},
+    "warehouse": {PROPOSALS_VIEW, PROPOSAL_ITEMS_VIEW},
+    "operational_reports": {PROPOSALS_VIEW, PROPOSAL_ITEMS_VIEW, FISCAL_VIEW},
+    "history": {AUDIT_VIEW},
     "settings": set(),
-    "users_permissions": {"users.view"},
-    "chats": {"chat.view"},
+    "users_permissions": {USERS_VIEW},
+    "chats": {CHAT_VIEW},
 }
 
 AREA_EDIT_PERMISSIONS = {
     "dashboard": set(),
     "executive_dashboard": set(),
-    "control_general": {"proposals.create", "proposals.update", "proposals.cancel", "proposals.change_status", "proposal_items.create", "proposal_items.update", "proposal_items.delete"},
-    "production": {"production.update"},
-    "galvanization": {"galvanization.update"},
-    "expedition": {"expedition.update"},
-    "fiscal": {"fiscal.register_emission", "fiscal.cancel_link"},
-    "partials": {"proposals.change_status", "proposal_items.update"},
-    "warehouse": {"proposals.change_status"},
+    "control_general": {
+        PROPOSALS_CREATE,
+        PROPOSALS_UPDATE,
+        PROPOSALS_CANCEL,
+        PROPOSALS_CHANGE_STATUS,
+        PROPOSAL_ITEMS_CREATE,
+        PROPOSAL_ITEMS_UPDATE,
+        PROPOSAL_ITEMS_DELETE,
+    },
+    "production": {PRODUCTION_UPDATE},
+    "galvanization": {GALVANIZATION_UPDATE},
+    "expedition": {EXPEDITION_UPDATE},
+    "fiscal": {FISCAL_REGISTER_EMISSION, FISCAL_CANCEL_LINK},
+    "partials": {PROPOSALS_CHANGE_STATUS, PROPOSAL_ITEMS_UPDATE},
+    "warehouse": {PROPOSALS_CHANGE_STATUS},
     "operational_reports": set(),
     "history": set(),
-    "settings": {"system.admin"},
-    "users_permissions": {"users.create", "users.update", "users.disable", "users.manage_permissions", "roles.view", "permissions.view"},
-    "chats": {"chat.send"},
+    "settings": {SYSTEM_ADMIN},
+    "users_permissions": {USERS_CREATE, USERS_UPDATE, USERS_DISABLE, USERS_MANAGE_PERMISSIONS, ROLES_VIEW, PERMISSIONS_VIEW},
+    "chats": {CHAT_SEND},
 }
 
 API_PERMISSION_TO_AREA = {
-    "proposals.view": ("control_general", "VIEW"),
-    "proposal_items.view": ("control_general", "VIEW"),
-    "proposals.create": ("control_general", "EDIT"),
-    "proposals.update": ("control_general", "EDIT"),
-    "proposals.cancel": ("control_general", "EDIT"),
-    "proposals.change_status": ("control_general", "EDIT"),
-    "proposal_items.create": ("control_general", "EDIT"),
-    "proposal_items.update": ("control_general", "EDIT"),
-    "proposal_items.delete": ("control_general", "EDIT"),
-    "production.view": ("production", "VIEW"),
-    "production.update": ("production", "EDIT"),
-    "galvanization.view": ("galvanization", "VIEW"),
-    "galvanization.update": ("galvanization", "EDIT"),
-    "expedition.view": ("expedition", "VIEW"),
-    "expedition.update": ("expedition", "EDIT"),
-    "fiscal.view": ("fiscal", "VIEW"),
-    "fiscal.register_emission": ("fiscal", "EDIT"),
-    "fiscal.cancel_link": ("fiscal", "EDIT"),
-    "audit.view": ("history", "VIEW"),
-    "system.admin": ("settings", "EDIT"),
-    "users.view": ("users_permissions", "VIEW"),
-    "users.create": ("users_permissions", "EDIT"),
-    "users.update": ("users_permissions", "EDIT"),
-    "users.disable": ("users_permissions", "EDIT"),
-    "users.manage_permissions": ("users_permissions", "EDIT"),
-    "chat.view": ("chats", "VIEW"),
-    "chat.send": ("chats", "EDIT"),
+    PROPOSALS_VIEW: ("control_general", "VIEW"),
+    PROPOSAL_ITEMS_VIEW: ("control_general", "VIEW"),
+    PROPOSALS_CREATE: ("control_general", "EDIT"),
+    PROPOSALS_UPDATE: ("control_general", "EDIT"),
+    PROPOSALS_CANCEL: ("control_general", "EDIT"),
+    PROPOSALS_CHANGE_STATUS: ("control_general", "EDIT"),
+    PROPOSAL_ITEMS_CREATE: ("control_general", "EDIT"),
+    PROPOSAL_ITEMS_UPDATE: ("control_general", "EDIT"),
+    PROPOSAL_ITEMS_DELETE: ("control_general", "EDIT"),
+    PRODUCTION_VIEW: ("production", "VIEW"),
+    PRODUCTION_UPDATE: ("production", "EDIT"),
+    GALVANIZATION_VIEW: ("galvanization", "VIEW"),
+    GALVANIZATION_UPDATE: ("galvanization", "EDIT"),
+    EXPEDITION_VIEW: ("expedition", "VIEW"),
+    EXPEDITION_UPDATE: ("expedition", "EDIT"),
+    FISCAL_VIEW: ("fiscal", "VIEW"),
+    FISCAL_REGISTER_EMISSION: ("fiscal", "EDIT"),
+    FISCAL_CANCEL_LINK: ("fiscal", "EDIT"),
+    AUDIT_VIEW: ("history", "VIEW"),
+    SYSTEM_ADMIN: ("settings", "EDIT"),
+    USERS_VIEW: ("users_permissions", "VIEW"),
+    USERS_CREATE: ("users_permissions", "EDIT"),
+    USERS_UPDATE: ("users_permissions", "EDIT"),
+    USERS_DISABLE: ("users_permissions", "EDIT"),
+    USERS_MANAGE_PERMISSIONS: ("users_permissions", "EDIT"),
+    CHAT_VIEW: ("chats", "VIEW"),
+    CHAT_SEND: ("chats", "EDIT"),
 }
 
 
@@ -271,6 +316,24 @@ class OfficialProposalApiStorage:
         finally:
             client.close()
 
+    def flow_review_data(self, proposal_id: int) -> dict[str, Any]:
+        """Single-call data source for the flow review screen: proposal header info plus
+        every item (including flow_editable/flow_lock_reason), reusing the same production
+        detail endpoint already used by get_production_process()/production_items()."""
+        client, proposals, token = self._client()
+        try:
+            detail = proposals.get_production_detail(token, proposal_id)
+            items = [_api_item_to_process_item(item) for item in detail.get("items", []) if item.get("active", True)]
+            return {
+                "proposal_id": detail.get("id"),
+                "proposta": detail.get("proposal_number") or "",
+                "cliente": detail.get("customer_name") or "",
+                "version": detail.get("version"),
+                "itens": items,
+            }
+        finally:
+            client.close()
+
     def production_item_flow_summary(self, proposal_id: int) -> dict[str, Any]:
         client, proposals, token = self._client()
         try:
@@ -318,7 +381,44 @@ class OfficialProposalApiStorage:
         finally:
             client.close()
 
-    def administrative_correction(self, proposal_id: int, new_area: str, new_status: str, justification: str) -> dict[str, Any]:
+    def administrative_correction_options(self, proposal_id: int) -> dict[str, Any]:
+        client, proposals, token = self._client()
+        try:
+            return proposals.administrative_correction_options(token, proposal_id)
+        finally:
+            client.close()
+
+    def preview_administrative_correction(
+        self,
+        proposal_id: int,
+        expected_version: int,
+        new_area: str,
+        new_status: str,
+    ) -> dict[str, Any]:
+        client, proposals, token = self._client()
+        try:
+            return proposals.preview_administrative_correction(
+                token,
+                proposal_id,
+                {
+                    "expected_version": expected_version,
+                    "correction_type": "STATE",
+                    "to_area": str(new_area or "").replace(" ", "_"),
+                    "to_status": new_status,
+                },
+            )
+        finally:
+            client.close()
+
+    def administrative_correction(
+        self,
+        proposal_id: int,
+        expected_version: int,
+        new_area: str,
+        new_status: str,
+        reason: str,
+        idempotency_key: str,
+    ) -> dict[str, Any]:
         client, proposals, token = self._client()
         try:
             return _api_proposal_to_process(
@@ -326,9 +426,12 @@ class OfficialProposalApiStorage:
                     token,
                     proposal_id,
                     {
+                        "expected_version": expected_version,
+                        "correction_type": "STATE",
                         "to_area": str(new_area or "").replace(" ", "_"),
                         "to_status": new_status,
-                        "justification": justification,
+                        "reason": reason,
+                        "idempotency_key": idempotency_key,
                     },
                 )
             )
@@ -339,6 +442,20 @@ class OfficialProposalApiStorage:
         client, proposals, token = self._client()
         try:
             return _api_production_to_process(proposals.start_production(token, proposal_id, {"version": version, "observation": observation or None}))
+        finally:
+            client.close()
+
+    def pause_production(self, proposal_id: int, version: int, reason: str) -> dict[str, Any]:
+        client, proposals, token = self._client()
+        try:
+            return _api_production_to_process(proposals.pause_production(token, proposal_id, {"version": version, "reason": reason}))
+        finally:
+            client.close()
+
+    def resume_production(self, proposal_id: int, version: int, observation: str = "") -> dict[str, Any]:
+        client, proposals, token = self._client()
+        try:
+            return _api_production_to_process(proposals.resume_production(token, proposal_id, {"version": version, "observation": observation or None}))
         finally:
             client.close()
 
@@ -400,6 +517,8 @@ class OfficialProposalApiStorage:
                         "id": proposal_id,
                         "processo_id": proposal_id,
                         "proposta": item.get("proposal_number") or "",
+                        "parent_proposal_id": item.get("parent_proposal_id"),
+                        "partial_number": item.get("partial_number"),
                         "cliente": item.get("customer_name") or "",
                         "obra_site": item.get("project_name") or "",
                         "lote": item.get("lot") or "",
@@ -438,6 +557,38 @@ class OfficialProposalApiStorage:
         client, proposals, token = self._client()
         try:
             return _api_galvanization_load_to_legacy(proposals.get_galvanization_load(token, load_id))
+        finally:
+            client.close()
+
+    def galvanization_load_details(self, load_id: int) -> dict[str, Any]:
+        """Retorna a visão completa da carga com uma única chamada oficial.
+
+        A agregação permanece no endpoint de cargas; este adaptador somente
+        traduz o contrato da API para os nomes usados pela interface desktop.
+        """
+
+        client, proposals, token = self._client()
+        try:
+            detail = proposals.get_galvanization_load(token, load_id)
+            return {
+                "load": _api_galvanization_load_to_legacy(detail),
+                "proposals": [
+                    _api_galvanization_proposal_to_legacy(row)
+                    for row in detail.get("proposals", [])
+                ],
+                "items": [
+                    _api_galvanization_item_to_legacy(row)
+                    for row in detail.get("items", [])
+                ],
+                "returns": [
+                    _api_galvanization_return_to_legacy(row, number=index)
+                    for index, row in enumerate(detail.get("returns", []), start=1)
+                ],
+                "history": [
+                    _api_galvanization_history_to_legacy(row)
+                    for row in detail.get("history", [])
+                ],
+            }
         finally:
             client.close()
 
@@ -491,7 +642,18 @@ class OfficialProposalApiStorage:
             "envio_parcial_anterior": False,
         }
 
-    def save_galvanization_load(self, driver: str, max_weight: str, expected_return_date: str, items: list[dict[str, Any]], load_id: int | None = None) -> int:
+    def save_galvanization_load(
+        self,
+        driver: str,
+        max_weight: str,
+        expected_return_date: str,
+        items: list[dict[str, Any]],
+        load_id: int | None = None,
+        *,
+        load_weight: str | None = None,
+        load_weight_source: str | None = "MANUAL",
+        expected_version: int | None = None,
+    ) -> int:
         payload_items = []
         for row in items:
             item_id = int(row.get("item_id") or 0)
@@ -508,16 +670,83 @@ class OfficialProposalApiStorage:
         payload = {
             "driver_name": driver,
             "max_weight": _optional_decimal(max_weight),
+            "load_weight": _optional_known_decimal(load_weight),
+            "load_weight_source": load_weight_source if _optional_known_decimal(load_weight) is not None else None,
             "expected_return_date": _date_iso(expected_return_date),
             "items": payload_items,
         }
         client, proposals, token = self._client()
         try:
             if load_id:
-                current = proposals.get_galvanization_load(token, load_id)
-                payload["version"] = int(current["version"])
+                if expected_version is None:
+                    current = proposals.get_galvanization_load(token, load_id)
+                    expected_version = int(current["version"])
+                payload["version"] = int(expected_version)
                 return int(proposals.update_galvanization_load(token, load_id, payload)["id"])
             return int(proposals.create_galvanization_load(token, payload)["id"])
+        finally:
+            client.close()
+
+    def add_items_to_galvanization_load(
+        self,
+        load_id: int,
+        *,
+        item_ids: list[int] | None = None,
+        proposal_ids: list[int] | None = None,
+    ) -> dict[str, Any]:
+        """Inclui saldo elegivel em uma carga aberta sem abrir a tela de edicao.
+
+        A composicao atual e preservada e somente os itens solicitados sao
+        acrescentados. A API continua sendo a autoridade para saldo,
+        elegibilidade, capacidade e concorrencia da carga.
+        """
+        client, proposals, token = self._client()
+        try:
+            current = proposals.get_galvanization_load(token, int(load_id))
+            selected_ids = {int(value) for value in (item_ids or []) if value}
+            selected_proposals = {int(value) for value in (proposal_ids or []) if value}
+            existing_ids = {
+                int(row.get("proposal_item_id"))
+                for row in current.get("items", [])
+                if row.get("active", True) and row.get("proposal_item_id")
+            }
+            entries = [
+                {
+                    "proposal_item_id": int(row["proposal_item_id"]),
+                    "sent_quantity": str(row.get("sent_quantity")),
+                }
+                for row in current.get("items", [])
+                if row.get("active", True) and row.get("proposal_item_id")
+            ]
+            candidates = proposals.list_galvanization_candidates(token, limit=200, offset=0).get("items", [])
+            added_ids: list[int] = []
+            for row in candidates:
+                proposal_id = int(row.get("proposal_id") or 0)
+                proposal_item_id = int(row.get("item_id") or 0)
+                if not proposal_item_id or proposal_item_id in existing_ids:
+                    continue
+                if selected_ids and proposal_item_id not in selected_ids:
+                    continue
+                if not selected_ids and selected_proposals and proposal_id not in selected_proposals:
+                    continue
+                available = row.get("available_quantity")
+                if available in (None, "", 0, "0"):
+                    continue
+                entries.append({
+                    "proposal_item_id": proposal_item_id,
+                    "version": int(row.get("version") or 1),
+                    "sent_quantity": str(available),
+                })
+                added_ids.append(proposal_item_id)
+            if not added_ids:
+                raise ValueError("Nenhum item elegivel novo foi encontrado para adicionar a esta carga.")
+            payload = {
+                "version": int(current["version"]),
+                "items": entries,
+            }
+            updated = proposals.update_galvanization_load(token, int(load_id), payload)
+            updated["added_item_ids"] = added_ids
+            return updated
         finally:
             client.close()
 
@@ -600,6 +829,7 @@ class OfficialProposalApiStorage:
 
     def deliver_expedition_items(self, proposal_id: int, version: int, item_ids: list[int] | None = None, observation: str = "") -> dict[str, Any]:
         payload = {"version": version, "items": _expedition_item_payload(item_ids), "observation": observation or None}
+        log.debug("Registrando entrega: proposal_id=%r version=%r payload=%r", proposal_id, version, payload)
         client, proposals, token = self._client()
         try:
             return _api_expedition_to_process(proposals.deliver_expedition_items(token, proposal_id, payload))
@@ -623,15 +853,82 @@ class OfficialProposalApiStorage:
         client, proposals, token = self._client()
         try:
             destination = proposals.get_proposal(token, destination_id)
-            source = proposals.get_expedition_detail(token, source_id)
+            source = proposals.get_proposal(token, source_id)
+            compatible = proposals.compatible_remanagement_items(token, source_id, destination_id)
+            selected = {int(value) for value in (item_ids or [])}
+            mappings = [row for row in compatible if not selected or int(row["source_item_id"]) in selected]
+            if not mappings:
+                raise ValueError("Nao existem itens compativeis com saldo para este remanejamento.")
+            import uuid
             payload = {
-                "version": int(destination["version"]),
                 "source_proposal_id": source_id,
+                "destination_proposal_id": destination_id,
                 "source_version": int(source["version"]),
-                "items": _expedition_remanagement_item_payload(item_ids, source.get("items") or []),
-                "reason": observation or "Entrega por remanejamento de material",
+                "destination_version": int(destination["version"]),
+                "idempotency_key": str(uuid.uuid4()),
+                "items": [
+                    {
+                        "source_item_id": int(row["source_item_id"]),
+                        "destination_item_id": int(row["destination_item_id"]),
+                        "source_item_version": int(row["source_item_version"]),
+                        "destination_item_version": int(row["destination_item_version"]),
+                        "quantity": str(row["max_remanageable"]),
+                    }
+                    for row in mappings
+                ],
+                "reason": observation or "Remanejamento compensado de material",
             }
-            return _api_proposal_to_process(proposals.deliver_by_remanagement(token, destination_id, payload))
+            return proposals.create_remanagement(token, payload)
+        finally:
+            client.close()
+
+    def remanagement_compatible_items(self, source_id: int, destination_id: int) -> list[dict[str, Any]]:
+        client, proposals, token = self._client()
+        try:
+            return proposals.compatible_remanagement_items(token, source_id, destination_id)
+        finally:
+            client.close()
+
+    def preview_material_remanagement(self, payload: dict[str, Any]) -> dict[str, Any]:
+        client, proposals, token = self._client()
+        try:
+            return proposals.preview_remanagement(token, payload)
+        finally:
+            client.close()
+
+    def apply_material_remanagement(self, payload: dict[str, Any]) -> dict[str, Any]:
+        client, proposals, token = self._client()
+        try:
+            return proposals.create_remanagement(token, payload)
+        finally:
+            client.close()
+
+    def remanagement_rows(self, *, limit: int = 200, offset: int = 0) -> list[dict[str, Any]]:
+        client, proposals, token = self._client()
+        try:
+            response = proposals.list_remanagements(token, limit=limit, offset=offset)
+            rows = []
+            for operation in response.get("items", []):
+                for item in operation.get("items", []):
+                    unit_weight = item.get("weight_snapshot")
+                    rows.append({
+                        "acao": "REMANEJAMENTO_COMPENSADO",
+                        "codigo": operation.get("code"),
+                        "processo_origem_id": operation.get("source_proposal_id"),
+                        "processo_destino_id": operation.get("destination_proposal_id"),
+                        "item_origem_id": item.get("source_item_id"),
+                        "item_destino_id": item.get("destination_item_id"),
+                        "codigo_produto": item.get("product_code"),
+                        "unidade": item.get("unit"),
+                        "quantidade": item.get("quantity"),
+                        "producao_realocada": item.get("production_reallocated_quantity"),
+                        "peso_remanejado": str(Decimal(str(item["quantity"])) * Decimal(str(unit_weight))) if unit_weight is not None else None,
+                        "motivo": operation.get("reason"),
+                        "usuario_id": operation.get("created_by"),
+                        "data": operation.get("created_at"),
+                        "entrega": False,
+                    })
+            return rows
         finally:
             client.close()
 
@@ -814,20 +1111,28 @@ class OfficialProposalApiStorage:
         try:
             detail = proposals.get_fiscal_record(token, fiscal_record_id)
             invoice_number = (numero_controle or "").strip() or f"REGISTRO-{fiscal_record_id}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
-            items = [
-                {
-                    "fiscal_item_id": int(row.get("fiscal_item_id") or row.get("item_id") or 0),
-                    "quantity": str(row.get("quantidade_emitida") or row.get("quantity") or ""),
-                    "weight": str(row.get("peso_emitido") or row.get("weight") or ""),
-                }
-                for row in emissions or []
-                if int(row.get("fiscal_item_id") or row.get("item_id") or 0)
-            ]
-            updated = proposals.register_fiscal_invoice(
-                token,
-                fiscal_record_id,
-                {"version": int(detail["version"]), "invoice_number": invoice_number, "observation": observacao or None, "items": items or None},
-            )
+            items = []
+            for row in emissions or []:
+                fiscal_item_id = int(row.get("fiscal_item_id") or row.get("item_id") or 0)
+                if not fiscal_item_id:
+                    continue
+                item_payload: dict[str, Any] = {"fiscal_item_id": fiscal_item_id}
+                quantity_value = row.get("quantidade_emitida") if row.get("quantidade_emitida") is not None else row.get("quantity")
+                if quantity_value is not None and _decimal(quantity_value, default="0") > 0:
+                    item_payload["quantity"] = _decimal_text(quantity_value)
+                weight_value = row.get("peso_emitido") if row.get("peso_emitido") is not None else row.get("weight")
+                if weight_value is not None:
+                    item_payload["weight"] = _decimal_text(weight_value) or "0"
+                items.append(item_payload)
+            payload = {"version": int(detail["version"]), "invoice_number": invoice_number, "observation": observacao or None, "items": items or None}
+            try:
+                updated = proposals.register_fiscal_invoice(token, fiscal_record_id, payload)
+            except ApiClientError as exc:
+                log.error(
+                    "Erro ao registrar emissao fiscal: status=%s mensagem=%r request_id=%s payload=%r",
+                    exc.status_code, exc.user_message, exc.request_id, payload,
+                )
+                raise
             invoices = updated.get("invoices") or []
             return int(invoices[0]["id"]) if invoices else 0
         finally:
@@ -908,6 +1213,26 @@ class OfficialProposalApiStorage:
             raise OfficialProposalStorageError("Entre na API antes de salvar propostas oficiais.")
         return state.access_token
 
+    def update_current_user(self, *, username: str | None = None, display_name: str | None = None):
+        client = self._ensure_client(self._load_enabled_settings())
+        return AuthApiClient(client).update_me(self.current_access_token(), username=username, display_name=display_name)
+
+    def change_current_password(self, current_password: str, new_password: str, confirm_password: str):
+        client = self._ensure_client(self._load_enabled_settings())
+        return AuthApiClient(client).change_password(self.current_access_token(), current_password, new_password, confirm_password)
+
+    def upload_current_avatar(self, filename: str, content: bytes, mime: str):
+        client = self._ensure_client(self._load_enabled_settings())
+        return AuthApiClient(client).upload_avatar(self.current_access_token(), filename, content, mime)
+
+    def remove_current_avatar(self):
+        client = self._ensure_client(self._load_enabled_settings())
+        return AuthApiClient(client).remove_avatar(self.current_access_token())
+
+    def avatar_bytes_for_user(self, user_id: int) -> bytes | None:
+        client = self._ensure_client(self._load_enabled_settings())
+        return AuthApiClient(client).avatar_bytes(self.current_access_token(), int(user_id))
+
     def logout_current_session(self) -> None:
         with self._client_lock:
             if self._session:
@@ -953,12 +1278,30 @@ class OfficialProposalApiStorage:
         finally:
             client.close()
 
-    def chat_send_message(self, conversation_id: int, body: str, message_type: str = "MENSAGEM", mentioned_user_id: int | None = None) -> dict[str, Any]:
+    def chat_send_message(
+        self,
+        conversation_id: int,
+        body: str,
+        message_type: str = "MENSAGEM",
+        mentioned_user_id: int | None = None,
+        reply_to_message_id: int | None = None,
+        area: str | None = None,
+        due_at=None,
+        is_important: bool = False,
+    ) -> dict[str, Any]:
         client, chat, token = self._chat_client()
         try:
             payload: dict[str, Any] = {"body": body, "message_type": message_type}
             if mentioned_user_id:
                 payload["mentioned_user_id"] = mentioned_user_id
+            if reply_to_message_id:
+                payload["reply_to_message_id"] = reply_to_message_id
+            if area:
+                payload["area"] = area
+            if due_at:
+                payload["due_at"] = due_at.isoformat() if hasattr(due_at, "isoformat") else due_at
+            if is_important:
+                payload["is_important"] = True
             return chat.post_message(token, conversation_id, payload)
         finally:
             client.close()
@@ -970,10 +1313,10 @@ class OfficialProposalApiStorage:
         finally:
             client.close()
 
-    def chat_proposal_timeline(self, proposal_id: int) -> dict[str, Any]:
+    def chat_proposal_timeline(self, proposal_id: int, **filters) -> dict[str, Any]:
         client, chat, token = self._chat_client()
         try:
-            return chat.get_proposal_timeline(token, proposal_id)
+            return chat.get_proposal_timeline(token, proposal_id, **filters)
         finally:
             client.close()
 
@@ -1007,10 +1350,56 @@ class OfficialProposalApiStorage:
         finally:
             client.close()
 
+    def chat_notifications_page(self, *, status: str | None = None, limit: int = 30, offset: int = 0) -> dict[str, Any]:
+        # ETAPA 10: variante paginada pra Central de Notificacoes -- devolve
+        # o envelope inteiro (items/total/has_more), diferente de
+        # chat_notifications() acima, que so serve pro polling de toasts
+        # (esse ja tem callers existentes esperando uma lista simples).
+        client, chat, token = self._chat_client()
+        try:
+            return chat.list_notifications(token, status=status, limit=limit, offset=offset)
+        finally:
+            client.close()
+
     def chat_mark_all_notifications_read(self) -> None:
         client, chat, token = self._chat_client()
         try:
             chat.mark_all_notifications_read(token)
+        finally:
+            client.close()
+
+    def chat_mark_notification_read(self, notification_id: int) -> None:
+        client, chat, token = self._chat_client()
+        try:
+            chat.mark_notification_read(token, notification_id)
+        finally:
+            client.close()
+
+    def chat_mark_question_viewed(self, message_id: int) -> dict[str, Any]:
+        client, chat, token = self._chat_client()
+        try:
+            return chat.mark_question_viewed(token, message_id)
+        finally:
+            client.close()
+
+    def chat_cancel_question(self, message_id: int, reason: str) -> dict[str, Any]:
+        client, chat, token = self._chat_client()
+        try:
+            return chat.cancel_question(token, message_id, {"reason": reason})
+        finally:
+            client.close()
+
+    def chat_reassign_question(self, message_id: int, assignee_user_id: int, reason: str) -> dict[str, Any]:
+        client, chat, token = self._chat_client()
+        try:
+            return chat.reassign_question(token, message_id, {"assignee_user_id": assignee_user_id, "reason": reason})
+        finally:
+            client.close()
+
+    def proposal_activities(self, proposal_id: int, **filters) -> list[dict[str, Any]]:
+        client, chat, token = self._chat_client()
+        try:
+            return chat.get_proposal_activities(token, proposal_id, **filters)
         finally:
             client.close()
 
@@ -1099,15 +1488,16 @@ def _proposal_update_payload(data: dict[str, Any], current: dict[str, Any]) -> d
 
 def _item_create_payload(item: dict[str, Any]) -> dict[str, Any]:
     quantity = _decimal(item.get("quantidade"), default="1")
-    weight = _decimal(item.get("peso"), default="0")
+    weight_text = _optional_known_decimal(item.get("peso"))
+    weight = Decimal(weight_text) if weight_text is not None else None
     return {
         "item_number": str(item.get("numero_item") or "").strip(),
         "product_code": _optional(item.get("codigo_produto")),
         "description": str(item.get("descricao") or "").strip(),
         "quantity": str(quantity),
         "unit": "un",
-        "unit_weight": str(weight),
-        "total_weight": str((quantity * weight).quantize(Decimal("0.0001"))),
+        "unit_weight": str(weight) if weight is not None else None,
+        "total_weight": str((quantity * weight).quantize(Decimal("0.0001"))) if weight is not None else None,
         "produce_internally": _flag_to_bool(item.get("produzir_internamente")),
         "non_production_reason": _optional(item.get("motivo_nao_produzir")),
         "requires_galvanization": _flag_to_bool(item.get("precisa_galvanizacao")),
@@ -1126,6 +1516,10 @@ def _api_proposal_to_process(row: dict[str, Any]) -> dict[str, Any]:
         "id": row.get("id"),
         "api_id": row.get("id"),
         "api_version": row.get("version"),
+        "parent_proposal_id": row.get("parent_proposal_id"),
+        "parent_legacy_id": row.get("parent_legacy_id"),
+        "partial_number": row.get("partial_number"),
+        "is_partial": bool(row.get("is_partial")),
         "proposta": row.get("proposal_number") or "",
         "cliente": row.get("customer_name") or "",
         "obra_site": row.get("project_name") or "",
@@ -1141,6 +1535,11 @@ def _api_proposal_to_process(row: dict[str, Any]) -> dict[str, Any]:
         "status_galvanizacao": row.get("galvanization_status") or "",
         "status_expedicao": row.get("shipping_status") or "",
         "status_almoxarifado": row.get("warehouse_status") or "",
+        "is_cancelled": bool(row.get("is_cancelled")),
+        "is_completed": bool(row.get("is_completed")),
+        "cancelled_at": row.get("cancelled_at"),
+        "cancelled_by": row.get("cancelled_by"),
+        "cancellation_reason": row.get("cancellation_reason") or "",
         "tipo_processo": row.get("process_type") or "PRINCIPAL",
         "localizacao_atual": str(row.get("current_area") or "CONTROLE_GERAL").replace("_", " "),
         "status_localizacao": row.get("current_status") or row.get("general_status") or "",
@@ -1178,6 +1577,8 @@ def _api_partial_to_process(row: dict[str, Any]) -> dict[str, Any]:
         "id": row.get("id"),
         "api_id": row.get("id"),
         "api_version": row.get("version"),
+        "parent_proposal_id": row.get("parent_proposal_id"),
+        "parent_legacy_id": row.get("parent_legacy_id"),
         "proposta": row.get("proposal_number") or "",
         "cliente": row.get("customer_name") or "",
         "obra_site": row.get("project_name") or "",
@@ -1293,6 +1694,8 @@ def _api_expedition_to_process(row: dict[str, Any]) -> dict[str, Any]:
     status = row.get("shipping_status") or row.get("current_status") or ""
     process.update(
         {
+            "parent_proposal_id": row.get("parent_proposal_id"),
+            "numero_parcial": row.get("partial_number"),
             "status_expedicao": status,
             "status_geral": row.get("general_status") or "EM_EXPEDICAO",
             "localizacao_atual": "EXPEDICAO" if status != "ENTREGUE" else "FINALIZADO",
@@ -1319,7 +1722,7 @@ def _api_item_to_process_item(item: dict[str, Any]) -> dict[str, Any]:
         "codigo_produto": item.get("product_code") or "",
         "descricao": item.get("description") or "",
         "quantidade": item.get("quantity") or "1",
-        "peso": item.get("unit_weight") or "0",
+        "peso": item.get("unit_weight") or "",
         "produzir_internamente": _api_flag(item.get("produce_internally")),
         "motivo_nao_produzir": item.get("non_production_reason") or "",
         "precisa_galvanizacao": _api_flag(item.get("requires_galvanization")),
@@ -1329,6 +1732,8 @@ def _api_item_to_process_item(item: dict[str, Any]) -> dict[str, Any]:
         "galvanizado": item.get("galvanized", False),
         "entregue": item.get("delivered", False),
         "version": item.get("version"),
+        "editavel": item.get("flow_editable", True),
+        "motivo_bloqueio": item.get("flow_lock_reason"),
     }
 
 
@@ -1341,7 +1746,7 @@ def _api_production_item_row_to_process_item(row: dict[str, Any]) -> dict[str, A
         "codigo_produto": row.get("product_code") or "",
         "descricao": row.get("description") or "",
         "quantidade": row.get("quantity") or "1",
-        "peso": row.get("unit_weight") or "0",
+        "peso": row.get("unit_weight") or "",
         "peso_total": _decimal_text(row.get("total_weight")),
         "produzir_internamente": _api_flag(row.get("produce_internally")),
         "precisa_galvanizacao": _api_flag(row.get("requires_galvanization")),
@@ -1356,7 +1761,7 @@ def _api_production_item_row_to_process_item(row: dict[str, Any]) -> dict[str, A
         "obra_site": row.get("project_name") or "",
         "lote": row.get("lot") or "",
         "status_producao": row.get("proposal_status") or "",
-        "status_producao_item": row.get("proposal_status") or "",
+        "status_producao_item": "FLUXO_INDEFINIDO" if not row.get("flow_defined") else (row.get("proposal_status") or ""),
     }
 
 
@@ -1371,7 +1776,7 @@ def _api_galvanization_item_row_to_process_item(row: dict[str, Any]) -> dict[str
         "quantidade": row.get("quantity") or "0",
         "quantidade_disponivel": row.get("available_quantity") or "0",
         "quantidade_em_galvanizacao": row.get("sent_quantity") or "0",
-        "peso_unitario": row.get("unit_weight") or "0",
+        "peso_unitario": row.get("unit_weight") or "",
         "peso": _decimal_text(row.get("available_weight")),
         "peso_em_galvanizacao": _decimal_text(row.get("sent_weight")),
         "situacao": row.get("situation") or "",
@@ -1403,8 +1808,8 @@ def _api_expedition_item_to_process_item(item: dict[str, Any]) -> dict[str, Any]
         "quantidade_remanejada": item.get("remanaged_quantity") or "0",
         "saldo_pendente": item.get("pending_quantity") or "0",
         "saldo_separado": _decimal_text(separated_balance),
-        "peso": item.get("unit_weight") or "0",
-        "peso_total": item.get("total_weight") or "0",
+        "peso": item.get("unit_weight") or "",
+        "peso_total": item.get("total_weight") or "",
         "origem_expedicao": item.get("origin") or "",
         "status_expedicao": item.get("status") or "",
         "processo_atual_id": item.get("proposal_id"),
@@ -1416,19 +1821,21 @@ def _api_expedition_item_to_process_item(item: dict[str, Any]) -> dict[str, Any]
 def _expedition_item_payload(item_ids: list[int] | None) -> list[dict[str, Any]] | None:
     if not item_ids:
         return None
-    return [{"expedition_item_id": int(item_id)} for item_id in item_ids]
+    # item_ids here are ProposalItem.id (see _api_expedition_item_to_process_item's "id"),
+    # not ExpeditionItem.id, so they must be sent as proposal_item_id.
+    return [{"proposal_item_id": int(item_id)} for item_id in item_ids]
 
 
 def _expedition_remanagement_item_payload(item_ids: list[int] | None, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     if not item_ids:
         return []
-    items_by_id = {int(item.get("id") or 0): item for item in items}
+    items_by_proposal_item_id = {int(item.get("proposal_item_id") or 0): item for item in items}
     payload = []
     for item_id in item_ids:
-        expedition_item_id = int(item_id)
-        item = items_by_id.get(expedition_item_id) or {}
+        proposal_item_id = int(item_id)
+        item = items_by_proposal_item_id.get(proposal_item_id) or {}
         quantity = item.get("pending_quantity") or item.get("available_quantity") or None
-        row = {"expedition_item_id": expedition_item_id}
+        row = {"proposal_item_id": proposal_item_id}
         if quantity not in (None, ""):
             row["quantity"] = str(quantity)
         payload.append(row)
@@ -1438,7 +1845,10 @@ def _expedition_remanagement_item_payload(item_ids: list[int] | None, items: lis
 def _api_fiscal_record_to_legacy(row: dict[str, Any]) -> dict[str, Any]:
     return {
         "fiscal_processo_id": row.get("id"),
+        "fiscal_processo_ids": row.get("fiscal_processo_ids") or [row.get("id")],
         "processo_id": row.get("proposal_id"),
+        "parent_proposal_id": row.get("parent_proposal_id"),
+        "numero_parcial": row.get("partial_number"),
         "proposta": row.get("proposal_number") or "",
         "cliente": row.get("customer_name") or "",
         "pedido_compra": "",
@@ -1456,6 +1866,9 @@ def _api_fiscal_record_to_legacy(row: dict[str, Any]) -> dict[str, Any]:
         "peso_total": _decimal_text(row.get("total_weight")),
         "peso_faturado": _decimal_text(row.get("billed_weight")),
         "peso_pendente": _decimal_text(row.get("pending_weight")),
+        "itens_com_peso": int(row.get("weight_known_items") or 0),
+        "itens_total_peso": int(row.get("weight_total_items") or row.get("item_count") or 0),
+        "cobertura_peso_completa": bool(row.get("weight_complete")),
         "mais_7_dias_sem_emissao": 1 if row.get("older_than_7_days") else 0,
         "pendencia_critica": 1 if row.get("critical_pending") else 0,
         "api_version": row.get("version"),
@@ -1670,7 +2083,14 @@ def _api_galvanization_load_to_legacy(row: dict[str, Any]) -> dict[str, Any]:
         "status": row.get("status") or "",
         "motorista": row.get("driver_name") or "",
         "peso_maximo": _decimal_text(row.get("max_weight")),
+        "peso_informado_carga": _decimal_text(row.get("load_weight")),
+        "origem_peso_carga": row.get("load_weight_source") or "",
+        "peso_carga_atualizado_em": _datetime_br(row.get("load_weight_updated_at")),
         "peso_total": _decimal_text(row.get("total_weight")),
+        "peso_conhecido_itens": _decimal_text(row.get("known_items_weight") if "known_items_weight" in row else row.get("total_weight")),
+        "itens_com_peso": int(row.get("weight_known_items") or 0),
+        "itens_total_peso": int(row.get("weight_total_items") or row.get("item_count") or 0),
+        "cobertura_peso_completa": bool(row.get("weight_complete")),
         "item_count": row.get("item_count", 0),
         "proposal_count": row.get("proposal_count", 0),
         "data_prevista_retorno": _date_br(row.get("expected_return_date")),
@@ -1678,7 +2098,11 @@ def _api_galvanization_load_to_legacy(row: dict[str, Any]) -> dict[str, Any]:
         "data_retorno": _datetime_br(row.get("returned_at")) or "",
         "encerrado_em": _datetime_br(row.get("closed_at")) or "",
         "criado_em": _datetime_br(row.get("created_at")),
-        "criado_por": "",
+        "atualizado_em": _datetime_br(row.get("updated_at")),
+        "criado_por_id": row.get("created_by_user_id"),
+        "criado_por": row.get("created_by_name") or "",
+        "atualizado_por_id": row.get("updated_by_user_id"),
+        "atualizado_por": row.get("updated_by_name") or "",
         "observacao": row.get("notes") or "",
         "api_version": row.get("version"),
         "version": row.get("version"),
@@ -1689,6 +2113,8 @@ def _api_galvanization_proposal_to_legacy(row: dict[str, Any]) -> dict[str, Any]
     return {
         "carga_item_id": row.get("proposal_id"),
         "processo_id": row.get("proposal_id"),
+        "parent_proposal_id": row.get("parent_proposal_id"),
+        "numero_parcial": row.get("partial_number"),
         "proposta": row.get("proposal_number") or "",
         "cliente": row.get("customer_name") or "",
         "obra_site": row.get("project_name") or "",
@@ -1730,6 +2156,57 @@ def _api_galvanization_item_to_legacy(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _api_galvanization_return_to_legacy(row: dict[str, Any], *, number: int) -> dict[str, Any]:
+    return {
+        "id": row.get("id"),
+        "numero_retorno": number,
+        "request_id": row.get("request_id") or "",
+        "data": _datetime_br(row.get("occurred_at")),
+        "usuario_id": row.get("actor_user_id"),
+        "usuario": row.get("actor_name") or "",
+        "status_anterior": row.get("from_status") or "",
+        "status_novo": row.get("to_status") or "",
+        "tipo_retorno": row.get("return_type") or "",
+        "observacao": row.get("observation") or "",
+        "peso_retornado": row.get("returned_weight"),
+        "itens_com_peso": int(row.get("weight_known_items") or 0),
+        "itens_total_peso": int(row.get("weight_total_items") or 0),
+        "itens": [
+            {
+                "evento_id": item.get("event_id"),
+                "carga_item_id": item.get("load_item_id"),
+                "processo_id": item.get("proposal_id"),
+                "proposta": item.get("proposal_number") or "",
+                "proposta_item_id": item.get("proposal_item_id"),
+                "numero_item": item.get("item_number") or "",
+                "codigo_produto": item.get("product_code") or "",
+                "descricao": item.get("description") or "",
+                "quantidade_retornada": item.get("returned_quantity"),
+                "peso_unitario": item.get("unit_weight"),
+                "peso_retornado": item.get("returned_weight"),
+            }
+            for item in row.get("items", [])
+        ],
+    }
+
+
+def _api_galvanization_history_to_legacy(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": row.get("id"),
+        "evento": row.get("event_type") or "",
+        "carga_item_id": row.get("load_item_id"),
+        "processo_id": row.get("proposal_id"),
+        "proposta_item_id": row.get("proposal_item_id"),
+        "usuario_id": row.get("actor_user_id"),
+        "usuario": row.get("actor_name") or "",
+        "request_id": row.get("request_id") or "",
+        "status_anterior": row.get("from_status") or "",
+        "status_novo": row.get("to_status") or "",
+        "metadata": row.get("metadata") if isinstance(row.get("metadata"), dict) else {},
+        "data": _datetime_br(row.get("created_at")),
+    }
+
+
 def _source(data: dict[str, Any], import_metadata: dict[str, Any] | None) -> str:
     if import_metadata and str(import_metadata.get("origem") or "").upper() == "NOMUS_PDF":
         return "NOMUS_PDF"
@@ -1745,6 +2222,21 @@ def _optional(value: Any) -> str | None:
 def _optional_decimal(value: Any) -> str | None:
     text = str(value or "").strip().replace(",", ".")
     return text or None
+
+
+def _optional_known_decimal(value: Any) -> str | None:
+    text = _optional_decimal(value)
+    if text is None:
+        return None
+    try:
+        parsed = Decimal(text).quantize(Decimal("0.0001"))
+    except InvalidOperation as exc:
+        raise OfficialProposalStorageError("Informe um peso numerico valido.") from exc
+    # Zero enviado por Desktops antigos e tratado como campo limpo. Negativos
+    # continuam seguindo para a validacao oficial da API.
+    if parsed == Decimal("0"):
+        return None
+    return str(parsed)
 
 
 def _decimal(value: Any, *, default: str) -> Decimal:

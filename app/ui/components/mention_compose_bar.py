@@ -1,13 +1,19 @@
 from __future__ import annotations
 
-from PySide6.QtCore import QSize, Qt, Signal
-from PySide6.QtGui import QFontMetrics, QTextCursor
+from datetime import datetime
+
+from app.ui.components.avatar import make_avatar_label
+
+from PySide6.QtCore import QDateTime, QEasingCurve, QParallelAnimationGroup, QPropertyAnimation, QSize, Qt, Signal
+from PySide6.QtGui import QAction, QFontMetrics, QIcon, QTextCursor
 from PySide6.QtWidgets import (
     QCheckBox,
+    QDateTimeEdit,
     QFrame,
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QMenu,
     QPushButton,
     QTextEdit,
     QVBoxLayout,
@@ -136,14 +142,7 @@ class _MentionPopup(QFrame):
         row_layout.setContentsMargins(6, 4, 6, 4)
         row_layout.setSpacing(8)
 
-        avatar = QLabel(_initials(user.get("display_name")))
-        avatar.setFixedSize(26, 26)
-        avatar.setAlignment(Qt.AlignCenter)
-        avatar.setStyleSheet(
-            f"background: {self.service.palette.get('accent', '#0078d4')}; "
-            f"color: {self.service.palette.get('accent_text', '#ffffff')}; "
-            "border-radius: 13px; font-weight: 700; font-size: 10px;"
-        )
+        avatar = make_avatar_label(user.get("display_name"), self.service, 26, user.get("id"))
         row_layout.addWidget(avatar)
 
         text_col = QVBoxLayout()
@@ -157,10 +156,12 @@ class _MentionPopup(QFrame):
             text_col.addWidget(sector_label)
         row_layout.addLayout(text_col, 1)
 
+        is_online = bool(user.get("is_online"))
         dot = QLabel()
         dot.setFixedSize(8, 8)
-        dot.setStyleSheet(f"background: {self.service.palette.get('muted', '#94a3b8')}; border-radius: 4px;")
-        dot.setToolTip("Status de presenca nao disponivel nesta versao")
+        dot_color = self.service.palette.get("success", "#16a34a") if is_online else self.service.palette.get("muted", "#94a3b8")
+        dot.setStyleSheet(f"background: {dot_color}; border-radius: 4px;")
+        dot.setToolTip("Online" if is_online else "Offline")
         row_layout.addWidget(dot)
 
         if selected:
@@ -210,6 +211,7 @@ class MentionComposeBar(QFrame):
 
     send_requested = Signal()
     action_unavailable = Signal(str)
+    internal_note_requested = Signal()
 
     def __init__(self, service, parent=None):
         super().__init__(parent)
@@ -217,6 +219,7 @@ class MentionComposeBar(QFrame):
         self._last_mentioned_user_id: int | None = None
         self._last_mentioned_name: str | None = None
         self._mentionable_users: list[dict] = []
+        self._reply_to_message_id: int | None = None
         self._build()
 
     def _build(self):
@@ -227,23 +230,65 @@ class MentionComposeBar(QFrame):
             f"border: 1px solid {palette.get('border', '#cbd5e1')}; border-radius: 10px; }}"
         )
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(8, 6, 8, 4)
+        outer.setContentsMargins(8, 6, 8, 6)
         outer.setSpacing(2)
 
-        row = QHBoxLayout()
-        row.setSpacing(2)
+        self._reply_preview = QFrame()
+        self._reply_preview.setObjectName("ReplyPreviewBar")
+        self._reply_preview.setStyleSheet(
+            f"QFrame#ReplyPreviewBar {{ background: {palette.get('surface_alt', '#e2e8f0')}; "
+            f"border-left: 3px solid {palette.get('accent', '#0078d4')}; border-radius: 4px; }}"
+        )
+        reply_layout = QHBoxLayout(self._reply_preview)
+        reply_layout.setContentsMargins(8, 4, 6, 4)
+        reply_layout.setSpacing(6)
+        self._reply_preview_label = QLabel()
+        self._reply_preview_label.setWordWrap(True)
+        self._reply_preview_label.setStyleSheet("font-size: 11px;")
+        reply_layout.addWidget(self._reply_preview_label, 1)
+        cancel_reply_btn = QPushButton("x")
+        cancel_reply_btn.setObjectName("GhostButton")
+        cancel_reply_btn.setFixedSize(20, 20)
+        cancel_reply_btn.setCursor(Qt.PointingHandCursor)
+        cancel_reply_btn.clicked.connect(self.clear_reply_preview)
+        reply_layout.addWidget(cancel_reply_btn)
+        self._reply_preview.setVisible(False)
+        outer.addWidget(self._reply_preview)
 
-        self.attach_btn = self._icon_button("attach", "Anexar arquivo (em breve)")
-        self.attach_btn.clicked.connect(lambda: self.action_unavailable.emit("attach"))
+        row = QHBoxLayout()
+        row.setSpacing(4)
+
+        self.attach_btn = QPushButton()
+        self.attach_btn.setObjectName("GhostButton")
+        self.attach_btn.setIcon(make_icon("attach", self.service.palette["accent"], 20))
+        self.attach_btn.setIconSize(QSize(20, 20))
+        self.attach_btn.setFixedSize(36, 36)
+        self.attach_btn.setCursor(Qt.PointingHandCursor)
+        self.attach_btn.setToolTip("Anexar ou registrar nota interna")
+        attach_menu = QMenu(self.attach_btn)
+        attach_file_action = QAction("Anexar arquivo", attach_menu)
+        attach_file_action.triggered.connect(lambda: self.action_unavailable.emit("attach"))
+        attach_menu.addAction(attach_file_action)
+        attach_image_action = QAction("Anexar imagem", attach_menu)
+        attach_image_action.triggered.connect(lambda: self.action_unavailable.emit("attach"))
+        attach_menu.addAction(attach_image_action)
+        attach_menu.addSeparator()
+        internal_note_action = QAction("Registrar nota interna", attach_menu)
+        internal_note_action.triggered.connect(self.internal_note_requested.emit)
+        attach_menu.addAction(internal_note_action)
+        self.attach_btn.setMenu(attach_menu)
         row.addWidget(self.attach_btn)
+        row.setAlignment(self.attach_btn, Qt.AlignBottom)
 
         self.emoji_btn = self._icon_button("emoji", "Emojis")
         self.emoji_btn.clicked.connect(self._open_emoji_popup)
         row.addWidget(self.emoji_btn)
+        row.setAlignment(self.emoji_btn, Qt.AlignBottom)
 
         self.mention_btn = self._icon_button("at", "Mencionar usuario")
         self.mention_btn.clicked.connect(self._insert_at_symbol)
         row.addWidget(self.mention_btn)
+        row.setAlignment(self.mention_btn, Qt.AlignBottom)
 
         self.text_edit = _ComposeTextEdit()
         self.text_edit.setObjectName("ComposeTextEdit")
@@ -251,6 +296,7 @@ class MentionComposeBar(QFrame):
         self.text_edit.setPlaceholderText("Digite uma mensagem ou utilize @ para mencionar alguem...")
         self.text_edit.setAcceptRichText(False)
         self._line_height = QFontMetrics(self.text_edit.font()).lineSpacing()
+        self._height_animation: QParallelAnimationGroup | None = None
         self.text_edit.textChanged.connect(self._on_text_changed)
         self.text_edit.send_requested.connect(self.send_requested.emit)
         self.text_edit.mention_query_changed.connect(self._on_mention_query_changed)
@@ -262,37 +308,71 @@ class MentionComposeBar(QFrame):
         self.mic_btn = self._icon_button("mic", "Gravar audio (em breve)")
         self.mic_btn.clicked.connect(lambda: self.action_unavailable.emit("mic"))
         row.addWidget(self.mic_btn)
+        row.setAlignment(self.mic_btn, Qt.AlignBottom)
 
         self.send_btn = QPushButton()
-        self.send_btn.setObjectName("AccentButton")
-        self.send_btn.setIcon(make_icon("send", "#ffffff", 16))
-        self.send_btn.setIconSize(QSize(16, 16))
-        self.send_btn.setFixedSize(34, 34)
-        self.send_btn.setStyleSheet("border-radius: 17px;")
+        self.send_btn.setObjectName("ChatSendButton")
+        send_icon = QIcon()
+        send_icon.addPixmap(make_icon("send", palette.get("accent_text", "#ffffff"), 18).pixmap(18, 18), QIcon.Mode.Normal)
+        send_icon.addPixmap(make_icon("send", palette.get("disabled", palette.get("muted", "#94a3b8")), 18).pixmap(18, 18), QIcon.Mode.Disabled)
+        self.send_btn.setIcon(send_icon)
+        self.send_btn.setIconSize(QSize(18, 18))
+        self.send_btn.setFixedSize(36, 36)
+        self.send_btn.setToolTip("Enviar mensagem")
         self.send_btn.setCursor(Qt.PointingHandCursor)
+        self.send_btn.setStyleSheet(f"""
+            QPushButton#ChatSendButton {{
+                background: {palette.get('accent', '#0078d4')};
+                border: none;
+                border-radius: 18px;
+            }}
+            QPushButton#ChatSendButton:hover:enabled {{
+                background: {palette.get('accent_hover', '#005a9e')};
+            }}
+            QPushButton#ChatSendButton:disabled {{
+                background: {palette.get('surface_alt', '#e2e8f0')};
+            }}
+        """)
+        self.send_btn.setEnabled(False)
         self.send_btn.clicked.connect(self.send_requested.emit)
         row.addWidget(self.send_btn)
+        row.setAlignment(self.send_btn, Qt.AlignBottom)
         outer.addLayout(row)
 
-        self.question_checkbox = QCheckBox("Marcar como Pergunta")
+        self.question_checkbox = QCheckBox("Solicitar resposta")
         self.question_checkbox.setVisible(False)
+        self.question_checkbox.toggled.connect(self._update_due_controls_visibility)
         checkbox_row = QHBoxLayout()
         checkbox_row.addStretch()
         checkbox_row.addWidget(self.question_checkbox)
         outer.addLayout(checkbox_row)
 
+        self.due_checkbox = QCheckBox("Definir prazo")
+        self.due_checkbox.setVisible(False)
+        self.due_checkbox.toggled.connect(self._update_due_controls_visibility)
+        self.due_edit = QDateTimeEdit()
+        self.due_edit.setCalendarPopup(True)
+        self.due_edit.setDisplayFormat("dd/MM/yyyy HH:mm")
+        self.due_edit.setDateTime(QDateTime.currentDateTime().addDays(1))
+        self.due_edit.setVisible(False)
+        due_row = QHBoxLayout()
+        due_row.addStretch()
+        due_row.addWidget(self.due_checkbox)
+        due_row.addWidget(self.due_edit)
+        outer.addLayout(due_row)
+
         self._mention_popup = _MentionPopup(self.service, parent=self)
         self._mention_popup.user_selected.connect(self._on_mention_selected)
         self._mention_popup.hide()
 
-        self._resize_text_edit()
+        self._resize_text_edit(animate=False)
 
     def _icon_button(self, icon_name: str, tooltip: str) -> QPushButton:
         button = QPushButton()
         button.setObjectName("GhostButton")
-        button.setIcon(make_icon(icon_name, self.service.palette["accent"], 18))
-        button.setIconSize(QSize(18, 18))
-        button.setFixedSize(30, 30)
+        button.setIcon(make_icon(icon_name, self.service.palette["accent"], 20))
+        button.setIconSize(QSize(20, 20))
+        button.setFixedSize(36, 36)
         button.setToolTip(tooltip)
         button.setCursor(Qt.PointingHandCursor)
         return button
@@ -303,16 +383,40 @@ class MentionComposeBar(QFrame):
     def _on_text_changed(self):
         self._resize_text_edit()
         self._update_question_checkbox()
+        self.send_btn.setEnabled(bool(self.text_edit.toPlainText().strip()))
 
-    def _resize_text_edit(self):
+    def _resize_text_edit(self, animate: bool = True):
         doc_height = self.text_edit.document().size().height()
-        padding = 14
+        padding = 10
         min_height = self._line_height + padding
         max_height = self._line_height * 6 + padding
-        target = max(min_height, min(doc_height + padding, max_height))
-        self.text_edit.setFixedHeight(int(target))
+        target = int(max(min_height, min(doc_height + padding, max_height)))
         overflow = doc_height + padding > max_height
         self.text_edit.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded if overflow else Qt.ScrollBarAlwaysOff)
+
+        current = self.text_edit.height()
+        if current == target:
+            return
+        if not animate:
+            self.text_edit.setFixedHeight(target)
+            return
+        if self._height_animation is not None:
+            self._height_animation.stop()
+        min_anim = QPropertyAnimation(self.text_edit, b"minimumHeight", self.text_edit)
+        min_anim.setDuration(160)
+        min_anim.setStartValue(current)
+        min_anim.setEndValue(target)
+        min_anim.setEasingCurve(QEasingCurve.OutCubic)
+        max_anim = QPropertyAnimation(self.text_edit, b"maximumHeight", self.text_edit)
+        max_anim.setDuration(160)
+        max_anim.setStartValue(current)
+        max_anim.setEndValue(target)
+        max_anim.setEasingCurve(QEasingCurve.OutCubic)
+        group = QParallelAnimationGroup(self.text_edit)
+        group.addAnimation(min_anim)
+        group.addAnimation(max_anim)
+        self._height_animation = group
+        group.start()
 
     def _update_question_checkbox(self):
         text = self.text_edit.toPlainText()
@@ -322,6 +426,14 @@ class MentionComposeBar(QFrame):
             self._last_mentioned_name = None
             self.question_checkbox.setChecked(False)
         self.question_checkbox.setVisible(valid_mention)
+        self._update_due_controls_visibility()
+
+    def _update_due_controls_visibility(self):
+        requesting_response = self.question_checkbox.isVisible() and self.question_checkbox.isChecked()
+        self.due_checkbox.setVisible(requesting_response)
+        if not requesting_response:
+            self.due_checkbox.setChecked(False)
+        self.due_edit.setVisible(requesting_response and self.due_checkbox.isChecked())
 
     def _on_mention_query_changed(self, query):
         if query is None:
@@ -381,7 +493,38 @@ class MentionComposeBar(QFrame):
         return "PERGUNTA" if (self.question_checkbox.isVisible() and self.question_checkbox.isChecked()) else "MENSAGEM"
 
     def mentioned_user_id(self) -> int | None:
-        return self._last_mentioned_user_id if self.message_type() == "PERGUNTA" else None
+        # a mencao vale para qualquer mensagem (nao so Pergunta): o texto ja
+        # foi casado contra um usuario real em _on_mention_selected, entao o
+        # ID persiste enquanto o token "@Nome" continuar presente no texto.
+        text = self.text_edit.toPlainText()
+        if self._last_mentioned_user_id and self._last_mentioned_name and f"@{self._last_mentioned_name}" in text:
+            return self._last_mentioned_user_id
+        return None
+
+    def due_at(self) -> datetime | None:
+        if not (self.due_checkbox.isVisible() and self.due_checkbox.isChecked()):
+            return None
+        # QDateTimeEdit trabalha em hora local "ingenua" (sem fuso); anexa o
+        # fuso local antes de mandar pro backend, senao o servidor armazena
+        # como se fosse UTC e o prazo escolhido fica errado por horas.
+        return self.due_edit.dateTime().toPython().astimezone()
+
+    def reply_to_message_id(self) -> int | None:
+        return self._reply_to_message_id
+
+    def set_reply_preview(self, author_name: str | None, snippet: str | None, message_id: int) -> None:
+        self._reply_to_message_id = message_id
+        label_author = author_name or "-"
+        label_snippet = (snippet or "").strip().replace("\n", " ")
+        if len(label_snippet) > 90:
+            label_snippet = label_snippet[:87] + "..."
+        self._reply_preview_label.setText(f"Respondendo a {label_author}: “{label_snippet}”")
+        self._reply_preview.setVisible(True)
+        self.text_edit.setFocus()
+
+    def clear_reply_preview(self) -> None:
+        self._reply_to_message_id = None
+        self._reply_preview.setVisible(False)
 
     def clear(self):
         self.text_edit.clear()
@@ -389,6 +532,10 @@ class MentionComposeBar(QFrame):
         self._last_mentioned_name = None
         self.question_checkbox.setChecked(False)
         self.question_checkbox.setVisible(False)
+        self.due_checkbox.setChecked(False)
+        self.due_edit.setDateTime(QDateTime.currentDateTime().addDays(1))
+        self._update_due_controls_visibility()
+        self.clear_reply_preview()
         self._resize_text_edit()
 
     def focus_with_mention(self, user: dict | None = None):

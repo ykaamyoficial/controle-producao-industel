@@ -10,7 +10,7 @@ from app.integrations.api.auth_client import AuthApiClient
 from app.integrations.api.client import DesktopApiClient
 from app.integrations.api.compatibility import compatibility_report
 from app.integrations.api.config import DesktopApiSettings
-from app.integrations.api.exceptions import ApiBusinessError, ApiConnectionError, ApiPermissionError, ApiSessionExpiredError, ApiTimeoutError, ApiUnavailableError, ApiUnexpectedResponseError, ApiValidationError
+from app.integrations.api.exceptions import ApiBusinessError, ApiConnectionError, ApiPermissionError, ApiSessionExpiredError, ApiTimeoutError, ApiUnavailableError, ApiUnexpectedResponseError, ApiValidationError, sanitize_secret
 from app.integrations.api.models import SystemIdentity, SystemVersion
 from app.integrations.api.proposals_client import ProposalsApiClient
 from app.integrations.api.session import ExperimentalApiSession
@@ -30,6 +30,20 @@ class FakeProtector:
 
 def settings() -> DesktopApiSettings:
     return DesktopApiSettings(enabled=True, base_url="http://127.0.0.1:8000", connect_timeout=1, read_timeout=1)
+
+
+class SanitizeSecretTests(unittest.TestCase):
+    def test_redacts_json_token_field_value(self):
+        result = sanitize_secret('{"access_token": "eyJhbGciOiJIUzI1NiJ9.SEGREDO", "user": "carlos"}')
+        self.assertNotIn("SEGREDO", result)
+        self.assertIn("carlos", result)
+
+    def test_redacts_bearer_token_value_in_free_text(self):
+        result = sanitize_secret("Authorization: Bearer abc.def.ghi123 rejected")
+        self.assertNotIn("abc.def.ghi123", result)
+
+    def test_leaves_unrelated_text_untouched(self):
+        self.assertEqual(sanitize_secret("conteudo normal sem segredo"), "conteudo normal sem segredo")
 
 
 class DesktopApiClientTests(unittest.TestCase):
@@ -118,6 +132,32 @@ class DesktopApiClientTests(unittest.TestCase):
                 with self.assertRaises(expected):
                     client.post("/api/v1/proposals", json_payload={}, access_token="ACCESS")
                 client.close()
+
+    def test_unexpected_response_logs_endpoint_status_and_body_without_leaking_secrets(self):
+        # Regressao do bug "A resposta do servidor nao pode ser validada
+        # agora." aparecendo sem nenhum detalhe no log: precisa dar pra
+        # descobrir exatamente qual endpoint/status/corpo causou a falha,
+        # mas sem vazar token/senha do corpo da resposta.
+        client = DesktopApiClient(
+            settings(),
+            transport=httpx.MockTransport(
+                lambda _request: httpx.Response(
+                    500,
+                    json={"detail": "erro interno", "access_token": "SEGREDO-123"},
+                    headers={"content-type": "application/json"},
+                )
+            ),
+        )
+        with self.assertLogs("controle_producao.desktop_api_client", level="WARNING") as captured:
+            with self.assertRaises(ApiUnexpectedResponseError):
+                client.get("/api/v1/chat/conversations", access_token="ACCESS")
+        client.close()
+        joined = " ".join(captured.output)
+        self.assertIn("api_response_parse_failed", joined)
+        self.assertIn("/api/v1/chat/conversations", joined)
+        self.assertIn("status=500", joined)
+        self.assertIn("GET", joined)
+        self.assertNotIn("SEGREDO-123", joined)
 
     def test_invalid_json_is_mapped(self):
         client = DesktopApiClient(settings(), transport=httpx.MockTransport(lambda _request: httpx.Response(200, content=b"<html>", headers={"content-type": "text/html"})))
@@ -211,17 +251,21 @@ class DesktopApiClientTests(unittest.TestCase):
         proposals.list_production_proposals("ACCESS", search="CP", status="NAO_INICIADO")
         proposals.get_production_detail("ACCESS", 10)
         proposals.start_production("ACCESS", 10, {"version": 1})
-        proposals.update_production_item_flow("ACCESS", 10, {"version": 2, "items": []})
-        proposals.update_production_item_weights("ACCESS", 10, {"version": 3, "items": []})
-        proposals.complete_production_items("ACCESS", 10, {"version": 4})
+        proposals.pause_production("ACCESS", 10, {"version": 2, "reason": "Manutencao"})
+        proposals.resume_production("ACCESS", 10, {"version": 3})
+        proposals.update_production_item_flow("ACCESS", 10, {"version": 4, "items": []})
+        proposals.update_production_item_weights("ACCESS", 10, {"version": 5, "items": []})
+        proposals.complete_production_items("ACCESS", 10, {"version": 6})
 
         self.assertEqual(seen[0][1], "/api/v1/production/proposals")
         self.assertIn("search=CP", seen[0][2])
         self.assertEqual(seen[1][1], "/api/v1/production/proposals/10")
         self.assertEqual(seen[2][1], "/api/v1/production/proposals/10/start")
-        self.assertEqual(seen[3][1], "/api/v1/production/proposals/10/item-flow")
-        self.assertEqual(seen[4][1], "/api/v1/production/proposals/10/item-weights")
-        self.assertEqual(seen[5][1], "/api/v1/production/proposals/10/complete-items")
+        self.assertEqual(seen[3][1], "/api/v1/production/proposals/10/pause")
+        self.assertEqual(seen[4][1], "/api/v1/production/proposals/10/resume")
+        self.assertEqual(seen[5][1], "/api/v1/production/proposals/10/item-flow")
+        self.assertEqual(seen[6][1], "/api/v1/production/proposals/10/item-weights")
+        self.assertEqual(seen[7][1], "/api/v1/production/proposals/10/complete-items")
         client.close()
 
 

@@ -43,6 +43,19 @@ class ProposalsApiClient:
     def administrative_correction(self, access_token: str, proposal_id: int, payload: dict[str, Any]) -> dict[str, Any]:
         return self.client.post(f"/api/v1/proposals/{proposal_id}/administrative-correction", json_payload=payload, access_token=access_token).data
 
+    def administrative_correction_options(self, access_token: str, proposal_id: int) -> dict[str, Any]:
+        return self.client.get(
+            f"/api/v1/proposals/{proposal_id}/administrative-corrections/options",
+            access_token=access_token,
+        ).data
+
+    def preview_administrative_correction(self, access_token: str, proposal_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+        return self.client.post(
+            f"/api/v1/proposals/{proposal_id}/administrative-corrections/preview",
+            json_payload=payload,
+            access_token=access_token,
+        ).data
+
     def list_production_proposals(self, access_token: str, **filters) -> dict[str, Any]:
         params = urlencode({key: value for key, value in filters.items() if value not in (None, "")})
         path = "/api/v1/production/proposals" + (f"?{params}" if params else "")
@@ -71,6 +84,12 @@ class ProposalsApiClient:
 
     def start_production(self, access_token: str, proposal_id: int, payload: dict[str, Any]) -> dict[str, Any]:
         return self.client.post(f"/api/v1/production/proposals/{proposal_id}/start", json_payload=payload, access_token=access_token).data
+
+    def pause_production(self, access_token: str, proposal_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+        return self.client.post(f"/api/v1/production/proposals/{proposal_id}/pause", json_payload=payload, access_token=access_token).data
+
+    def resume_production(self, access_token: str, proposal_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+        return self.client.post(f"/api/v1/production/proposals/{proposal_id}/resume", json_payload=payload, access_token=access_token).data
 
     def update_production_item_flow(self, access_token: str, proposal_id: int, payload: dict[str, Any]) -> dict[str, Any]:
         return self.client.patch(f"/api/v1/production/proposals/{proposal_id}/item-flow", json_payload=payload, access_token=access_token).data
@@ -127,7 +146,23 @@ class ProposalsApiClient:
         return self.client.post(f"/api/v1/shipping/proposals/{proposal_id}/deliver-items", json_payload=payload, access_token=access_token).data
 
     def remanage_expedition_items(self, access_token: str, proposal_id: int, payload: dict[str, Any]) -> dict[str, Any]:
-        return self.client.post(f"/api/v1/shipping/proposals/{proposal_id}/remanage-items", json_payload=payload, access_token=access_token).data
+        return self.client.post(f"/api/v1/shipping/proposals/{proposal_id}/return-to-production", json_payload=payload, access_token=access_token).data
+
+    def compatible_remanagement_items(self, access_token: str, source_proposal_id: int, destination_proposal_id: int) -> list[dict[str, Any]]:
+        params = urlencode({"source_proposal_id": source_proposal_id, "destination_proposal_id": destination_proposal_id})
+        data = self.client.get(f"/api/v1/shipping/remanagements/compatible-items?{params}", access_token=access_token).data
+        return data if isinstance(data, list) else []
+
+    def preview_remanagement(self, access_token: str, payload: dict[str, Any]) -> dict[str, Any]:
+        return self.client.post("/api/v1/shipping/remanagements/preview", json_payload=payload, access_token=access_token).data
+
+    def create_remanagement(self, access_token: str, payload: dict[str, Any]) -> dict[str, Any]:
+        return self.client.post("/api/v1/shipping/remanagements", json_payload=payload, access_token=access_token).data
+
+    def list_remanagements(self, access_token: str, **filters) -> dict[str, Any]:
+        params = urlencode({key: value for key, value in filters.items() if value not in (None, "")})
+        path = "/api/v1/shipping/remanagements" + (f"?{params}" if params else "")
+        return self.client.get(path, access_token=access_token).data
 
     def deliver_by_remanagement(self, access_token: str, proposal_id: int, payload: dict[str, Any]) -> dict[str, Any]:
         return self.client.post(f"/api/v1/shipping/proposals/{proposal_id}/deliver-by-remanagement", json_payload=payload, access_token=access_token).data

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSize, Qt
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QListWidget,
     QListWidgetItem,
+    QSizePolicy,
     QSplitter,
     QVBoxLayout,
     QWidget,
@@ -19,13 +20,12 @@ from app.ui.animations import fade_in
 from app.ui.background_worker import start_worker
 from app.ui.components.modern_button import ModernButton
 from app.ui.components.toast_notification import ToastNotification
-from app.ui.process_detail_dialog import ProcessDetailDialog
 from app.ui.proposal_chat_dialog import ChatConversationPanel
 from app.ui.styles import status_color
 
 
-RIGHT_COLUMN_MIN_WIDTH = 1100
-LEFT_COLUMN_MIN_WIDTH = 860
+CONVERSATION_LIST_WIDTH = 310
+CONVERSATION_CARD_HEIGHT = 72
 
 
 def _relative_time(value: str | None) -> str:
@@ -46,8 +46,8 @@ def _relative_time(value: str | None) -> str:
 
 class ChatCenterPage(QWidget):
     """Tela "Chats": lista de conversas a esquerda, timeline da conversa
-    selecionada ao centro (ChatConversationPanel embutido), participantes
-    e acoes rapidas a direita."""
+    selecionada ao centro (ChatConversationPanel embutido, com seu proprio
+    painel lateral recolhivel de detalhes da proposta)."""
 
     def __init__(self, service, parent=None):
         super().__init__(parent)
@@ -62,56 +62,34 @@ class ChatCenterPage(QWidget):
 
     def _build(self):
         root = QVBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(8)
+        root.setContentsMargins(4, 2, 4, 4)
+        root.setSpacing(6)
 
-        header = QFrame()
-        header.setObjectName("FilterBar")
-        header_layout = QVBoxLayout(header)
-        header_layout.setContentsMargins(14, 10, 14, 10)
-        header_layout.setSpacing(2)
-        title = QLabel("Chats")
-        title.setObjectName("FilterTitle")
-        subtitle = QLabel("Comunique-se com sua equipe e acompanhe tudo sobre as propostas.")
-        subtitle.setObjectName("FilterSubtitle")
-        header_layout.addWidget(title)
-        header_layout.addWidget(subtitle)
-        root.addWidget(header)
+        title = QLabel("\U0001F4AC Chats")
+        title.setStyleSheet("font-size: 15px; font-weight: 800;")
+        root.addWidget(title)
 
         self.left_column = self._build_left_column()
         self.center_column = self._build_center_column()
-        self.right_column = self._build_right_column()
-        self.left_column.setMinimumWidth(240)
-        self.center_column.setMinimumWidth(340)
-        self.right_column.setMinimumWidth(220)
+        self.left_column.setFixedWidth(CONVERSATION_LIST_WIDTH)
+        self.center_column.setMinimumWidth(360)
 
         self.splitter = QSplitter(Qt.Horizontal)
         self.splitter.setChildrenCollapsible(False)
         self.splitter.setHandleWidth(8)
         self.splitter.addWidget(self.left_column)
         self.splitter.addWidget(self.center_column)
-        self.splitter.addWidget(self.right_column)
         self.splitter.setStretchFactor(0, 2)
-        self.splitter.setStretchFactor(1, 5)
-        self.splitter.setStretchFactor(2, 2)
+        self.splitter.setStretchFactor(1, 7)
+        self.splitter.setSizes([CONVERSATION_LIST_WIDTH, max(360, self.width() - CONVERSATION_LIST_WIDTH)])
         root.addWidget(self.splitter, 1)
-
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        width = self.width()
-        right_visible = width >= RIGHT_COLUMN_MIN_WIDTH
-        if self.right_column.isVisible() != right_visible:
-            self.right_column.setVisible(right_visible)
-        left_visible = width >= LEFT_COLUMN_MIN_WIDTH
-        if self.left_column.isVisible() != left_visible:
-            self.left_column.setVisible(left_visible)
 
     def _build_left_column(self) -> QFrame:
         container = QFrame()
         container.setObjectName("Panel")
         layout = QVBoxLayout(container)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(8)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(4)
 
         self.search = QLineEdit()
         self.search.setPlaceholderText("Pesquisar conversas...")
@@ -119,8 +97,9 @@ class ChatCenterPage(QWidget):
         layout.addWidget(self.search)
 
         tab_row = QHBoxLayout()
-        self.active_tab_btn = ModernButton("Conversas Ativas", accent=True)
-        self.finalized_tab_btn = ModernButton("Conversas Finalizadas")
+        tab_row.setSpacing(4)
+        self.active_tab_btn = ModernButton("Ativas", accent=True)
+        self.finalized_tab_btn = ModernButton("Finalizadas")
         self.finalized_tab_btn.setObjectName("GhostButton")
         self.active_tab_btn.clicked.connect(lambda: self._set_status_tab("ATIVA"))
         self.finalized_tab_btn.clicked.connect(lambda: self._set_status_tab("FINALIZADA"))
@@ -134,8 +113,19 @@ class ChatCenterPage(QWidget):
         layout.addWidget(self.loading)
 
         self.conversation_list = QListWidget()
-        self.conversation_list.setSpacing(4)
-        self.conversation_list.setFrameShape(QListWidget.NoFrame)
+        self.conversation_list.setObjectName("ConversationList")
+        self.conversation_list.setSpacing(3)
+        self.conversation_list.setFrameShape(QFrame.NoFrame)
+        self.conversation_list.setStyleSheet(
+            "QListWidget#ConversationList { border: none; background: transparent; }"
+            "QListWidget#ConversationList QScrollBar:vertical { width: 5px; margin: 0px; }"
+            "QListWidget#ConversationList QScrollBar::handle:vertical { min-height: 24px; }"
+        )
+        self.conversation_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.conversation_list.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.conversation_list.setUniformItemSizes(True)
+        self.conversation_list.setViewportMargins(0, 0, 0, 0)
+        self.conversation_list.verticalScrollBar().rangeChanged.connect(lambda _minimum, _maximum: self._sync_card_widths())
         self.conversation_list.itemClicked.connect(self._on_conversation_clicked)
         layout.addWidget(self.conversation_list, 1)
         return container
@@ -144,47 +134,12 @@ class ChatCenterPage(QWidget):
         self.center_container = QFrame()
         self.center_container.setObjectName("Panel")
         self.center_layout = QVBoxLayout(self.center_container)
-        self.center_layout.setContentsMargins(14, 14, 14, 14)
+        self.center_layout.setContentsMargins(12, 12, 12, 12)
         self.empty_center_label = QLabel("Selecione uma conversa a esquerda para comecar.")
         self.empty_center_label.setAlignment(Qt.AlignCenter)
         self.empty_center_label.setObjectName("Caption")
         self.center_layout.addWidget(self.empty_center_label)
         return self.center_container
-
-    def _build_right_column(self) -> QFrame:
-        container = QFrame()
-        container.setObjectName("Panel")
-        layout = QVBoxLayout(container)
-        layout.setContentsMargins(14, 14, 14, 14)
-        layout.setSpacing(14)
-
-        self.summary_title = QLabel("Resumo da Proposta")
-        self.summary_title.setStyleSheet("font-weight: 800;")
-        self.summary_title.setVisible(False)
-        layout.addWidget(self.summary_title)
-        self.summary_layout = QVBoxLayout()
-        self.summary_layout.setSpacing(4)
-        layout.addLayout(self.summary_layout)
-
-        participants_title = QLabel("Participantes")
-        participants_title.setStyleSheet("font-weight: 800;")
-        layout.addWidget(participants_title)
-        self.participants_layout = QVBoxLayout()
-        self.participants_layout.setSpacing(4)
-        layout.addLayout(self.participants_layout)
-
-        actions_title = QLabel("Acoes rapidas")
-        actions_title.setStyleSheet("font-weight: 800;")
-        layout.addWidget(actions_title)
-        self.question_action_btn = ModernButton("Fazer pergunta", "chat")
-        self.question_action_btn.clicked.connect(self._trigger_question_mode)
-        layout.addWidget(self.question_action_btn)
-        self.details_action_btn = ModernButton("Ver informacoes da proposta", "search")
-        self.details_action_btn.clicked.connect(self._open_proposal_details)
-        self.details_action_btn.setVisible(False)
-        layout.addWidget(self.details_action_btn)
-        layout.addStretch()
-        return container
 
     def _set_status_tab(self, status: str):
         self._status_filter = status
@@ -215,11 +170,13 @@ class ChatCenterPage(QWidget):
     def _refresh_success(self, result: tuple[list[dict], int]):
         conversations, other_count = result
         if self._status_filter == "ATIVA":
-            self.active_tab_btn.setText(f"Conversas Ativas ({len(conversations)})")
-            self.finalized_tab_btn.setText(f"Conversas Finalizadas ({other_count})")
+            self.active_tab_btn.setText(f"Ativas ({len(conversations)})")
+            self.finalized_tab_btn.setText(f"Finalizadas ({other_count})")
         else:
-            self.finalized_tab_btn.setText(f"Conversas Finalizadas ({len(conversations)})")
-            self.active_tab_btn.setText(f"Conversas Ativas ({other_count})")
+            self.finalized_tab_btn.setText(f"Finalizadas ({len(conversations)})")
+            self.active_tab_btn.setText(f"Ativas ({other_count})")
+        self.active_tab_btn.setToolTip(f"Conversas Ativas ({len(conversations) if self._status_filter == 'ATIVA' else other_count})")
+        self.finalized_tab_btn.setToolTip(f"Conversas Finalizadas ({other_count if self._status_filter == 'ATIVA' else len(conversations)})")
         self.conversations = conversations
         self.conversation_list.clear()
         selected_id = self.selected_conversation.get("id") if self.selected_conversation else None
@@ -227,7 +184,9 @@ class ChatCenterPage(QWidget):
         for conversation in conversations:
             item = QListWidgetItem()
             card = self._build_conversation_card(conversation)
-            item.setSizeHint(card.sizeHint())
+            card.setFixedWidth(max(0, self.conversation_list.viewport().width() - 4))
+            self._fit_card_labels(card)
+            item.setSizeHint(QSize(0, CONVERSATION_CARD_HEIGHT))
             item.setData(Qt.UserRole, conversation)
             self.conversation_list.addItem(item)
             self.conversation_list.setItemWidget(item, card)
@@ -236,6 +195,36 @@ class ChatCenterPage(QWidget):
         if selected_item is not None:
             self.conversation_list.setCurrentItem(selected_item)
         self._set_loading(False)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._sync_card_widths()
+
+    def _sync_card_widths(self):
+        if not hasattr(self, "conversation_list"):
+            return
+        width = max(0, self.conversation_list.viewport().width() - 4)
+        for index in range(self.conversation_list.count()):
+            card = self.conversation_list.itemWidget(self.conversation_list.item(index))
+            if card is not None:
+                card.setFixedWidth(width)
+                self._fit_card_labels(card)
+
+    @staticmethod
+    def _fit_card_labels(card: QFrame):
+        width = max(0, card.width())
+        proposal = card.findChild(QLabel, "ConversationProposal")
+        client = card.findChild(QLabel, "ConversationClient")
+        preview = card.findChild(QLabel, "ConversationPreview")
+        if proposal is not None:
+            proposal.setText(proposal.property("full_text") or "")
+            proposal.setText(proposal.fontMetrics().elidedText(proposal.text(), Qt.ElideRight, max(90, width - 90)))
+        if client is not None:
+            client.setText(client.property("full_text") or "")
+            client.setText(client.fontMetrics().elidedText(client.text(), Qt.ElideRight, max(120, width - 26)))
+        if preview is not None:
+            preview.setText(preview.property("full_text") or "")
+            preview.setText(preview.fontMetrics().elidedText(preview.text(), Qt.ElideRight, max(130, width - 46)))
 
     def _refresh_error(self, exc):
         self._set_loading(False)
@@ -247,33 +236,48 @@ class ChatCenterPage(QWidget):
     def _build_conversation_card(self, conversation: dict) -> QFrame:
         card = QFrame()
         card.setObjectName("Panel")
+        card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        card.setMinimumWidth(0)
+        card.setFixedHeight(CONVERSATION_CARD_HEIGHT)
         layout = QVBoxLayout(card)
-        layout.setContentsMargins(10, 8, 10, 8)
-        layout.setSpacing(2)
+        layout.setContentsMargins(6, 4, 6, 4)
+        layout.setSpacing(1)
 
         is_general = conversation.get("kind") == "GERAL"
         name = "Chat Geral" if is_general else (conversation.get("proposal_number") or f"Proposta {conversation.get('proposal_id')}")
 
         top_row = QHBoxLayout()
-        top_row.setSpacing(6)
+        top_row.setSpacing(5)
         if not is_general and conversation.get("proposal_status"):
             dot_color, _fg = status_color(conversation["proposal_status"], self.service.palette, conversation.get("proposal_area") or "")
             status_dot = QLabel()
-            status_dot.setFixedSize(10, 10)
-            status_dot.setStyleSheet(f"background: {dot_color}; border-radius: 5px;")
+            status_dot.setFixedSize(8, 8)
+            status_dot.setStyleSheet(f"background: {dot_color}; border-radius: 4px;")
             top_row.addWidget(status_dot)
         name_label = QLabel(name)
-        name_label.setStyleSheet("font-weight: 700;")
+        name_label.setObjectName("ConversationProposal")
+        name_label.setProperty("full_text", name)
+        name_label.setStyleSheet("font-weight: 700; font-size: 11px;")
+        name_label.setMinimumWidth(0)
+        name_label.setWordWrap(False)
+        name_label.setText(name_label.fontMetrics().elidedText(name, Qt.ElideRight, max(90, card.width() - 90)))
         top_row.addWidget(name_label)
         top_row.addStretch()
         time_label = QLabel(_relative_time(conversation.get("last_activity_at")))
+        time_label.setStyleSheet("font-size: 9px;")
         time_label.setObjectName("Caption")
         top_row.addWidget(time_label)
         layout.addLayout(top_row)
 
         subtitle_text = "Conversa geral entre todos" if is_general else (conversation.get("customer_name") or "-")
         subtitle = QLabel(subtitle_text)
+        subtitle.setObjectName("ConversationClient")
+        subtitle.setProperty("full_text", subtitle_text)
         subtitle.setObjectName("Caption")
+        subtitle.setStyleSheet("font-size: 10px;")
+        subtitle.setMinimumWidth(0)
+        subtitle.setWordWrap(False)
+        subtitle.setText(subtitle.fontMetrics().elidedText(subtitle_text, Qt.ElideRight, max(120, card.width() - 26)))
         layout.addWidget(subtitle)
 
         bottom_row = QHBoxLayout()
@@ -283,20 +287,25 @@ class ChatCenterPage(QWidget):
             preview_text = f"{author}: {preview_text}" if author else preview_text
         else:
             preview_text = "Sem mensagens ainda."
+        preview_text = str(preview_text)
         preview_label = QLabel(preview_text)
+        preview_label.setObjectName("ConversationPreview")
+        preview_label.setProperty("full_text", preview_text)
         preview_label.setObjectName("Caption")
+        preview_label.setStyleSheet("font-size: 10px;")
         preview_label.setWordWrap(False)
+        preview_label.setMinimumWidth(0)
         metrics = preview_label.fontMetrics()
-        preview_label.setText(metrics.elidedText(preview_text, Qt.ElideRight, 260))
+        preview_label.setText(metrics.elidedText(preview_text, Qt.ElideRight, max(130, card.width() - 46)))
         bottom_row.addWidget(preview_label, 1)
         unread = int(conversation.get("unread_count") or 0)
         if unread:
             badge = QLabel(str(unread) if unread < 100 else "99+")
             badge.setAlignment(Qt.AlignCenter)
-            badge.setFixedSize(22, 20)
+            badge.setFixedSize(19, 18)
             badge.setStyleSheet(
                 f"background: {self.service.palette.get('danger', '#dc2626')}; color: #ffffff; "
-                "border-radius: 10px; font-weight: 800;"
+                "border-radius: 9px; font-weight: 800; font-size: 9px;"
             )
             bottom_row.addWidget(badge)
         layout.addLayout(bottom_row)
@@ -307,7 +316,28 @@ class ChatCenterPage(QWidget):
         if not conversation:
             return
         self.selected_conversation = conversation
+        if int(conversation.get("unread_count") or 0) > 0:
+            self._clear_local_unread(int(conversation.get("id") or 0))
         self._open_conversation(conversation)
+
+    def _clear_local_unread(self, conversation_id: int):
+        """Remove o contador visual assim que a conversa e aberta."""
+        if not conversation_id:
+            return
+        for index, conversation in enumerate(self.conversations):
+            if int(conversation.get("id") or 0) != conversation_id:
+                continue
+            conversation["unread_count"] = 0
+            item = self.conversation_list.item(index)
+            if item is None:
+                return
+            card = self._build_conversation_card(conversation)
+            card.setFixedWidth(max(0, self.conversation_list.viewport().width() - 4))
+            self._fit_card_labels(card)
+            item.setData(Qt.UserRole, conversation)
+            item.setSizeHint(QSize(0, CONVERSATION_CARD_HEIGHT))
+            self.conversation_list.setItemWidget(item, card)
+            return
 
     def _open_conversation(self, conversation: dict):
         while self.center_layout.count():
@@ -319,71 +349,5 @@ class ChatCenterPage(QWidget):
             self.panel = ChatConversationPanel(self.service, conversation_id=conversation["id"], parent=self.center_container)
         else:
             self.panel = ChatConversationPanel(self.service, proposal_id=conversation.get("proposal_id"), parent=self.center_container)
-        self.panel.entries_loaded.connect(self._refresh_right_column)
         self.center_layout.addWidget(self.panel, 1)
         self._panel_fade = fade_in(self.panel, duration=220)
-        self.details_action_btn.setVisible(conversation.get("kind") != "GERAL")
-        self._refresh_proposal_summary()
-        self._refresh_right_column()
-
-    def _refresh_proposal_summary(self):
-        while self.summary_layout.count():
-            item = self.summary_layout.takeAt(0)
-            widget = item.widget()
-            if widget:
-                widget.deleteLater()
-        is_proposal = bool(self.selected_conversation) and self.selected_conversation.get("kind") != "GERAL"
-        self.summary_title.setVisible(is_proposal)
-        if not is_proposal or not self.panel:
-            return
-        proposal = self.panel.proposal or {}
-        area, _label, status = self.service.current_location(proposal) if proposal else ("", "", "")
-        fields = [
-            ("Cliente", proposal.get("cliente") or "-"),
-            ("Obra/Site", proposal.get("obra_site") or "-"),
-            ("Status", self.service.status_label(status) if status else "-"),
-            ("Peso", f"{proposal.get('peso') or '0'} kg"),
-            ("Prazo", proposal.get("prazo_entrega") or "-"),
-            ("Area atual", str(area or "-").replace("_", " ").title()),
-        ]
-        for label, value in fields:
-            row = QHBoxLayout()
-            caption = QLabel(label)
-            caption.setObjectName("Caption")
-            row.addWidget(caption)
-            row.addStretch()
-            content = QLabel(str(value))
-            content.setStyleSheet("font-weight: 700;")
-            row.addWidget(content)
-            self.summary_layout.addLayout(row)
-
-    def _refresh_right_column(self):
-        while self.participants_layout.count():
-            item = self.participants_layout.takeAt(0)
-            widget = item.widget()
-            if widget:
-                widget.deleteLater()
-        if not self.panel:
-            return
-        participants = self.panel.participants()
-        if not participants:
-            empty = QLabel("Sem participantes ainda.")
-            empty.setObjectName("Caption")
-            self.participants_layout.addWidget(empty)
-            return
-        for person in participants:
-            row = QHBoxLayout()
-            name_label = QLabel(person.get("name") or "-")
-            row.addWidget(name_label)
-            row.addStretch()
-            self.participants_layout.addLayout(row)
-
-    def _trigger_question_mode(self):
-        if self.panel:
-            self.panel.focus_question_mode()
-
-    def _open_proposal_details(self):
-        if not self.selected_conversation or not self.selected_conversation.get("proposal_id"):
-            return
-        dialog = ProcessDetailDialog(self.service, self.selected_conversation["proposal_id"], self)
-        dialog.exec()

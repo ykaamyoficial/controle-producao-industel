@@ -36,6 +36,7 @@ from app.ui.components.modern_button import ModernButton
 from app.ui.components.modern_table import ModernTable, ProcessFilterProxy
 from app.ui.dialog_utils import apply_large_dialog_geometry, style_dialog_from_parent
 from app.ui.fiscal_emission_dialog import FiscalEmissionDialog
+from app.ui.action_center.fiscal_action_center import FiscalActionCenter
 from app.ui.table_utils import configure_wrapping_table, resize_rows_to_contents
 
 
@@ -125,8 +126,8 @@ class FiscalProposalDetailDialog(QDialog):
             ("Total de itens", self.fiscal_row.get("quantidade_itens") or 0, "audit"),
             ("Itens pendentes", self.fiscal_row.get("itens_pendentes") or 0, "clock"),
             ("Itens faturados", self.fiscal_row.get("itens_faturados") or 0, "status"),
-            ("Peso total", format_weight(self.fiscal_row.get("peso_total")), "reports"),
-            ("Peso pendente", format_weight(self.fiscal_row.get("peso_pendente")), "partial"),
+            ("Peso conhecido", format_weight(self.fiscal_row.get("peso_total")), "reports"),
+            ("Peso conhecido pendente", format_weight(self.fiscal_row.get("peso_pendente")), "partial"),
             ("Peso faturado", format_weight(self.fiscal_row.get("peso_faturado")), "status"),
         ]
         for index, (label, value, icon) in enumerate(metrics):
@@ -147,7 +148,7 @@ class FiscalProposalDetailDialog(QDialog):
             ("quantidade_total", "Quantidade Total"),
             ("quantidade_faturada", "Quantidade Faturada"),
             ("quantidade_pendente", "Quantidade Pendente"),
-            ("peso_total", "Peso Total"),
+            ("peso_total", "Peso conhecido"),
             ("peso_faturado", "Peso Faturado"),
             ("peso_pendente", "Peso Pendente"),
             ("status_item_fiscal", "Status Item"),
@@ -612,8 +613,12 @@ class FiscalPage(QWidget):
     def open_actions_menu(self, row: dict | None, global_pos: QPoint):
         if not row or not row.get("fiscal_processo_id"):
             return
-        menu = self.build_actions_menu(row)
-        menu.exec(global_pos)
+        handlers = {
+            "OPEN_FISCAL_DETAILS": lambda: self.show_fiscal_details(row),
+            "REGISTER_FISCAL_EMISSION": lambda: self.register_emission(row),
+            "CANCEL_FISCAL_EMISSION": lambda: self.cancel_latest_emission(row),
+        }
+        FiscalActionCenter(self.service, row, handlers, self).exec()
 
     def build_actions_menu(self, row: dict) -> QMenu:
         menu = QMenu(self)
@@ -625,10 +630,11 @@ class FiscalPage(QWidget):
             menu.addAction(QAction("Cancelar ultima emissao interna", self, triggered=lambda: self.cancel_latest_emission(row)))
         return menu
 
-    def show_fiscal_details(self, row: dict):
+    def show_fiscal_details(self, row: dict) -> bool:
         dialog = FiscalProposalDetailDialog(self.service, row, self)
         style_dialog_from_parent(dialog, self)
         dialog.exec()
+        return False
 
     def show_fiscal_items(self, row: dict):
         self.show_fiscal_details(row)
@@ -683,26 +689,28 @@ class FiscalPage(QWidget):
         style_dialog_from_parent(dialog, self)
         dialog.exec()
 
-    def register_emission(self):
+    def register_emission(self, row: dict | None = None) -> bool:
         if not self.service.can_register_fiscal_emission():
             QMessageBox.warning(self, "Fiscal", "Seu usuario nao tem permissao para registrar emissao fiscal.")
-            return
-        fiscal_row = self.selected_fiscal_row()
+            return False
+        fiscal_row = row or self.selected_fiscal_row()
         if not fiscal_row:
             QMessageBox.warning(self, "Fiscal", "Selecione uma proposta fiscal.")
-            return
+            return False
         if fiscal_row.get("status_fiscal") == "NOTA_FISCAL_EMITIDA":
             QMessageBox.information(self, "Fiscal", "Esta proposta ja esta totalmente faturada.")
-            return
+            return False
         dialog = FiscalEmissionDialog(self.service, fiscal_row, self)
         if dialog.exec():
             self.refresh()
             QMessageBox.information(self, "Fiscal", "Emissao fiscal registrada com sucesso.")
+            return True
+        return False
 
-    def cancel_latest_emission(self, row: dict):
+    def cancel_latest_emission(self, row: dict) -> bool:
         if not getattr(self.service, "can_cancel_fiscal_emission", lambda: False)():
             QMessageBox.warning(self, "Fiscal", "Seu usuario nao tem permissao para cancelar emissao fiscal.")
-            return
+            return False
         answer = QMessageBox.question(
             self,
             "Cancelar emissao fiscal",
@@ -711,7 +719,7 @@ class FiscalPage(QWidget):
             QMessageBox.No,
         )
         if answer != QMessageBox.Yes:
-            return
+            return False
         try:
             cancelled = self.service.cancel_latest_fiscal_emission(
                 int(row["fiscal_processo_id"]),
@@ -719,8 +727,10 @@ class FiscalPage(QWidget):
             )
             self.refresh()
             QMessageBox.information(self, "Fiscal", f"{cancelled} vinculo(s) fiscal(is) cancelado(s).")
+            return True
         except Exception as exc:
             QMessageBox.warning(self, "Fiscal", str(exc))
+            return False
 
     def _build_report_tab(self) -> QWidget:
         tab = QWidget()
@@ -829,7 +839,7 @@ class FiscalPage(QWidget):
         self.report_emitted_card = KpiCard("NF emitida", 0, "status", palette["success"])
         self.report_critical_card = KpiCard("Pendencia critica", 0, "clear", palette["danger"])
         self.report_old_card = KpiCard("+7 dias sem emissao", 0, "history", palette["secondary"])
-        self.report_pending_weight_card = KpiCard("Peso pendente", "0 kg", "clock", palette["warning"])
+        self.report_pending_weight_card = KpiCard("Peso conhecido pendente", "0 kg", "clock", palette["warning"])
         for card in (
             self.report_missing_card,
             self.report_partial_card,

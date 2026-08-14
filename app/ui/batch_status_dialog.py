@@ -16,24 +16,53 @@ from PySide6.QtWidgets import (
 
 from app.ui.components.modern_button import ModernButton
 from app.ui.dialog_utils import apply_large_dialog_geometry, style_dialog_from_parent
-from app.ui.icons import make_icon
+from app.ui.icons import IconSize, status_icon
 from app.ui.item_selection_dialog import ItemSelectionDialog
+from app.ui.production_registration_dialog import ProductionRegistrationDialog
 
 
 class BatchStatusDialog(QDialog):
-    def __init__(self, service, process_ids: list[int] | None, area: str | None, parent=None):
+    def __init__(
+        self,
+        service,
+        process_ids: list[int] | None,
+        area: str | None,
+        parent=None,
+        *,
+        strict_preselection: bool = False,
+        lock_area: bool = False,
+    ):
         super().__init__(parent)
         self.service = service
         self.selected_ids = []
+        self.requested_ids = list(dict.fromkeys(int(value) for value in (process_ids or []) if value))
+        self.strict_preselection = strict_preselection
+        self.invalid_preselected_ids: list[int] = []
         self.default_area = area
         self.setWindowTitle("Acoes em lote")
         apply_large_dialog_geometry(self, parent)
         style_dialog_from_parent(self, parent)
         self._build()
-        for process_id in process_ids or []:
+        for process_id in self.requested_ids:
             self._add_process(process_id)
         self.load_candidates()
         self.refresh_selected()
+        if lock_area:
+            self.area_combo.setEnabled(False)
+        if self.strict_preselection:
+            self.search.setEnabled(False)
+            self.status_filter.setEnabled(False)
+            self.candidates.setEnabled(False)
+            self.selected.setSelectionMode(QTableWidget.NoSelection)
+            self.add_btn.setEnabled(False)
+            self.remove_btn.setEnabled(False)
+            self.invalid_preselected_ids = [
+                process_id for process_id in self.requested_ids if process_id not in self.selected_ids
+            ]
+            if self.invalid_preselected_ids:
+                self.summary.setText(
+                    f"{len(self.invalid_preselected_ids)} proposta(s) mudaram de estado e precisam ser revisadas."
+                )
 
     def _build(self):
         root = QVBoxLayout(self)
@@ -73,12 +102,12 @@ class BatchStatusDialog(QDialog):
 
         actions = QVBoxLayout()
         actions.addSpacing(58)
-        add_btn = ModernButton("Adicionar", "new", accent=True)
-        remove_btn = ModernButton("Remover", "delete")
-        add_btn.clicked.connect(self.add_candidates)
-        remove_btn.clicked.connect(self.remove_selected)
-        actions.addWidget(add_btn)
-        actions.addWidget(remove_btn)
+        self.add_btn = ModernButton("Adicionar", "new", accent=True)
+        self.remove_btn = ModernButton("Remover", "remove")
+        self.add_btn.clicked.connect(self.add_candidates)
+        self.remove_btn.clicked.connect(self.remove_selected)
+        actions.addWidget(self.add_btn)
+        actions.addWidget(self.remove_btn)
         actions.addStretch()
         body.addLayout(actions, 1, 1)
         body.setColumnStretch(0, 1)
@@ -211,7 +240,10 @@ class BatchStatusDialog(QDialog):
         rows = []
         valid_ids = []
         for process_id in self.selected_ids:
-            process = self.service.get_process_dict(process_id)
+            try:
+                process = self.service.get_process_dict(process_id)
+            except Exception:
+                process = None
             if not process or not self.service.process_visible_in_area(process, area):
                 continue
             if not self.service.common_next_statuses(area, [process_id]):
@@ -225,13 +257,15 @@ class BatchStatusDialog(QDialog):
         statuses = self.service.common_next_statuses(area, self.selected_ids)
         if area == "PRODUCAO" and any(status in statuses for status in ("FINALIZADO", "FINALIZADO_PARCIAL")):
             statuses = [status for status in statuses if status not in ("FINALIZADO", "FINALIZADO_PARCIAL")]
-            self.status_combo.addItem(make_icon("status", self.service.palette["accent"]), "Registrar producao", "__REGISTER_PRODUCTION__")
+            icon = status_icon("FINALIZADO", area=area, palette=self.service.palette, size=IconSize.TABLE_STATUS)
+            self.status_combo.addItem(icon, "Registrar producao", "__REGISTER_PRODUCTION__")
         if area == "EXPEDICAO" and any(status in statuses for status in ("ENTREGUE", "ENTREGUE_PARCIAL")):
             statuses = [status for status in statuses if status not in ("ENTREGUE", "ENTREGUE_PARCIAL")]
-            self.status_combo.addItem(make_icon("status", self.service.palette["accent"]), "Registrar retirada do cliente", "__REGISTER_DELIVERY__")
+            icon = status_icon("ENTREGUE", area=area, palette=self.service.palette, size=IconSize.TABLE_STATUS)
+            self.status_combo.addItem(icon, "Registrar retirada do cliente", "__REGISTER_DELIVERY__")
         for status in statuses:
             self.status_combo.addItem(
-                make_icon(status, self.service.palette["accent"]),
+                status_icon(status, area=area, palette=self.service.palette, size=IconSize.TABLE_STATUS),
                 self.service.action_label(area, status),
                 status,
             )
@@ -241,6 +275,14 @@ class BatchStatusDialog(QDialog):
             self.summary.setText(f"{len(self.selected_ids)} proposta(s) adicionada(s).")
 
     def apply_batch(self):
+        if self.strict_preselection and self.invalid_preselected_ids:
+            QMessageBox.warning(
+                self,
+                "Acoes em lote",
+                "Algumas propostas selecionadas não estão mais disponíveis para esta ação: "
+                + ", ".join(str(value) for value in self.invalid_preselected_ids[:20]),
+            )
+            return
         if not self.selected_ids:
             QMessageBox.warning(self, "Acoes em lote", "Adicione pelo menos uma proposta na lista.")
             return
@@ -249,51 +291,44 @@ class BatchStatusDialog(QDialog):
             QMessageBox.warning(self, "Acoes em lote", "Nao existe uma acao comum para as propostas selecionadas.")
             return
         area = self.current_area()
+        if self.strict_preselection and not self._revalidate_before_apply(area, status):
+            return
         label = self.status_combo.currentText()
+        if area == "PRODUCAO" and status == "PARADO" and not self.observation.text().strip():
+            QMessageBox.warning(self, "Pausar produção", "Informe o motivo da pausa na observação do lote.")
+            self.observation.setFocus()
+            return
         item_selections = {}
         target_statuses = {}
         produced_weights = {}
         if status in ("__REGISTER_PRODUCTION__", "__REGISTER_DELIVERY__"):
+            if status == "__REGISTER_PRODUCTION__":
+                dialog = ProductionRegistrationDialog(self.service, list(self.selected_ids), self, observation=self.observation.text().strip())
+                if dialog.exec():
+                    self.accept()
+                return
             for process_id in self.selected_ids:
                 process = self.service.get_process_dict(process_id)
-                production = status == "__REGISTER_PRODUCTION__"
-                available = self.service.proposal_items(
-                    process_id,
-                    pending_production=production,
-                    pending_delivery=not production,
-                )
+                available = self.service.proposal_items(process_id, pending_delivery=True)
                 if not available:
-                    target_statuses[process_id] = "FINALIZADO" if production else "ENTREGUE"
+                    target_statuses[process_id] = "ENTREGUE"
                     continue
-                mode = "production" if production else "delivery"
                 selector = ItemSelectionDialog(
                     self.service,
                     process_id,
-                    mode,
+                    "delivery",
                     self,
-                    allow_full_selection=not production,
+                    allow_full_selection=True,
                 )
-                operation = "Producao" if production else "Retirada"
-                selector.setWindowTitle(f"{operation} | {process.get('proposta') or process_id}")
+                selector.setWindowTitle(f"Retirada | {process.get('proposta') or process_id}")
                 if not selector.exec():
                     return
                 item_selections[process_id] = selector.selected_ids
-                if production:
-                    target_statuses[process_id] = "FINALIZADO" if len(selector.selected_ids) == len(available) else "FINALIZADO_PARCIAL"
-                    if target_statuses[process_id] not in self.service.next_status_options("PRODUCAO", process_id):
-                        QMessageBox.warning(
-                            self,
-                            "Registrar producao",
-                            f"{process.get('proposta') or process_id} precisa ter todos os itens deste subprocesso concluidos.",
-                        )
-                        return
-                    produced_weights[process_id] = selector.manual_weight
-                else:
-                    target_statuses[process_id] = "ENTREGUE" if len(selector.selected_ids) == len(available) else "ENTREGUE_PARCIAL"
+                target_statuses[process_id] = "ENTREGUE" if len(selector.selected_ids) == len(available) else "ENTREGUE_PARCIAL"
         if QMessageBox.question(
             self,
             "Acoes em lote",
-            f"Aplicar {label} em {len(self.selected_ids)} proposta(s)?",
+            self._confirmation_text(label),
         ) != QMessageBox.Yes:
             return
         failures = []
@@ -320,3 +355,52 @@ class BatchStatusDialog(QDialog):
                 f"{changed} proposta(s) alterada(s).\n\nNao alteradas:\n" + "\n".join(failures[:12]),
             )
         self.accept()
+
+    def _revalidate_before_apply(self, area: str, selected_action: str) -> bool:
+        if not hasattr(self.service, "validate_batch_selection"):
+            return True
+        result = self.service.validate_batch_selection(area, list(self.selected_ids), "STATUS")
+        incompatible = result.get("incompatible") or []
+        valid_ids = [int(value) for value in result.get("valid_ids") or []]
+        common_statuses = set(result.get("common_statuses") or [])
+        action_still_available = (
+            bool(common_statuses.intersection({"FINALIZADO", "FINALIZADO_PARCIAL"}))
+            if selected_action == "__REGISTER_PRODUCTION__"
+            else bool(common_statuses.intersection({"ENTREGUE", "ENTREGUE_PARCIAL"}))
+            if selected_action == "__REGISTER_DELIVERY__"
+            else selected_action in common_statuses
+        )
+        if (
+            incompatible
+            or valid_ids != list(self.selected_ids)
+            or result.get("global_reason")
+            or not action_still_available
+        ):
+            lines = [
+                f"{row.get('proposta') or 'ID ' + str(row.get('id'))}: {row.get('reason') or 'estado alterado'}"
+                for row in incompatible
+            ]
+            detail = result.get("global_reason") or "A ação escolhida não está mais disponível para toda a seleção."
+            if lines:
+                detail += "\n\n" + "\n".join(lines[:20])
+            QMessageBox.warning(
+                self,
+                "Acoes em lote",
+                "As propostas foram alteradas enquanto o diálogo estava aberto.\n\n" + detail,
+            )
+            return False
+        return True
+
+    def _confirmation_text(self, label: str) -> str:
+        proposals = []
+        for row in range(self.selected.rowCount()):
+            item = self.selected.item(row, 0)
+            if item:
+                proposals.append(item.text() or f"ID {item.data(Qt.UserRole)}")
+        visible = "\n".join(f"- {proposal}" for proposal in proposals[:12])
+        if len(proposals) > 12:
+            visible += f"\n- ... e mais {len(proposals) - 12}"
+        return (
+            f"Aplicar {label} em {len(self.selected_ids)} proposta(s)?"
+            + (f"\n\nPropostas afetadas:\n{visible}" if visible else "")
+        )
