@@ -1,10 +1,13 @@
+"""Fallback vetorial (QPainter) usado apenas quando um nome de icone nao
+resolve nem para um AppIcons/Lucide conhecido nem para um PNG legado em
+app/assets/icons/. Preservado tal como estava antes da migracao pra Lucide -
+e o ultimo recurso, nunca o caminho normal.
+"""
+
 from __future__ import annotations
 
-from pathlib import Path
-
-from PySide6.QtCore import QPointF, QRectF, QSize, Qt
+from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QIcon, QPainter, QPainterPath, QPen, QPixmap
-
 
 ICON_SYMBOLS = {
     "dashboard": "bar",
@@ -36,10 +39,17 @@ ICON_SYMBOLS = {
     "question": "question",
     "gear": "gear",
     "attach": "attach",
+    "pause": "pause",
+    "scale": "scale",
     "emoji": "emoji",
     "mic": "mic",
     "send": "send",
     "at": "at",
+    "info": "info",
+    "minimize": "minimize",
+    "maximize": "maximize",
+    "restore": "restore",
+    "window_close": "x",
     "fiscal_pending": "fiscal_pending",
     "fiscal_partial": "fiscal_partial",
     "fiscal_done": "fiscal_done",
@@ -47,69 +57,8 @@ ICON_SYMBOLS = {
     "fiscal_blocked": "fiscal_blocked",
 }
 
-ROOT_DIR = Path(__file__).resolve().parents[2]
-APP_ICON_DIR = ROOT_DIR / "app" / "assets" / "icons"
-PREMIUM_ICON_SIZES = (16, 24, 32, 48, 64, 128, 256, 512)
 
-ICON_FILES = {
-    "dashboard": "area_painel.png",
-    "control": "area_controle_geral.png",
-    "production": "area_producao.png",
-    "galvanization": "area_galvanizacao.png",
-    "expedition": "area_expedicao.png",
-    "stock": "area_almoxarifado.png",
-    "fiscal": "sistema_fiscal.png",
-    "partial": "status_parcial.png",
-    "history": "sistema_historico.png",
-    "audit": "sistema_auditoria.png",
-    "reports": "sistema_relatorios.png",
-    "settings": "sistema_configuracoes.png",
-    "users": "sistema_usuarios.png",
-    "backup": "sistema_backup.png",
-    "restore": "sistema_restaurar.png",
-    "database": "sistema_banco_postgresql.png",
-    "search": "acao_pesquisar.png",
-    "clear": "acao_limpar.png",
-    "new": "acao_novo.png",
-    "edit": "acao_editar.png",
-    "status": "acao_salvar.png",
-    "batch": "acao_lote.png",
-    "load": "acao_cargas.png",
-    "next": "acao_proximo.png",
-    "previous": "acao_anterior.png",
-    "save": "acao_salvar.png",
-    "remove": "acao_remover.png",
-    "refresh": "acao_atualizar.png",
-    "pdf": "acao_pdf.png",
-    "excel": "acao_excel.png",
-    "fiscal_pending": "status_pendente.png",
-    "fiscal_partial": "status_parcial.png",
-    "fiscal_done": "status_finalizado.png",
-    "fiscal_critical": "status_pendente.png",
-    "fiscal_blocked": "status_cancelado.png",
-}
-
-
-def make_icon(name: str, color: str = "#2563eb", size: int = 20) -> QIcon:
-    icon_file = ICON_FILES.get(name)
-    if not icon_file and name:
-        status_file = f"status_{name.lower()}.png"
-        if (APP_ICON_DIR / status_file).exists():
-            icon_file = status_file
-    if icon_file:
-        icon = QIcon()
-        loaded = False
-        for icon_size in PREMIUM_ICON_SIZES:
-            path = APP_ICON_DIR / "premium" / str(icon_size) / icon_file
-            if path.exists():
-                icon.addFile(str(path), QSize(icon_size, icon_size))
-                loaded = True
-        path = APP_ICON_DIR / icon_file
-        if path.exists():
-            icon.addFile(str(path), QSize(512, 512))
-            loaded = True
-        if loaded:
-            return icon
+def draw_procedural_icon(name: str, color: str = "#2563eb", size: int = 20) -> QIcon:
     pix = QPixmap(size, size)
     pix.fill(Qt.transparent)
     painter = QPainter(pix)
@@ -268,6 +217,20 @@ def make_icon(name: str, color: str = "#2563eb", size: int = 20) -> QIcon:
             painter.rotate(angle)
             painter.drawLine(QPointF(0, -w * .40), QPointF(0, -w * .30))
             painter.restore()
+    elif shape == "pause":
+        painter.drawRoundedRect(QRectF(w * .32, w * .20, w * .14, w * .60), 2, 2)
+        painter.drawRoundedRect(QRectF(w * .54, w * .20, w * .14, w * .60), 2, 2)
+    elif shape == "scale":
+        painter.drawLine(QPointF(w * .50, w * .16), QPointF(w * .50, w * .80))
+        painter.drawLine(QPointF(w * .50, w * .82), QPointF(w * .32, w * .82))
+        painter.drawLine(QPointF(w * .50, w * .82), QPointF(w * .68, w * .82))
+        painter.drawLine(QPointF(w * .22, w * .28), QPointF(w * .78, w * .28))
+        painter.drawLine(QPointF(w * .22, w * .28), QPointF(w * .14, w * .54))
+        painter.drawLine(QPointF(w * .22, w * .28), QPointF(w * .30, w * .54))
+        painter.drawArc(QRectF(w * .12, w * .48, w * .20, w * .16), 190 * 16, 160 * 16)
+        painter.drawLine(QPointF(w * .78, w * .28), QPointF(w * .70, w * .54))
+        painter.drawLine(QPointF(w * .78, w * .28), QPointF(w * .86, w * .54))
+        painter.drawArc(QRectF(w * .68, w * .48, w * .20, w * .16), 190 * 16, 160 * 16)
     elif shape == "attach":
         path = QPainterPath()
         path.moveTo(w * .64, w * .24)
@@ -317,6 +280,21 @@ def make_icon(name: str, color: str = "#2563eb", size: int = 20) -> QIcon:
             painter.rotate(angle)
             painter.drawLine(QPointF(0, -w * .42), QPointF(0, -w * .30))
             painter.restore()
+    elif shape == "info":
+        painter.drawEllipse(QRectF(w * .20, w * .20, w * .60, w * .60))
+        painter.drawPoint(QPointF(w * .50, w * .36))
+        painter.drawLine(QPointF(w * .50, w * .46), QPointF(w * .50, w * .68))
+    elif shape == "minimize":
+        painter.drawLine(QPointF(w * .24, w * .70), QPointF(w * .76, w * .70))
+    elif shape == "maximize":
+        painter.drawRect(QRectF(w * .24, w * .24, w * .52, w * .52))
+    elif shape == "restore":
+        painter.drawRect(QRectF(w * .32, w * .24, w * .44, w * .44))
+        path = QPainterPath(QPointF(w * .24, w * .40))
+        path.lineTo(QPointF(w * .24, w * .76))
+        path.lineTo(QPointF(w * .60, w * .76))
+        path.lineTo(QPointF(w * .60, w * .68))
+        painter.drawPath(path)
     else:
         painter.drawEllipse(QRectF(w * .30, w * .30, w * .40, w * .40))
 
