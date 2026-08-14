@@ -84,7 +84,23 @@ def main() -> None:
     run_alembic(args.direct_url, "upgrade", "head")
 
     run_alembic(args.progressive_url, "downgrade", "base")
-    for revision in ("20260720_0001", "20260720_0002", "20260720_0003", "20260720_0004", "20260720_0005"):
+    for revision in (
+        "20260720_0001",
+        "20260720_0002",
+        "20260720_0003",
+        "20260720_0004",
+        "20260720_0005",
+        "20260721_0006",
+        "20260721_0007",
+        "20260721_0008",
+        "20260722_0009",
+        "20260727_0010",
+        "20260801_0011",
+        "20260802_0012",
+        "20260803_0013",
+        "20260807_0014",
+        "20260810_0015",
+    ):
         run_alembic(args.progressive_url, "upgrade", revision)
 
     direct = normalize(asyncio.run(snapshot(args.direct_url)))

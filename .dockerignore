@@ -17,3 +17,10 @@ gerados/
 .env
 .env.*
 !.env.example
+
+# Nao entram na imagem de release da API (Fase 07): testes, cache e
+# artefatos locais nao sao necessarios em runtime.
+api/tests/
+api/.pytest_cache/
+api/__pycache__/
+api/pyproject.toml

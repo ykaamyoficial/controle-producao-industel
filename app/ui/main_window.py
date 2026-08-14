@@ -1,16 +1,20 @@
 from __future__ import annotations
 
-from PySide6.QtCore import QObject, QThread, Signal, QTimer
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QMainWindow, QStackedWidget, QVBoxLayout, QWidget
+from PySide6.QtCore import QEvent, QObject, QThread, Signal, QTimer
+from PySide6.QtWidgets import QApplication, QFrame, QHBoxLayout, QLabel, QMainWindow, QMessageBox, QStackedWidget, QVBoxLayout, QWidget
 
 from app.services.backend_adapter import BackendService
+from app.services.session_sync_service import SessionSyncService
 from app.ui.animations import animate_width, fade_in
 from app.ui.app_icon import app_icon
 from app.ui.background_worker import start_worker
 from app.ui.chat_center_page import ChatCenterPage
+from app.ui.chat_realtime import ChatRealtimeClient
 from app.ui.components.floating_chat_button import FloatingChatButton
-from app.ui.components.modern_button import ModernButton
-from app.ui.components.notification_bell import NotificationBell
+from app.ui.components.login_summary_banner import LoginSummaryBanner
+from app.ui.components.native_frameless import FramelessHitTestMixin
+from app.ui.components.title_bar import TitleBar
+from app.ui.components.toast_manager import InAppToastManager
 from app.ui.data_page import DataPage
 from app.ui.dashboard_page import DashboardPage
 from app.ui.executive_dashboard_page import ExecutiveDashboardPage
@@ -19,12 +23,14 @@ from app.ui.login_dialog import LoginDialog
 from app.ui.operational_reports_page import OperationalReportsPage
 from app.ui.process_page import ProcessPage
 from app.ui.production_items_page import ProductionAreaPage
+from app.ui.proposal_chat_dialog import ProposalChatDialog
 from app.ui.galvanization_items_page import GalvanizationAreaPage
-from app.ui.settings_page import SettingsPage
+from app.ui.settings_dialog import SettingsDialog
 from app.ui.sidebar import Sidebar
+from app.ui.icons import icon_cache
 from app.ui.styles import app_stylesheet
 from app.version import APP_NAME, APP_VERSION
-from app.services.update_checker import check_for_updates
+from app.services.update_distribution_client import check_for_updates
 from app.services.app_logging import get_logger
 from app.ui.update_dialog import UpdateDialog
 
@@ -58,16 +64,22 @@ class UpdateCheckWorker(QObject):
 
 
 
-class MainWindow(QMainWindow):
-    def __init__(self, *, skip_auto_update_check: bool = False):
+class MainWindow(FramelessHitTestMixin, QMainWindow):
+    def __init__(self, *, skip_auto_update_check: bool = False, update_available_notice: str | None = None):
         super().__init__()
         self.service = BackendService()
+        self.service.on_conversation_marked_read = self._poll_chat_unread
         self.sidebar_collapsed = False
         self._width_animation = None
         self._page_animation = None
         self._update_thread = None
         self._update_worker = None
+        self._settings_dialog = None
         self._auto_update_checked = skip_auto_update_check
+        self._login_summary_shown = False
+        self._realtime_ever_connected = False
+        self._update_available_notice = update_available_notice
+        self._update_available_notice_shown = False
         self.pages: dict[str, QWidget] = {}
         self.setWindowTitle(f"{APP_NAME} {APP_VERSION}")
         self.setWindowIcon(app_icon())
@@ -96,47 +108,57 @@ class MainWindow(QMainWindow):
         root = QWidget()
         root.setObjectName("AppRoot")
         self.setCentralWidget(root)
-        main = QHBoxLayout(root)
+        root_layout = QVBoxLayout(root)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.setSpacing(0)
+
+        has_chats = self._can_view("chats", "CHATS")
+        self.title_bar = TitleBar(self.service, on_open_conversation=self._open_conversation_from_notification)
+        self.title_bar.chat_requested.connect(lambda: self.select_page("CHATS"))
+        self.title_bar.theme_toggle_requested.connect(self.toggle_theme)
+        self.title_bar.settings_requested.connect(self.open_settings)
+        self.title_bar.logout_callback = self._logout
+        self.title_bar.profile_callback = self.open_user_profile
+        self.title_bar.password_callback = self.open_user_profile
+        self.title_bar.set_theme_icon(getattr(self.service, "palette_name", "claro") != "claro")
+        for widget in (self.title_bar.chat_btn, self.title_bar.notification_bell, self.title_bar.pending_btn):
+            widget.setVisible(has_chats)
+        root_layout.addWidget(self.title_bar)
+
+        self.notification_bell = self.title_bar.notification_bell if has_chats else None
+        self.pending_btn = self.title_bar.pending_btn if has_chats else None
+
+        body = QWidget()
+        main = QHBoxLayout(body)
         main.setContentsMargins(0, 0, 0, 0)
         main.setSpacing(0)
+        root_layout.addWidget(body, 1)
 
         self.sidebar = Sidebar(self.service)
         self.sidebar.page_selected.connect(self.select_page)
         self.sidebar.collapse_requested.connect(self.toggle_sidebar)
-        self.sidebar.theme_toggle_requested.connect(self.toggle_theme)
         main.addWidget(self.sidebar)
 
         content = QWidget()
-        content_layout = QVBoxLayout(content)
-        content_layout.setContentsMargins(18, 14, 18, 18)
-        content_layout.setSpacing(10)
+        self.content_layout = QVBoxLayout(content)
+        self.content_layout.setContentsMargins(18, 14, 18, 18)
+        self.content_layout.setSpacing(10)
         main.addWidget(content, 1)
 
-        self.notification_bell = None
-        self.quick_indicator_messages = None
-        self.quick_indicator_questions = None
-        self.quick_indicator_observations = None
-        if self._can_view("chats", "CHATS"):
-            top_bar = QHBoxLayout()
-            top_bar.setSpacing(8)
-            top_bar.addStretch()
-            self.quick_indicator_messages = self._build_quick_indicator("chat")
-            self.quick_indicator_questions = self._build_quick_indicator("question")
-            self.quick_indicator_observations = self._build_quick_indicator("doc")
-            top_bar.addWidget(self.quick_indicator_messages)
-            top_bar.addWidget(self.quick_indicator_questions)
-            top_bar.addWidget(self.quick_indicator_observations)
-            self.notification_bell = NotificationBell(self.service)
-            top_bar.addWidget(self.notification_bell)
-            content_layout.addLayout(top_bar)
+        self.session_policy_banner = QLabel()
+        self.session_policy_banner.setObjectName("SessionPolicyBanner")
+        self.session_policy_banner.setWordWrap(True)
+        self.session_policy_banner.hide()
+        self.content_layout.addWidget(self.session_policy_banner)
 
         self.stack = QStackedWidget()
-        content_layout.addWidget(self.stack, 1)
+        self.content_layout.addWidget(self.stack, 1)
         self._create_pages()
         first_page = next(iter(self.pages), "")
         if first_page:
             self.select_page(first_page)
             QTimer.singleShot(1500, self._start_background_update_check)
+            self._start_session_policy_timer()
 
         self.floating_chat_button = None
         if self._can_view("chats", "CHATS"):
@@ -145,12 +167,40 @@ class MainWindow(QMainWindow):
             self.floating_chat_button.raise_()
             self._reposition_floating_button()
 
+        self.chat_realtime = None
+        self.session_sync = None
+        if self._can_view("chats", "CHATS"):
+            self.chat_realtime = ChatRealtimeClient(self.service, parent=self)
+            self.chat_realtime.conversation_updated.connect(self._on_conversation_updated)
+            self.chat_realtime.read_state_updated.connect(self._poll_chat_unread)
+            self.chat_realtime.connection_changed.connect(self._on_realtime_connection_changed)
+            self.chat_realtime.notification_event.connect(self._on_notification_event)
+            self.chat_realtime.start()
+
+            # ETAPA 8: SessionSyncService reconcilia badges/resumo a partir do
+            # snapshot oficial (Postgres) — reusado tanto pelo sync inicial de
+            # login (abaixo) quanto pelo poll periodico, pelos eventos
+            # realtime e pela reconexao (_on_realtime_connection_changed).
+            self.session_sync = SessionSyncService(self.service, parent=self)
+            self.session_sync.sync_completed.connect(self._apply_chat_unread_summary)
+            self.session_sync.sync_failed.connect(self._on_session_sync_failed)
+
+        self.toast_manager = None
+        if has_chats:
+            self.toast_manager = InAppToastManager(self.service, root, self._open_conversation_from_notification)
+
         if self.notification_bell is not None or self.floating_chat_button is not None:
             self._chat_poll_timer = QTimer(self)
             self._chat_poll_timer.timeout.connect(self._poll_chat_unread)
             self._chat_poll_timer.start(20000)
-            QTimer.singleShot(1000, self._poll_chat_unread)
-    
+            # Sync inicial roda na hora (sem delay artificial) — ordem pedida
+            # pela ETAPA 8 e AUTH -> REALTIME (ja iniciado acima) -> SESSION
+            # SYNC; o timer de 20s continua so como heartbeat de fallback.
+            self._poll_chat_unread()
+
+        if self._update_available_notice and not self._update_available_notice_shown:
+            QTimer.singleShot(500, self._show_update_available_notice)
+
     
 
     def _start_background_update_check(self):
@@ -184,10 +234,65 @@ class MainWindow(QMainWindow):
             dialog = UpdateDialog(result, self)
             dialog.setStyleSheet(app_stylesheet(self.service.palette))
             dialog.exec()
+            if getattr(dialog, "update_launched", False):
+                # Fase 07: o Updater ja foi lancado e esta esperando este
+                # processo (parent_pid) encerrar para aplicar a troca --
+                # mesmo padrao de encerramento usado em _logout().
+                self.close()
+                QApplication.quit()
 
     def _clear_update_worker_refs(self):
        self._update_thread = None
        self._update_worker = None
+
+    def _start_session_policy_timer(self, *, interval_ms: int = 20 * 60 * 1000):
+        """Fase 13, Secao 14: re-checa a politica de enforcement periodicamente
+        durante uma sessao ja ativa (nao apenas no startup) -- OPTIONAL/RECOMMENDED
+        atualizam so um aviso discreto, nunca interrompem; REQUIRED/INCOMPATIBLE
+        mostram um aviso persistente orientando salvar e reiniciar. O bloqueio
+        pleno (impedir novas operacoes) acontece de fato na proxima inicializacao,
+        via CompatibilityGateDialog -- ver Riscos/Pendencias no relatorio da fase."""
+        self._session_policy_timer = QTimer(self)
+        self._session_policy_timer.timeout.connect(self._check_session_policy)
+        self._session_policy_timer.start(interval_ms)
+
+    def _check_session_policy(self):
+        from app.integrations.api.client import DesktopApiClient
+        from app.integrations.api.config import DesktopApiConfigStore
+        from app.integrations.api.system_client import SystemApiClient
+        from app.services.compatibility_check import run_compatibility_check
+
+        settings = DesktopApiConfigStore().load_settings()
+        if not settings.enabled:
+            return
+
+        def perform_check():
+            client = DesktopApiClient(settings)
+            try:
+                return run_compatibility_check(SystemApiClient(client))
+            finally:
+                client.close()
+
+        start_worker(self, perform_check, self._on_session_policy_result, self._on_session_policy_error)
+
+    def _on_session_policy_result(self, result):
+        from app.services.session_policy_monitor import classify_session_policy_action
+
+        action = classify_session_policy_action(result)
+        self._apply_session_policy_action(action)
+
+    def _on_session_policy_error(self, exc):
+        log.warning("Falha inesperada ao reavaliar politica de atualizacao durante a sessao", exc_info=exc)
+
+    def _apply_session_policy_action(self, action):
+        if not action.show_banner:
+            self.session_policy_banner.hide()
+            return
+        self.session_policy_banner.setText(action.banner_text)
+        self.session_policy_banner.setProperty("severity", action.severity)
+        self.session_policy_banner.style().unpolish(self.session_policy_banner)
+        self.session_policy_banner.style().polish(self.session_policy_banner)
+        self.session_policy_banner.show()
 
 
     
@@ -263,10 +368,6 @@ class MainWindow(QMainWindow):
         )
         self.stack.addWidget(self.pages["RELATORIOS"])
 
-        if self._can_view("settings", "CONFIGURACOES"):
-            self.pages["CONFIGURACOES"] = SettingsPage(self.service, self.apply_theme)
-            self.stack.addWidget(self.pages["CONFIGURACOES"])
-
     def _can_view(self, area_key: str, nav_key: str = "") -> bool:
         if hasattr(self.service, "can_view"):
             return bool(self.service.can_view(area_key))
@@ -278,11 +379,32 @@ class MainWindow(QMainWindow):
         page = self.pages.get(key)
         if not page:
             return
+        previous = self.stack.currentWidget()
+        if previous is not page and hasattr(previous, "deactivate_transient_modes"):
+            previous.deactivate_transient_modes()
         self.stack.setCurrentWidget(page)
         self.sidebar.set_active(key)
         if hasattr(page, "refresh"):
             page.refresh()
         self._page_animation = fade_in(page)
+
+    def open_settings(self):
+        if not self._can_view("settings", "CONFIGURACOES"):
+            return
+        dialog = SettingsDialog(self.service, self.apply_theme, self)
+        self._settings_dialog = dialog
+        try:
+            dialog.exec()
+        finally:
+            self._settings_dialog = None
+
+    def open_user_profile(self, focus_password: bool = False):
+        from app.ui.user_profile_dialog import UserProfileDialog
+
+        dialog = UserProfileDialog(self.service, focus_password=focus_password, parent=self)
+        if dialog.exec():
+            self.title_bar.apply_palette(self.service.palette)
+            self.title_bar.refresh_profile_avatar()
 
     def refresh_current(self):
         page = self.stack.currentWidget()
@@ -290,10 +412,13 @@ class MainWindow(QMainWindow):
             page.refresh()
 
     def apply_theme(self):
+        icon_cache.clear()
         self.setStyleSheet(app_stylesheet(self.service.palette))
         current = self.stack.currentWidget()
         self.sidebar.setStyleSheet("")
-        self.sidebar.update_theme_button()
+        self.sidebar.apply_palette(self.service.palette)
+        self.title_bar.apply_palette(self.service.palette)
+        self.title_bar.set_theme_icon(getattr(self.service, "palette_name", "claro") != "claro")
         for page in self.pages.values():
             page.style().unpolish(page)
             page.style().polish(page)
@@ -317,6 +442,25 @@ class MainWindow(QMainWindow):
         super().resizeEvent(event)
         self._reposition_floating_button()
 
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() == QEvent.WindowStateChange and hasattr(self, "title_bar"):
+            self.title_bar.set_maximized(self.isMaximized())
+
+    def _logout(self):
+        if self.title_bar is not None:
+            self.title_bar.notification_bell.close_center()
+        if self.session_sync is not None:
+            self.session_sync.stop()
+        if self.chat_realtime is not None:
+            self.chat_realtime.stop()
+        try:
+            self.service.logout()
+        except Exception:
+            log.exception("Falha ao encerrar sessao no logout")
+        self.close()
+        QApplication.quit()
+
     def _reposition_floating_button(self):
         button = getattr(self, "floating_chat_button", None)
         if not button:
@@ -330,37 +474,131 @@ class MainWindow(QMainWindow):
         button.move(max(0, x), max(0, y))
 
     def _poll_chat_unread(self):
-        if not hasattr(self.service, "chat_unread_summary"):
-            return
-        self._chat_poll_thread = start_worker(self, self.service.chat_unread_summary, self._apply_chat_unread_summary, lambda _exc: None)
+        # ETAPA 8: todo gatilho (timer de 20s, evento realtime, callback de
+        # leitura local, sync inicial de login) passa pelo mesmo
+        # SessionSyncService — garante o sequence guard contra resposta fora
+        # de ordem em qualquer um desses caminhos, nao so no login.
+        if self.session_sync is not None:
+            self.session_sync.sync("poll")
+        if self.notification_bell is not None and hasattr(self.service, "chat_notifications"):
+            # o sino conta apenas notificacoes de verdade (mencao/resposta),
+            # independente do contador de mensagens nao lidas do icone de chat.
+            self._notification_poll_thread = start_worker(
+                self, lambda: self.service.chat_notifications(limit=50), self._apply_notifications_summary, lambda _exc: None
+            )
 
-    def _build_quick_indicator(self, icon_name: str) -> ModernButton:
-        button = ModernButton("", icon_name)
-        button.setObjectName("GhostButton")
-        button.clicked.connect(lambda: self.select_page("CHATS"))
-        return button
+    def _apply_notifications_summary(self, notifications):
+        # o contador do sino vem de notification_unread_count (COUNT agregado
+        # no backend, via _apply_chat_unread_summary) — esta lista so serve
+        # pros toasts de notificacao nova, nunca pra contar (list_notifications
+        # tem teto de linhas e nao pode ser usada como fonte do badge).
+        if self.toast_manager is not None:
+            self.toast_manager.set_current_conversation(self._current_open_conversation_id())
+            self.toast_manager.handle_notifications(notifications or [])
+
+    def _current_open_conversation_id(self):
+        chats_page = self.pages.get("CHATS")
+        if chats_page is None or self.stack.currentWidget() is not chats_page:
+            return None
+        panel = getattr(chats_page, "panel", None)
+        return getattr(panel, "conversation_id", None) if panel is not None else None
+
+    def _open_conversation_from_notification(self, proposal_id, conversation_id, message_id):
+        dialog = ProposalChatDialog(self.service, proposal_id=proposal_id, conversation_id=conversation_id, parent=self)
+        if message_id:
+            dialog.panel.focus_message(message_id)
+        dialog.exec()
+
+    def _on_realtime_connection_changed(self, connected: bool):
+        # ETAPA 8: primeira conexao apos o login ja e coberta pelo sync
+        # inicial disparado em _build() — so reconciliamos aqui numa
+        # RECONEXAO de verdade (rede caiu, notebook suspendeu), pra nao
+        # duplicar a busca que ja esta em voo.
+        if connected and self._realtime_ever_connected:
+            self._poll_chat_unread()
+        if connected:
+            self._realtime_ever_connected = True
+
+    def _on_session_sync_failed(self, _exc):
+        # Nao mexe em nenhum badge (evita mostrar "0" como se fosse
+        # verdade) e nao marca o resumo de login como exibido — assim, o
+        # resumo aparece assim que um sync futuro (poll/reconexao) tiver
+        # sucesso, em vez de nunca aparecer.
+        log.warning("Falha ao sincronizar estado de chat/notificacoes")
+
+    def _on_conversation_updated(self, conversation_id: int):
+        self._poll_chat_unread()
+        # so atualiza a conversa ao vivo se a pagina "Chats" for a que esta
+        # REALMENTE visivel agora (reaproveita a mesma checagem usada pro
+        # toast manager) — comparar so o conversation_id guardado no painel
+        # nao bastava: ele fica obsoleto se o usuario trocou de pagina.
+        if self._current_open_conversation_id() == conversation_id:
+            chats_page = self.pages.get("CHATS")
+            panel = getattr(chats_page, "panel", None)
+            if panel is not None:
+                panel.refresh()
+
+    def _on_notification_event(self, event_type: str, data: dict):
+        # ETAPA 10: badge do sino reconcilia pelo mesmo SessionSyncService
+        # de sempre (nunca confia no corpo do evento) -- e se a Central
+        # estiver aberta agora, ela tambem reage (refresh silencioso se o
+        # usuario esta no topo, aviso discreto se estiver lendo historico).
+        self._poll_chat_unread()
+        if self.title_bar is not None:
+            self.title_bar.notification_bell.apply_realtime_event(event_type, data)
 
     def _apply_chat_unread_summary(self, summary: dict):
         total = int(summary.get("total_unread") or 0)
-        pending_questions = int(summary.get("pending_questions") or 0)
-        new_observations = int(summary.get("new_observations") or 0)
-        if self.notification_bell is not None:
-            self.notification_bell.set_unread_count(total)
         if self.floating_chat_button is not None:
             self.floating_chat_button.set_unread_count(total)
-        if self.quick_indicator_messages is not None:
-            self.quick_indicator_messages.setText(str(total) if total else "")
-            self.quick_indicator_messages.setToolTip(f"{total} mensagem(ns) nao lida(s)")
-        if self.quick_indicator_questions is not None:
-            self.quick_indicator_questions.setText(str(pending_questions) if pending_questions else "")
-            self.quick_indicator_questions.setToolTip(f"{pending_questions} pergunta(s) pendente(s) para voce")
-        if self.quick_indicator_observations is not None:
-            self.quick_indicator_observations.setText(str(new_observations) if new_observations else "")
-            self.quick_indicator_observations.setToolTip(f"{new_observations} observacao(oes) nova(s)")
-        self.sidebar.set_nav_badge("CHATS", total)
+        self.title_bar.set_chat_unread_count(total)
+        if self.notification_bell is not None:
+            self.notification_bell.set_unread_count(int(summary.get("notification_unread_count") or 0))
+        if self.pending_btn is not None:
+            self.title_bar.set_pending_count(int(summary.get("pending_questions") or 0))
+        if not self._login_summary_shown:
+            self._login_summary_shown = True
+            self._show_login_summary(summary)
+
+    def _show_update_available_notice(self):
+        # Fase 03: aviso nao bloqueante de UPDATE_AVAILABLE, exibido uma unica vez por sessao
+        # (a verificacao de compatibilidade ja rodou antes do login; aqui so apresentamos o
+        # resultado). Nao baixa nem instala nada -- apenas informa.
+        if self._update_available_notice_shown or not self._update_available_notice:
+            return
+        self._update_available_notice_shown = True
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Information)
+        box.setWindowTitle("Nova versao disponivel")
+        box.setText(self._update_available_notice)
+        ok_button = box.addButton("Continuar", QMessageBox.AcceptRole)
+        box.setDefaultButton(ok_button)
+        box.exec()
+
+    def _show_login_summary(self, summary: dict):
+        # so a primeira leitura pos-login (ETAPA 6) — puramente informativo,
+        # nunca chama mark-read/resolve, so apresenta numeros que os badges
+        # do header ja mostram.
+        unread_messages = int(summary.get("total_unread") or 0)
+        unread_mentions = int(summary.get("unread_mentions") or 0)
+        open_action_required = int(summary.get("pending_questions") or 0)
+        if unread_messages <= 0 and unread_mentions <= 0 and open_action_required <= 0:
+            return
+        user = self.service.user or {}
+        display_name = user.get("display_name") or user.get("username") or ""
+        banner = LoginSummaryBanner(self.service, display_name, unread_messages, unread_mentions, open_action_required, parent=self)
+        banner.view_messages_requested.connect(lambda: self.select_page("CHATS"))
+        banner.view_pending_requested.connect(lambda: self.select_page("CHATS"))
+        self.content_layout.insertWidget(0, banner)
 
     def closeEvent(self, event):
       log.info("Fechamento solicitado")
+      if self.title_bar is not None:
+          self.title_bar.notification_bell.close_center()
+      if self.session_sync is not None:
+          self.session_sync.stop()
+      if self.chat_realtime is not None:
+          self.chat_realtime.stop()
       if self._update_thread and self._update_thread.isRunning():
            self._update_thread.requestInterruption()
            self._update_thread.quit()

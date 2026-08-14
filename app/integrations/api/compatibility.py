@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from app.integrations.api.exceptions import ApiCompatibilityError
 from app.integrations.api.models import SystemIdentity, SystemVersion
 from app.version import APP_VERSION
+from app.versioning.parser import compare_versions
 
 
 REQUIRED_FEATURES = {"auth", "auth_me", "permissions_read", "refresh", "logout"}
@@ -21,9 +22,9 @@ class CompatibilityResult:
 def validate_api_compatibility(version: SystemVersion, *, desktop_version: str = APP_VERSION) -> CompatibilityResult:
     if version.database_status != "compatible":
         raise ApiCompatibilityError("A revisao do banco da API nao e compativel.")
-    if version.minimum_desktop_version and _compare_versions(desktop_version, version.minimum_desktop_version) < 0:
+    if version.minimum_desktop_version and compare_versions(desktop_version, version.minimum_desktop_version) < 0:
         raise ApiCompatibilityError("A versao do aplicativo e antiga para esta API.")
-    if version.maximum_desktop_version and _compare_versions(desktop_version, version.maximum_desktop_version) > 0:
+    if version.maximum_desktop_version and compare_versions(desktop_version, version.maximum_desktop_version) > 0:
         raise ApiCompatibilityError("A versao do aplicativo e nova demais para esta API.")
     missing = sorted(REQUIRED_FEATURES - set(version.supported_features))
     if missing:
@@ -66,19 +67,3 @@ def compatibility_report(version: SystemVersion, *, desktop_version: str = APP_V
     except ApiCompatibilityError as exc:
         missing = sorted(REQUIRED_FEATURES - set(version.supported_features))
         return CompatibilityResult(False, exc.category, exc.user_message, missing)
-
-
-def _compare_versions(left: str, right: str) -> int:
-    def parts(value: str) -> list[int]:
-        result = []
-        for chunk in (value or "0").split("."):
-            digits = "".join(char for char in chunk if char.isdigit())
-            result.append(int(digits or 0))
-        return result
-
-    left_parts = parts(left)
-    right_parts = parts(right)
-    length = max(len(left_parts), len(right_parts))
-    left_parts.extend([0] * (length - len(left_parts)))
-    right_parts.extend([0] * (length - len(right_parts)))
-    return (left_parts > right_parts) - (left_parts < right_parts)

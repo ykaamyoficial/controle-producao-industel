@@ -5,6 +5,7 @@ from typing import Any
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QComboBox,
     QFrame,
@@ -159,7 +160,7 @@ class ExecutiveDashboardPage(QWidget):
         self.refresh_btn = ModernButton("Atualizar", "refresh", accent=True)
         self.refresh_btn.setMinimumHeight(28)
         self.refresh_btn.setMaximumHeight(28)
-        self.refresh_btn.clicked.connect(self.refresh)
+        self.refresh_btn.clicked.connect(self._on_refresh_clicked)
         header.addWidget(self.reliability_badge)
         header.addWidget(self.updated_at)
         header.addWidget(self.refresh_btn)
@@ -292,6 +293,18 @@ class ExecutiveDashboardPage(QWidget):
             "incluir_parciais": self.include_partials.isChecked(),
             "confiabilidade": "" if reliability == "todas" else reliability,
         }
+
+    def _on_refresh_clicked(self) -> None:
+        # "Atualizar" busca o relatorio executivo de forma sincrona (sem
+        # worker/QThread) - o icone gira enquanto a consulta roda, mesmo sem
+        # animar quadro a quadro durante o bloqueio, pra dar feedback visual
+        # de inicio/fim (PDF 10.1: "rotate somente durante operacao").
+        self.refresh_btn.rotate_while(True)
+        QApplication.processEvents()
+        try:
+            self.refresh()
+        finally:
+            self.refresh_btn.rotate_while(False)
 
     def refresh(self) -> None:
         self.current_data = self.service.executive_dashboard_report(self.filters())

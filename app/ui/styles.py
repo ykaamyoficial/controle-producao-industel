@@ -423,17 +423,46 @@ def app_stylesheet(palette: dict) -> str:
         color: {danger};
         font-weight: 600;
     }}
+    QFrame#TitleBar {{
+        background: {surface};
+        border: 0;
+        border-bottom: 1px solid {border};
+    }}
+    QLabel#TitleBarAppName {{
+        font-size: 11px;
+        font-weight: 700;
+        color: {muted};
+    }}
+    QPushButton#TitleBarButton {{
+        background: transparent;
+        border: 0;
+        border-radius: 0;
+        padding: 0;
+    }}
+    QPushButton#TitleBarButton:hover {{
+        background: {surface_alt};
+    }}
+    QPushButton#TitleBarCloseButton {{
+        background: transparent;
+        border: 0;
+        border-radius: 0;
+        padding: 0;
+    }}
+    QPushButton#TitleBarCloseButton:hover {{
+        background: {danger};
+    }}
     """
 
 
 def area_color(area: str, palette: dict) -> str:
-    area = (area or "").strip().upper()
+    area = (area or "").strip().upper().replace("_", " ")
     colors = {
         "CONTROLE GERAL": palette.get("area_control", palette["accent"]),
         "PRODUCAO": palette.get("area_production", palette["success"]),
         "GALVANIZACAO": palette.get("area_galvanization", palette["secondary"]),
         "EXPEDICAO": palette.get("area_expedition", palette["warning"]),
         "ALMOXARIFADO": palette.get("area_stock", palette["muted"]),
+        "FISCAL": palette.get("secondary", palette["accent"]),
     }
     return colors.get(area, palette["accent"])
 
@@ -444,9 +473,11 @@ STATUS_BADGE_COLORS = {
         "waiting": "#2563EB",
         "progress": "#EA580C",
         "attention": "#CA8A04",
+        "warning": "#CA8A04",
         "done": "#16A34A",
         "final_done": "#0F766E",
         "danger": "#DC2626",
+        "blocked": "#DC2626",
         "location_production": "#047857",
         "location_galvanization": "#7C3AED",
         "location_expedition": "#C2410C",
@@ -457,9 +488,11 @@ STATUS_BADGE_COLORS = {
         "waiting": "#60A5FA",
         "progress": "#FB923C",
         "attention": "#FACC15",
+        "warning": "#FACC15",
         "done": "#4ADE80",
         "final_done": "#2DD4BF",
         "danger": "#FB7185",
+        "blocked": "#FB7185",
         "location_production": "#34D399",
         "location_galvanization": "#A78BFA",
         "location_expedition": "#FB923C",
@@ -474,7 +507,7 @@ STATUS_CATEGORY_BY_STATUS = {
     "NAO_INICIADO": "waiting",
     "ITEM_PENDENTE_FABRICACAO": "attention",
     "INICIADO": "progress",
-    "PARADO": "danger",
+    "PARADO": "attention",
     "FINALIZADO_PARCIAL": "attention",
     "FINALIZADO": "done",
     "AGUARDANDO_ENVIO": "waiting",
