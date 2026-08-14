@@ -48,7 +48,7 @@ services:
       REFRESH_TOKEN_EXPIRE_DAYS: ${REFRESH_TOKEN_EXPIRE_DAYS:-7}
       LOGIN_MAX_FAILED_ATTEMPTS: ${LOGIN_MAX_FAILED_ATTEMPTS:-5}
       LOGIN_LOCK_MINUTES: ${LOGIN_LOCK_MINUTES:-15}
-      PASSWORD_MIN_LENGTH: ${PASSWORD_MIN_LENGTH:-10}
+      PASSWORD_MIN_LENGTH: ${PASSWORD_MIN_LENGTH:-4}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
       NOMUS_ENCRYPTION_KEY: ${NOMUS_ENCRYPTION_KEY:-dev-nomus-encryption-key-change-me}
     ports:
@@ -57,11 +57,14 @@ services:
       - ./api:/app/api
     command: python -m uvicorn api.app.main:app --host 0.0.0.0 --port 8000 --reload
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/system/health', timeout=5).read()\""]
+      # Evoluido na Fase 06: usa /health/ready (processo + PostgreSQL + revisao do
+      # schema), nao apenas o /system/health de liveness anterior -- um container
+      # so e considerado "healthy" pelo Docker quando realmente pronto para trafego.
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health/ready', timeout=8).read()\""]
       interval: 10s
-      timeout: 5s
+      timeout: 12s
       retries: 5
-      start_period: 10s
+      start_period: 20s
 
 volumes:
   postgres_dev_data:

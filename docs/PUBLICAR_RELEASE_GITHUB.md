@@ -1,5 +1,21 @@
 # Publicar Release no GitHub
 
+> **ARQUIVADO (Fase 07 - Instalador e Atualizacao).** Este documento descreve um
+> processo manual anterior as Fases 09-15, baseado em SQLite local e GitHub
+> Releases publico. O sistema hoje usa PostgreSQL via API (Fase 01) e nunca
+> consulta o GitHub para atualizacoes (regra explicita da Fase 12/Secao 23:
+> "Desktop pergunta ao servidor"). O caminho oficial atual de release e:
+>
+> 1. Build: `ControleProducao.spec` (PyInstaller) + `installer\ControleProducao.iss` (Inno Setup).
+> 2. Publicacao/manifesto: `scripts/generate_release_manifest.py` + `scripts/sync_release_to_server.py`
+>    (ve `docs/architecture/UPDATE_DISTRIBUTION_SERVICE.md`).
+> 3. Aprovacao: `POST /api/v1/updates/desktop/{version}/authorize` (READY -> AUTHORIZED,
+>    ve `docs/architecture/UPDATE_ENFORCEMENT_POLICY.md`).
+> 4. Distribuicao ao Desktop: `docs/architecture/UPDATER_DESKTOP.md` (manifesto assinado,
+>    download com verificacao SHA-256, troca atomica com journal/rollback).
+>
+> Mantido apenas como referencia historica; nao seguir os passos abaixo para uma release nova.
+
 Este documento descreve o processo manual para publicar uma versao instalavel do Controle de Producao Industel.
 
 ## Objetivo
