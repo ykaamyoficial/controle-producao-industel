@@ -468,6 +468,7 @@ class FiscalInvoice(Base):
     fiscal_record_id: Mapped[int] = mapped_column(ForeignKey("fiscal_records.id", ondelete="CASCADE"), nullable=False)
     proposal_id: Mapped[int] = mapped_column(ForeignKey("proposals.id", ondelete="CASCADE"), nullable=False)
     invoice_number: Mapped[str] = mapped_column(String(80), nullable=False)
+    operation_id: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
     series: Mapped[str | None] = mapped_column(String(40), nullable=True)
     access_key: Mapped[str | None] = mapped_column(String(80), nullable=True)
     issued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

@@ -506,7 +506,9 @@ class ProcessPage(QWidget):
             return
         log.debug("Abrindo detalhes da proposta: process_id=%r, tipo=%s", process_id, type(process_id).__name__)
         try:
-            dialog = ProcessDetailDialog(self.service, process_id, self)
+            row = self.selected_row_data() or {}
+            grouped_ids = [int(value) for value in (row.get("proposal_ids") or []) if value]
+            dialog = ProcessDetailDialog(self.service, process_id, self, process_ids=grouped_ids or None)
         except Exception as exc:
             ToastNotification(self.window(), f"Nao foi possivel abrir os detalhes da proposta: {exc}", "error")
             return

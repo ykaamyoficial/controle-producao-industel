@@ -113,5 +113,10 @@
     "classification": "DATA_MIGRATION",
     "summary": "Backfill de parent_proposal_id para propostas parciais legadas, casando parent_legacy_id com o legacy_id da proposta-mae.",
     "justification": "Somente SELECT + UPDATE (DML) sobre dados ja existentes; nenhuma alteracao de schema. So atualiza linhas onde parent_proposal_id ainda esta NULL e ha um parent_legacy_id resolvivel, e nunca aponta uma linha para si mesma. Downgrade e um no-op deliberado (Secao 11 documentada no proprio arquivo): desfazer o vinculo reexporia filhas legadas sem parent, o que seria pior que manter o backfill."
+  },
+  "20260817_0023": {
+    "classification": "ADDITIVE",
+    "summary": "Adiciona operation_id opcional e indexado as emissoes fiscais para evitar duplicacao em retry de lotes.",
+    "justification": "Apenas ADD COLUMN nullable e indice em tabela fiscal existente. Registros antigos permanecem validos e o campo so e preenchido por novas operacoes de emissao."
   }
 }

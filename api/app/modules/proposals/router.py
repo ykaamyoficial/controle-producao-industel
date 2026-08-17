@@ -38,6 +38,8 @@ from api.app.modules.proposals.schemas import (
     ExpeditionRemanageRequest,
     ExpeditionVersionRequest,
     FiscalCancelInvoiceItemRequest,
+    FiscalBatchRequest,
+    FiscalBatchResponse,
     FiscalIndicators,
     FiscalRecordDetail,
     FiscalRecordSummary,
@@ -277,12 +279,13 @@ async def complete_production_items(proposal_id: int, payload: ProductionComplet
 async def list_galvanization_candidates(
     search: str | None = Query(default=None, max_length=180),
     situation: str | None = Query(default=None, pattern="^(DISPONIVEL|EM_GALVANIZACAO)$"),
+    include_unavailable: bool = Query(default=False),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     session: AsyncSession = Depends(get_db_session),
     _actor: User = Depends(require_permission(GALVANIZATION_VIEW)),
 ):
-    return await service.list_galvanization_candidates(session, search=search, situation=situation, limit=limit, offset=offset)
+    return await service.list_galvanization_candidates(session, search=search, situation=situation, include_unavailable=include_unavailable, limit=limit, offset=offset)
 
 
 @router.get("/galvanization/loads", response_model=PaginatedGalvanizationLoadResponse)
@@ -419,6 +422,11 @@ async def get_fiscal_indicator_rows(indicator: str, session: AsyncSession = Depe
 @router.post("/fiscal/records/{fiscal_record_id}/invoices", response_model=FiscalRecordDetail, status_code=status.HTTP_201_CREATED)
 async def register_fiscal_invoice(fiscal_record_id: int, payload: FiscalRegisterInvoiceRequest, request: Request, session: AsyncSession = Depends(get_db_session), actor: User = Depends(require_permission(FISCAL_REGISTER_EMISSION))):
     return await service.register_fiscal_invoice(session, fiscal_record_id, payload, actor, request_id=getattr(request.state, "request_id", None))
+
+
+@router.post("/fiscal/emissions/batch", response_model=FiscalBatchResponse, status_code=status.HTTP_201_CREATED)
+async def register_fiscal_batch(payload: FiscalBatchRequest, request: Request, session: AsyncSession = Depends(get_db_session), actor: User = Depends(require_permission(FISCAL_REGISTER_EMISSION))):
+    return await service.register_fiscal_batch(session, payload, actor, request_id=getattr(request.state, "request_id", None))
 
 
 @router.post("/fiscal/invoice-items/{invoice_item_id}/cancel", response_model=FiscalRecordDetail)

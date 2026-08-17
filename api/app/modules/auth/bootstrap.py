@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from api.app.database.session import get_sessionmaker
 from api.app.modules.auth import repository
@@ -36,8 +37,17 @@ async def sync_official_permissions() -> None:
         missing = [(code, name, module) for code, name, module in OFFICIAL_PERMISSIONS if code not in existing_codes]
         if not missing:
             return
-        for code, name, module in missing:
-            session.add(Permission(code=code, name=name, module=module))
+        # INSERT ... ON CONFLICT DO NOTHING (nao um simples add()+commit): dois
+        # processos podem chamar sync_official_permissions() no startup ao
+        # mesmo tempo (ex.: dois workers/instancias da API subindo juntos) e
+        # ambos verem o mesmo codigo como "faltando" antes de qualquer commit -
+        # sem o ON CONFLICT, o segundo a commitar estoura UniqueViolationError
+        # em vez de simplesmente nao duplicar a linha.
+        await session.execute(
+            pg_insert(Permission)
+            .values([{"code": code, "name": name, "module": module} for code, name, module in missing])
+            .on_conflict_do_nothing(index_elements=["code"])
+        )
         await session.commit()
         log.warning("Catalogo de permissoes sincronizado | inseridas=%s", [code for code, _name, _module in missing])
 

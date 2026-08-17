@@ -427,10 +427,23 @@ class BatchProposalActionCenter(QDialog):
         load_id = choose_existing_load_for_addition(self.service, self)
         if load_id is None:
             return
-        dialog = GalvanizationLoadDialog(self.service, self.process_ids, load_id=load_id, parent=self)
-        if dialog.exec():
-            self.changed = True
-            self.accept()
+        try:
+            result = self.service.add_items_to_galvanization_load(
+                load_id,
+                proposal_ids=list(self.process_ids),
+            )
+        except Exception as exc:
+            QMessageBox.warning(self, "Adicionar a uma carga", str(exc))
+            return
+        added_items = result.get("added_item_ids") or [] if isinstance(result, dict) else []
+        QMessageBox.information(
+            self,
+            "Carga atualizada",
+            f"{len(self.process_ids)} proposta(s) adicionada(s) à carga #{load_id}.\n"
+            f"Itens adicionados: {len(added_items)}.",
+        )
+        self.changed = True
+        self.accept()
 
     def _open_manage_load_new(self):
         dialog = GalvanizationLoadDialog(self.service, self.process_ids, parent=self)

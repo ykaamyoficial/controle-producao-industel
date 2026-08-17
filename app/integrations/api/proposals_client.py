@@ -185,6 +185,9 @@ class ProposalsApiClient:
     def register_fiscal_invoice(self, access_token: str, fiscal_record_id: int, payload: dict[str, Any]) -> dict[str, Any]:
         return self.client.post(f"/api/v1/fiscal/records/{fiscal_record_id}/invoices", json_payload=payload, access_token=access_token).data
 
+    def register_fiscal_batch(self, access_token: str, payload: dict[str, Any]) -> dict[str, Any]:
+        return self.client.post("/api/v1/fiscal/emissions/batch", json_payload=payload, access_token=access_token).data
+
     def cancel_fiscal_invoice_item(self, access_token: str, invoice_item_id: int, payload: dict[str, Any]) -> dict[str, Any]:
         return self.client.post(f"/api/v1/fiscal/invoice-items/{invoice_item_id}/cancel", json_payload=payload, access_token=access_token).data
 

@@ -11,7 +11,7 @@ API_VERSION = "0.8.0"
 API_STAGE = "official-fiscal"
 API_CONTRACT_VERSION = "v1"
 SERVICE_NAME = "controle-producao-api"
-EXPECTED_DATABASE_REVISION = "20260814_0022"
+EXPECTED_DATABASE_REVISION = "20260817_0023"
 # Revisao mais antiga que este server_version ainda consegue operar (Fase 04, Secao 19).
 # Hoje e igual a EXPECTED_DATABASE_REVISION porque esta release depende da
 # hierarquia mae/filhas e nao possui tolerancia retroativa deliberada -- sera

@@ -80,6 +80,10 @@ class FakeGalvanizationService:
         self.calls.append(("update_status", process_id, area, status, observation))
         return {}
 
+    def add_items_to_galvanization_load(self, load_id, *, item_ids=None, proposal_ids=None):
+        self.calls.append(("add_items_to_galvanization_load", load_id, item_ids, proposal_ids))
+        return {"id": load_id, "added_item_ids": [101]}
+
 
 class GalvanizationActionCenterOpeningTests(unittest.TestCase):
     """Secao 63: a Central abre em Galvanizacao com o proposal_id/area/status
@@ -189,7 +193,7 @@ class ManageLoadHandlerTests(unittest.TestCase):
             dialog.run_action(action)
         self.assertTrue(dialog.result())
 
-    def test_manage_load_existing_shows_chooser_then_opens_with_load_id(self):
+    def test_manage_load_existing_shows_chooser_then_adds_without_opening_editor(self):
         service = FakeGalvanizationService(
             "AGUARDANDO_ENVIO", loads=[{"id": 14, "status": "AGUARDANDO_LIBERACAO"}]
         )
@@ -198,16 +202,18 @@ class ManageLoadHandlerTests(unittest.TestCase):
         fake_chooser = MagicMock()
         fake_chooser.exec.return_value = 1
         fake_chooser.selected_load_id = 14
-        fake_load_dialog = MagicMock()
-        fake_load_dialog.exec.return_value = 1
         with patch(
             "app.ui.action_center.handlers.galvanization._SelectGalvanizationLoadDialog", return_value=fake_chooser
         ) as chooser_ctor, patch(
-            "app.ui.action_center.handlers.galvanization.GalvanizationLoadDialog", return_value=fake_load_dialog
+            "app.ui.action_center.handlers.galvanization.QMessageBox.information"
+        ) as info, patch(
+            "app.ui.action_center.handlers.galvanization.GalvanizationLoadDialog"
         ) as load_ctor:
             dialog.run_action(action)
         chooser_ctor.assert_called_once()
-        load_ctor.assert_called_once_with(service, [55], load_id=14, parent=dialog)
+        self.assertIn(("add_items_to_galvanization_load", 14, None, [55]), service.calls)
+        load_ctor.assert_not_called()
+        info.assert_called_once()
         self.assertTrue(dialog.result())
 
     def test_manage_load_existing_with_no_open_loads_shows_message(self):

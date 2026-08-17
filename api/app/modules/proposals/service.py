@@ -39,6 +39,9 @@ from api.app.modules.proposals.schemas import (
     ExpeditionRemanageRequest,
     ExpeditionVersionRequest,
     FiscalCancelInvoiceItemRequest,
+    FiscalBatchRequest,
+    FiscalBatchResponse,
+    FiscalBatchProposalResult,
     FiscalEmissionItemInput,
     FiscalEventSummary,
     FiscalIndicators,
@@ -456,7 +459,7 @@ async def get_production_detail(session: AsyncSession, proposal_id: int) -> Prod
     return _production_detail(proposal)
 
 
-async def list_galvanization_candidates(session: AsyncSession, *, search: str | None, situation: str | None = None, limit: int, offset: int) -> PaginatedGalvanizationCandidateResponse:
+async def list_galvanization_candidates(session: AsyncSession, *, search: str | None, situation: str | None = None, include_unavailable: bool = False, limit: int, offset: int) -> PaginatedGalvanizationCandidateResponse:
     # Elegibilidade e por ITEM (_eligible_galvanization_items ja checa
     # produced/requires_galvanization/flow_defined/galvanized), nao por area
     # agregada da proposta: current_area so migra para GALVANIZACAO quando
@@ -483,6 +486,11 @@ async def list_galvanization_candidates(session: AsyncSession, *, search: str | 
     for proposal in proposals:
         for item in _eligible_galvanization_items(proposal):
             available = await _galvanization_available_quantity(session, item)
+            # Item ja enviado para uma carga nao pode ser candidato novamente.
+            # O saldo zero era exposto como diagnostico e o desktop o projetava
+            # junto com a linha real da carga, duplicando a filha.
+            if available <= 0 and not include_unavailable:
+                continue
             item_situation = "DISPONIVEL" if available > Decimal("0") else "EM_GALVANIZACAO"
             if situation_filter and item_situation != situation_filter:
                 continue
@@ -660,6 +668,23 @@ async def register_galvanization_return(session: AsyncSession, load_id: int, pay
             await _record_event(session, proposal, "GALVANIZATION_RETURN_RECORDED_AFTER_CANCELLATION", actor, request_id=request_id, from_area=proposal.current_area, from_status=proposal.current_status, to_area=proposal.current_area, to_status=proposal.current_status, metadata={"load_id": load.id, "observation": payload.observation, "terminal_state_preserved": True})
         else:
             await _recalculate_galvanization_proposal_state(session, proposal, actor, request_id=request_id, load_id=load.id, observation=payload.observation)
+    # O retorno pode ser o ultimo evento que coloca todas as filhas na
+    # Expedicao. Nesse ponto a estrutura mae-filhas precisa ser recalculada
+    # imediatamente; esperar uma nova acao na Expedicao deixava as filhas
+    # separadas no backend e fazia a lista de itens consultar somente uma
+    # delas. A uniao continua respeitando area, status e conjunto de cargas.
+    parent_ids = {
+        int(item.proposal.parent_proposal_id)
+        for item in load.items
+        if item.active and item.proposal is not None and item.proposal.parent_proposal_id is not None
+        and int(item.proposal_id) in affected_proposals
+    }
+    for parent_id in parent_ids:
+        await _merge_equal_status_partial_children(session, parent_id, actor, request_id=request_id)
+    for proposal_id in affected_proposals:
+        proposal = next(item.proposal for item in load.items if int(item.proposal_id) == proposal_id)
+        if proposal.parent_proposal_id is not None:
+            await _reborn_parent_when_children_converge(session, proposal, actor, request_id=request_id)
     previous_load_status = load.status
     _recalculate_load_return_state(load, now)
     _touch(load, actor)
@@ -1236,72 +1261,125 @@ async def fiscal_indicator_records(session: AsyncSession, indicator: str) -> lis
 
 
 async def register_fiscal_invoice(session: AsyncSession, fiscal_record_id: int, payload: FiscalRegisterInvoiceRequest, actor: User, *, request_id: str | None) -> FiscalRecordDetail:
-    record = await _get_fiscal_record(session, fiscal_record_id)
-    _ensure_proposal_not_cancelled(record.proposal)
-    _ensure_fiscal_version(record, payload.version)
-    if record.status_fiscal == "NOTA_FISCAL_EMITIDA":
-        raise ApiError(error_codes.FISCAL_INVALID_STATE, "Esta proposta ja esta fiscalmente concluida.", status_code=409)
-    await _ensure_fiscal_items_for_record(session, record)
-    existing = (await session.execute(
-        select(FiscalInvoice)
-        .where(FiscalInvoice.invoice_number == payload.invoice_number)
-        .where(FiscalInvoice.series.is_(None) if payload.series is None else FiscalInvoice.series == payload.series)
-        .where(FiscalInvoice.active.is_(True))
-        .where(FiscalInvoice.status != "CANCELADA")
-    )).scalars().first()
-    if existing is not None:
-        raise ApiError(error_codes.FISCAL_INVOICE_DUPLICATED, "Ja existe nota fiscal registrada com este numero e serie.", status_code=409)
-    selected = _selected_fiscal_items(record, payload.items)
-    if not selected and record.items:
-        raise ApiError(error_codes.FISCAL_ITEM_INVALID, "Selecione pelo menos um item fiscal.", status_code=409)
-    now = datetime.now(UTC)
-    previous = record.status_fiscal
-    invoice = FiscalInvoice(
-        fiscal_record_id=record.id,
-        proposal_id=record.proposal_id,
-        invoice_number=payload.invoice_number,
-        series=payload.series or None,
-        access_key=payload.access_key or None,
-        issued_at=payload.issued_at or now,
-        source=payload.source,
-        observation=payload.observation,
-        created_by=actor.id,
-        updated_by=actor.id,
-    )
-    session.add(invoice)
-    await session.flush()
-    for item, qty, weight in selected:
-        item.billed_quantity = (item.billed_quantity + qty).quantize(Decimal("0.0001"))
-        if weight is not None:
-            item.billed_weight = (item.billed_weight + weight).quantize(Decimal("0.0001"))
-        _recalculate_fiscal_item_status(item)
-        _touch(item, actor)
-        session.add(
-            FiscalInvoiceItem(
-                fiscal_invoice_id=invoice.id,
-                fiscal_item_id=item.id,
-                proposal_id=record.proposal_id,
-                proposal_item_id=item.proposal_item_id,
-                quantity=qty,
-                weight=weight,
-                created_by=actor.id,
-            )
-        )
-    if not record.items:
-        record.status_fiscal = "NOTA_FISCAL_EMITIDA"
-        record.fiscal_situation = "NF_EMITIDA"
-        invoice.emission_type = "TOTAL"
-    else:
-        _recalculate_fiscal_record(record)
-        invoice.emission_type = "TOTAL" if record.status_fiscal == "NOTA_FISCAL_EMITIDA" else "PARCIAL"
-    record.last_emission_at = now
-    record.observation = payload.observation
-    _touch(record, actor)
-    _touch(invoice, actor)
-    await _record_fiscal_event(session, record, "FISCAL_INVOICE_REGISTERED", actor, fiscal_invoice=invoice, request_id=request_id, from_status=previous, to_status=record.status_fiscal, metadata={"invoice_number": invoice.invoice_number})
-    await session.commit()
+    batch = FiscalBatchRequest(proposals=[{
+        "fiscal_record_id": fiscal_record_id,
+        "version": payload.version,
+        "selection_type": "TOTAL",
+        "invoice_number": payload.invoice_number,
+        "series": payload.series,
+        "issued_at": payload.issued_at,
+        "source": payload.source,
+        "observation": payload.observation,
+        "items": [item.model_dump() for item in payload.items] if payload.items is not None else None,
+    }])
+    await register_fiscal_batch(session, batch, actor, request_id=request_id)
     session.expire_all()
     return await get_fiscal_detail(session, fiscal_record_id)
+
+
+async def register_fiscal_batch(session: AsyncSession, payload: FiscalBatchRequest, actor: User, *, request_id: str | None) -> FiscalBatchResponse:
+    """Shared atomic motor used by individual and batch fiscal registration."""
+    operation_id = (payload.operation_id or request_id or f"fiscal-{datetime.now(UTC).timestamp()}").strip()
+    record_ids = [int(row.fiscal_record_id) for row in payload.proposals]
+    if len(record_ids) != len(set(record_ids)):
+        raise ApiError(error_codes.FISCAL_ITEM_INVALID, "A mesma proposta nao pode aparecer duas vezes no lote.", status_code=409)
+    document_keys = [(str(row.invoice_number).strip(), (row.series or "").strip() or None) for row in payload.proposals]
+    if len(document_keys) != len(set(document_keys)):
+        raise ApiError(error_codes.FISCAL_INVOICE_DUPLICATED, "Existem NFs duplicadas dentro do mesmo lote.", status_code=409)
+    try:
+        previous_invoices = (await session.execute(
+            select(FiscalInvoice).where(FiscalInvoice.operation_id == operation_id).where(FiscalInvoice.active.is_(True))
+        )).scalars().all()
+        if previous_invoices:
+            if {int(invoice.fiscal_record_id) for invoice in previous_invoices} != set(record_ids):
+                raise ApiError(error_codes.FISCAL_ITEM_INVALID, "O operation_id ja foi usado por outro lote.", status_code=409)
+            replay_results = []
+            for invoice in previous_invoices:
+                record = await _get_fiscal_record(session, int(invoice.fiscal_record_id))
+                replay_results.append(FiscalBatchProposalResult(fiscal_record_id=record.id, emission_id=invoice.id, invoice_number=invoice.invoice_number, series=invoice.series, final_status=record.status_fiscal))
+            return FiscalBatchResponse(operation_id=operation_id, status="confirmed", proposals=replay_results)
+        records = []
+        for record_id in record_ids:
+            record = await _get_fiscal_record(session, record_id, for_update=True)
+            _ensure_proposal_not_cancelled(record.proposal)
+            records.append(record)
+        # All validations complete before creating any invoice. PostgreSQL row
+        # locks protect the saldo/version check from a concurrent commit.
+        selections = []
+        for record, request in zip(records, payload.proposals):
+            await _ensure_fiscal_items_for_record(session, record)
+            _ensure_fiscal_version(record, request.version)
+            if record.status_fiscal == "NOTA_FISCAL_EMITIDA":
+                raise ApiError(error_codes.FISCAL_INVALID_STATE, f"A proposta fiscal {record.id} ja esta concluida.", status_code=409)
+            duplicate = (await session.execute(
+                select(FiscalInvoice)
+                .where(FiscalInvoice.invoice_number == request.invoice_number)
+                .where(FiscalInvoice.series.is_(None) if request.series is None else FiscalInvoice.series == request.series)
+                .where(FiscalInvoice.active.is_(True))
+                .where(FiscalInvoice.status != "CANCELADA")
+            )).scalars().first()
+            if duplicate is not None:
+                raise ApiError(error_codes.FISCAL_INVOICE_DUPLICATED, f"A NF {request.invoice_number} ja existe para esta serie.", status_code=409)
+            selected = _selected_fiscal_items(record, [FiscalEmissionItemInput(**item.model_dump()) for item in request.items] if request.items is not None else None)
+            if not selected and record.items:
+                raise ApiError(error_codes.FISCAL_ITEM_INVALID, "Selecione pelo menos um item fiscal.", status_code=409)
+            selections.append(selected)
+
+        results = []
+        for record, request, selected in zip(records, payload.proposals, selections):
+            now = datetime.now(UTC)
+            previous = record.status_fiscal
+            invoice = FiscalInvoice(
+                fiscal_record_id=record.id,
+                proposal_id=record.proposal_id,
+                operation_id=operation_id,
+                invoice_number=request.invoice_number,
+                series=request.series or None,
+                issued_at=request.issued_at or now,
+                source=request.source,
+                observation=request.observation,
+                created_by=actor.id,
+                updated_by=actor.id,
+            )
+            session.add(invoice)
+            await session.flush()
+            for item, qty, weight in selected:
+                item.billed_quantity = (item.billed_quantity + qty).quantize(Decimal("0.0001"))
+                if weight is not None:
+                    item.billed_weight = (item.billed_weight + weight).quantize(Decimal("0.0001"))
+                _recalculate_fiscal_item_status(item)
+                _touch(item, actor)
+                session.add(FiscalInvoiceItem(fiscal_invoice_id=invoice.id, fiscal_item_id=item.id, proposal_id=record.proposal_id, proposal_item_id=item.proposal_item_id, quantity=qty, weight=weight, created_by=actor.id))
+            if not record.items:
+                record.status_fiscal = "NOTA_FISCAL_EMITIDA"
+                record.fiscal_situation = "NF_EMITIDA"
+            else:
+                _recalculate_fiscal_record(record)
+            _assert_fiscal_record_invariants(record)
+            invoice.emission_type = "TOTAL" if record.status_fiscal == "NOTA_FISCAL_EMITIDA" else "PARCIAL"
+            record.last_emission_at = now
+            record.observation = request.observation
+            _touch(record, actor)
+            _touch(invoice, actor)
+            await _record_fiscal_event(session, record, "FISCAL_INVOICE_REGISTERED", actor, fiscal_invoice=invoice, request_id=request_id, from_status=previous, to_status=record.status_fiscal, metadata={"invoice_number": invoice.invoice_number, "operation_id": operation_id})
+            results.append(FiscalBatchProposalResult(fiscal_record_id=record.id, emission_id=invoice.id, invoice_number=invoice.invoice_number, series=invoice.series, final_status=record.status_fiscal))
+        result_ids = [int(result.emission_id) for result in results]
+        for record in records:
+            await _record_fiscal_event(
+                session,
+                record,
+                "FISCAL_BATCH_CONFIRMED",
+                actor,
+                request_id=request_id,
+                from_status=None,
+                to_status=record.status_fiscal,
+                metadata={"operation_id": operation_id, "emission_ids": result_ids, "proposal_ids": record_ids},
+            )
+        await session.commit()
+        return FiscalBatchResponse(operation_id=operation_id, status="confirmed", proposals=results)
+    except Exception:
+        await session.rollback()
+        raise
 
 
 async def cancel_fiscal_invoice_item(session: AsyncSession, invoice_item_id: int, payload: FiscalCancelInvoiceItemRequest, actor: User, *, request_id: str | None) -> FiscalRecordDetail:
@@ -1381,10 +1459,13 @@ async def _load_fiscal_records(session: AsyncSession) -> list[FiscalRecord]:
     )
 
 
-async def _get_fiscal_record(session: AsyncSession, fiscal_record_id: int) -> FiscalRecord:
+async def _get_fiscal_record(session: AsyncSession, fiscal_record_id: int, *, for_update: bool = False) -> FiscalRecord:
+    statement = select(FiscalRecord)
+    if for_update:
+        statement = statement.with_for_update()
     record = (
         (await session.execute(
-            select(FiscalRecord)
+            statement
             .options(
                 selectinload(FiscalRecord.proposal).selectinload(Proposal.items),
                 selectinload(FiscalRecord.items).selectinload(FiscalItem.proposal_item),
@@ -1498,10 +1579,14 @@ def _selected_fiscal_items(record: FiscalRecord, payload_items) -> list[tuple[Fi
             if item.total_weight is not None
             else None
         )
+        if pending_qty <= Decimal("0"):
+            raise ApiError(error_codes.FISCAL_ITEM_INVALID, "O item fiscal nao possui saldo pendente.", status_code=409)
+        if row.quantity is not None and row.quantity <= Decimal("0"):
+            raise ApiError(error_codes.FISCAL_ITEM_INVALID, "A quantidade fiscal deve ser maior que zero.", status_code=409)
         qty = (row.quantity or pending_qty).quantize(Decimal("0.0001"))
         weight = normalize_known_weight(row.weight if row.weight is not None else pending_weight)
-        if qty <= Decimal("0") and weight is None:
-            continue
+        if qty <= Decimal("0"):
+            raise ApiError(error_codes.FISCAL_ITEM_INVALID, "A quantidade fiscal deve ser maior que zero.", status_code=409)
         if qty > pending_qty:
             raise ApiError(error_codes.FISCAL_QUANTITY_EXCEEDED, "Quantidade fiscal excede o saldo pendente.", status_code=409)
         prepared.append((item, qty, weight))
@@ -1534,6 +1619,23 @@ def _recalculate_fiscal_record(record: FiscalRecord) -> None:
     else:
         record.status_fiscal = "FALTA_EMITIR_NOTA_FISCAL"
         record.fiscal_situation = "AGUARDANDO_NF"
+
+
+def _assert_fiscal_record_invariants(record: FiscalRecord) -> None:
+    """Fail closed if a fiscal write would leave an impossible state."""
+    active = [item for item in record.items if item.active]
+    for item in active:
+        if item.billed_quantity < Decimal("0") or item.billed_quantity > item.total_quantity:
+            raise ApiError(error_codes.FISCAL_ITEM_INVALID, "O saldo fiscal calculado ficou inconsistente.", status_code=409)
+        if item.billed_weight < Decimal("0"):
+            raise ApiError(error_codes.FISCAL_ITEM_INVALID, "O peso fiscal calculado ficou inconsistente.", status_code=409)
+        if item.status == "FATURADO" and item.billed_quantity < item.total_quantity:
+            raise ApiError(error_codes.FISCAL_ITEM_INVALID, "O status fiscal do item ficou inconsistente.", status_code=409)
+    has_emitted = any(item.billed_quantity > Decimal("0") for item in active)
+    has_pending = any(item.billed_quantity < item.total_quantity for item in active)
+    expected = "NOTA_FISCAL_EMITIDA" if active and not has_pending else "NOTA_FISCAL_PARCIAL" if has_emitted else "FALTA_EMITIR_NOTA_FISCAL"
+    if active and record.status_fiscal != expected:
+        raise ApiError(error_codes.FISCAL_ITEM_INVALID, "O status fiscal da proposta ficou inconsistente.", status_code=409)
 
 
 def _fiscal_situation(record: FiscalRecord) -> str:
@@ -1882,7 +1984,7 @@ async def _reborn_parent_when_children_converge(
         "PARENT_PROPOSAL_REBORN",
         actor,
         request_id=request_id,
-        from_area="CONTROLE GERAL",
+        from_area="CONTROLE_GERAL",
         from_status="EM_PRODUCAO",
         to_area=parent.current_area,
         to_status=parent.current_status,
@@ -2488,6 +2590,7 @@ ACTIVITY_TEMPLATES = {
         if md.get("invoice_number") and not str(md["invoice_number"]).startswith("REGISTRO-")
         else f"{who} registrou a emissao fiscal."
     ),
+    "FISCAL_BATCH_CONFIRMED": lambda who, md: f"{who} confirmou o lote de emissoes fiscais.",
     "FISCAL_INVOICE_ITEM_CANCELLED": lambda who, md: f"{who} cancelou um item da nota fiscal{_reason_suffix(md)}.",
     "FISCAL_INVOICE_WITHDRAWN": lambda who, md: f"{who} registrou a retirada da nota fiscal.",
 }
@@ -3222,7 +3325,13 @@ async def complete_production_items(session: AsyncSession, proposal_id: int, pay
     for item in selected:
         destination = "GALVANIZACAO" if item.requires_galvanization == "SIM" else "EXPEDICAO"
         destination_groups.setdefault(destination, []).append(item)
-    if selected and (remaining_before_split or existing_children > 0 or len(destination_groups) > 1):
+    # Destinos mistos (galvanizacao + expedicao) na MESMA conclusao nao
+    # justificam sozinhos uma filha: _finalize_production_destination ja
+    # resolve a area unica da mae por prioridade (galvanizacao primeiro) e a
+    # elegibilidade de cada item continua sendo por item, nao pela area
+    # agregada (Secao acima). Uma filha so nasce quando ha de fato uma
+    # segunda leva (algo ficou pendente) ou quando ja existe uma anterior.
+    if selected and (remaining_before_split or existing_children > 0):
         next_partial = int((await session.execute(
             select(func.coalesce(func.max(Proposal.partial_number), 0))
             .where(Proposal.parent_proposal_id == proposal.id)
@@ -3273,7 +3382,7 @@ async def complete_production_items(session: AsyncSession, proposal_id: int, pay
                     load_item.proposal = child
                 _touch(item, actor)
             await session.flush()
-            _finalize_production_destination(child)
+            _finalize_production_destination(child, items=child_items)
             _touch(child, actor)
             partial_children.append(child)
             await _record_event(
@@ -3322,7 +3431,7 @@ async def complete_production_items(session: AsyncSession, proposal_id: int, pay
         if partial_child is not None:
             # A mae sem itens pendentes continua existindo como referencia
             # consolidada no Controle Geral.
-            proposal.current_area = "CONTROLE GERAL"
+            proposal.current_area = "CONTROLE_GERAL"
             proposal.current_status = "EM_PRODUCAO"
             proposal.general_status = "EM_PRODUCAO"
             proposal.production_status = "FINALIZADO"
@@ -3336,7 +3445,7 @@ async def complete_production_items(session: AsyncSession, proposal_id: int, pay
                 request_id=request_id,
                 from_area="PRODUCAO",
                 from_status=from_status,
-                to_area="CONTROLE GERAL",
+                to_area="CONTROLE_GERAL",
                 to_status="EM_PRODUCAO",
                 metadata={"child_proposal_id": partial_child.id, "child_proposal_number": partial_child.proposal_number},
             )
@@ -4788,11 +4897,12 @@ def _recalculate_production_state(proposal: Proposal) -> None:
         proposal.has_production_pending = False
 
 
-def _finalize_production_destination(proposal: Proposal) -> None:
+def _finalize_production_destination(proposal: Proposal, *, items: list[ProposalItem] | None = None) -> None:
+    destination_items = items if items is not None else _active_items(proposal)
     proposal.production_status = "FINALIZADO"
     proposal.has_production_pending = False
     proposal.flow_situation = "NORMAL"
-    if any(item.requires_galvanization == "SIM" and item.produced for item in _active_items(proposal)):
+    if any(item.requires_galvanization == "SIM" and item.produced for item in destination_items):
         proposal.current_area = "GALVANIZACAO"
         proposal.current_status = "AGUARDANDO_ENVIO"
         proposal.general_status = "EM_GALVANIZACAO"

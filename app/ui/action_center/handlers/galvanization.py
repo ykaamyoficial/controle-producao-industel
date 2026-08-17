@@ -60,13 +60,23 @@ class ManageGalvanizationLoadExistingHandler:
         load_id = choose_existing_load_for_addition(dialog.service, dialog)
         if load_id is None:
             return ActionResult(success=True, changed=False, close_action_center=False)
-        load_dialog = GalvanizationLoadDialog(
-            dialog.service, [context.proposal_id], load_id=load_id, parent=dialog
+        try:
+            result = dialog.service.add_items_to_galvanization_load(
+                load_id,
+                proposal_ids=[context.proposal_id],
+            )
+        except Exception as exc:
+            QMessageBox.warning(dialog, "Adicionar a uma carga", str(exc))
+            return ActionResult(success=False, changed=False, close_action_center=False)
+        added_items = result.get("added_item_ids") or [] if isinstance(result, dict) else []
+        QMessageBox.information(
+            dialog,
+            "Carga atualizada",
+            f"A proposta {context.proposal_number} foi adicionada à carga #{load_id}.\n"
+            f"Itens adicionados: {len(added_items)}.",
         )
-        if load_dialog.exec():
-            dialog.accept()
-            return ActionResult(success=True, changed=True, refresh_required=True)
-        return ActionResult(success=True, changed=False, close_action_center=False)
+        dialog.accept()
+        return ActionResult(success=True, changed=True, refresh_required=True)
 
 
 class ManageGalvanizationLoadNewHandler:

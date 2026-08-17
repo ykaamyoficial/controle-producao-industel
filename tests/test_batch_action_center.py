@@ -70,6 +70,10 @@ class FakeBatchService:
         self.calls.append(("process_loads", process_id))
         return list(self._process_loads.get(process_id, []))
 
+    def add_items_to_galvanization_load(self, load_id, *, item_ids=None, proposal_ids=None):
+        self.calls.append(("add_items_to_galvanization_load", load_id, item_ids, proposal_ids))
+        return {"id": load_id, "added_item_ids": [1, 2]}
+
     def common_next_statuses(self, area, process_ids):
         self.calls.append(("common_next_statuses", area, tuple(process_ids)))
         return list(self._common_statuses)
@@ -386,16 +390,18 @@ class SpecializedDialogRoutingTests(unittest.TestCase):
         fake_chooser = MagicMock()
         fake_chooser.exec.return_value = 1
         fake_chooser.selected_load_id = 14
-        fake_load_dialog = MagicMock()
-        fake_load_dialog.exec.return_value = 1
         with patch(
             "app.ui.action_center.handlers.galvanization._SelectGalvanizationLoadDialog", return_value=fake_chooser
         ) as chooser_ctor, patch(
-            "app.ui.action_center.batch_action_center.GalvanizationLoadDialog", return_value=fake_load_dialog
-        ) as load_ctor:
+            "app.ui.action_center.batch_action_center.GalvanizationLoadDialog"
+        ) as load_ctor, patch(
+            "app.ui.action_center.batch_action_center.QMessageBox.information"
+        ) as info:
             dialog.run_action(action)
         chooser_ctor.assert_called_once()
-        load_ctor.assert_called_once_with(service, [10, 20], load_id=14, parent=dialog)
+        self.assertIn(("add_items_to_galvanization_load", 14, None, [10, 20]), service.calls)
+        load_ctor.assert_not_called()
+        info.assert_called_once()
         self.assertTrue(dialog.changed)
         self.assertTrue(dialog.result())
 

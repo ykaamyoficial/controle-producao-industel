@@ -32,10 +32,11 @@ log = get_logger("process_detail_dialog")
 
 
 class ProcessDetailDialog(QDialog):
-    def __init__(self, service, process_id: int, parent=None):
+    def __init__(self, service, process_id: int, parent=None, process_ids: list[int] | None = None):
         super().__init__(parent)
         self.service = service
         self.process_id = process_id
+        self.process_ids = list(dict.fromkeys([int(process_id), *(int(value) for value in (process_ids or []) if value)]))
         self.changed = False
         self.setWindowTitle("Detalhes da proposta")
         apply_large_dialog_geometry(self, parent)
@@ -157,18 +158,21 @@ class ProcessDetailDialog(QDialog):
                         child.widget().deleteLater()
 
     def load(self):
-        self.process = self.service.get_process_dict(self.process_id)
+        processes = [self.service.get_process_dict(process_id) for process_id in self.process_ids]
+        self.process = next((process for process in processes if process), None)
         if not self.process:
             self.reject()
             return
         p = self.process
-        self.title.setText(f"{p.get('proposta') or '-'} | {p.get('cliente') or '-'}")
+        proposal_labels = [str(process.get("proposta") or "-") for process in processes if process]
+        title_proposal = ", ".join(dict.fromkeys(proposal_labels)) or "-"
+        self.title.setText(f"{title_proposal} | {p.get('cliente') or '-'}")
         self.subtitle.setText(
             f"Obra/Site: {p.get('obra_site') or '-'} | Lote: {p.get('lote') or '-'} | "
             f"Prazo: {p.get('prazo_entrega') or '-'} | Situacao: {self.service.status_label(p.get('situacao_fluxo') or '')}"
         )
         cancelled = bool(p.get("is_cancelled")) or (p.get("status_geral") or p.get("status_localizacao")) == "CANCELADA"
-        self.edit_button.setVisible(not cancelled)
+        self.edit_button.setVisible(not cancelled and len(self.process_ids) == 1)
         self.actions_button.setVisible(not cancelled)
         self.load_status()
         self.load_info()
@@ -176,7 +180,16 @@ class ProcessDetailDialog(QDialog):
         self.load_timeline()
 
     def load_items(self):
-        items = self.service.proposal_items(self.process_id)
+        items = []
+        seen_item_ids: set[int] = set()
+        for process_id in self.process_ids:
+            for item in self.service.proposal_items(process_id):
+                item_id = int(item.get("id") or 0)
+                if item_id and item_id in seen_item_ids:
+                    continue
+                if item_id:
+                    seen_item_ids.add(item_id)
+                items.append(item)
         self.items_table.setRowCount(len(items))
         for item in items:
             log.debug(
@@ -193,7 +206,9 @@ class ProcessDetailDialog(QDialog):
         self.items_summary.setText(
             f"{len(items)} linha(s) | {format_decimal(total_units)} unidade(s) | {weight_label} | cobertura {len(weighted_items)}/{len(items)}"
         )
-        process_names = {row.get("id"): row.get("proposta") for row in self.service.process_partials(self.process_id)}
+        process_names = {}
+        for process_id in self.process_ids:
+            process_names.update({row.get("id"): row.get("proposta") for row in self.service.process_partials(process_id)})
         for row, item in enumerate(items):
             values = [
                 item.get("numero_item"), item_product_code(item), item.get("descricao"), format_decimal(item.get("quantidade") or 1),
@@ -286,7 +301,10 @@ class ProcessDetailDialog(QDialog):
 
     def load_timeline(self):
         self.timeline.setRowCount(0)
-        history = self.service.process_history_rows(self.process_id)
+        history = []
+        for process_id in self.process_ids:
+            history.extend(self.service.process_history_rows(process_id))
+        history.sort(key=lambda item: str(item.get("data_hora") or ""), reverse=True)
         self.timeline_summary.setText(f"{len(history)} movimentacao(oes) registrada(s)")
         for item in history:
             row = self.timeline.rowCount()

@@ -618,6 +618,24 @@ class BackendOfficialProposalTests(unittest.TestCase):
         assert mother["fiscal_processo_id"] == 500
         assert grouped_children["fiscal_processo_ids"] == [501, 502]
 
+    def test_expedition_children_with_same_status_are_grouped(self):
+        service = BackendService.__new__(BackendService)
+        storage = FakeOfficialProposalStorage()
+        storage.list_expedition_proposals = lambda **_kwargs: [
+            {"id": 30, "proposta": "CP05390-1", "parent_proposal_id": 26, "partial_number": 1,
+             "status_expedicao": "EM_SEPARACAO", "quantidade_itens": 2},
+            {"id": 31, "proposta": "CP05390-2", "parent_proposal_id": 26, "partial_number": 2,
+             "status_expedicao": "EM_SEPARACAO", "quantidade_itens": 1},
+        ]
+        service.official_proposal_storage = storage
+
+        rows = service.process_rows("EXPEDICAO", {})
+
+        assert len(rows) == 1
+        assert rows[0]["proposta"] == "CP05390-1,2"
+        assert rows[0]["proposal_ids"] == [30, 31]
+        assert rows[0]["quantidade_itens"] == 3
+
     def test_official_fiscal_write_actions_respect_permission(self):
         service, _storage = official_service()
         service.can_edit = lambda _area: False
@@ -748,6 +766,33 @@ class BackendOfficialProposalTests(unittest.TestCase):
         # A carga em si (carga_galvanizacao) e a mesma para as 3 - so a
         # projecao de status por proposta muda, o status da carga nao.
         self.assertTrue(all(row['carga_galvanizacao'] == 5 for row in by_id.values()))
+
+    def test_galvanization_loaded_child_is_not_duplicated_by_zero_balance_candidate(self):
+        class FakeLoadedChildStorage:
+            def galvanization_load_candidates(self, proposal='', client=''):
+                return [{
+                    'id': 30,
+                    'processo_id': 30,
+                    'proposta': 'CP05390-1',
+                    'cliente': 'MNS ENGENHARIA',
+                    'available_quantity': '0.0000',
+                    'status_galvanizacao': 'AGUARDANDO_ENVIO',
+                }]
+
+            def galvanization_loads(self):
+                return [{'id': 30, 'status': 'AGUARDANDO_LIBERACAO'}]
+
+            def galvanization_load_items(self, load_id):
+                return [{'processo_id': 30, 'proposta': 'CP05390-1', 'status_retorno': 'AGUARDANDO_RETORNO'}]
+
+        service = BackendService.__new__(BackendService)
+        service.official_proposal_storage = FakeLoadedChildStorage()
+
+        rows = service._official_galvanization_rows({})
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['id'], 30)
+        self.assertEqual(rows[0]['carga_galvanizacao'], 30)
 
     def test_official_galvanization_actions_respect_edit_permission(self):
         service, _storage = official_service()

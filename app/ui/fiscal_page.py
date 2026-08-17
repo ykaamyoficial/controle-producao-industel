@@ -34,8 +34,12 @@ from app.ui.background_worker import start_worker
 from app.ui.components.kpi_card import KpiCard
 from app.ui.components.modern_button import ModernButton
 from app.ui.components.modern_table import ModernTable, ProcessFilterProxy
+from app.ui.components.batch_selection import BatchSelectionController, BatchSelectionHeader
 from app.ui.dialog_utils import apply_large_dialog_geometry, style_dialog_from_parent
 from app.ui.fiscal_emission_dialog import FiscalEmissionDialog
+from app.ui.fiscal_item_selection_dialog import FiscalItemSelectionDialog
+from app.ui.fiscal_emission_draft_dialog import FiscalEmissionDraftDialog
+from app.ui.fiscal_emission_review_dialog import FiscalEmissionReviewDialog
 from app.ui.action_center.fiscal_action_center import FiscalActionCenter
 from app.ui.table_utils import configure_wrapping_table, resize_rows_to_contents
 
@@ -304,14 +308,39 @@ class FiscalProposalDetailDialog(QDialog):
         return alerts
 
 
+class FiscalSelectionProxy(ProcessFilterProxy):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._selected_only = False
+        self._selection = None
+
+    def set_selection(self, selection: BatchSelectionController) -> None:
+        self._selection = selection
+        self.invalidateFilter()
+
+    def set_selected_only(self, selected_only: bool) -> None:
+        self._selected_only = bool(selected_only)
+        self.invalidateFilter()
+
+    def filterAcceptsRow(self, source_row: int, source_parent) -> bool:
+        if not super().filterAcceptsRow(source_row, source_parent):
+            return False
+        if not self._selected_only or self._selection is None:
+            return True
+        row = self.sourceModel().rows[source_row]
+        return self._selection.is_selected(row.get("fiscal_processo_id"))
+
+
 class FiscalPage(QWidget):
     def __init__(self, service, parent=None):
         super().__init__(parent)
         self.setObjectName("FiscalPage")
         self.service = service
         self.model = FiscalProcessTableModel()
-        self.proxy = ProcessFilterProxy(self)
+        self.batch_selection = BatchSelectionController(id_getter=lambda row: row.get("fiscal_processo_id"), parent=self)
+        self.proxy = FiscalSelectionProxy(self)
         self.proxy.setSourceModel(self.model)
+        self.proxy.set_selection(self.batch_selection)
         self.proxy.setFilterCaseSensitivity(Qt.CaseInsensitive)
         self.withdrawn_model = FiscalProcessTableModel()
         self.withdrawn_proxy = ProcessFilterProxy(self)
@@ -321,6 +350,7 @@ class FiscalPage(QWidget):
         self.report_model = FiscalReportTableModel()
         self._refresh_thread = None
         self._refreshing = False
+        self._selected_only = False
         self._build()
 
     def _build(self):
@@ -358,6 +388,9 @@ class FiscalPage(QWidget):
             self.register_btn.setEnabled(False)
             self.register_btn.setToolTip("Disponivel apenas para administrador ou perfil Fiscal.")
         header.addWidget(self.register_btn)
+        self.batch_btn = ModernButton("Acoes em lote", "batch")
+        self.batch_btn.clicked.connect(self.activate_batch_selection)
+        header.addWidget(self.batch_btn)
         fl.addLayout(header)
         fl.addWidget(caption)
 
@@ -405,9 +438,33 @@ class FiscalPage(QWidget):
         fields.setColumnStretch(5, 2)
         fields.setColumnStretch(7, 2)
         fl.addLayout(fields)
+
+        self.selection_bar = QHBoxLayout()
+        self.selection_bar.setSpacing(8)
+        self.selection_mode_label = QLabel("Modo de selecao")
+        self.selection_mode_label.setObjectName("FilterTitle")
+        self.selection_count_label = QLabel("0 propostas selecionadas")
+        self.selection_count_label.setObjectName("Caption")
+        self.view_selected_btn = ModernButton("Ver selecionadas", "search")
+        self.clear_selection_btn = ModernButton("Limpar selecao", "clear")
+        self.batch_actions_btn = ModernButton("Acoes", "batch", accent=True)
+        self.cancel_selection_btn = ModernButton("Cancelar", "close")
+        self.view_selected_btn.clicked.connect(self.toggle_selected_view)
+        self.clear_selection_btn.clicked.connect(self.batch_selection.clear)
+        self.batch_actions_btn.clicked.connect(self.show_batch_actions_placeholder)
+        self.cancel_selection_btn.clicked.connect(self.cancel_batch_selection)
+        for widget in (self.selection_mode_label, self.selection_count_label, self.view_selected_btn, self.clear_selection_btn, self.batch_actions_btn, self.cancel_selection_btn):
+            widget.setVisible(False)
+            self.selection_bar.addWidget(widget)
+        self.selection_bar.addStretch()
+        fl.addLayout(self.selection_bar)
         root.addWidget(filters)
 
         self.table = ModernTable(self.service)
+        self.batch_header = BatchSelectionHeader(Qt.Horizontal, self.table)
+        self.table.setHorizontalHeader(self.batch_header)
+        self.batch_header.setFixedHeight(28)
+        self.batch_header.setStretchLastSection(True)
         self.table.status_shortcut_enabled = False
         self.table.setModel(self.proxy)
         self.table.setToolTip("Clique com o botao direito ou na coluna Acoes para consultar detalhes fiscais.")
@@ -421,6 +478,12 @@ class FiscalPage(QWidget):
         root.addWidget(hint)
 
         self.search.textChanged.connect(lambda text: self.proxy.setFilterRegularExpression(QRegularExpression(text)))
+        self.model.set_batch_selection_controller(self.batch_selection)
+        self.model.set_selection_eligibility(self._is_selection_eligible)
+        self.batch_selection.selection_changed.connect(self._sync_selection_ui)
+        self.batch_header.toggle_visible_requested.connect(self.toggle_visible_selection)
+        for signal in (self.proxy.rowsInserted, self.proxy.rowsRemoved, self.proxy.modelReset, self.proxy.layoutChanged):
+            signal.connect(lambda *_args: self._sync_batch_header())
         tabs.addTab(tracking, "Acompanhamento fiscal")
         tabs.addTab(self._build_withdrawn_tab(), "Notas fiscais retiradas")
         tabs.addTab(self._build_report_tab(), "Relatorios fiscais")
@@ -497,14 +560,18 @@ class FiscalPage(QWidget):
 
     def _refresh_success(self, payload):
         rows = payload.get("rows") or []
+        self.batch_selection.remember_rows(rows)
+        eligible_ids = {int(row.get("fiscal_processo_id") or 0) for row in rows if self._is_selection_eligible(row)}
+        self.batch_selection.deselect_many(self.batch_selection.selected_ids - eligible_ids)
         self.model.set_rows(rows)
         self.table.apply_column_layout()
-        if rows:
+        if rows and not self.batch_selection.active:
             self.table.selectRow(0)
         withdrawn_rows = payload.get("withdrawn_rows") or []
         self.withdrawn_model.set_rows(withdrawn_rows)
         self.withdrawn_table.apply_column_layout()
         self._set_loading(False)
+        self._sync_selection_ui()
 
     def _refresh_error(self, exc):
         self.model.set_rows([])
@@ -512,6 +579,8 @@ class FiscalPage(QWidget):
         self.table.apply_column_layout()
         self.withdrawn_table.apply_column_layout()
         self._set_loading(False)
+        self.batch_selection.clear()
+        self._sync_selection_ui()
         QMessageBox.warning(self, "Fiscal", str(exc))
 
     def _set_loading(self, loading: bool):
@@ -520,8 +589,147 @@ class FiscalPage(QWidget):
         self.table.setEnabled(not loading)
         self.withdrawn_table.setEnabled(not loading)
         self.register_btn.setEnabled(not loading and self.service.can_register_fiscal_emission())
+        self.batch_btn.setEnabled(not loading and self.service.can_register_fiscal_emission())
         for button in getattr(self, "refresh_buttons", []):
             button.setEnabled(not loading)
+
+    def _is_selection_eligible(self, row: dict) -> bool:
+        if not self.service.can_register_fiscal_emission():
+            return False
+        status = str(row.get("status_fiscal") or row.get("situacao_fiscal") or "").strip().upper()
+        return status not in {"NOTA_FISCAL_EMITIDA", "NF_EMITIDA", "FISCAL_CANCELADO", "NF_RETIRADA_CLIENTE"}
+
+    def activate_batch_selection(self):
+        if not self.service.can_register_fiscal_emission():
+            QMessageBox.warning(self, "Fiscal", "Seu usuario nao tem permissao para selecionar propostas fiscais.")
+            return
+        if self.batch_selection.active:
+            return
+        self.batch_selection.activate()
+        self.model.set_batch_selection_mode(True)
+        self.table.apply_column_layout()
+        self.table.setSelectionMode(QAbstractItemView.NoSelection)
+        self.table.clearSelection()
+        self.batch_btn.setVisible(False)
+        self.register_btn.setVisible(False)
+        for widget in (self.selection_mode_label, self.selection_count_label, self.view_selected_btn, self.clear_selection_btn, self.batch_actions_btn, self.cancel_selection_btn):
+            widget.setVisible(True)
+        self._sync_selection_ui()
+
+    def cancel_batch_selection(self):
+        if not self.batch_selection.active:
+            return
+        self.batch_selection.deactivate(clear=True)
+        self._selected_only = False
+        self.proxy.set_selected_only(False)
+        self.model.set_batch_selection_mode(False)
+        self.table.apply_column_layout()
+        self.table.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        for widget in (self.selection_mode_label, self.selection_count_label, self.view_selected_btn, self.clear_selection_btn, self.batch_actions_btn, self.cancel_selection_btn):
+            widget.setVisible(False)
+        self.register_btn.setVisible(True)
+        self.batch_btn.setVisible(True)
+        self._sync_batch_header()
+
+    def toggle_selected_view(self):
+        if not self.batch_selection.count:
+            return
+        self._selected_only = not self._selected_only
+        self.proxy.set_selected_only(self._selected_only)
+        self.view_selected_btn.setText("Mostrar todas" if self._selected_only else "Ver selecionadas")
+        self._sync_batch_header()
+
+    def toggle_visible_selection(self, select: bool):
+        rows = []
+        for proxy_row in range(self.proxy.rowCount()):
+            source_index = self.proxy.mapToSource(self.proxy.index(proxy_row, 0))
+            if source_index.isValid():
+                row = self.model.rows[source_index.row()]
+                if self._is_selection_eligible(row):
+                    rows.append(row)
+        if select:
+            self.batch_selection.select_many(rows)
+        else:
+            self.batch_selection.deselect_many(int(row.get("fiscal_processo_id") or 0) for row in rows)
+
+    def _sync_batch_header(self):
+        visible_ids = []
+        for proxy_row in range(self.proxy.rowCount()):
+            source_index = self.proxy.mapToSource(self.proxy.index(proxy_row, 0))
+            if source_index.isValid():
+                row = self.model.rows[source_index.row()]
+                if self._is_selection_eligible(row):
+                    visible_ids.append(int(row.get("fiscal_processo_id") or 0))
+        self.batch_header.set_batch_state(
+            self.batch_selection.active,
+            self.batch_selection.header_state(visible_ids),
+            has_visible_rows=bool(visible_ids),
+        )
+
+    def _sync_selection_ui(self):
+        count = self.batch_selection.count
+        self.selection_count_label.setText("1 proposta selecionada" if count == 1 else f"{count} propostas selecionadas")
+        self.view_selected_btn.setEnabled(count > 0)
+        self.clear_selection_btn.setEnabled(count > 0)
+        self.batch_actions_btn.setEnabled(count > 0)
+        self._sync_batch_header()
+
+    def show_batch_actions_placeholder(self):
+        if not self.batch_selection.count:
+            return
+        proposal_ids = []
+        selected_rows = self.batch_selection.selected_entities()
+        for row in selected_rows:
+            values = row.get("fiscal_processo_ids") or [row.get("fiscal_processo_id")]
+            proposal_ids.extend(int(value) for value in values if value)
+        proposal_ids = list(dict.fromkeys(proposal_ids))
+        if not proposal_ids:
+            return
+        selected_item_ids: set[int] = set()
+        drafts: dict[int, dict] = {}
+        while True:
+            dialog = FiscalItemSelectionDialog(self.service, proposal_ids, self, fiscal_rows=selected_rows, selected_item_ids=selected_item_ids)
+            if not dialog.exec() or not dialog.result:
+                return
+            selection_payload = dialog.result.as_payload()
+            selected_item_ids = {
+                int(item["item_id"])
+                for proposal in selection_payload.get("proposals", [])
+                for item in proposal.get("items", [])
+            }
+            draft_dialog = FiscalEmissionDraftDialog(self.service, selection_payload, selected_rows, self, drafts=drafts)
+            if draft_dialog.exec() and draft_dialog.result is not None:
+                if not hasattr(self.service, "register_fiscal_batch"):
+                    QMessageBox.warning(self, "Emissao fiscal", "O motor fiscal em lote nao esta disponivel.")
+                    return
+                self.last_fiscal_batch_draft = draft_dialog.result
+                review = FiscalEmissionReviewDialog(draft_dialog.result, self, confirm_callback=self.service.register_fiscal_batch)
+                if not review.exec():
+                    return
+                result = review.result
+                self.last_fiscal_selection = selection_payload
+                self.last_fiscal_batch_result = result
+                processed = len((result or {}).get("proposals") or draft_dialog.result)
+                item_count = sum(len(row.get("items", [])) for row in draft_dialog.result)
+                QMessageBox.information(self, "Emissao fiscal", f"Emissoes fiscais registradas com sucesso.\n\n{processed} proposta(s) processada(s)\n{item_count} item(ns) atualizado(s)")
+                self.batch_selection.clear()
+                self._sync_selection_ui()
+                self.refresh()
+                return
+            # Voltar preserva a selecao e os dados fiscais ja preenchidos.
+            drafts = {int(row["proposal_id"]): row for row in (draft_dialog._collect()[0] if draft_dialog.table.rowCount() else [])}
+
+    @staticmethod
+    def _fiscal_error_message(exc: Exception) -> str:
+        code = str(getattr(exc, "error_code", "") or getattr(exc, "technical_message", "") or "").upper()
+        messages = {
+            "FISCAL_QUANTITY_EXCEEDED": "O saldo fiscal deste item foi alterado. Atualize os dados e revise a emissao.",
+            "FISCAL_ITEM_INVALID": "Um item fiscal ficou indisponivel ou invalido. Atualize os dados e revise a emissao.",
+            "FISCAL_INVOICE_DUPLICATED": "A NF informada ja esta registrada conforme a regra de unicidade atual.",
+            "FISCAL_VERSION_CONFLICT": "Os dados fiscais foram alterados por outra operacao. Atualize e tente novamente.",
+            "PERMISSION_DENIED": "Seu usuario nao possui permissao para registrar esta emissao.",
+        }
+        return messages.get(code, str(exc) or "Nao foi possivel concluir a emissao fiscal.")
 
     def clear(self):
         self.search.clear()
@@ -550,6 +758,14 @@ class FiscalPage(QWidget):
         if not index.isValid():
             return
         source_index = self.proxy.mapToSource(index)
+        if self.batch_selection.active:
+            key = self.model.columns[source_index.column()][0]
+            if key == "batch_select":
+                row = self.model.rows[source_index.row()]
+                if self._is_selection_eligible(row):
+                    self.batch_selection.toggle(int(row.get("fiscal_processo_id") or 0), row)
+                return
+            return
         key = self.model.columns[source_index.column()][0]
         if key in {"acoes", "fiscal_action"}:
             self.table.selectRow(index.row())

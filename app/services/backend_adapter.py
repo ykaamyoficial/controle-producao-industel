@@ -1,5 +1,6 @@
 from __future__ import annotations
 import json
+from decimal import Decimal, InvalidOperation
 from typing import Any
 from urllib.parse import urlparse, urlunparse
 from app.integrations.api.exceptions import ApiBusinessError
@@ -441,7 +442,7 @@ class BackendService:
                 status_filter = (filters.get('status') or '').strip().upper()
                 if status_filter:
                     rows = [row for row in rows if (row.get('status_expedicao') or row.get('current_status') or '').upper() == status_filter]
-                return sort_process_rows(area, rows)
+                return sort_process_rows(area, self._merge_partial_operational_rows(rows, area))
             except Exception as exc:
                 raise AppError(user_message_for_api_error(exc)) from exc
         if area == 'GALVANIZACAO':
@@ -484,9 +485,6 @@ class BackendService:
             load_key = str(row.get('carga_galvanizacao') or '') if area == 'GALVANIZACAO' else ''
             groups.setdefault((parent_id, status, load_key), []).append(row)
         merged: list[dict[str, Any]] = []
-        parent_group_count: dict[int, int] = {}
-        for parent_id, _status, _load_key in groups:
-            parent_group_count[parent_id] = parent_group_count.get(parent_id, 0) + 1
         for (_parent_id, _status, _load_key), group in groups.items():
             # A mãe é uma linha própria no Fiscal. Separe-a antes de agrupar
             # as filhas; status igual não transforma a mãe em alvo das ações
@@ -502,11 +500,9 @@ class BackendService:
             ids = [int(row.get('id') or row.get('processo_id') or row.get('proposal_id')) for row in group]
             partials = [int(row.get('partial_number') or 0) for row in group if row.get('partial_number')]
             display = str(base_row.get('proposta') or base_row.get('proposal_number') or '')
-            if partials and base_row.get('parent_proposal_id') and parent_group_count.get(_parent_id, 0) > 1:
+            if partials and base_row.get('parent_proposal_id'):
                 root = display.rsplit('-', 1)[0] if '-' in display else display
                 display = f"{root}-{','.join(str(value) for value in partials)}"
-            elif partials and base_row.get('parent_proposal_id'):
-                display = display.rsplit('-', 1)[0] if '-' in display else display
             combined = dict(base_row)
             combined['id'] = ids[0]
             combined['processo_id'] = ids[0]
@@ -674,6 +670,16 @@ class BackendService:
             normalized = dict(row)
             process_id = int(normalized.get('processo_id') or normalized.get('id') or 0)
             if not process_id:
+                continue
+            # O endpoint de candidatos tambem retorna itens ja vinculados a
+            # uma carga, com saldo disponivel zero, para permitir diagnostico.
+            # Esses itens ja serao projetados pelo bloco da carga; inclui-los
+            # aqui criava duas linhas para a mesma filha (CANDIDATE + LOAD).
+            try:
+                available = Decimal(str(normalized.get('available_quantity') or '0'))
+            except (InvalidOperation, TypeError, ValueError):
+                available = Decimal('0')
+            if 'available_quantity' in normalized and available <= 0:
                 continue
             normalized.setdefault('status_galvanizacao', 'AGUARDANDO_ENVIO')
             normalized.setdefault('status_geral', 'EM_GALVANIZACAO')
@@ -1083,6 +1089,18 @@ class BackendService:
             raise legacy.AppError('Seu usuario nao tem permissao para registrar emissao fiscal.')
         try:
             return self.official_proposal_storage.register_fiscal_emission(fiscal_processo_id, emissions, numero_controle, observacao)
+        except Exception as exc:
+            raise self._api_app_error(exc) from exc
+
+    def register_fiscal_batch(self, draft: list[dict[str, Any]], operation_id: str | None = None) -> dict[str, Any]:
+        if not self.user:
+            raise legacy.AppError('Usuario nao autenticado.')
+        if not self.can_register_fiscal_emission():
+            raise legacy.AppError('Seu usuario nao tem permissao para registrar emissao fiscal.')
+        try:
+            if hasattr(self.official_proposal_storage, "register_fiscal_batch"):
+                return self.official_proposal_storage.register_fiscal_batch(draft, operation_id=operation_id)
+            raise RuntimeError("O motor fiscal em lote nao esta disponivel no armazenamento oficial.")
         except Exception as exc:
             raise self._api_app_error(exc) from exc
 

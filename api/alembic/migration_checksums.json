@@ -21,5 +21,6 @@
   "20260812_0020_create_update_audit_events.py": "34be35354ac9034cba5f2c7fb7e1829a145f06351e1e7d10f59b715099fafcd9",
   "20260813_0010_add_user_profile.py": "fe043a716317a90e2e81dd278104bfa3184785303ec08babe754278c05c5d002",
   "20260814_0021_proposal_partial_hierarchy.py": "f71ae4c46c95161002284aa7484aad696ecbd76ccace722b25784554b3d76fa9",
-  "20260814_0022_backfill_legacy_partial_parents.py": "a34c6531b378d89febfb2d9ebbf98dda9f52ad7491ac563f8ffdbde7c2cc44de"
+  "20260814_0022_backfill_legacy_partial_parents.py": "a34c6531b378d89febfb2d9ebbf98dda9f52ad7491ac563f8ffdbde7c2cc44de",
+  "20260817_0023_fiscal_operation_id.py": "910943d89aed4a170bc55082d834e5e34679468382645c674bcbfa99d50721f0"
 }

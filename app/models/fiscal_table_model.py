@@ -3,6 +3,9 @@ from __future__ import annotations
 from typing import Any
 
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
+from PySide6.QtGui import QBrush, QColor
+
+from app.ui.components.batch_selection import BatchSelectionController
 
 
 FISCAL_STATUS_LABELS = {
@@ -92,7 +95,27 @@ class FiscalProcessTableModel(QAbstractTableModel):
 
     def __init__(self, rows: list[dict[str, Any]] | None = None):
         super().__init__()
+        self._base_columns = list(self.columns)
+        self.columns = list(self._base_columns)
         self.rows = rows or []
+        self.batch_selection: BatchSelectionController | None = None
+        self._selection_eligibility = lambda _row: True
+
+    def set_batch_selection_controller(self, controller: BatchSelectionController) -> None:
+        self.batch_selection = controller
+        controller.selection_changed.connect(self._selection_changed)
+
+    def set_selection_eligibility(self, checker) -> None:
+        self._selection_eligibility = checker or (lambda _row: True)
+        self._selection_changed()
+
+    def set_batch_selection_mode(self, active: bool) -> None:
+        expected = [("batch_select", "")] + self._base_columns if active else list(self._base_columns)
+        if self.columns == expected:
+            return
+        self.beginResetModel()
+        self.columns = expected
+        self.endResetModel()
 
     def set_rows(self, rows: list[dict[str, Any]]):
         self.beginResetModel()
@@ -111,6 +134,12 @@ class FiscalProcessTableModel(QAbstractTableModel):
         row = self.rows[index.row()]
         key, _label = self.columns[index.column()]
         value = row.get(key)
+        fiscal_id = int(row.get("fiscal_processo_id") or 0)
+        if key == "batch_select":
+            if role == Qt.CheckStateRole:
+                return Qt.Checked if self.batch_selection and self.batch_selection.is_selected(fiscal_id) else Qt.Unchecked
+            if role in (Qt.DisplayRole, Qt.EditRole):
+                return ""
         if role in (Qt.DisplayRole, Qt.EditRole):
             if key == "fiscal_action":
                 return ""
@@ -149,10 +178,33 @@ class FiscalProcessTableModel(QAbstractTableModel):
                 return fiscal_action_tooltip(row)
             return self.data(index, Qt.DisplayRole)
         if role == Qt.TextAlignmentRole:
-            if key in {"acoes", "fiscal_action"}:
+            if key in {"batch_select", "acoes", "fiscal_action"}:
                 return Qt.AlignCenter
             return Qt.AlignVCenter | Qt.AlignLeft
+        if role == Qt.BackgroundRole and self.batch_selection and self.batch_selection.active and self.batch_selection.is_selected(fiscal_id):
+            return QBrush(QColor("#e8f1ff"))
         return None
+
+    def flags(self, index: QModelIndex):
+        flags = super().flags(index)
+        if index.isValid() and self.columns[index.column()][0] == "batch_select":
+            if not self._selection_eligibility(self.rows[index.row()]):
+                return flags & ~Qt.ItemIsEnabled
+            return flags | Qt.ItemIsUserCheckable | Qt.ItemIsEnabled | Qt.ItemIsSelectable
+        return flags
+
+    def setData(self, index: QModelIndex, value, role=Qt.EditRole):
+        if index.isValid() and role == Qt.CheckStateRole and self.columns[index.column()][0] == "batch_select" and self.batch_selection:
+            row = self.rows[index.row()]
+            if not self._selection_eligibility(row):
+                return False
+            fiscal_id = int(row.get("fiscal_processo_id") or 0)
+            if getattr(value, "value", value) == Qt.CheckState.Checked.value:
+                self.batch_selection.select(fiscal_id, row)
+            else:
+                self.batch_selection.deselect(fiscal_id)
+            return True
+        return False
 
     def headerData(self, section, orientation, role=Qt.DisplayRole):
         if role != Qt.DisplayRole:
@@ -183,3 +235,7 @@ class FiscalProcessTableModel(QAbstractTableModel):
             values = self.rows[row].get("fiscal_processo_ids") or [self.rows[row].get("fiscal_processo_id")]
             return [int(value) for value in values if value]
         return []
+
+    def _selection_changed(self) -> None:
+        if self.rows and self.columns:
+            self.dataChanged.emit(self.index(0, 0), self.index(len(self.rows) - 1, len(self.columns) - 1), [Qt.CheckStateRole, Qt.BackgroundRole])

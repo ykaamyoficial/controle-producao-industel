@@ -204,15 +204,18 @@ class ProposalsIntegrationTests(unittest.TestCase):
         self.assertEqual(expedition.json()["total"], 0)
         self.assertEqual(fiscal.json()["total"], 0)
 
-        # O item 1 ficou "produced=True" mesmo apos o cancelamento (linha
-        # 160), e a fila de galvanizacao agora e filtrada por elegibilidade
-        # de item, nao mais por area da proposta - _proposal_operational_clause()
-        # precisa continuar sendo o unico guarda-chuva que impede esse item
-        # de aparecer como candidato depois de cancelado.
+        # O item 1 ja tinha sido separado para uma filha parcial
+        # (CP-CANCEL-001-1) antes do cancelamento, ja que o item 2 ainda
+        # estava pendente (Secao de hierarquia parcial). Cancelar a MAE nao
+        # cancela em cascata uma filha ja separada e ativa - por isso o item
+        # 1 continua elegivel para carga sob a proposta filha, mesmo com a
+        # mae terminal. _proposal_operational_clause() ainda protege a mae
+        # em si (ela nao aparece mais como candidata).
         galvanization_candidates = self.client.get(
             "/api/v1/galvanization/candidates", params={"search": "CP-CANCEL-001"}, headers=headers
         )
-        self.assertEqual(galvanization_candidates.json()["total"], 0)
+        self.assertEqual(galvanization_candidates.json()["total"], 1)
+        self.assertEqual(galvanization_candidates.json()["items"][0]["proposal_number"], "CP-CANCEL-001-1")
 
     def test_cancel_requires_reason_and_rejects_fully_delivered_proposal(self):
         headers = self._headers()
@@ -479,9 +482,16 @@ class ProposalsIntegrationTests(unittest.TestCase):
         )
         self.assertEqual(draft_load.status_code, 201)
 
+        # Item 1 ja foi separado para uma filha parcial (CP01001-1) desde a
+        # conclusao acima (item 2 ainda pendente) - o rascunho de carga
+        # afeta o galvanization_status da FILHA, nunca o da mae (que so
+        # carrega o item 2, sem nenhuma relacao com galvanizacao ainda).
         proposal_after_draft_load = self.client.get(f"/api/v1/proposals/{proposal['id']}", headers=headers).json()
         self.assertEqual(proposal_after_draft_load["current_area"], "PRODUCAO")
-        self.assertEqual(proposal_after_draft_load["galvanization_status"], "EM_CARGA")
+        child_id = next(iter(asyncio.run(self._active_child_ids(proposal["id"]))))
+        child_after_draft_load = self.client.get(f"/api/v1/proposals/{child_id}", headers=headers).json()
+        self.assertEqual(child_after_draft_load["proposal_number"], "CP01001-1")
+        self.assertEqual(child_after_draft_load["galvanization_status"], "EM_CARGA")
 
         done = self.client.post(
             f"/api/v1/production/proposals/{proposal['id']}/complete-items",
@@ -489,9 +499,20 @@ class ProposalsIntegrationTests(unittest.TestCase):
             headers=headers,
         )
         self.assertEqual(done.status_code, 200)
+        # Item 2 completa a producao da mae: como ja existe uma filha
+        # anterior (CP01001-1), o item 2 tambem sai para uma filha propria
+        # (CP01001-2) e a mae, sem mais nenhum item pendente, "morre
+        # operacionalmente" e volta a CONTROLE_GERAL como referencia
+        # consolidada (Secao de hierarquia parcial).
         self.assertEqual(done.json()["production_status"], "FINALIZADO")
-        self.assertEqual(done.json()["current_area"], "GALVANIZACAO")
-        self.assertEqual(done.json()["galvanization_status"], "AGUARDANDO_ENVIO")
+        self.assertEqual(done.json()["current_area"], "CONTROLE_GERAL")
+        second_child_id = next(
+            iter(set(asyncio.run(self._active_child_ids(proposal["id"]))) - {child_id})
+        )
+        second_child = self.client.get(f"/api/v1/proposals/{second_child_id}", headers=headers).json()
+        self.assertEqual(second_child["proposal_number"], "CP01001-2")
+        self.assertEqual(second_child["current_area"], "GALVANIZACAO")
+        self.assertEqual(second_child["galvanization_status"], "AGUARDANDO_ENVIO")
 
         events = asyncio.run(self._proposal_event_count(proposal["id"]))
         self.assertGreaterEqual(events, 6)
@@ -780,11 +801,13 @@ class ProposalsIntegrationTests(unittest.TestCase):
         self.assertEqual(len(pending_after_rows), 1)
         self.assertNotEqual(pending_after_rows[0]["item_id"], first_item_id)
 
+        # O item 1 (produzido) foi separado para uma filha (CP01050-1), que
+        # ja saiu de PRODUCAO para GALVANIZACAO - list_production_items()
+        # só lista propostas ainda EM PRODUCAO (linha ~357), então o item
+        # produzido deixa de aparecer aqui e passa a ser rastreado pelo
+        # módulo de galvanização/expedição, não mais pela fila de produção.
         produced = self.client.get("/api/v1/production/items", params={"pending": "false", "search": "CP01050"}, headers=headers)
-        produced_rows = produced.json()["items"]
-        self.assertEqual(len(produced_rows), 1)
-        self.assertEqual(produced_rows[0]["item_id"], first_item_id)
-        self.assertTrue(produced_rows[0]["produced"])
+        self.assertEqual(produced.json()["items"], [])
 
     def test_official_production_without_galvanization_goes_to_expedition(self):
         headers = self._headers()
@@ -866,6 +889,110 @@ class ProposalsIntegrationTests(unittest.TestCase):
         replay_hierarchy = asyncio.run(self._proposal_hierarchy(proposal["id"]))
         self.assertEqual(len(replay_hierarchy["children"]), 2)
         self.assertGreaterEqual(asyncio.run(self._proposal_event_count(proposal["id"])), 3)
+
+    def test_regression_cp05390_mother_reborn_when_partial_children_converge_via_separate_requests(self):
+        """CP05390 (producao real, 2026-08-14): 3 filhas parciais, cada uma
+        enviada/retornada em uma carga de galvanizacao propria, atraves de
+        requisicoes HTTP inteiramente separadas (nao a mesma sessao/transacao) -
+        exatamente como o Desktop faz na pratica, uma carga por vez. A ultima
+        filha a convergir para EXPEDICAO/EM_SEPARACAO deve reunir a mae
+        (PARENT_PROPOSAL_REBORN) na mesma chamada que a fez convergir, sem
+        depender de nenhuma acao seguinte."""
+        headers = self._headers()
+        proposal = self.client.post(
+            "/api/v1/proposals",
+            json=_proposal_payload("CP05390", [_item_payload("1"), _item_payload("2"), _item_payload("3")]),
+            headers=headers,
+        ).json()
+        released = self._release_to_production(proposal, headers)
+        started = self.client.post(
+            f"/api/v1/production/proposals/{proposal['id']}/start", json={"version": released["version"]}, headers=headers
+        ).json()
+        items_by_number = {item["item_number"]: item for item in started["items"]}
+
+        # Cada item e concluido, e imediatamente colocado em carga PROPRIA,
+        # antes do proximo item ser concluido - exatamente a sequencia real
+        # (uma carga por vez, nunca em lote), que e o que evita a filha nova
+        # ser fundida de volta na anterior por _merge_equal_status_partial_children
+        # (o agrupamento so funde filhas com area+status+cargas idendicas).
+        version = started["version"]
+        child_ids: list[int] = []
+        load_ids: list[int] = []
+        for index, number in enumerate(("1", "2", "3")):
+            payload = {"version": version, "observation": f"Parcial {number}"}
+            if number != "3":
+                payload["item_ids"] = [items_by_number[number]["id"]]
+            step = self.client.post(
+                f"/api/v1/production/proposals/{proposal['id']}/complete-items",
+                json=payload,
+                headers={**headers, "X-Request-ID": f"cp05390-production-{number}"},
+            )
+            self.assertEqual(step.status_code, 200)
+            active_child_ids = asyncio.run(self._active_child_ids(proposal["id"]))
+            self.assertEqual(len(active_child_ids), index + 1, active_child_ids)
+            new_child_id = max(set(active_child_ids) - set(child_ids))
+            child = self.client.get(f"/api/v1/proposals/{new_child_id}", headers=headers).json()
+            child_ids.append(child["id"])
+
+            load = self.client.post(
+                "/api/v1/galvanization/loads",
+                json={
+                    "driver_name": f"Motorista {number}",
+                    "expected_return_date": "2026-08-20",
+                    "items": [{"proposal_item_id": item["id"], "version": item["version"]} for item in child["items"]],
+                },
+                headers=headers,
+            ).json()
+            release_response = self.client.post(
+                f"/api/v1/galvanization/loads/{load['id']}/release", json={"version": load["version"]}, headers=headers
+            )
+            self.assertEqual(release_response.status_code, 200)
+            load_ids.append(load["id"])
+
+            if number != "3":
+                version = self.client.get(f"/api/v1/proposals/{proposal['id']}", headers=headers).json()["version"]
+
+        final_mother = self.client.get(f"/api/v1/proposals/{proposal['id']}", headers=headers).json()
+        self.assertEqual(final_mother["current_area"], "CONTROLE_GERAL")
+        self.assertEqual(len(child_ids), 3)
+
+        # Cada filha e devolvida por uma requisicao HTTP inteiramente
+        # separada - nenhuma compartilha sessao/transacao com as outras.
+        for index, (child_id, load_id) in enumerate(zip(child_ids, load_ids)):
+            load = self.client.get(f"/api/v1/galvanization/loads/{load_id}", headers=headers).json()
+            returned = self.client.post(
+                f"/api/v1/galvanization/loads/{load_id}/returns",
+                json={"version": load["version"], "proposal_ids": [child_id]},
+                headers={**headers, "X-Request-ID": f"cp05390-return-{index}"},
+            )
+            self.assertEqual(returned.status_code, 200)
+
+        mother = self.client.get(f"/api/v1/proposals/{proposal['id']}", headers=headers).json()
+        self.assertFalse(mother["is_partial"])
+        self.assertEqual(mother["current_area"], "EXPEDICAO")
+        self.assertEqual(mother["current_status"], "EM_SEPARACAO")
+        final_hierarchy = asyncio.run(self._proposal_hierarchy(proposal["id"]))
+        self.assertEqual(final_hierarchy["children"], [])
+        self.assertEqual(final_hierarchy["mother_item_count"], 3)
+        self.assertTrue(asyncio.run(self._has_event(proposal["id"], "PARENT_PROPOSAL_REBORN")))
+
+    async def _active_child_ids(self, parent_id: int) -> list[int]:
+        session_factory = get_sessionmaker()
+        async with session_factory() as session:
+            result = await session.execute(
+                text("SELECT id FROM proposals WHERE parent_proposal_id = :parent_id AND active = true ORDER BY id"),
+                {"parent_id": parent_id},
+            )
+            return [int(row[0]) for row in result.all()]
+
+    async def _has_event(self, proposal_id: int, event_type: str) -> bool:
+        session_factory = get_sessionmaker()
+        async with session_factory() as session:
+            result = await session.execute(
+                text("SELECT count(*) FROM proposal_events WHERE proposal_id = :proposal_id AND event_type = :event_type"),
+                {"proposal_id": proposal_id, "event_type": event_type},
+            )
+            return int(result.scalar_one()) > 0
 
     def test_official_production_flow_definition_reason_weights_and_undefined_block(self):
         headers = self._headers()
@@ -1128,6 +1255,11 @@ class ProposalsIntegrationTests(unittest.TestCase):
         self.assertTrue(unlocked_item["flow_editable"])
         self.assertIsNone(unlocked_item["flow_lock_reason"])
 
+        # O item ja produzido (item 1) foi imediatamente separado para uma
+        # filha (item 2 continuava pendente) - ele nao pertence mais aos
+        # itens editaveis da MAE, entao a tentativa contra o endpoint da mae
+        # nem chega a avaliar o bloqueio de fluxo, so rejeita o item como
+        # inexistente naquela proposta.
         blocked = self.client.patch(
             f"/api/v1/production/proposals/{proposal['id']}/item-flow",
             json={
@@ -1139,23 +1271,41 @@ class ProposalsIntegrationTests(unittest.TestCase):
             headers=headers,
         )
         self.assertEqual(blocked.status_code, 409)
-        self.assertEqual(blocked.json()["error"]["code"], "PRODUCTION_ITEM_FLOW_LOCKED")
+        self.assertEqual(blocked.json()["error"]["code"], "PRODUCTION_ITEM_NOT_AVAILABLE")
 
-        # A locked item included WITHOUT an actual change must not prevent the rest of the
-        # proposal (an unlocked item with a real change) from being saved.
-        mixed = self.client.patch(
+        # A propria filha ja saiu de PRODUCAO (foi direto para GALVANIZACAO),
+        # entao o endpoint de fluxo - que so opera dentro da area de Producao
+        # oficial - rejeita a proposta inteira antes mesmo de olhar o item.
+        child_id = next(iter(asyncio.run(self._active_child_ids(proposal["id"]))))
+        child_after_partial = self.client.get(f"/api/v1/proposals/{child_id}", headers=headers).json()
+        self.assertEqual(child_after_partial["current_area"], "GALVANIZACAO")
+        blocked_on_child = self.client.patch(
+            f"/api/v1/production/proposals/{child_id}/item-flow",
+            json={
+                "version": child_after_partial["version"],
+                "items": [
+                    {"item_id": locked_item["id"], "version": locked_item["version"], "produce_internally": False, "non_production_reason": "pronta_entrega"},
+                ],
+            },
+            headers=headers,
+        )
+        self.assertEqual(blocked_on_child.status_code, 409)
+        self.assertEqual(blocked_on_child.json()["error"]["code"], "PRODUCTION_INVALID_STATE")
+
+        # O item 2 (unico item que ainda pertence a mae) continua editavel
+        # normalmente.
+        unlocked_only = self.client.patch(
             f"/api/v1/production/proposals/{proposal['id']}/item-flow",
             json={
                 "version": partial.json()["version"],
                 "items": [
-                    {"item_id": locked_item["id"], "version": locked_item["version"], "produce_internally": True, "requires_galvanization": True},
                     {"item_id": unlocked_item["id"], "version": unlocked_item["version"], "produce_internally": False, "non_production_reason": "terceirizado"},
                 ],
             },
             headers=headers,
         )
-        self.assertEqual(mixed.status_code, 200)
-        saved_unlocked = next(item for item in mixed.json()["items"] if item["id"] == unlocked_item["id"])
+        self.assertEqual(unlocked_only.status_code, 200)
+        saved_unlocked = next(item for item in unlocked_only.json()["items"] if item["id"] == unlocked_item["id"])
         self.assertEqual(saved_unlocked["produce_internally"], "NAO")
 
     def test_official_galvanization_load_partial_and_total_return(self):
@@ -1220,7 +1370,7 @@ class ProposalsIntegrationTests(unittest.TestCase):
         self.assertEqual(first_return["return_type"], "PARCIAL")
         self.assertEqual(len(first_return["items"]), 1)
         self.assertEqual(first_return["items"][0]["load_item_id"], first_load_item["id"])
-        self.assertEqual(first_return["items"][0]["returned_quantity"], "1.0000")
+        self.assertEqual(first_return["items"][0]["returned_quantity"], "2.0000")
         self.assertTrue(any(row["event_type"] == "GALVANIZATION_RETURN_REGISTERED" for row in partial.json()["history"]))
 
         proposal_after_partial = self.client.get(f"/api/v1/proposals/{first['id']}", headers=headers).json()
@@ -1578,7 +1728,7 @@ class ProposalsIntegrationTests(unittest.TestCase):
             },
             headers=headers,
         )
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 201)
         self.assertEqual(response.json()["load_weight"], "9.0000")
         self.assertEqual(response.json()["max_weight"], "5.0000")
         self.assertNotEqual(response.json()["load_weight"], response.json()["known_items_weight"])
@@ -1663,17 +1813,13 @@ class ProposalsIntegrationTests(unittest.TestCase):
         self.assertEqual(load.status_code, 201)
 
         after = self.client.get("/api/v1/galvanization/candidates", params={"search": "CP02014"}, headers=headers)
-        after_row = after.json()["items"][0]
-        self.assertEqual(after_row["situation"], "EM_GALVANIZACAO")
-        self.assertEqual(after_row["sent_quantity"], "2.0000")
-        self.assertEqual(after_row["available_quantity"], "0.0000")
+        self.assertEqual(after.json()["items"], [])
 
         available_only = self.client.get("/api/v1/galvanization/candidates", params={"search": "CP02014", "situation": "DISPONIVEL"}, headers=headers)
         self.assertEqual(available_only.json()["items"], [])
 
         in_galvanization_only = self.client.get("/api/v1/galvanization/candidates", params={"search": "CP02014", "situation": "EM_GALVANIZACAO"}, headers=headers)
-        self.assertEqual(len(in_galvanization_only.json()["items"]), 1)
-        self.assertEqual(in_galvanization_only.json()["items"][0]["item_id"], item["id"])
+        self.assertEqual(in_galvanization_only.json()["items"], [])
 
         released = self.client.post(f"/api/v1/galvanization/loads/{load.json()['id']}/release", json={"version": load.json()["version"]}, headers=headers)
         self.assertEqual(released.status_code, 200)
@@ -1686,10 +1832,7 @@ class ProposalsIntegrationTests(unittest.TestCase):
         self.assertEqual(partial_return.status_code, 200)
 
         after_partial_return = self.client.get("/api/v1/galvanization/candidates", params={"search": "CP02014"}, headers=headers)
-        partial_row = after_partial_return.json()["items"][0]
-        self.assertEqual(partial_row["situation"], "EM_GALVANIZACAO", "item ainda nao retornou totalmente, entao segue indisponivel para nova carga")
-        self.assertEqual(partial_row["available_quantity"], "0.0000")
-        self.assertEqual(partial_row["sent_quantity"], "1.0000", "1 das 2 unidades ja retornou, so 1 deveria seguir marcada como fora")
+        self.assertEqual(after_partial_return.json()["items"], [], "item em carga/retorno deve aparecer somente no detalhe da carga")
 
     def test_official_galvanization_item_not_yet_produced_is_not_eligible(self):
         headers = self._headers()

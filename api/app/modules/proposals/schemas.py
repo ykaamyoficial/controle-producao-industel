@@ -1146,6 +1146,62 @@ class FiscalRegisterInvoiceRequest(BaseModel):
         return normalized
 
 
+class FiscalBatchProposalInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    fiscal_record_id: int = Field(gt=0)
+    version: int = Field(ge=1)
+    selection_type: str = Field(default="TOTAL", max_length=20)
+    invoice_number: str = Field(min_length=1, max_length=80)
+    series: str | None = Field(default=None, max_length=40)
+    issued_at: datetime | None = None
+    source: str = Field(default="MANUAL", max_length=40)
+    observation: str | None = Field(default=None, max_length=1000)
+    items: list[FiscalEmissionItemInput] | None = None
+
+    @field_validator("invoice_number", "series", "source", mode="before")
+    @classmethod
+    def strip_batch_fiscal_text(cls, value):
+        return value.strip() if isinstance(value, str) else value
+
+    @field_validator("selection_type")
+    @classmethod
+    def validate_selection_type(cls, value: str) -> str:
+        normalized = value.upper()
+        if normalized not in {"TOTAL", "PARCIAL"}:
+            raise ValueError("tipo de selecao fiscal invalido")
+        return normalized
+
+    @field_validator("source")
+    @classmethod
+    def validate_batch_source(cls, value: str) -> str:
+        normalized = value.upper()
+        if normalized not in {"MANUAL", "NOMUS", "SYSTEM"}:
+            raise ValueError("origem fiscal invalida")
+        return normalized
+
+
+class FiscalBatchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    operation_id: str | None = Field(default=None, max_length=120)
+    proposals: list[FiscalBatchProposalInput] = Field(min_length=1, max_length=200)
+
+
+class FiscalBatchProposalResult(BaseModel):
+    fiscal_record_id: int
+    emission_id: int
+    invoice_number: str
+    series: str | None = None
+    final_status: str
+
+
+class FiscalBatchResponse(BaseModel):
+    operation_id: str
+    status: str
+    proposals: list[FiscalBatchProposalResult]
+
+
 class FiscalCancelInvoiceItemRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

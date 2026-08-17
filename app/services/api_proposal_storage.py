@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+import uuid
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -540,7 +541,7 @@ class OfficialProposalApiStorage:
     def galvanization_items_queue(self, **filters) -> list[dict[str, Any]]:
         client, proposals, token = self._client()
         try:
-            payload = proposals.list_galvanization_candidates(token, **filters)
+            payload = proposals.list_galvanization_candidates(token, include_unavailable=True, **filters)
             return [_api_galvanization_item_row_to_process_item(row) for row in payload.get("items", [])]
         finally:
             client.close()
@@ -1135,6 +1136,47 @@ class OfficialProposalApiStorage:
                 raise
             invoices = updated.get("invoices") or []
             return int(invoices[0]["id"]) if invoices else 0
+        finally:
+            client.close()
+
+    def register_fiscal_batch(self, draft: list[dict[str, Any]], operation_id: str | None = None) -> dict[str, Any]:
+        """Confirm a Fase 4 draft through the single transactional API motor."""
+        client, proposals, token = self._client()
+        try:
+            request_rows = []
+            for row in draft or []:
+                fiscal_record_id = int(row.get("fiscal_record_id") or row.get("proposal_id") or 0)
+                if not fiscal_record_id:
+                    raise ValueError("Draft fiscal sem identificador de proposta.")
+                detail = proposals.get_fiscal_record(token, fiscal_record_id)
+                items = []
+                for item in row.get("items") or []:
+                    item_id = int(item.get("item_id") or item.get("fiscal_item_id") or 0)
+                    if not item_id:
+                        raise ValueError("Draft fiscal possui item sem identificador.")
+                    item_payload = {"fiscal_item_id": item_id}
+                    quantity = item.get("pending_quantity") if item.get("requested_quantity") is None else item.get("requested_quantity")
+                    if quantity not in (None, ""):
+                        item_payload["quantity"] = str(quantity)
+                    weight = item.get("pending_weight") if item.get("requested_weight") is None else item.get("requested_weight")
+                    if weight not in (None, "", "0", 0):
+                        item_payload["weight"] = str(weight)
+                    items.append(item_payload)
+                emission_date = row.get("emission_date") or None
+                issued_at = f"{emission_date}T00:00:00Z" if emission_date else None
+                request_rows.append({
+                    "fiscal_record_id": fiscal_record_id,
+                    "version": int(detail["version"]),
+                    "selection_type": row.get("selection_type") or "TOTAL",
+                    "invoice_number": str(row.get("invoice_number") or "").strip() or f"REGISTRO-{fiscal_record_id}-{datetime.now().strftime('%Y%m%d%H%M%S')}",
+                    "series": str(row.get("series") or "").strip() or None,
+                    "issued_at": issued_at,
+                    "source": row.get("source") or "MANUAL",
+                    "observation": row.get("note") or row.get("observacao") or None,
+                    "items": items or None,
+                })
+            payload = {"operation_id": operation_id or str(uuid.uuid4()), "proposals": request_rows}
+            return proposals.register_fiscal_batch(token, payload)
         finally:
             client.close()
 
