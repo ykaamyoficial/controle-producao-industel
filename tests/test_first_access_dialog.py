@@ -131,6 +131,21 @@ class FirstAccessDialogTests(unittest.TestCase):
             dialog.url_field.setText("http://192.168.1.78:8000")
             self.assertFalse(dialog.save_button.isEnabled())
 
+            # O setEnabled(False) acima agenda um repaint do save_button
+            # (ModernButton/AppIconButton) que nunca e processado se o
+            # teste termina aqui: o dialog nao e fechado e so sobrevive
+            # via um ciclo de referencia (botao -> slot conectado ->
+            # dialog -> botao), entao o Python so o libera num ciclo do
+            # GC em momento imprevisivel -- podendo cair durante o
+            # app.processEvents() de um teste completamente diferente
+            # mais adiante e entregar aquele repaint pendente contra um
+            # ModernButton ja destruido (AttributeError em _badge_count
+            # dentro de AppIconButton.paintEvent). Fechar e drenar a fila
+            # aqui evita deixar esse estado pendurado.
+            dialog.close()
+            for _ in range(5):
+                self.app.processEvents()
+
     def test_failed_test_keeps_save_disabled_and_does_not_touch_config(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             store = self._store(temp_dir)
