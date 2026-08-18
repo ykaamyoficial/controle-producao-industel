@@ -148,9 +148,27 @@ class ProductionRegistrationDialogTests(unittest.TestCase):
             self.confirmed = True
             return QDialog.Accepted
 
+        def _run_synchronously(_owner, operation, on_success, on_error, **_kwargs):
+            # `_execute()` hands off to `start_worker`, which runs the
+            # operation on a real QThread and delivers the result via a
+            # queued signal - i.e. asynchronously, only once the event loop
+            # is pumped again. Without this, the QMessageBox patch below
+            # exits before that queued callback fires, so it later runs
+            # with the REAL QMessageBox (and a stale `self`) whenever some
+            # other, unrelated test happens to call `app.processEvents()`.
+            try:
+                result = operation()
+            except Exception as exc:
+                on_error(exc)
+            else:
+                on_success(result)
+            return None
+
         with patch("app.ui.production_registration_dialog.ProductionReviewDialog.exec", fake_exec), patch(
             "app.ui.production_registration_dialog.QMessageBox.information"
-        ) as info:
+        ) as info, patch(
+            "app.ui.production_registration_dialog.start_worker", side_effect=_run_synchronously
+        ):
             dialog._review()
 
         info.assert_called_once()

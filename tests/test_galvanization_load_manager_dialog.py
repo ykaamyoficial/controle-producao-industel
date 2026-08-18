@@ -13,6 +13,26 @@ from app.services.backend_adapter import OFFICIAL_COLOR_PALETTES
 from app.ui.galvanization_load_dialog import GalvanizationLoadManagerDialog, GalvanizationReturnDialog
 
 
+def _run_synchronously(_owner, operation, on_success, on_error, **_kwargs):
+    # `_confirm()` normally hands off to `start_worker`, which runs the
+    # operation on a real QThread and delivers the result via a queued
+    # signal - i.e. asynchronously, only once the event loop is pumped
+    # again. Tests that patch QMessageBox and then call `_confirm()`
+    # synchronously would otherwise leave that queued callback pending
+    # after the `with patch.object(QMessageBox, ...)` block exits, so it
+    # fires later (with the REAL QMessageBox) whenever some other,
+    # unrelated test happens to call `app.processEvents()`. Patching
+    # `start_worker` itself to run inline keeps the whole
+    # operation/success/error cycle inside the patched block.
+    try:
+        result = operation()
+    except Exception as exc:
+        on_error(exc)
+    else:
+        on_success(result)
+    return None
+
+
 class FakeGalvanizationLoadService:
     def __init__(self):
         self.palette = OFFICIAL_COLOR_PALETTES["claro"]
@@ -302,7 +322,9 @@ class GalvanizationLoadManagerDialogTests(unittest.TestCase):
         # Sem nenhum ajuste manual, "carga completa" ja vem com o saldo
         # pendente integral pronto para retornar - nao existe mais um passo
         # de selecao por checkbox.
-        with patch.object(QMessageBox, "information"):
+        with patch.object(QMessageBox, "information"), patch(
+            "app.ui.galvanization_load_dialog.start_worker", side_effect=_run_synchronously
+        ):
             dialog._confirm()
 
         self.assertEqual(len(self.service.registered_returns), 1)
@@ -317,7 +339,9 @@ class GalvanizationLoadManagerDialogTests(unittest.TestCase):
         # so que via edicao de quantidade (0 = nao retorna desta vez).
         dialog.cart[9001]["return_quantity"] = 0
         dialog.refresh()
-        with patch.object(QMessageBox, "information"):
+        with patch.object(QMessageBox, "information"), patch(
+            "app.ui.galvanization_load_dialog.start_worker", side_effect=_run_synchronously
+        ):
             dialog._confirm()
 
         _load_id, items, _observation = self.service.registered_returns[0]
@@ -413,7 +437,9 @@ class GalvanizationReturnDialogMultiLoadTests(unittest.TestCase):
     def test_confirm_registers_return_once_per_load_with_its_own_items(self):
         service = FakeGalvanizationLoadService()
         dialog = GalvanizationReturnDialog(service, 2, extra_load_ids=[4])
-        with patch.object(QMessageBox, "information"):
+        with patch.object(QMessageBox, "information"), patch(
+            "app.ui.galvanization_load_dialog.start_worker", side_effect=_run_synchronously
+        ):
             dialog._confirm()
         self.assertEqual(len(service.registered_returns), 2)
         by_load = {load_id: items for load_id, items, _observation in service.registered_returns}
@@ -438,7 +464,9 @@ class GalvanizationReturnDialogMultiLoadTests(unittest.TestCase):
 
         service.register_galvanization_partial_return = flaky_register
         dialog = GalvanizationReturnDialog(service, 2, extra_load_ids=[4])
-        with patch.object(QMessageBox, "critical") as critical:
+        with patch.object(QMessageBox, "critical") as critical, patch(
+            "app.ui.galvanization_load_dialog.start_worker", side_effect=_run_synchronously
+        ):
             dialog._confirm()
         critical.assert_called_once()
         self.assertFalse(dialog.result())
