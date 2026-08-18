@@ -24,6 +24,7 @@ from app.integrations.api.exceptions import (
     sanitize_secret,
 )
 from app.services.app_logging import get_logger
+from app.services.performance_metrics import SLOW_OPERATION_THRESHOLD_MS, request_context
 
 
 log = get_logger("desktop_api_client")
@@ -33,6 +34,14 @@ USER_AGENT = "ControleProducaoIndustel/desktop-api-client"
 # para compatibilidade/suporte/observabilidade, nunca para autenticacao.
 CLIENT_VERSION_HEADER = "X-Client-Version"
 IDEMPOTENT_GET_PATHS = {"/api/v1/system/health", "/api/v1/system/ready", "/api/v1/system/version", "/api/v1/system/compatibility", "/api/v1/auth/me"}
+
+
+def _safe_get_for_retry(path: str) -> bool:
+    """Somente consultas sem efeito colateral recebem retry automático."""
+    normalized = path.split("?", 1)[0]
+    if normalized.startswith("/api/v1/chat/proposals/") and normalized.endswith("/timeline"):
+        return False
+    return normalized.startswith("/api/v1/")
 
 
 @dataclass(frozen=True)
@@ -63,6 +72,7 @@ class DesktopApiClient:
     def get_bytes(self, path: str, *, access_token: str | None = None) -> bytes | None:
         safe_path = _normalize_path(path)
         headers = {"Accept": "image/*", "User-Agent": USER_AGENT, "X-Request-ID": uuid.uuid4().hex, CLIENT_VERSION_HEADER: APP_VERSION}
+        _add_performance_headers(headers)
         if access_token:
             headers["Authorization"] = f"Bearer {access_token}"
         response = self._client.get(safe_path, headers=headers)
@@ -82,6 +92,7 @@ class DesktopApiClient:
         safe_path = _normalize_path(path)
         request_id = uuid.uuid4().hex
         headers = {"Accept": "application/json", "User-Agent": USER_AGENT, "X-Request-ID": request_id, CLIENT_VERSION_HEADER: APP_VERSION}
+        _add_performance_headers(headers)
         try:
             response = self._client.get(safe_path, headers=headers)
         except httpx.TimeoutException as exc:
@@ -115,7 +126,8 @@ class DesktopApiClient:
     ) -> ApiResponse:
         safe_path = _normalize_path(path)
         path_without_query = safe_path.split("?", 1)[0]
-        attempts = max(1, 1 + (retries if method.upper() == "GET" and path_without_query in IDEMPOTENT_GET_PATHS else 0))
+        default_retry = 1 if method.upper() == "GET" and _safe_get_for_retry(path_without_query) else 0
+        attempts = max(1, 1 + (retries if retries > 0 else default_retry))
         last_error: ApiClientError | None = None
         for attempt in range(1, attempts + 1):
             try:
@@ -132,11 +144,15 @@ class DesktopApiClient:
     def _single_request(self, method: str, path: str, *, json_payload: dict[str, Any] | None, access_token: str | None, files=None) -> ApiResponse:
         request_id = uuid.uuid4().hex
         headers = {"Accept": "application/json", "User-Agent": USER_AGENT, "X-Request-ID": request_id, CLIENT_VERSION_HEADER: APP_VERSION}
+        context = _add_performance_headers(headers)
         if access_token:
             headers["Authorization"] = f"Bearer {access_token}"
         started = time.monotonic()
         try:
-            response = self._client.request(method.upper(), path, json=None if files else json_payload, files=files, headers=headers)
+            response = self._client.request(
+                method.upper(), path, json=None if files else json_payload, files=files, headers=headers,
+                timeout=self._timeout_for(method, path),
+            )
         except httpx.TimeoutException as exc:
             log.warning("api_connection_failed | method=%s | path=%s | category=timeout | request_id=%s", method.upper(), path, request_id)
             raise ApiTimeoutError(str(exc), request_id=request_id) from exc
@@ -146,8 +162,31 @@ class DesktopApiClient:
         duration_ms = max(0, int((time.monotonic() - started) * 1000))
         response_request_id = response.headers.get("X-Request-ID") or request_id
         log.info("api_http_request | method=%s | path=%s | status=%s | duration_ms=%s | request_id=%s", method.upper(), path, response.status_code, duration_ms, response_request_id)
+        if context:
+            log.info(
+                "performance_api_request | operation_id=%s | operation=%s | screen=%s | action=%s | execution_thread=%s | method=%s | path=%s | duration_ms=%s | status=%s | request_id=%s | slow=%s",
+                context["operation_id"], context["operation"], context["screen"], context["action"],
+                context["execution_thread"], method.upper(), path, duration_ms, response.status_code,
+                response_request_id, duration_ms >= SLOW_OPERATION_THRESHOLD_MS,
+            )
+        elif duration_ms >= SLOW_OPERATION_THRESHOLD_MS:
+            log.warning(
+                "performance_ui_blocking_api_request | method=%s | path=%s | duration_ms=%s | status=%s | request_id=%s | motivo=api_request_on_ui_thread",
+                method.upper(), path, duration_ms, response.status_code, response_request_id,
+            )
         data = self._parse_response(response, response_request_id, method=method.upper(), path=path)
         return ApiResponse(response.status_code, data, response_request_id, duration_ms)
+
+    def _timeout_for(self, method: str, path: str) -> httpx.Timeout:
+        """Timeouts por perfil: consultas e gravações têm limites distintos."""
+        normalized = path.split("?", 1)[0]
+        if method.upper() == "GET":
+            read_timeout = 8.0 if any(token in normalized for token in ("/conversations", "/notifications", "/unread-summary")) else 12.0
+        else:
+            read_timeout = 30.0 if any(token in normalized for token in ("/batch", "/production", "/galvanization", "/fiscal")) else 20.0
+        read_timeout = max(1.0, min(float(read_timeout), max(1.0, float(self.settings.read_timeout))))
+        connect_timeout = max(1.0, min(float(self.settings.connect_timeout), 10.0))
+        return httpx.Timeout(connect=connect_timeout, read=read_timeout, write=read_timeout, pool=connect_timeout)
 
     def _log_parse_failure(self, *, method: str, path: str, response: httpx.Response, request_id: str, reason: str) -> None:
         # Diagnostico completo vai so pro log (nunca pra UI): a mensagem
@@ -205,3 +244,12 @@ def _normalize_path(path: str) -> str:
     if ".." in value.split("/"):
         raise ApiUnexpectedResponseError("invalid path")
     return urljoin("/", value)
+
+
+def _add_performance_headers(headers: dict[str, str]) -> dict[str, str]:
+    context = request_context()
+    if context:
+        headers["X-UI-Operation-ID"] = context["operation_id"]
+        headers["X-UI-Screen"] = context["screen"][:120]
+        headers["X-UI-Action"] = context["action"][:120]
+    return context

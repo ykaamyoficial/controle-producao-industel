@@ -66,6 +66,9 @@ class ProposalsApiClient:
         path = "/api/v1/production/items" + (f"?{params}" if params else "")
         return self.client.get(path, access_token=access_token).data
 
+    def get_item(self, access_token: str, item_id: int) -> dict[str, Any]:
+        return self.client.get(f"/api/v1/proposal-items/{item_id}", access_token=access_token).data
+
     def list_partial_proposals(self, access_token: str, **filters) -> dict[str, Any]:
         params = urlencode({key: value for key, value in filters.items() if value not in (None, "")})
         path = "/api/v1/partials/proposals" + (f"?{params}" if params else "")
@@ -152,6 +155,23 @@ class ProposalsApiClient:
         params = urlencode({"source_proposal_id": source_proposal_id, "destination_proposal_id": destination_proposal_id})
         data = self.client.get(f"/api/v1/shipping/remanagements/compatible-items?{params}", access_token=access_token).data
         return data if isinstance(data, list) else []
+
+    def remanagement_destination_items(self, access_token: str, destination_proposal_id: int) -> list[dict[str, Any]]:
+        params = urlencode({"destination_proposal_id": destination_proposal_id})
+        data = self.client.get(f"/api/v1/shipping/remanagements/destination-items?{params}", access_token=access_token).data
+        return data if isinstance(data, list) else []
+
+    def remanagement_availability(self, access_token: str, payload: dict[str, Any]) -> dict[str, Any]:
+        return self.client.post("/api/v1/shipping/remanagements/availability", json_payload=payload, access_token=access_token).data
+
+    def remanagement_compensation_plan(self, access_token: str, payload: dict[str, Any]) -> dict[str, Any]:
+        return self.client.post("/api/v1/shipping/remanagements/compensation-plan", json_payload=payload, access_token=access_token).data
+
+    def remanagement_review(self, access_token: str, payload: dict[str, Any]) -> dict[str, Any]:
+        return self.client.post("/api/v1/shipping/remanagements/review", json_payload=payload, access_token=access_token).data
+
+    def remanagement_confirm(self, access_token: str, payload: dict[str, Any]) -> dict[str, Any]:
+        return self.client.post("/api/v1/shipping/remanagements/confirm", json_payload=payload, access_token=access_token).data
 
     def preview_remanagement(self, access_token: str, payload: dict[str, Any]) -> dict[str, Any]:
         return self.client.post("/api/v1/shipping/remanagements/preview", json_payload=payload, access_token=access_token).data

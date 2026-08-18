@@ -4,6 +4,7 @@ from PySide6.QtCore import QRectF, QSortFilterProxyModel, Qt, Signal
 from PySide6.QtGui import QBrush, QColor, QPainter, QPen
 from PySide6.QtWidgets import QAbstractItemView, QHeaderView, QStyledItemDelegate, QStyle, QStyleOptionViewItem, QTableView
 
+from app.ui.components.operational_table import configure_operational_table
 from app.ui.styles import area_color, status_color
 from app.ui.icons import IconSize, make_icon, status_icon
 
@@ -114,6 +115,7 @@ class ModernTable(QTableView):
     def __init__(self, service, parent=None):
         super().__init__(parent)
         self.service = service
+        configure_operational_table(self)
         self.setAlternatingRowColors(True)
         self.setSortingEnabled(True)
         self.setSelectionBehavior(QAbstractItemView.SelectRows)
