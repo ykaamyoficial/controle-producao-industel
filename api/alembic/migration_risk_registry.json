@@ -123,5 +123,10 @@
     "classification": "ADDITIVE",
     "summary": "Cria indices para consultas de listagem/paginacao operacional (proposals, proposal_items, galvanization_load_items, expedition_items, fiscal_records).",
     "justification": "Apenas CREATE INDEX em tabelas ja existentes, sem alterar colunas nem dados. Nenhum consumidor pre-existente e afetado; downgrade remove os mesmos indices de forma simetrica."
+  },
+  "20260818_0025": {
+    "classification": "TRANSITIONAL",
+    "summary": "Cria o modulo de Carga Planejada (planned_loads, planned_load_items, planned_load_history), FASE_PL1 - separado de proposals/galvanizacao, so leitura do estado real.",
+    "justification": "Somente CREATE TABLE de tres tabelas novas, nenhuma tabela ou linha existente e alterada. Classificado TRANSITIONAL (nao ADDITIVE) porque planned_load_items tem uma UniqueConstraint(planned_load_id, proposal_item_id) nova - decisao de produto para impedir duplicidade de item no banco, nao so em service.py, sob concorrencia -, mesmo padrao ja registrado para 20260812_0019/20260812_0020: a constraint recai inteiramente sobre tabela(s) nova(s), nenhum consumidor pre-existente e afetado. Todas as FKs sao unidirecionais (planned_loads/planned_load_items/planned_load_history -> proposals/proposal_items/galvanization_loads/users), nunca o inverso, entao nenhuma tabela existente ganha um novo consumidor obrigatorio."
   }
 }
