@@ -57,24 +57,46 @@ class BatchProposalActionCenter(QDialog):
         parent=None,
         *,
         proposal_labels: dict[int, str] | None = None,
+        item_rows: list[dict] | None = None,
+        item_action_host=None,
     ):
         super().__init__(parent)
         self.service = service
         self.process_ids = list(dict.fromkeys(int(value) for value in process_ids if value))
         self.area = area
         self.proposal_labels = proposal_labels or {}
+        self.item_rows = self._deduplicate_item_rows(item_rows or [])
+        self.item_ids = [int(row.get("api_id") or row.get("id")) for row in self.item_rows]
+        self.item_action_host = item_action_host
         self.changed = False
         self._running_action = False
         self._action_thread = None
         self._action_buttons: list[ActionCardButton] = []
         self.actions = self._load_actions()
-        self.setWindowTitle("Acoes em lote")
+        self.setWindowTitle("Acoes dos itens selecionados" if self.item_rows else "Acoes em lote")
         style_dialog_from_parent(self, parent)
         self._build()
         self.setMinimumWidth(720)
         self.resize(760, self.sizeHint().height())
         self._center_on_parent(parent)
-        log.info("Central de acoes em lote aberta: area=%s propostas=%s", area, len(self.process_ids))
+        log.info(
+            "Central de acoes em lote aberta: area=%s propostas=%s itens=%s",
+            area,
+            len(self.process_ids),
+            len(self.item_ids),
+        )
+
+    @staticmethod
+    def _deduplicate_item_rows(rows: list[dict]) -> list[dict]:
+        result: list[dict] = []
+        seen: set[int] = set()
+        for row in rows:
+            item_id = int(row.get("api_id") or row.get("id") or 0)
+            if not item_id or item_id in seen:
+                continue
+            seen.add(item_id)
+            result.append(dict(row))
+        return result
 
     def _center_on_parent(self, parent):
         owner = parent.window() if parent and parent.window() else None
@@ -90,6 +112,8 @@ class BatchProposalActionCenter(QDialog):
     # -- acoes disponiveis ---------------------------------------------
 
     def _raw_actions(self) -> list[dict]:
+        if self.item_rows:
+            return self._raw_item_actions()
         if self.area == "GALVANIZACAO":
             # Galvanizacao nao tem STATUS de proposta generico (o dominio e
             # MANAGE_LOAD/retorno de carga). "Adicionar a uma carga" foi
@@ -109,6 +133,133 @@ class BatchProposalActionCenter(QDialog):
                 raw.append({"id": "REGISTER_RETURN", "label": "Registrar retorno", "icon": "status", "status": "", "area": self.area})
             return raw
         return self._raw_status_actions()
+
+    def _raw_item_actions(self) -> list[dict]:
+        total = len(self.item_rows)
+        actions: list[dict] = []
+        can_edit_production = bool(self.service.can_edit("PRODUCAO"))
+        can_mount_load = (
+            bool(self.service.can_mount_galvanization_load())
+            if hasattr(self.service, "can_mount_galvanization_load")
+            else bool(self.service.can_edit("GALVANIZACAO"))
+        )
+        all_flow_defined = all(bool(row.get("fluxo_definido")) for row in self.item_rows)
+        proposal_flow_ready = self._production_flow_selection_state() == "defined"
+
+        if can_edit_production:
+            actions.append(
+                {
+                    "id": "DEFINE_ITEM_FLOW",
+                    "label": "Redefinir fluxo dos itens" if all_flow_defined else "Definir fluxo dos itens",
+                    "description": "Altere o fluxo somente dos itens selecionados.",
+                    "icon": "settings",
+                    "status": "",
+                    "area": self.area,
+                }
+            )
+
+        try:
+            common_statuses = set(self.service.common_next_statuses("PRODUCAO", self.process_ids))
+        except Exception:
+            common_statuses = set()
+        if can_edit_production and proposal_flow_ready and "INICIADO" in common_statuses:
+            actions.append(
+                {
+                    "id": "STATUS",
+                    "label": self.service.action_label("PRODUCAO", "INICIADO"),
+                    "description": "Inicia ou retoma as propostas dos itens selecionados.",
+                    "icon": "status",
+                    "status": "INICIADO",
+                    "area": self.area,
+                }
+            )
+
+        production_eligible = (
+            [row for row in self.item_rows if self._is_production_registration_eligible(row)]
+            if proposal_flow_ready
+            else []
+        )
+        if can_edit_production and production_eligible:
+            actions.append(
+                {
+                    "id": "REGISTER_PRODUCTION",
+                    "label": "Registrar producao dos itens selecionados",
+                    "description": self._coverage_description(
+                        len(production_eligible), total, "Registre a producao sem alterar os demais itens das propostas."
+                    ),
+                    "icon": "status",
+                    "status": "",
+                    "area": self.area,
+                }
+            )
+
+        load_eligible_ids = self._eligible_load_item_ids()
+        if can_mount_load and load_eligible_ids:
+            actions.append(
+                {
+                    "id": "MANAGE_LOAD_EXISTING",
+                    "label": "Adicionar a uma carga existente",
+                    "description": self._coverage_description(
+                        len(load_eligible_ids), total, "Escolha uma carga aberta e inclua os itens elegiveis."
+                    ),
+                    "icon": "load",
+                    "status": "",
+                    "area": self.area,
+                }
+            )
+
+        new_load_rows = [row for row in self.item_rows if self._is_new_load_eligible(row)]
+        if can_mount_load and new_load_rows:
+            actions.append(
+                {
+                    "id": "MANAGE_LOAD_NEW",
+                    "label": "Criar nova carga",
+                    "description": self._coverage_description(
+                        len(new_load_rows), total, "Crie uma carga com os itens elegiveis selecionados."
+                    ),
+                    "eligible_item_ids": [int(row.get("api_id") or row.get("id")) for row in new_load_rows],
+                    "icon": "new",
+                    "status": "",
+                    "area": self.area,
+                }
+            )
+        return actions
+
+    @staticmethod
+    def _coverage_description(eligible: int, total: int, description: str) -> str:
+        if eligible == total:
+            return description
+        return f"Disponivel para {eligible} de {total} itens. {description}"
+
+    @staticmethod
+    def _is_production_registration_eligible(row: dict) -> bool:
+        produce = str(row.get("produzir_internamente") or "").strip().lower()
+        return bool(
+            row.get("fluxo_definido")
+            and not row.get("produzido")
+            and produce not in {"nao", "não", "false", "0"}
+            and not row.get("motivo_bloqueio")
+        )
+
+    @staticmethod
+    def _is_new_load_eligible(row: dict) -> bool:
+        needs_galvanization = str(row.get("precisa_galvanizacao") or "").strip().lower() in {"sim", "true", "1"}
+        paused = str(row.get("status_producao") or "").strip().upper() == "PARADO"
+        return bool(row.get("fluxo_definido") and needs_galvanization and not paused)
+
+    def _eligible_load_item_ids(self) -> set[int]:
+        if hasattr(self.service, "galvanization_item_eligibility"):
+            try:
+                result = self.service.galvanization_item_eligibility(self.item_ids)
+                return {int(value) for value in result.get("eligible_item_ids") or []}
+            except Exception as exc:
+                log.warning("Nao foi possivel validar itens para carga: %s", exc)
+                return set()
+        return {
+            int(row.get("api_id") or row.get("id"))
+            for row in self.item_rows
+            if row.get("produzido") and self._is_new_load_eligible(row)
+        }
 
     def _has_galvanization_load_candidates(self) -> bool:
         try:
@@ -146,8 +297,22 @@ class BatchProposalActionCenter(QDialog):
         return False
 
     def _raw_status_actions(self) -> list[dict]:
+        if self.area == "PRODUCAO":
+            flow_state = self._production_flow_selection_state()
+            flow_action = {
+                "id": "DEFINE_ITEM_FLOW",
+                "label": "Redefinir fluxo dos itens" if flow_state == "defined" else "Definir fluxo dos itens",
+                "icon": "settings",
+                "status": "",
+                "area": self.area,
+            }
+            # Em selecao mista, definir o fluxo tem precedencia. O inicio so
+            # reaparece quando todas as propostas selecionadas estao completas.
+            if flow_state != "defined":
+                return [flow_action]
+
         statuses = list(self.service.common_next_statuses(self.area, self.process_ids))
-        raw: list[dict] = []
+        raw: list[dict] = [flow_action] if self.area == "PRODUCAO" else []
         if self.area == "PRODUCAO" and any(status in statuses for status in _PRODUCTION_COMPLETION_STATUSES):
             statuses = [status for status in statuses if status not in _PRODUCTION_COMPLETION_STATUSES]
             raw.append({"id": "REGISTER_PRODUCTION", "label": "Registrar producao", "icon": "status", "status": "", "area": self.area})
@@ -156,9 +321,24 @@ class BatchProposalActionCenter(QDialog):
             raw.append({"id": "REGISTER_DELIVERY", "label": "Registrar retirada do cliente", "icon": "status", "status": "", "area": self.area})
         for status in statuses:
             raw.append({"id": "STATUS", "label": self.service.action_label(self.area, status), "icon": "status", "status": status, "area": self.area})
-        if self.area == "PRODUCAO":
-            raw.append({"id": "DEFINE_ITEM_FLOW", "label": "Definir fluxo dos itens", "icon": "settings", "status": "", "area": self.area})
         return raw
+
+    def _production_flow_selection_state(self) -> str:
+        defined: list[bool] = []
+        for process_id in self.process_ids:
+            try:
+                summary = self.service.item_flow_summary(process_id)
+                total = int(summary.get("total") or 0)
+                undefined_count = int(summary.get("undefined_count") or 0)
+            except Exception as exc:
+                log.warning("Nao foi possivel consultar o fluxo da proposta %s: %s", process_id, exc)
+                return "unknown"
+            defined.append(total > 0 and undefined_count == 0)
+        if defined and all(defined):
+            return "defined"
+        if any(defined):
+            return "mixed"
+        return "undefined"
 
     def _load_actions(self) -> list[ActionDescriptor]:
         raw_actions = self._raw_actions()
@@ -167,7 +347,7 @@ class BatchProposalActionCenter(QDialog):
             ActionDescriptor(
                 id=action["id"],
                 label=action["label"],
-                description=action_description(action),
+                description=action.get("description") or action_description(action),
                 icon=action_icon(action),
                 category=action_category(action, index, primary_index),
                 area=action.get("area", self.area),
@@ -215,8 +395,12 @@ class BatchProposalActionCenter(QDialog):
     def _build_header(self, palette) -> QVBoxLayout:
         header = QVBoxLayout()
         header.setSpacing(4)
-        count = len(self.process_ids)
-        self._title_label = QLabel(f"{count} proposta{'s' if count != 1 else ''} selecionada{'s' if count != 1 else ''}")
+        count = len(self.item_ids) if self.item_rows else len(self.process_ids)
+        if self.item_rows:
+            title = f"{count} {'item' if count == 1 else 'itens'} selecionado{'s' if count != 1 else ''}"
+        else:
+            title = f"{count} proposta{'s' if count != 1 else ''} selecionada{'s' if count != 1 else ''}"
+        self._title_label = QLabel(title)
         self._title_label.setStyleSheet("font-size: 16px; font-weight: 800;")
         self._title_label.setWordWrap(True)
         header.addWidget(self._title_label)
@@ -227,6 +411,15 @@ class BatchProposalActionCenter(QDialog):
         area_label = self.area.title()
         stage_color = palette.get(AREA_COLOR_KEYS.get(self.area, ""), palette["accent"])
         badges.addWidget(StatusBadge(area_label or "-", with_alpha(stage_color, 34), stage_color))
+        if self.item_rows:
+            proposals = len(self.process_ids)
+            badges.addWidget(
+                StatusBadge(
+                    f"{proposals} proposta{'s' if proposals != 1 else ''}",
+                    with_alpha(palette["muted"], 30),
+                    palette["text"],
+                )
+            )
         badges.addStretch()
         header.addLayout(badges)
         return header
@@ -291,6 +484,9 @@ class BatchProposalActionCenter(QDialog):
     def run_action(self, descriptor: ActionDescriptor):
         if self._running_action:
             return
+        if self.item_rows:
+            self._run_item_action(descriptor)
+            return
         if descriptor.id == "STATUS":
             self._apply_status(descriptor.status)
         elif descriptor.id == "REGISTER_PRODUCTION":
@@ -308,6 +504,37 @@ class BatchProposalActionCenter(QDialog):
         else:
             log.error("Acao de lote sem rota: id=%s area=%s", descriptor.id, self.area)
             QMessageBox.warning(self, "Acoes em lote", "Esta acao nao esta disponivel nesta versao.")
+
+    def _run_item_action(self, descriptor: ActionDescriptor) -> None:
+        if self.item_action_host is None:
+            QMessageBox.warning(self, "Acoes dos itens", "O contexto da tela de itens nao esta disponivel.")
+            return
+        observation = self.observation.toPlainText().strip()
+        if descriptor.id == "MANAGE_LOAD_EXISTING":
+            load_id = choose_existing_load_for_addition(self.service, self)
+            if load_id is None:
+                return
+            self.changed = True
+            self.accept()
+            self.item_action_host.open_assemble_load(self.item_rows, load_id=load_id)
+            return
+        if descriptor.id == "MANAGE_LOAD_NEW":
+            eligible_ids = {int(value) for value in descriptor.raw.get("eligible_item_ids") or self.item_ids}
+            rows = [row for row in self.item_rows if int(row.get("api_id") or row.get("id") or 0) in eligible_ids]
+            self.changed = True
+            self.accept()
+            self.item_action_host.open_assemble_load(rows)
+            return
+        self.changed = True
+        self.accept()
+        if descriptor.id == "STATUS" and descriptor.status == "INICIADO":
+            self.item_action_host.start_selected(self.item_rows, observation)
+        elif descriptor.id == "REGISTER_PRODUCTION":
+            self.item_action_host.register_selected(self.item_rows)
+        elif descriptor.id == "DEFINE_ITEM_FLOW":
+            self.item_action_host.open_flow_review(self.item_rows)
+        else:
+            log.error("Acao de itens sem rota: id=%s", descriptor.id)
 
     def _confirmation_text(self, label: str) -> str:
         proposals = [self._proposal_label(process_id) for process_id in self.process_ids[:12]]

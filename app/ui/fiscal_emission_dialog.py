@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
 from app.models.fiscal_table_model import format_number, format_weight
 from app.services.app_logging import get_logger
 from app.ui.components.modern_button import ModernButton
+from app.ui.background_worker import start_worker
 from app.ui.dialog_utils import apply_large_dialog_geometry, style_dialog_from_parent
 from app.ui.numeric_utils import parse_decimal, parse_whole_quantity
 from app.ui.table_utils import configure_wrapping_table, item_product_code, resize_rows_to_contents
@@ -111,21 +112,21 @@ class FiscalEmissionDialog(QDialog):
         self.table.itemChanged.connect(self._on_item_changed)
 
         footer = QHBoxLayout()
-        total_btn = ModernButton("Selecionar todos os saldos", "status", accent=True)
-        total_btn.clicked.connect(self.mark_all_pending)
-        total_btn.setEnabled(bool(self.items))
-        clear_btn = ModernButton("Limpar selecao", "clear")
-        clear_btn.clicked.connect(self.clear_selection)
-        clear_btn.setEnabled(bool(self.items))
-        cancel_btn = ModernButton("Cancelar", "clear")
-        cancel_btn.clicked.connect(self.reject)
-        confirm_btn = ModernButton("Registrar emissao fiscal", "status", accent=True)
-        confirm_btn.clicked.connect(self.confirm)
-        footer.addWidget(total_btn)
-        footer.addWidget(clear_btn)
+        self.select_all_button = ModernButton("Selecionar todos os saldos", "status", accent=True)
+        self.select_all_button.clicked.connect(self.mark_all_pending)
+        self.select_all_button.setEnabled(bool(self.items))
+        self.clear_button = ModernButton("Limpar selecao", "clear")
+        self.clear_button.clicked.connect(self.clear_selection)
+        self.clear_button.setEnabled(bool(self.items))
+        self.cancel_button = ModernButton("Cancelar", "clear")
+        self.cancel_button.clicked.connect(self.reject)
+        self.confirm_button = ModernButton("Registrar emissao fiscal", "status", accent=True)
+        self.confirm_button.clicked.connect(self.confirm)
+        footer.addWidget(self.select_all_button)
+        footer.addWidget(self.clear_button)
         footer.addStretch()
-        footer.addWidget(cancel_btn)
-        footer.addWidget(confirm_btn)
+        footer.addWidget(self.cancel_button)
+        footer.addWidget(self.confirm_button)
         root.addLayout(footer)
 
     def _populate_items(self):
@@ -281,14 +282,44 @@ class FiscalEmissionDialog(QDialog):
             "Registrando emissao fiscal: fiscal_processo_id=%r itens=%d",
             self.fiscal_row.get("fiscal_processo_id"), len(emissions),
         )
-        try:
-            self.service.register_fiscal_emission(
-                int(self.fiscal_row["fiscal_processo_id"]),
-                emissions,
-                self.control_number.text().strip(),
-                self.observation.toPlainText().strip(),
+        self._set_busy(True)
+        fiscal_process_id = int(self.fiscal_row["fiscal_processo_id"])
+        control_number = self.control_number.text().strip()
+        observation = self.observation.toPlainText().strip()
+
+        def operation():
+            return self.service.register_fiscal_emission(
+                fiscal_process_id, emissions, control_number, observation
             )
+
+        def success(_result):
+            self._set_busy(False)
             self.accept()
-        except Exception as exc:
+
+        def error(exc):
+            self._set_busy(False)
             log.error("Erro ao registrar emissao fiscal: %s", exc)
             QMessageBox.warning(self, "Emissao fiscal", str(exc))
+
+        self._worker = start_worker(
+            self, operation, success, error, operation_name="fiscal_emission.register"
+        )
+
+    def _set_busy(self, busy: bool):
+        self._busy = busy
+        for widget in (
+            self.table, self.control_number, self.observation,
+            self.select_all_button, self.clear_button, self.cancel_button,
+            self.confirm_button,
+        ):
+            widget.setEnabled(not busy)
+        if busy:
+            self.confirm_button.setText("Registrando...")
+        else:
+            self.confirm_button.setText("Registrar emissao fiscal")
+
+    def closeEvent(self, event):
+        if getattr(self, "_busy", False):
+            event.ignore()
+            return
+        super().closeEvent(event)

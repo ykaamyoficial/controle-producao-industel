@@ -104,6 +104,24 @@ class BatchSelectionController(QObject):
         if changed:
             self.selection_changed.emit()
 
+    def replace(self, rows: Iterable[dict[str, Any]]) -> None:
+        ordered_ids: list[int] = []
+        entities: dict[int, dict[str, Any]] = {}
+        for row in rows:
+            entity_id = self._row_id(row)
+            if entity_id is None or entity_id in entities:
+                continue
+            ordered_ids.append(entity_id)
+            entities[entity_id] = dict(row)
+        selected_ids = set(ordered_ids)
+        for entity_id, row in entities.items():
+            self._entity_cache[entity_id] = row
+        if selected_ids == self._selected_ids and ordered_ids == self.ordered_selected_ids:
+            return
+        self._selected_ids = selected_ids
+        self._selection_order = ordered_ids
+        self.selection_changed.emit()
+
     def deselect_many(self, entity_ids: Iterable[int]) -> None:
         previous = len(self._selected_ids)
         removed = {int(entity_id) for entity_id in entity_ids}

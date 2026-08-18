@@ -96,7 +96,7 @@ class FiscalActionCenter(QDialog):
         root.addWidget(title)
         badges = QHBoxLayout()
         badges.setContentsMargins(0, 0, 0, 0)
-        area_color = palette.get("area_stock", palette["accent"])
+        area_color = palette.get("area_fiscal", palette["danger"])
         badges.addWidget(StatusBadge("Fiscal", with_alpha(area_color, 34), area_color))
         status = self.fiscal_row.get("status_fiscal") or self.fiscal_row.get("situacao_fiscal") or ""
         status_label = self.service.fiscal_status_label(status) if hasattr(self.service, "fiscal_status_label") else status

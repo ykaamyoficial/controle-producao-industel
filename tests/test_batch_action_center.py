@@ -35,6 +35,7 @@ class FakeBatchService:
         open_loads: list[dict] | None = None,
         process_loads: dict[int, list[dict]] | None = None,
         load_candidates: list[dict] | None = None,
+        flow_summaries: dict[int, dict] | None = None,
     ):
         self.area = area
         self.palette = OFFICIAL_COLOR_PALETTES[palette_name]
@@ -44,6 +45,7 @@ class FakeBatchService:
         self._pending_delivery_items = pending_delivery_items or {}
         self._open_loads = open_loads if open_loads is not None else [{"id": 14, "status": "AGUARDANDO_LIBERACAO"}]
         self._process_loads = process_loads or {}
+        self._flow_summaries = flow_summaries
         # Por padrao, 10 e 20 (os ids usados na maioria dos testes de
         # GALVANIZACAO) tem saldo elegivel para montar carga - assim os
         # testes que nao mexem com elegibilidade continuam vendo os cards
@@ -78,8 +80,18 @@ class FakeBatchService:
         self.calls.append(("common_next_statuses", area, tuple(process_ids)))
         return list(self._common_statuses)
 
+    def item_flow_summary(self, process_id):
+        self.calls.append(("item_flow_summary", process_id))
+        if self._flow_summaries is None:
+            return {"total": 1, "undefined_count": 0}
+        return dict(self._flow_summaries[process_id])
+
     def action_label(self, area, status):
-        return {"LIBERADO_PRODUCAO": "Liberar para producao", "CANCELADA": "Cancelar proposta"}.get(
+        return {
+            "LIBERADO_PRODUCAO": "Liberar para producao",
+            "CANCELADA": "Cancelar proposta",
+            "INICIADO": "Iniciar ou retomar producao",
+        }.get(
             status, status.replace("_", " ").title()
         )
 
@@ -124,8 +136,48 @@ class ActionListPerAreaTests(unittest.TestCase):
         self.assertIn("REGISTER_PRODUCTION", ids)
         self.assertNotIn(("STATUS", "FINALIZADO"), [(a.id, a.status) for a in dialog.actions])
         self.assertIn(("STATUS", "INICIADO"), [(a.id, a.status) for a in dialog.actions])
-        # Producao sempre ganha o card de definir fluxo, independente do status comum
-        self.assertIn("DEFINE_ITEM_FLOW", ids)
+        self.assertEqual(dialog.actions[0].id, "DEFINE_ITEM_FLOW")
+        self.assertEqual(dialog.actions[0].label, "Redefinir fluxo dos itens")
+
+    def test_production_without_defined_flow_only_offers_definition(self):
+        service = FakeBatchService(
+            "PRODUCAO",
+            common_statuses=["INICIADO", "FINALIZADO"],
+            flow_summaries={
+                10: {"total": 2, "undefined_count": 2},
+                20: {"total": 1, "undefined_count": 1},
+            },
+        )
+        dialog = BatchProposalActionCenter(service, [10, 20], "PRODUCAO")
+
+        self.assertEqual([(action.id, action.label) for action in dialog.actions], [("DEFINE_ITEM_FLOW", "Definir fluxo dos itens")])
+        self.assertFalse(any(call[0] == "common_next_statuses" for call in service.calls))
+
+    def test_production_with_defined_flow_orders_redefinition_before_start(self):
+        service = FakeBatchService("PRODUCAO", common_statuses=["INICIADO"])
+        dialog = BatchProposalActionCenter(service, [10, 20], "PRODUCAO")
+
+        self.assertEqual(
+            [(action.id, action.status, action.label) for action in dialog.actions],
+            [
+                ("DEFINE_ITEM_FLOW", "", "Redefinir fluxo dos itens"),
+                ("STATUS", "INICIADO", "Iniciar ou retomar producao"),
+            ],
+        )
+
+    def test_mixed_flow_selection_prioritizes_definition_and_hides_start(self):
+        service = FakeBatchService(
+            "PRODUCAO",
+            common_statuses=["INICIADO"],
+            flow_summaries={
+                10: {"total": 2, "undefined_count": 0},
+                20: {"total": 2, "undefined_count": 1},
+            },
+        )
+        dialog = BatchProposalActionCenter(service, [10, 20], "PRODUCAO")
+
+        self.assertEqual([(action.id, action.label) for action in dialog.actions], [("DEFINE_ITEM_FLOW", "Definir fluxo dos itens")])
+        self.assertFalse(any(action.status == "INICIADO" for action in dialog.actions))
 
     def test_expedicao_collapses_entregue_into_register_delivery_card(self):
         service = FakeBatchService("EXPEDICAO", common_statuses=["SEPARADO", "ENTREGUE", "ENTREGUE_PARCIAL"])

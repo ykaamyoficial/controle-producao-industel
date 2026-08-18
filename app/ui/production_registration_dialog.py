@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.ui.components.modern_button import ModernButton
+from app.ui.background_worker import start_worker
 from app.ui.dialog_utils import apply_large_dialog_geometry, style_dialog_from_parent
 from app.ui.numeric_utils import format_decimal, parse_decimal
 
@@ -399,15 +400,14 @@ class ProductionRegistrationDialog(QDialog):
         return True, ""
 
     def _execute(self, groups: list[dict]):
-        valid, message = self._revalidate(groups)
-        if not valid:
-            QMessageBox.warning(self, "Registro desatualizado", message)
-            self._load()
-            return
         self._busy = True
         self._update_summary()
         observation = self.observation_input.text().strip()
-        try:
+
+        def operation():
+            valid, message = self._revalidate(groups)
+            if not valid:
+                return {"valid": False, "message": message}
             processed = 0
             items = 0
             weight = Decimal("0")
@@ -419,9 +419,23 @@ class ProductionRegistrationDialog(QDialog):
                 processed += 1
                 items += len(selected_ids)
                 weight += sum((row.get("_weight", Decimal("0")) for row in group["selected"]), Decimal("0"))
-            QMessageBox.information(self, "Produçao", f"Produçao registrada com sucesso.\n\n{processed} proposta(s) processada(s)\n{items} item(ns) registrado(s)\n{format_decimal(weight)} kg registrado(s)")
+            return {"valid": True, "processed": processed, "items": items, "weight": weight}
+
+        def success(result):
+            self._busy = False
+            self._update_summary()
+            if not result.get("valid"):
+                QMessageBox.warning(self, "Registro desatualizado", result.get("message") or "Revise os itens disponiveis.")
+                self._load()
+                return
+            QMessageBox.information(self, "Produçao", f"Produçao registrada com sucesso.\n\n{result['processed']} proposta(s) processada(s)\n{result['items']} item(ns) registrado(s)\n{format_decimal(result['weight'])} kg registrado(s)")
             self.accept()
-        except Exception as exc:
+
+        def error(exc):
             self._busy = False
             self._update_summary()
             QMessageBox.warning(self, "Registrar producao", f"A operacao nao foi concluida integralmente:\n{exc}")
+
+        self._worker = start_worker(
+            self, operation, success, error, operation_name="production_registration.execute"
+        )

@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.ui.components.modern_button import ModernButton
+from app.ui.background_worker import start_worker
 from app.ui.dialog_utils import apply_large_dialog_geometry, style_dialog_from_parent
 from app.ui.icons import IconSize, make_icon, status_icon
 from app.ui.styles import status_color
@@ -97,6 +98,7 @@ class GalvanizationLoadDialog(QDialog):
         self.cart: dict[int, dict] = {}
         self._proposal_status_by_id: dict[int, str] = {}
         self.saved = False
+        self._busy = False
         self.setWindowTitle("Editar carga de galvanizacao" if load_id else "Montar carga para galvanizacao")
         apply_large_dialog_geometry(self, parent)
         style_dialog_from_parent(self, parent)
@@ -117,13 +119,13 @@ class GalvanizationLoadDialog(QDialog):
         root.addWidget(self.tabs, 1)
 
         footer = QHBoxLayout()
-        cancel = ModernButton("Cancelar", "clear")
-        review = ModernButton("Revisar carga", "save", accent=True)
-        cancel.clicked.connect(self.reject)
-        review.clicked.connect(self.review_and_save)
+        self.cancel_button = ModernButton("Cancelar", "clear")
+        self.review_button = ModernButton("Revisar carga", "save", accent=True)
+        self.cancel_button.clicked.connect(self.reject)
+        self.review_button.clicked.connect(self.review_and_save)
         footer.addStretch()
-        footer.addWidget(cancel)
-        footer.addWidget(review)
+        footer.addWidget(self.cancel_button)
+        footer.addWidget(self.review_button)
         root.addLayout(footer)
 
     def _build_load_tab(self) -> QFrame:
@@ -552,23 +554,46 @@ class GalvanizationLoadDialog(QDialog):
             {"item_id": entry["item_id"], "version": entry.get("version"), "sent_quantity": entry.get("sent_quantity")}
             for entry in self.cart.values()
         ]
-        try:
-            self.load_id = self.service.save_galvanization_load(
-                self.driver.text(),
-                self.max_weight.text(),
-                self.expected_return.text(),
-                payload_items,
-                self.load_id,
-                load_weight=self.load_weight.text(),
-                load_weight_source="MANUAL",
-                expected_version=self.load_version,
+        driver = self.driver.text()
+        max_weight = self.max_weight.text()
+        expected_return = self.expected_return.text()
+        load_weight = self.load_weight.text()
+        current_load_id = self.load_id
+        expected_version = self.load_version
+        self._set_busy(True)
+
+        def operation():
+            return self.service.save_galvanization_load(
+                driver, max_weight, expected_return, payload_items, current_load_id,
+                load_weight=load_weight, load_weight_source="MANUAL",
+                expected_version=expected_version,
             )
-        except Exception as exc:
+
+        def success(load_id):
+            self._set_busy(False)
+            self.load_id = load_id
+            self.saved = True
+            QMessageBox.information(self, "Montar carga", f"Carga {self.load_id} salva aguardando liberacao.")
+            self.accept()
+
+        def error(exc):
+            self._set_busy(False)
             QMessageBox.critical(self, "Montar carga", str(exc))
+
+        self._worker = start_worker(self, operation, success, error, operation_name="galvanization_load.save")
+
+    def _set_busy(self, busy: bool):
+        self._busy = busy
+        for widget in (self.tabs, self.driver, self.max_weight, self.expected_return,
+                       self.load_weight, self.cancel_button, self.review_button):
+            widget.setEnabled(not busy)
+        self.review_button.setText("Salvando..." if busy else "Revisar carga")
+
+    def closeEvent(self, event):
+        if self._busy:
+            event.ignore()
             return
-        self.saved = True
-        QMessageBox.information(self, "Montar carga", f"Carga {self.load_id} salva aguardando liberacao.")
-        self.accept()
+        super().closeEvent(event)
 
 
 class _ItemAllocationDialog(QDialog):
@@ -1054,13 +1079,13 @@ class GalvanizationReturnDialog(QDialog):
         root.addWidget(self.tabs, 1)
 
         footer = QHBoxLayout()
-        cancel = ModernButton("Cancelar", "clear")
-        review = ModernButton("Revisar retorno", "status", accent=True)
-        cancel.clicked.connect(self.reject)
-        review.clicked.connect(self.review_and_confirm)
+        self.cancel_button = ModernButton("Cancelar", "clear")
+        self.review_button = ModernButton("Revisar retorno", "status", accent=True)
+        self.cancel_button.clicked.connect(self.reject)
+        self.review_button.clicked.connect(self.review_and_confirm)
         footer.addStretch()
-        footer.addWidget(cancel)
-        footer.addWidget(review)
+        footer.addWidget(self.cancel_button)
+        footer.addWidget(self.review_button)
         root.addLayout(footer)
 
     def _build_return_tab(self) -> QFrame:
@@ -1417,46 +1442,65 @@ class GalvanizationReturnDialog(QDialog):
                 {"detail_id": entry["detail_id"], "quantidade_retornada": entry["return_quantity"]}
             )
         observation = self.observation.toPlainText().strip()
-        completed_loads: list[int] = []
-        pending_loads: list[int] = []
-        failures: list[str] = []
-        for load_id, payload_items in payload_by_load.items():
-            try:
-                self.service.register_galvanization_partial_return(load_id, payload_items, observation)
-            except Exception as exc:
-                failures.append(f"Carga #{load_id}: {exc}")
-                continue
-            try:
-                updated_load = self.service.get_galvanization_load_dict(load_id)
-            except Exception:
-                updated_load = {}
-            if (updated_load.get("status") or "") == "RETORNADA_GALVANIZACAO":
-                completed_loads.append(load_id)
-            else:
-                pending_loads.append(load_id)
-        if failures:
-            QMessageBox.critical(
-                self,
-                "Registrar retorno",
-                "Parte do retorno nao foi registrada:\n\n" + "\n".join(failures),
-            )
-            # O que ja foi gravado com sucesso permanece gravado (cada carga
-            # e uma chamada independente) - recarrega o carrinho para
-            # refletir o estado real em vez de fechar como se nada tivesse
-            # acontecido, deixando o usuario decidir o proximo passo.
-            self.cart.clear()
-            self._load_pending()
-            self.refresh()
+        self._set_busy(True)
+
+        def operation():
+            completed_loads: list[int] = []
+            pending_loads: list[int] = []
+            failures: list[str] = []
+            for load_id, payload_items in payload_by_load.items():
+                try:
+                    self.service.register_galvanization_partial_return(load_id, payload_items, observation)
+                except Exception as exc:
+                    failures.append(f"Carga #{load_id}: {exc}")
+                    continue
+                try:
+                    updated_load = self.service.get_galvanization_load_dict(load_id)
+                except Exception:
+                    updated_load = {}
+                if (updated_load.get("status") or "") == "RETORNADA_GALVANIZACAO":
+                    completed_loads.append(load_id)
+                else:
+                    pending_loads.append(load_id)
+            return completed_loads, pending_loads, failures
+
+        def success(result):
+            completed_loads, pending_loads, failures = result
+            self._set_busy(False)
+            if failures:
+                QMessageBox.critical(
+                    self, "Registrar retorno",
+                    "Parte do retorno nao foi registrada:\n\n" + "\n".join(failures),
+                )
+                self.cart.clear()
+                self._load_pending()
+                self.refresh()
+                return
+            lines = []
+            if completed_loads:
+                lines.append(f"Carga(s) {', '.join(f'#{value}' for value in completed_loads)} concluida(s).")
+            if pending_loads:
+                lines.append(f"Carga(s) {', '.join(f'#{value}' for value in pending_loads)} ainda com saldo pendente.")
+            QMessageBox.information(self, "Registrar retorno", "Retorno registrado com sucesso.\n\n" + "\n".join(lines))
+            self.accept()
+
+        def error(exc):
+            self._set_busy(False)
+            QMessageBox.critical(self, "Registrar retorno", str(exc))
+
+        self._worker = start_worker(self, operation, success, error, operation_name="galvanization_return.confirm")
+
+    def _set_busy(self, busy: bool):
+        self._busy = busy
+        for widget in (self.tabs, self.observation, self.cancel_button, self.review_button):
+            widget.setEnabled(not busy)
+        self.review_button.setText("Registrando..." if busy else "Revisar retorno")
+
+    def closeEvent(self, event):
+        if getattr(self, "_busy", False):
+            event.ignore()
             return
-        lines = []
-        if completed_loads:
-            listed = ", ".join(f"#{load_id}" for load_id in completed_loads)
-            lines.append(f"Carga(s) {listed} concluida(s).")
-        if pending_loads:
-            listed = ", ".join(f"#{load_id}" for load_id in pending_loads)
-            lines.append(f"Carga(s) {listed} ainda com saldo pendente.")
-        QMessageBox.information(self, "Registrar retorno", "Retorno registrado com sucesso.\n\n" + "\n".join(lines))
-        self.accept()
+        super().closeEvent(event)
 
 
 class _GalvanizationReturnReviewDialog(QDialog):

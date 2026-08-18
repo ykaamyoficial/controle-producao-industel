@@ -31,10 +31,22 @@ from app.models.fiscal_report_table_model import FiscalReportTableModel
 from app.models.fiscal_table_model import format_weight
 from app.models.fiscal_table_model import FiscalProcessTableModel
 from app.ui.background_worker import start_worker
+from app.ui.refresh_coordinator import RefreshCoordinator
+from app.ui.resilience import show_operation_error
+from app.ui.components.area_identity import style_area_title
 from app.ui.components.kpi_card import KpiCard
 from app.ui.components.modern_button import ModernButton
 from app.ui.components.modern_table import ModernTable, ProcessFilterProxy
 from app.ui.components.batch_selection import BatchSelectionController, BatchSelectionHeader
+from app.ui.components.operational_layout import (
+    OPERATIONAL_ACTION_SPACING,
+    OPERATIONAL_FIELD_HORIZONTAL_SPACING,
+    OPERATIONAL_FIELD_VERTICAL_SPACING,
+    OPERATIONAL_PAGE_MARGINS,
+    OPERATIONAL_SECTION_SPACING,
+)
+from app.ui.components.operational_header import configure_operational_header
+from app.ui.components.top_tabs import configure_operational_tabs
 from app.ui.dialog_utils import apply_large_dialog_geometry, style_dialog_from_parent
 from app.ui.fiscal_emission_dialog import FiscalEmissionDialog
 from app.ui.fiscal_item_selection_dialog import FiscalItemSelectionDialog
@@ -350,32 +362,40 @@ class FiscalPage(QWidget):
         self.report_model = FiscalReportTableModel()
         self._refresh_thread = None
         self._refreshing = False
+        self._refresh_coordinator = RefreshCoordinator(self)
+        self._refresh_view_state = (0, 0)
         self._selected_only = False
         self._build()
 
     def _build(self):
         shell = QVBoxLayout(self)
-        shell.setContentsMargins(0, 0, 0, 0)
+        shell.setContentsMargins(*OPERATIONAL_PAGE_MARGINS)
         shell.setSpacing(0)
         tabs = QTabWidget()
-        tabs.setObjectName("ModernTabs")
+        configure_operational_tabs(tabs, area="FISCAL", palette=self.service.palette)
         self.tabs = tabs
         shell.addWidget(tabs, 1)
 
         tracking = QWidget()
         tracking.setObjectName("FiscalTabPage")
         root = QVBoxLayout(tracking)
-        root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(12)
+        root.setContentsMargins(*OPERATIONAL_PAGE_MARGINS)
+        root.setSpacing(OPERATIONAL_SECTION_SPACING)
 
         filters = QFrame()
-        filters.setObjectName("FilterBar")
         fl = QVBoxLayout(filters)
-        fl.setContentsMargins(16, 12, 16, 12)
-        fl.setSpacing(10)
+        configure_operational_header(
+            filters,
+            fl,
+            margins=(16, 12, 16, 10),
+            spacing=8,
+            area="FISCAL",
+            palette=self.service.palette,
+        )
 
         title = QLabel("Fiscal")
         title.setObjectName("FilterTitle")
+        style_area_title(title, "FISCAL", self.service.palette)
         caption = QLabel("Controle visual das propostas que retornaram da galvanizacao e precisam de acompanhamento fiscal.")
         caption.setObjectName("Caption")
         caption.setWordWrap(True)
@@ -421,14 +441,14 @@ class FiscalPage(QWidget):
         clear_btn.clicked.connect(self.clear)
 
         fields = QGridLayout()
-        fields.setHorizontalSpacing(12)
-        fields.setVerticalSpacing(6)
+        fields.setHorizontalSpacing(OPERATIONAL_FIELD_HORIZONTAL_SPACING)
+        fields.setVerticalSpacing(OPERATIONAL_FIELD_VERTICAL_SPACING)
         self._add_filter_field(fields, 0, 0, "Busca geral", self.search)
         self._add_filter_field(fields, 0, 2, "Status Fiscal", self.status)
         self._add_filter_field(fields, 0, 4, "Entrada", self.entry_date)
         self._add_filter_field(fields, 0, 6, "Alerta", self.critical)
         actions = QHBoxLayout()
-        actions.setSpacing(8)
+        actions.setSpacing(OPERATIONAL_ACTION_SPACING)
         actions.addWidget(self.loading)
         actions.addWidget(apply_btn)
         actions.addWidget(clear_btn)
@@ -440,7 +460,7 @@ class FiscalPage(QWidget):
         fl.addLayout(fields)
 
         self.selection_bar = QHBoxLayout()
-        self.selection_bar.setSpacing(8)
+        self.selection_bar.setSpacing(OPERATIONAL_ACTION_SPACING)
         self.selection_mode_label = QLabel("Modo de selecao")
         self.selection_mode_label.setObjectName("FilterTitle")
         self.selection_count_label = QLabel("0 propostas selecionadas")
@@ -493,14 +513,21 @@ class FiscalPage(QWidget):
         tab.setObjectName("FiscalTabPage")
         root = QVBoxLayout(tab)
         root.setContentsMargins(0, 12, 0, 0)
-        root.setSpacing(12)
+        root.setSpacing(OPERATIONAL_SECTION_SPACING)
 
         header = QFrame()
-        header.setObjectName("FilterBar")
         layout = QVBoxLayout(header)
-        layout.setContentsMargins(16, 12, 16, 12)
+        configure_operational_header(
+            header,
+            layout,
+            margins=(16, 12, 16, 10),
+            spacing=8,
+            area="FISCAL",
+            palette=self.service.palette,
+        )
         title = QLabel("Notas fiscais retiradas")
         title.setObjectName("FilterTitle")
+        style_area_title(title, "FISCAL", self.service.palette)
         caption = QLabel("Consulta das notas fiscais ja retiradas pelo cliente. Somente leitura.")
         caption.setObjectName("Caption")
         caption.setWordWrap(True)
@@ -527,9 +554,11 @@ class FiscalPage(QWidget):
         layout.addWidget(label, row, column)
         layout.addWidget(widget, row, column + 1)
 
-    def refresh(self):
-        if self._refreshing:
-            return
+    def refresh(self, *, debounced: bool = False):
+        self._refresh_view_state = (
+            self.table.verticalScrollBar().value() if hasattr(self, "table") else 0,
+            self.table.horizontalScrollBar().value() if hasattr(self, "table") else 0,
+        )
         raw_status = self.status.currentData() or ""
         status_fiscal = raw_status
         situacao_fiscal = ""
@@ -548,14 +577,15 @@ class FiscalPage(QWidget):
         if filters["mais_7_dias_sem_emissao"]:
             filters["pendencia_critica"] = ""
         self._set_loading(True)
-        self._refresh_thread = start_worker(
-            self,
+        self._refresh_coordinator.request(
             lambda: {
                 "rows": self.service.fiscal_rows(filters),
                 "withdrawn_rows": self.service.fiscal_rows({"situacao_fiscal": "NF_RETIRADA_CLIENTE"}),
             },
             self._refresh_success,
             self._refresh_error,
+            operation_name="fiscal_page.refresh",
+            immediate=not debounced,
         )
 
     def _refresh_success(self, payload):
@@ -565,6 +595,8 @@ class FiscalPage(QWidget):
         self.batch_selection.deselect_many(self.batch_selection.selected_ids - eligible_ids)
         self.model.set_rows(rows)
         self.table.apply_column_layout()
+        self.table.verticalScrollBar().setValue(self._refresh_view_state[0])
+        self.table.horizontalScrollBar().setValue(self._refresh_view_state[1])
         if rows and not self.batch_selection.active:
             self.table.selectRow(0)
         withdrawn_rows = payload.get("withdrawn_rows") or []
@@ -574,14 +606,8 @@ class FiscalPage(QWidget):
         self._sync_selection_ui()
 
     def _refresh_error(self, exc):
-        self.model.set_rows([])
-        self.withdrawn_model.set_rows([])
-        self.table.apply_column_layout()
-        self.withdrawn_table.apply_column_layout()
         self._set_loading(False)
-        self.batch_selection.clear()
-        self._sync_selection_ui()
-        QMessageBox.warning(self, "Fiscal", str(exc))
+        show_operation_error(self, exc, self.refresh, title="Fiscal")
 
     def _set_loading(self, loading: bool):
         self._refreshing = loading
@@ -758,13 +784,16 @@ class FiscalPage(QWidget):
         if not index.isValid():
             return
         source_index = self.proxy.mapToSource(index)
+        if not source_index.isValid() or not (0 <= source_index.row() < len(self.model.rows)):
+            return
+        row = self.model.rows[source_index.row()]
         if self.batch_selection.active:
-            key = self.model.columns[source_index.column()][0]
-            if key == "batch_select":
-                row = self.model.rows[source_index.row()]
-                if self._is_selection_eligible(row):
-                    self.batch_selection.toggle(int(row.get("fiscal_processo_id") or 0), row)
-                return
+            # O modo de selecao usa NoSelection na tabela para impedir que a
+            # selecao visual do Qt apague a selecao acumulada. Por isso, o
+            # clique em qualquer celula precisa alternar explicitamente a
+            # proposta; antes somente a coluna do checkbox fazia isso.
+            if self._is_selection_eligible(row):
+                self.batch_selection.toggle(int(row.get("fiscal_processo_id") or 0), row)
             return
         key = self.model.columns[source_index.column()][0]
         if key in {"acoes", "fiscal_action"}:
@@ -953,17 +982,21 @@ class FiscalPage(QWidget):
         tab.setObjectName("FiscalTabPage")
         root = QVBoxLayout(tab)
         root.setContentsMargins(0, 12, 0, 0)
-        root.setSpacing(12)
+        root.setSpacing(OPERATIONAL_SECTION_SPACING)
 
         filters = QFrame()
-        filters.setObjectName("FilterBar")
         layout = QVBoxLayout(filters)
-        layout.setContentsMargins(16, 12, 16, 12)
-        layout.setSpacing(10)
+        configure_operational_header(
+            filters,
+            layout,
+            area="FISCAL",
+            palette=self.service.palette,
+        )
 
         header = QHBoxLayout()
         title = QLabel("Relatorios fiscais")
         title.setObjectName("FilterTitle")
+        style_area_title(title, "FISCAL", self.service.palette)
         caption = QLabel("Consultas fiscais por proposta, item, cliente, periodo e emissao. Nao inclui valores financeiros.")
         caption.setObjectName("Caption")
         caption.setWordWrap(True)
@@ -1025,8 +1058,8 @@ class FiscalPage(QWidget):
         self.export_csv_btn.clicked.connect(self.export_report_csv)
 
         grid = QGridLayout()
-        grid.setHorizontalSpacing(10)
-        grid.setVerticalSpacing(8)
+        grid.setHorizontalSpacing(OPERATIONAL_FIELD_HORIZONTAL_SPACING)
+        grid.setVerticalSpacing(OPERATIONAL_FIELD_VERTICAL_SPACING)
         self._add_filter_field(grid, 0, 0, "Relatorio", self.report_type)
         self._add_filter_field(grid, 0, 2, "Periodo inicial", self.report_start)
         self._add_filter_field(grid, 0, 4, "Periodo final", self.report_end)
@@ -1036,7 +1069,7 @@ class FiscalPage(QWidget):
         self._add_filter_field(grid, 1, 4, "Pendencia critica / +7 dias", self.report_alert)
         layout.addLayout(grid)
         actions = QHBoxLayout()
-        actions.setSpacing(8)
+        actions.setSpacing(OPERATIONAL_ACTION_SPACING)
         actions.addStretch()
         actions.addWidget(generate)
         actions.addWidget(clear)

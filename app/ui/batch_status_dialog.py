@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -9,12 +9,14 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMessageBox,
+    QProgressBar,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
 )
 
 from app.ui.components.modern_button import ModernButton
+from app.ui.background_worker import start_worker
 from app.ui.dialog_utils import apply_large_dialog_geometry, style_dialog_from_parent
 from app.ui.icons import IconSize, status_icon
 from app.ui.item_selection_dialog import ItemSelectionDialog
@@ -22,6 +24,8 @@ from app.ui.production_registration_dialog import ProductionRegistrationDialog
 
 
 class BatchStatusDialog(QDialog):
+    progress = Signal(int, int)
+
     def __init__(
         self,
         service,
@@ -34,6 +38,9 @@ class BatchStatusDialog(QDialog):
     ):
         super().__init__(parent)
         self.service = service
+        self._busy = False
+        self._worker = None
+        self.progress.connect(self._update_progress)
         self.selected_ids = []
         self.requested_ids = list(dict.fromkeys(int(value) for value in (process_ids or []) if value))
         self.strict_preselection = strict_preselection
@@ -128,14 +135,21 @@ class BatchStatusDialog(QDialog):
         footer = QHBoxLayout()
         self.summary = QLabel("Nenhuma proposta adicionada.")
         self.summary.setObjectName("Caption")
-        cancel = ModernButton("Cancelar", "clear")
-        apply_btn = ModernButton("Aplicar lote", "batch", accent=True)
-        cancel.clicked.connect(self.reject)
-        apply_btn.clicked.connect(self.apply_batch)
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 1)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setTextVisible(False)
+        self.progress_bar.setMaximumWidth(150)
+        self.progress_bar.setVisible(False)
+        self.cancel_button = ModernButton("Cancelar", "clear")
+        self.apply_button = ModernButton("Aplicar lote", "batch", accent=True)
+        self.cancel_button.clicked.connect(self.reject)
+        self.apply_button.clicked.connect(self.apply_batch)
         footer.addWidget(self.summary)
+        footer.addWidget(self.progress_bar)
         footer.addStretch()
-        footer.addWidget(cancel)
-        footer.addWidget(apply_btn)
+        footer.addWidget(self.cancel_button)
+        footer.addWidget(self.apply_button)
         root.addLayout(footer)
 
         self.search.textChanged.connect(self.load_candidates)
@@ -331,30 +345,71 @@ class BatchStatusDialog(QDialog):
             self._confirmation_text(label),
         ) != QMessageBox.Yes:
             return
-        failures = []
-        changed = 0
-        for process_id in list(self.selected_ids):
-            process = self.service.get_process_dict(process_id)
-            proposal = process.get("proposta") or str(process_id)
-            try:
-                self.service.update_status(
-                    process_id,
-                    area,
-                    target_statuses.get(process_id, status),
-                    self.observation.text().strip(),
-                    item_selections.get(process_id),
-                    produced_weight=produced_weights.get(process_id),
+        process_ids = list(self.selected_ids)
+        observation = self.observation.text().strip()
+        self._set_busy(True)
+
+        def operation():
+            failures = []
+            changed = 0
+            total = len(process_ids)
+            for index, process_id in enumerate(process_ids, start=1):
+                process = self.service.get_process_dict(process_id)
+                proposal = process.get("proposta") or str(process_id)
+                try:
+                    self.service.update_status(
+                        process_id, area, target_statuses.get(process_id, status), observation,
+                        item_selections.get(process_id),
+                        produced_weight=produced_weights.get(process_id),
+                    )
+                    changed += 1
+                except Exception as exc:
+                    failures.append(f"{proposal}: {exc}")
+                self.progress.emit(index, total)
+            return changed, failures
+
+        def success(result):
+            changed, failures = result
+            self._set_busy(False)
+            if failures:
+                QMessageBox.warning(
+                    self, "Acoes em lote",
+                    f"{changed} proposta(s) alterada(s).\n\nNao alteradas:\n" + "\n".join(failures[:12]),
                 )
-                changed += 1
-            except Exception as exc:
-                failures.append(f"{proposal}: {exc}")
-        if failures:
-            QMessageBox.warning(
-                self,
-                "Acoes em lote",
-                f"{changed} proposta(s) alterada(s).\n\nNao alteradas:\n" + "\n".join(failures[:12]),
-            )
-        self.accept()
+            self.accept()
+
+        def error(exc):
+            self._set_busy(False)
+            QMessageBox.warning(self, "Acoes em lote", str(exc))
+
+        self._worker = start_worker(
+            self, operation, success, error, operation_name="batch_status.apply_batch"
+        )
+
+    def _set_busy(self, busy: bool):
+        self._busy = busy
+        for widget in (
+            self.search, self.area_combo, self.status_filter, self.candidates,
+            self.selected, self.add_btn, self.remove_btn, self.status_combo,
+            self.observation, self.cancel_button, self.apply_button,
+        ):
+            widget.setEnabled(not busy)
+        self.apply_button.setText("Aplicando..." if busy else "Aplicar lote")
+        self.progress_bar.setVisible(busy)
+        if busy:
+            self.progress_bar.setRange(0, max(1, len(self.selected_ids)))
+            self.progress_bar.setValue(0)
+
+    def _update_progress(self, current: int, total: int):
+        self.progress_bar.setRange(0, max(1, total))
+        self.progress_bar.setValue(min(current, total))
+        self.summary.setText(f"Processando {current}/{total} proposta(s)...")
+
+    def closeEvent(self, event):
+        if self._busy:
+            event.ignore()
+            return
+        super().closeEvent(event)
 
     def _revalidate_before_apply(self, area: str, selected_action: str) -> bool:
         if not hasattr(self.service, "validate_batch_selection"):

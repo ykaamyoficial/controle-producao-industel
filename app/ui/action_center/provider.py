@@ -72,6 +72,8 @@ AREA_COLOR_KEYS = {
     "PRODUCAO": "area_production",
     "GALVANIZACAO": "area_galvanization",
     "EXPEDICAO": "area_expedition",
+    "FISCAL": "area_fiscal",
+    "PARCIAIS": "area_partials",
     "ALMOXARIFADO": "area_stock",
 }
 
