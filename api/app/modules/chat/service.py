@@ -678,7 +678,11 @@ async def list_messages(session: AsyncSession, conversation_id: int, actor: User
         ids.add(row.mentioned_user_id)
     users_by_id = await _users_by_id(session, ids)
     seen_by_message = await _seen_counts(session, rows)
-    return MessageList(items=[_message_out(row, users_by_id, seen_by_message.get(row.id, 0)) for row in rows], total=total)
+    return MessageList(
+        items=[_message_out(row, users_by_id, seen_by_message.get(row.id, 0)) for row in rows],
+        total=total,
+        has_more=(offset + len(rows)) < total,
+    )
 
 
 async def get_proposal_timeline(
@@ -810,6 +814,7 @@ async def list_conversations(
     *,
     status: str | None = None,
     search: str | None = None,
+    conversation_id: int | None = None,
     limit: int = 50,
     offset: int = 0,
 ) -> ConversationList:
@@ -819,6 +824,8 @@ async def list_conversations(
     stmt = select(ChatConversation, Proposal).select_from(ChatConversation).outerjoin(Proposal, Proposal.id == ChatConversation.proposal_id)
     if status:
         stmt = stmt.where(ChatConversation.status == status)
+    if conversation_id:
+        stmt = stmt.where(ChatConversation.id == conversation_id)
     rows = (await session.execute(stmt)).all()
     rows = [(conversation, proposal) for conversation, proposal in rows if _conversation_visible_in_listings(actor, conversation)]
 

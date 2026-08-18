@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from PySide6.QtCore import QSize, Qt
+from PySide6.QtCore import QSize, Qt, QTimer
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -20,6 +20,7 @@ from app.ui.animations import fade_in
 from app.ui.background_worker import start_worker
 from app.ui.components.modern_button import ModernButton
 from app.ui.components.toast_notification import ToastNotification
+from app.ui.resilience import show_operation_error
 from app.ui.proposal_chat_dialog import ChatConversationPanel
 from app.ui.styles import status_color
 
@@ -53,6 +54,13 @@ class ChatCenterPage(QWidget):
         super().__init__(parent)
         self.service = service
         self._refresh_thread = None
+        self._refresh_in_flight = False
+        self._refresh_pending = False
+        self._targeted_thread = None
+        self._search_timer = QTimer(self)
+        self._search_timer.setSingleShot(True)
+        self._search_timer.setInterval(350)
+        self._search_timer.timeout.connect(self.refresh)
         self._status_filter = "ATIVA"
         self.conversations: list[dict] = []
         self.selected_conversation: dict | None = None
@@ -94,6 +102,7 @@ class ChatCenterPage(QWidget):
         self.search = QLineEdit()
         self.search.setPlaceholderText("Pesquisar conversas...")
         self.search.returnPressed.connect(self.refresh)
+        self.search.textChanged.connect(lambda _text: self._search_timer.start())
         layout.addWidget(self.search)
 
         tab_row = QHBoxLayout()
@@ -151,21 +160,31 @@ class ChatCenterPage(QWidget):
         self.refresh()
 
     def refresh(self):
+        if self._refresh_in_flight:
+            self._refresh_pending = True
+            return
+        self._refresh_in_flight = True
         self._set_loading(True)
         status = self._status_filter
         other_status = "FINALIZADA" if status == "ATIVA" else "ATIVA"
         search = self.search.text().strip()
         self._refresh_thread = start_worker(
-            self, lambda: self._fetch(status, other_status, search), self._refresh_success, self._refresh_error
+            self,
+            lambda: self._fetch(status, other_status, search),
+            self._refresh_success,
+            self._refresh_error,
+            operation_name="chat_center_page.refresh",
         )
 
     def _fetch(self, status: str, other_status: str, search: str) -> tuple[list[dict], int]:
-        active = self.service.chat_conversations({"status": status, "search": search or None, "limit": 200})
+        active_page = self.service.chat_conversations_page({"status": status, "search": search or None, "limit": 50})
+        active = active_page.get("items") or []
         try:
-            other = self.service.chat_conversations({"status": other_status, "search": search or None, "limit": 200})
+            other_page = self.service.chat_conversations_page({"status": other_status, "search": search or None, "limit": 1})
+            other = int(other_page.get("total") or 0)
         except Exception:
-            other = []
-        return active, len(other)
+            other = 0
+        return active, other
 
     def _refresh_success(self, result: tuple[list[dict], int]):
         conversations, other_count = result
@@ -195,6 +214,10 @@ class ChatCenterPage(QWidget):
         if selected_item is not None:
             self.conversation_list.setCurrentItem(selected_item)
         self._set_loading(False)
+        self._refresh_in_flight = False
+        if self._refresh_pending:
+            self._refresh_pending = False
+            QTimer.singleShot(0, self.refresh)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -228,7 +251,11 @@ class ChatCenterPage(QWidget):
 
     def _refresh_error(self, exc):
         self._set_loading(False)
-        ToastNotification(self.window(), str(exc), "error")
+        self._refresh_in_flight = False
+        show_operation_error(self, exc, self.refresh, title="Chat")
+        if self._refresh_pending:
+            self._refresh_pending = False
+            QTimer.singleShot(0, self.refresh)
 
     def _set_loading(self, loading: bool):
         self.loading.setVisible(loading)
@@ -351,3 +378,45 @@ class ChatCenterPage(QWidget):
             self.panel = ChatConversationPanel(self.service, proposal_id=conversation.get("proposal_id"), parent=self.center_container)
         self.center_layout.addWidget(self.panel, 1)
         self._panel_fade = fade_in(self.panel, duration=220)
+
+    def on_conversation_updated(self, conversation_id: int) -> None:
+        """Atualiza somente o card alterado; refresh completo fica reservado
+        para uma conversa nova ou para mudança de status/aba."""
+        if not conversation_id:
+            return
+        index = next((i for i, row in enumerate(self.conversations) if int(row.get("id") or 0) == conversation_id), None)
+        if index is None:
+            self.refresh()
+            return
+        current = self.conversations[index]
+        status = current.get("status") or self._status_filter
+        if self._targeted_thread is not None and self._targeted_thread.isRunning():
+            return
+        self._targeted_thread = start_worker(
+            self,
+            lambda: (self.service.chat_conversations_page({"status": status, "conversation_id": conversation_id, "limit": 1}).get("items") or []),
+            lambda rows: self._apply_targeted_conversation(conversation_id, rows),
+            lambda _exc: None,
+            operation_name="chat_center_page.update_conversation",
+        )
+
+    def _apply_targeted_conversation(self, conversation_id: int, rows: list[dict]) -> None:
+        updated = next((row for row in rows if int(row.get("id") or 0) == conversation_id), None)
+        if updated is None:
+            self.refresh()
+            return
+        index = next((i for i, row in enumerate(self.conversations) if int(row.get("id") or 0) == conversation_id), None)
+        if index is None:
+            self.refresh()
+            return
+        self.conversations[index] = updated
+        item = self.conversation_list.item(index)
+        if item is None:
+            return
+        card = self._build_conversation_card(updated)
+        card.setFixedWidth(max(0, self.conversation_list.viewport().width() - 4))
+        self._fit_card_labels(card)
+        item.setData(Qt.UserRole, updated)
+        self.conversation_list.setItemWidget(item, card)
+        if self.selected_conversation and int(self.selected_conversation.get("id") or 0) == conversation_id:
+            self.selected_conversation = updated

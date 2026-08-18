@@ -38,6 +38,7 @@ from app.ui.components.timeline_entries import (
     entry_fingerprint,
 )
 from app.ui.components.toast_notification import ToastNotification
+from app.ui.resilience import show_operation_error
 from app.ui.dialog_utils import apply_large_dialog_geometry, style_dialog_from_parent
 from app.ui.icons import AppIcons, IconSize, make_icon
 from app.ui.process_detail_dialog import ProcessDetailDialog
@@ -236,6 +237,7 @@ class ChatConversationPanel(QWidget):
         self._max_bubble_width = 420
         self._has_more_older = False
         self._oldest_created_at: str | None = None
+        self._message_offset = 0
         self._loading_older = False
         self._older_thread = None
         self.proposal: dict | None = None
@@ -660,16 +662,25 @@ class ChatConversationPanel(QWidget):
         if self.proposal_id is not None:
             loader = lambda: self.service.chat_proposal_timeline(self.proposal_id)
         else:
-            loader = lambda: {
-                "conversation_id": self.conversation_id,
-                "items": _messages_to_entries(self.service.chat_messages(self.conversation_id)),
-            }
+            def loader():
+                page = self.service.chat_messages_page(self.conversation_id, {"limit": 50, "offset": 0})
+                total = int(page.get("total") or 0)
+                offset = max(0, total - 50)
+                if offset:
+                    page = self.service.chat_messages_page(self.conversation_id, {"limit": 50, "offset": offset})
+                return {
+                    "conversation_id": self.conversation_id,
+                    "items": _messages_to_entries(page.get("items") or []),
+                    "has_more": offset > 0,
+                    "message_offset": offset,
+                }
         self._refresh_thread = start_worker(self, loader, self._refresh_success, self._refresh_error)
 
     def _refresh_success(self, timeline: dict):
         self.conversation_id = timeline.get("conversation_id")
         self.entries = timeline.get("items") or []
         self._has_more_older = bool(timeline.get("has_more"))
+        self._message_offset = int(timeline.get("message_offset") or 0)
         self._oldest_created_at = self.entries[0].get("created_at") if self.entries else None
         self._update_load_older_button()
         self._annotate_entries()
@@ -689,15 +700,25 @@ class ChatConversationPanel(QWidget):
         self._finish_refresh()
 
     def _update_load_older_button(self):
-        self._load_older_btn.setVisible(self.proposal_id is not None and self._has_more_older)
+        self._load_older_btn.setVisible(self._has_more_older)
 
     def _load_older_messages(self):
-        if self._loading_older or self.proposal_id is None or not self._oldest_created_at:
+        if self._loading_older or (self.proposal_id is None and not self._has_more_older) or (self.proposal_id is not None and not self._oldest_created_at):
             return
         self._loading_older = True
         self._load_older_btn.setEnabled(False)
         self._load_older_btn.setText("Carregando...")
-        loader = lambda: self.service.chat_proposal_timeline(self.proposal_id, before=self._oldest_created_at, limit=100)
+        if self.proposal_id is not None:
+            loader = lambda: self.service.chat_proposal_timeline(self.proposal_id, before=self._oldest_created_at, limit=100)
+        else:
+            offset = max(0, self._message_offset - 50)
+            def loader():
+                page = self.service.chat_messages_page(self.conversation_id, {"limit": 50, "offset": offset})
+                return {
+                    "items": _messages_to_entries(page.get("items") or []),
+                    "has_more": offset > 0,
+                    "message_offset": offset,
+                }
         self._older_thread = start_worker(self, loader, self._older_loaded, self._older_error)
 
     def _older_loaded(self, timeline: dict):
@@ -707,8 +728,12 @@ class ChatConversationPanel(QWidget):
         older_entries = timeline.get("items") or []
         self._has_more_older = bool(timeline.get("has_more"))
         if older_entries:
-            self.entries = older_entries + self.entries
-            self._oldest_created_at = older_entries[0].get("created_at")
+            if self.proposal_id is not None:
+                self.entries = older_entries + self.entries
+                self._oldest_created_at = older_entries[0].get("created_at")
+            else:
+                self.entries = older_entries + self.entries
+                self._message_offset = int(timeline.get("message_offset") or 0)
             self._annotate_entries()
         self._update_load_older_button()
 
@@ -736,7 +761,7 @@ class ChatConversationPanel(QWidget):
 
     def _refresh_error(self, exc):
         self._set_loading(False)
-        ToastNotification(self.window(), str(exc), "error")
+        show_operation_error(self, exc, self.refresh, title="Chat")
         self._finish_refresh()
 
     def _finish_refresh(self):

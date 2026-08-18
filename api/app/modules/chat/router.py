@@ -44,13 +44,16 @@ def _ensure_can_view_status(actor: User, status_filter: str | None) -> None:
 async def list_conversations(
     status_filter: str | None = Query(default=None, alias="status"),
     search: str | None = Query(default=None),
+    conversation_id: int | None = Query(default=None, ge=1),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     session: AsyncSession = Depends(get_db_session),
     actor: User = Depends(require_permission(CHAT_VIEW)),
 ):
     _ensure_can_view_status(actor, status_filter)
-    return await service.list_conversations(session, actor, status=status_filter, search=search, limit=limit, offset=offset)
+    return await service.list_conversations(
+        session, actor, status=status_filter, search=search, conversation_id=conversation_id, limit=limit, offset=offset
+    )
 
 
 @router.get("/chat/conversations/{conversation_id}/messages", response_model=MessageList)

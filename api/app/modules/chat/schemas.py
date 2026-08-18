@@ -63,6 +63,7 @@ class MessageOut(BaseModel):
 class MessageList(BaseModel):
     items: list[MessageOut]
     total: int
+    has_more: bool = False
 
 
 class TimelineEntry(BaseModel):

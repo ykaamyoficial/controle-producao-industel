@@ -78,6 +78,7 @@ class MainWindow(FramelessHitTestMixin, QMainWindow):
         self._auto_update_checked = skip_auto_update_check
         self._login_summary_shown = False
         self._realtime_ever_connected = False
+        self._notification_poll_thread = None
         self._update_available_notice = update_available_notice
         self._update_available_notice_shown = False
         self.pages: dict[str, QWidget] = {}
@@ -140,9 +141,10 @@ class MainWindow(FramelessHitTestMixin, QMainWindow):
         main.addWidget(self.sidebar)
 
         content = QWidget()
+        content.setObjectName("MainContent")
         self.content_layout = QVBoxLayout(content)
-        self.content_layout.setContentsMargins(18, 14, 18, 18)
-        self.content_layout.setSpacing(10)
+        self.content_layout.setContentsMargins(0, 0, 0, 0)
+        self.content_layout.setSpacing(0)
         main.addWidget(content, 1)
 
         self.session_policy_banner = QLabel()
@@ -481,11 +483,19 @@ class MainWindow(FramelessHitTestMixin, QMainWindow):
         if self.session_sync is not None:
             self.session_sync.sync("poll")
         if self.notification_bell is not None and hasattr(self.service, "chat_notifications"):
+            if self._notification_poll_thread is not None and self._notification_poll_thread.isRunning():
+                return
             # o sino conta apenas notificacoes de verdade (mencao/resposta),
             # independente do contador de mensagens nao lidas do icone de chat.
-            self._notification_poll_thread = start_worker(
+            thread = start_worker(
                 self, lambda: self.service.chat_notifications(limit=50), self._apply_notifications_summary, lambda _exc: None
             )
+            self._notification_poll_thread = thread
+            thread.finished.connect(lambda: self._clear_notification_poll(thread))
+
+    def _clear_notification_poll(self, thread) -> None:
+        if self._notification_poll_thread is thread:
+            self._notification_poll_thread = None
 
     def _apply_notifications_summary(self, notifications):
         # o contador do sino vem de notification_unread_count (COUNT agregado
@@ -528,6 +538,9 @@ class MainWindow(FramelessHitTestMixin, QMainWindow):
 
     def _on_conversation_updated(self, conversation_id: int):
         self._poll_chat_unread()
+        chats_page = self.pages.get("CHATS")
+        if chats_page is not None and self.stack.currentWidget() is chats_page and hasattr(chats_page, "on_conversation_updated"):
+            chats_page.on_conversation_updated(conversation_id)
         # so atualiza a conversa ao vivo se a pagina "Chats" for a que esta
         # REALMENTE visivel agora (reaproveita a mesma checagem usada pro
         # toast manager) — comparar so o conversation_id guardado no painel
