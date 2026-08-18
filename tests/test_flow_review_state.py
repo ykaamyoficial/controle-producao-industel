@@ -16,6 +16,7 @@ from app.ui.flow_review_state import (
     count_affected_exceptions,
     reconcile_after_reload,
     route_from_flags,
+    route_includes_production,
     route_to_flags,
     summarize,
     validate,
@@ -76,6 +77,12 @@ class RouteMappingTests(unittest.TestCase):
         self.assertEqual(route_from_flags("SIM", None), FlowRoute.INDEFINIDO)
         self.assertEqual(route_from_flags("SIM", "INDEFINIDO"), FlowRoute.INDEFINIDO)
         self.assertEqual(route_from_flags("lixo", "lixo"), FlowRoute.INDEFINIDO)
+
+    def test_only_producing_routes_allow_automatic_production_start(self):
+        self.assertTrue(route_includes_production(FlowRoute.PRODUZIR_GALVANIZAR))
+        self.assertTrue(route_includes_production(FlowRoute.PRODUZIR_SEM_GALVANIZAR))
+        self.assertFalse(route_includes_production(FlowRoute.NAO_PRODUZIR))
+        self.assertFalse(route_includes_production(FlowRoute.NAO_PRODUZIR_GALVANIZAR))
 
 
 class BuildProposalTests(unittest.TestCase):
@@ -165,6 +172,53 @@ class ApplyDefaultTests(unittest.TestCase):
 
         self.assertEqual(changed, 1)
         self.assertEqual(exception_item.proposed_route, FlowRoute.PRODUZIR_GALVANIZAR)
+
+    def test_global_reason_is_applied_to_eligible_items_that_require_it(self):
+        item = make_item(1, original_route=FlowRoute.INDEFINIDO)
+        proposal = make_proposal([item])
+
+        changed = apply_default(
+            proposal,
+            FlowRoute.NAO_PRODUZIR,
+            scope="undefined_only",
+            preserve_exceptions=True,
+            global_reason="Motivo comum do lote",
+        )
+
+        self.assertEqual(changed, 1)
+        self.assertEqual(item.proposed_route, FlowRoute.NAO_PRODUZIR)
+        self.assertEqual(item.proposed_reason, "Motivo comum do lote")
+
+    def test_global_reason_preserves_an_existing_individual_reason(self):
+        item = make_item(1, original_route=FlowRoute.NAO_PRODUZIR, original_reason="Motivo individual")
+        proposal = make_proposal([item])
+
+        changed = apply_default(
+            proposal,
+            FlowRoute.NAO_PRODUZIR,
+            scope="all_editable",
+            preserve_exceptions=True,
+            global_reason="Motivo comum do lote",
+        )
+
+        self.assertEqual(changed, 0)
+        self.assertEqual(item.proposed_reason, "Motivo individual")
+
+    def test_global_reason_overwrites_an_existing_reason_when_requested(self):
+        item = make_item(1, original_route=FlowRoute.NAO_PRODUZIR, original_reason="Motivo individual")
+        proposal = make_proposal([item])
+
+        changed = apply_default(
+            proposal,
+            FlowRoute.NAO_PRODUZIR,
+            scope="all_editable",
+            preserve_exceptions=False,
+            overwrite_exceptions=True,
+            global_reason="Motivo comum do lote",
+        )
+
+        self.assertEqual(changed, 1)
+        self.assertEqual(item.proposed_reason, "Motivo comum do lote")
 
     def test_locked_items_are_never_touched_by_the_default(self):
         locked_item = make_item(1, original_route=FlowRoute.INDEFINIDO, is_editable=False, lock_reason="Item ja possui producao registrada.")

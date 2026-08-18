@@ -301,6 +301,40 @@ class ProposalsIntegrationTests(unittest.TestCase):
         forbidden = self.client.post("/api/v1/proposals", json=payload, headers=headers)
         self.assertEqual(forbidden.status_code, 422)
 
+    def test_create_rolls_back_proposal_when_an_item_write_fails(self):
+        headers = self._headers()
+        payload = _proposal_payload("CP00003-ROLLBACK", [_item_payload("1"), _item_payload("1")])
+
+        failed = self.client.post("/api/v1/proposals", json=payload, headers=headers)
+
+        self.assertEqual(failed.status_code, 409)
+        lookup = self.client.get(
+            "/api/v1/proposals",
+            params={"proposal_number": "CP00003-ROLLBACK"},
+            headers=headers,
+        )
+        self.assertEqual(lookup.status_code, 200)
+        self.assertEqual(lookup.json()["total"], 0)
+
+    def test_nomus_import_metadata_is_recorded_in_creation_audit(self):
+        headers = self._headers()
+        payload = _proposal_payload("CP00003-AUDIT")
+        payload["source"] = "NOMUS_API"
+        payload["import_metadata"] = {
+            "origem": "NOMUS_API",
+            "batch_id": "batch-fase5",
+            "extraction_method": "nomus_api",
+            "warning_codes": ["DATE_REVIEW"],
+        }
+
+        created = self.client.post("/api/v1/proposals", json=payload, headers=headers)
+
+        self.assertEqual(created.status_code, 201)
+        metadata = asyncio.run(self._proposal_created_event_metadata(created.json()["id"]))
+        self.assertEqual(metadata["source"], "NOMUS_API")
+        self.assertEqual(metadata["import_metadata"]["batch_id"], "batch-fase5")
+        self.assertEqual(metadata["import_metadata"]["warning_codes"], ["DATE_REVIEW"])
+
     def test_create_requires_items_and_valid_item_values(self):
         headers = self._headers()
         no_items = _proposal_payload("CP00004")
@@ -2010,6 +2044,487 @@ class ProposalsIntegrationTests(unittest.TestCase):
         source_shipping = self.client.get(f"/api/v1/shipping/proposals/{source['id']}", headers=headers).json()
         self.assertEqual(source_shipping["items"][0]["pending_quantity"], "2.0000")
 
+    def test_remanagement_destination_items_reports_need_and_blocks_missing_code(self):
+        headers = self._headers()
+        items = [_item_payload("1", requires_galvanization=False), dict(_item_payload("2", requires_galvanization=False), product_code=None)]
+        destination = self.client.post("/api/v1/proposals", json=_proposal_payload("CP03007", items), headers=headers).json()
+
+        rows = self.client.get(
+            f"/api/v1/shipping/remanagements/destination-items?destination_proposal_id={destination['id']}",
+            headers=headers,
+        )
+        self.assertEqual(rows.status_code, 200, rows.text)
+        by_number = {row["item_number"]: row for row in rows.json()}
+
+        with_code = by_number["1"]
+        self.assertEqual(with_code["product_code"], "COD")
+        self.assertEqual(with_code["total_quantity"], "2.0000")
+        self.assertEqual(with_code["already_attended"], "0.0000")
+        self.assertEqual(with_code["remanageable_need"], "2.0000")
+        self.assertTrue(with_code["selectable"])
+        self.assertIsNone(with_code["block_reason"])
+
+        without_code = by_number["2"]
+        self.assertIsNone(without_code["product_code"])
+        self.assertFalse(without_code["selectable"])
+        self.assertIn("codigo", without_code["block_reason"])
+
+    def test_remanagement_destination_items_rejects_missing_or_cancelled_destination(self):
+        headers = self._headers()
+        missing = self.client.get("/api/v1/shipping/remanagements/destination-items?destination_proposal_id=999999", headers=headers)
+        self.assertEqual(missing.status_code, 404)
+        self.assertEqual(missing.json()["error"]["code"], "PROPOSAL_NOT_FOUND")
+
+        proposal = self.client.post("/api/v1/proposals", json=_proposal_payload("CP03008"), headers=headers).json()
+        cancelled = self.client.post(
+            f"/api/v1/proposals/{proposal['id']}/cancel",
+            json={"version": proposal["version"], "reason": "Teste"},
+            headers=headers,
+        )
+        self.assertEqual(cancelled.status_code, 200)
+
+        blocked = self.client.get(
+            f"/api/v1/shipping/remanagements/destination-items?destination_proposal_id={proposal['id']}",
+            headers=headers,
+        )
+        self.assertEqual(blocked.status_code, 409)
+        self.assertEqual(blocked.json()["error"]["code"], "PROPOSAL_CANCELLED_TERMINAL")
+
+    def test_remanagement_availability_finds_candidates_by_code_orders_by_balance_and_excludes_destination(self):
+        headers = self._headers()
+        destination = self.client.post(
+            "/api/v1/proposals",
+            json=_proposal_payload("CP03100", [_item_payload("1", product_code="300.23", quantity="20.0000", requires_galvanization=False)]),
+            headers=headers,
+        ).json()
+        destination_item_id = destination["items"][0]["id"]
+
+        self._proposal_ready_for_expedition("CP03101", headers, [_item_payload("1", product_code="300.23", quantity="12.0000", requires_galvanization=False)])
+        self._proposal_ready_for_expedition("CP03102", headers, [_item_payload("1", product_code="300.23", quantity="5.0000", requires_galvanization=False)])
+        self._proposal_ready_for_expedition("CP03103", headers, [_item_payload("1", product_code="999.99", quantity="50.0000", requires_galvanization=False)])
+
+        response = self.client.post(
+            "/api/v1/shipping/remanagements/availability",
+            json={"destination_proposal_id": destination["id"], "items": [{"destination_item_id": destination_item_id, "requested_quantity": "20.0000"}]},
+            headers=headers,
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertEqual(body["destination_proposal_id"], destination["id"])
+        self.assertEqual(len(body["items"]), 1)
+        group = body["items"][0]
+        self.assertEqual(group["product_code"], "300.23")
+        self.assertEqual(group["requested_quantity"], "20.0000")
+        self.assertEqual(group["total_available"], "17.0000")
+        self.assertEqual(group["coverage_status"], "PARCIAL")
+        self.assertEqual([c["source_proposal_number"] for c in group["candidates"]], ["CP03101", "CP03102"])
+        self.assertEqual([c["available_quantity"] for c in group["candidates"]], ["12.0000", "5.0000"])
+        self.assertNotIn(destination["id"], [c["source_proposal_id"] for c in group["candidates"]])
+
+    def test_remanagement_availability_excludes_source_with_no_remaining_balance(self):
+        headers = self._headers()
+        destination = self.client.post(
+            "/api/v1/proposals",
+            json=_proposal_payload("CP03110", [_item_payload("1", product_code="300.23", quantity="5.0000", requires_galvanization=False)]),
+            headers=headers,
+        ).json()
+        destination_item_id = destination["items"][0]["id"]
+
+        source = self._proposal_ready_for_expedition("CP03111", headers, [_item_payload("1", product_code="300.23", quantity="6.0000", requires_galvanization=False)])
+        started = self.client.post(f"/api/v1/shipping/proposals/{source['id']}/start-separation", json={"version": source["version"]}, headers=headers).json()
+        separated = self.client.post(f"/api/v1/shipping/proposals/{source['id']}/separate-items", json={"version": started["version"]}, headers=headers).json()
+        delivered = self.client.post(f"/api/v1/shipping/proposals/{source['id']}/deliver-items", json={"version": separated["version"]}, headers=headers)
+        self.assertEqual(delivered.status_code, 200, delivered.text)
+
+        response = self.client.post(
+            "/api/v1/shipping/remanagements/availability",
+            json={"destination_proposal_id": destination["id"], "items": [{"destination_item_id": destination_item_id, "requested_quantity": "5.0000"}]},
+            headers=headers,
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        group = response.json()["items"][0]
+        self.assertEqual(group["candidates"], [])
+        self.assertEqual(group["total_available"], "0.0000")
+        self.assertEqual(group["coverage_status"], "SEM_DISPONIBILIDADE")
+
+    def test_remanagement_availability_groups_independently_by_product_and_clamps_requested_quantity(self):
+        headers = self._headers()
+        destination = self.client.post(
+            "/api/v1/proposals",
+            json=_proposal_payload("CP03120", [
+                _item_payload("1", product_code="300.23", quantity="20.0000", requires_galvanization=False),
+                _item_payload("2", product_code="401.20", quantity="5.0000", requires_galvanization=False),
+            ]),
+            headers=headers,
+        ).json()
+        item1_id = destination["items"][0]["id"]
+        item2_id = destination["items"][1]["id"]
+
+        self._proposal_ready_for_expedition("CP03121", headers, [_item_payload("1", product_code="300.23", quantity="12.0000", requires_galvanization=False)])
+        self._proposal_ready_for_expedition("CP03122", headers, [_item_payload("1", product_code="401.20", quantity="7.0000", requires_galvanization=False)])
+
+        response = self.client.post(
+            "/api/v1/shipping/remanagements/availability",
+            json={
+                "destination_proposal_id": destination["id"],
+                "items": [
+                    {"destination_item_id": item1_id, "requested_quantity": "20.0000"},
+                    {"destination_item_id": item2_id, "requested_quantity": "999.0000"},  # acima da necessidade real (5)
+                ],
+            },
+            headers=headers,
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        groups = {row["destination_item_id"]: row for row in response.json()["items"]}
+
+        group1 = groups[item1_id]
+        self.assertEqual(group1["product_code"], "300.23")
+        self.assertEqual(len(group1["candidates"]), 1)
+        self.assertEqual(group1["candidates"][0]["available_quantity"], "12.0000")
+        self.assertEqual(group1["coverage_status"], "PARCIAL")
+
+        group2 = groups[item2_id]
+        self.assertEqual(group2["product_code"], "401.20")
+        self.assertEqual(group2["requested_quantity"], "5.0000")  # clampado para a necessidade real, nao 999
+        self.assertEqual(len(group2["candidates"]), 1)
+        self.assertEqual(group2["candidates"][0]["available_quantity"], "7.0000")
+        self.assertEqual(group2["coverage_status"], "SUFICIENTE")
+
+        self.assertNotEqual(
+            {c["source_item_id"] for c in group1["candidates"]},
+            {c["source_item_id"] for c in group2["candidates"]},
+        )
+
+    def test_remanagement_availability_validates_destination_and_item_ownership(self):
+        headers = self._headers()
+        missing = self.client.post(
+            "/api/v1/shipping/remanagements/availability",
+            json={"destination_proposal_id": 999999, "items": [{"destination_item_id": 1, "requested_quantity": "1.0000"}]},
+            headers=headers,
+        )
+        self.assertEqual(missing.status_code, 404)
+        self.assertEqual(missing.json()["error"]["code"], "PROPOSAL_NOT_FOUND")
+
+        destination = self.client.post("/api/v1/proposals", json=_proposal_payload("CP03130"), headers=headers).json()
+        other = self.client.post("/api/v1/proposals", json=_proposal_payload("CP03131"), headers=headers).json()
+        foreign_item_id = other["items"][0]["id"]
+
+        invalid_item = self.client.post(
+            "/api/v1/shipping/remanagements/availability",
+            json={"destination_proposal_id": destination["id"], "items": [{"destination_item_id": foreign_item_id, "requested_quantity": "1.0000"}]},
+            headers=headers,
+        )
+        self.assertEqual(invalid_item.status_code, 409)
+        self.assertEqual(invalid_item.json()["error"]["code"], "EXPEDITION_REMANAGEMENT_INVALID")
+
+    def test_remanagement_compensation_plan_single_source_conserves_quantity(self):
+        headers = self._headers()
+        destination = self.client.post(
+            "/api/v1/proposals",
+            json=_proposal_payload("CP03140", [_item_payload("1", product_code="300.23", quantity="10.0000", requires_galvanization=False)]),
+            headers=headers,
+        ).json()
+        destination_item_id = destination["items"][0]["id"]
+        source = self._proposal_ready_for_expedition("CP03141", headers, [_item_payload("1", product_code="300.23", quantity="15.0000", requires_galvanization=False)])
+        source_item_id = self.client.get(f"/api/v1/shipping/proposals/{source['id']}", headers=headers).json()["items"][0]["proposal_item_id"]
+
+        response = self.client.post(
+            "/api/v1/shipping/remanagements/compensation-plan",
+            json={
+                "destination_proposal_id": destination["id"],
+                "items": [{"destination_item_id": destination_item_id, "requested_quantity": "10.0000"}],
+                "allocations": [{"destination_item_id": destination_item_id, "source_proposal_id": source["id"], "source_item_id": source_item_id, "allocated_quantity": "10.0000"}],
+            },
+            headers=headers,
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertTrue(body["valid"], body)
+        self.assertEqual(body["total_ready_transferred"], "10.0000")
+        self.assertEqual(body["total_obligation_transferred"], "10.0000")
+        self.assertEqual(len(body["products"]), 1)
+        product = body["products"][0]
+        self.assertEqual(product["coverage"], "COMPLETE")
+        self.assertEqual(len(product["transfers"]), 1)
+        transfer = product["transfers"][0]
+        self.assertEqual(transfer["ready_quantity_to_destination"], "10.0000")
+        self.assertEqual(transfer["obligation_quantity_to_source"], "10.0000")
+        self.assertEqual(sorted(body["affected_proposals"]), sorted([destination["id"], source["id"]]))
+        self.assertEqual(
+            body["future_mutations"]["production_obligation_transfers"],
+            [{"from_item_id": destination_item_id, "to_item_id": source_item_id, "quantity": "10.0000"}],
+        )
+
+    def test_remanagement_compensation_plan_partial_coverage_and_multiple_sources(self):
+        headers = self._headers()
+        destination = self.client.post(
+            "/api/v1/proposals",
+            json=_proposal_payload("CP03150", [_item_payload("1", product_code="300.23", quantity="20.0000", requires_galvanization=False)]),
+            headers=headers,
+        ).json()
+        destination_item_id = destination["items"][0]["id"]
+        source_a = self._proposal_ready_for_expedition("CP03151", headers, [_item_payload("1", product_code="300.23", quantity="12.0000", requires_galvanization=False)])
+        source_b = self._proposal_ready_for_expedition("CP03152", headers, [_item_payload("1", product_code="300.23", quantity="5.0000", requires_galvanization=False)])
+        source_a_item_id = self.client.get(f"/api/v1/shipping/proposals/{source_a['id']}", headers=headers).json()["items"][0]["proposal_item_id"]
+        source_b_item_id = self.client.get(f"/api/v1/shipping/proposals/{source_b['id']}", headers=headers).json()["items"][0]["proposal_item_id"]
+
+        response = self.client.post(
+            "/api/v1/shipping/remanagements/compensation-plan",
+            json={
+                "destination_proposal_id": destination["id"],
+                "items": [{"destination_item_id": destination_item_id, "requested_quantity": "20.0000"}],
+                "allocations": [
+                    {"destination_item_id": destination_item_id, "source_proposal_id": source_a["id"], "source_item_id": source_a_item_id, "allocated_quantity": "12.0000"},
+                    {"destination_item_id": destination_item_id, "source_proposal_id": source_b["id"], "source_item_id": source_b_item_id, "allocated_quantity": "5.0000"},
+                ],
+            },
+            headers=headers,
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertTrue(body["valid"], body)
+        product = body["products"][0]
+        self.assertEqual(product["coverage"], "PARTIAL")
+        self.assertEqual(product["allocated_quantity"], "17.0000")
+        self.assertEqual(product["remaining_quantity"], "3.0000")
+        self.assertEqual(body["total_ready_transferred"], "17.0000")
+        self.assertTrue(body["warnings"])
+
+    def test_remanagement_compensation_plan_rejects_incompatible_code_and_self_reference(self):
+        headers = self._headers()
+        destination = self.client.post(
+            "/api/v1/proposals",
+            json=_proposal_payload("CP03160", [_item_payload("1", product_code="300.23", quantity="10.0000", requires_galvanization=False)]),
+            headers=headers,
+        ).json()
+        destination_item_id = destination["items"][0]["id"]
+        wrong_code_source = self._proposal_ready_for_expedition("CP03161", headers, [_item_payload("1", product_code="999.99", quantity="10.0000", requires_galvanization=False)])
+        wrong_code_item_id = self.client.get(f"/api/v1/shipping/proposals/{wrong_code_source['id']}", headers=headers).json()["items"][0]["proposal_item_id"]
+
+        incompatible = self.client.post(
+            "/api/v1/shipping/remanagements/compensation-plan",
+            json={
+                "destination_proposal_id": destination["id"],
+                "items": [{"destination_item_id": destination_item_id, "requested_quantity": "10.0000"}],
+                "allocations": [{"destination_item_id": destination_item_id, "source_proposal_id": wrong_code_source["id"], "source_item_id": wrong_code_item_id, "allocated_quantity": "10.0000"}],
+            },
+            headers=headers,
+        )
+        self.assertEqual(incompatible.status_code, 200, incompatible.text)
+        incompatible_body = incompatible.json()
+        self.assertFalse(incompatible_body["valid"])
+        self.assertTrue(any(error["code"] == "PRODUCT_INCOMPATIBLE" for error in incompatible_body["errors"]))
+        self.assertEqual(incompatible_body["products"], [])
+
+        self_reference = self.client.post(
+            "/api/v1/shipping/remanagements/compensation-plan",
+            json={
+                "destination_proposal_id": destination["id"],
+                "items": [{"destination_item_id": destination_item_id, "requested_quantity": "10.0000"}],
+                "allocations": [{"destination_item_id": destination_item_id, "source_proposal_id": destination["id"], "source_item_id": destination_item_id, "allocated_quantity": "10.0000"}],
+            },
+            headers=headers,
+        )
+        self.assertEqual(self_reference.status_code, 200, self_reference.text)
+        self_body = self_reference.json()
+        self.assertFalse(self_body["valid"])
+        self.assertTrue(any(error["code"] == "SOURCE_EQUALS_DESTINATION" for error in self_body["errors"]))
+
+    def test_remanagement_compensation_plan_rejects_allocation_exceeding_real_source_balance(self):
+        headers = self._headers()
+        destination = self.client.post(
+            "/api/v1/proposals",
+            json=_proposal_payload("CP03170", [_item_payload("1", product_code="300.23", quantity="10.0000", requires_galvanization=False)]),
+            headers=headers,
+        ).json()
+        destination_item_id = destination["items"][0]["id"]
+        source = self._proposal_ready_for_expedition("CP03171", headers, [_item_payload("1", product_code="300.23", quantity="4.0000", requires_galvanization=False)])
+        source_item_id = self.client.get(f"/api/v1/shipping/proposals/{source['id']}", headers=headers).json()["items"][0]["proposal_item_id"]
+
+        response = self.client.post(
+            "/api/v1/shipping/remanagements/compensation-plan",
+            json={
+                "destination_proposal_id": destination["id"],
+                "items": [{"destination_item_id": destination_item_id, "requested_quantity": "10.0000"}],
+                "allocations": [{"destination_item_id": destination_item_id, "source_proposal_id": source["id"], "source_item_id": source_item_id, "allocated_quantity": "8.0000"}],
+            },
+            headers=headers,
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertFalse(body["valid"])
+        self.assertTrue(any(error["code"] == "ALLOCATION_EXCEEDS_SOURCE_SNAPSHOT" for error in body["errors"]))
+
+    def test_remanagement_review_valid_plan_reports_before_after_and_summary(self):
+        headers = self._headers()
+        destination = self.client.post(
+            "/api/v1/proposals",
+            json=_proposal_payload("CP03180", [_item_payload("1", product_code="300.23", quantity="10.0000", requires_galvanization=False)]),
+            headers=headers,
+        ).json()
+        destination_item_id = destination["items"][0]["id"]
+        source = self._proposal_ready_for_expedition("CP03181", headers, [_item_payload("1", product_code="300.23", quantity="15.0000", requires_galvanization=False)])
+        source_item_id = self.client.get(f"/api/v1/shipping/proposals/{source['id']}", headers=headers).json()["items"][0]["proposal_item_id"]
+
+        response = self.client.post(
+            "/api/v1/shipping/remanagements/review",
+            json={
+                "destination_proposal_id": destination["id"],
+                "items": [{"destination_item_id": destination_item_id, "requested_quantity": "10.0000"}],
+                "allocations": [{"destination_item_id": destination_item_id, "source_proposal_id": source["id"], "source_item_id": source_item_id, "allocated_quantity": "10.0000"}],
+                "reason": "Cliente solicitou retirada antecipada",
+            },
+            headers=headers,
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertTrue(body["valid"], body)
+        self.assertEqual(body["errors"], [])
+        self.assertEqual(body["summary"]["product_count"], 1)
+        self.assertEqual(body["summary"]["complete_items"], 1)
+        self.assertEqual(body["summary"]["total_quantity"], "10.0000")
+        self.assertEqual(body["summary"]["total_unit"], "un")
+        item = body["items"][0]
+        self.assertEqual(item["status"], "COMPLETO")
+        source_row = item["sources"][0]
+        self.assertEqual(source_row["ready_transfer"], "10.0000")
+        self.assertEqual(source_row["production_compensation"], "10.0000")
+        self.assertEqual(source_row["source_before"], "15.0000")
+        self.assertEqual(source_row["source_after_simulated"], "5.0000")
+
+    def test_remanagement_review_blocks_missing_reason_without_rejecting_the_call(self):
+        headers = self._headers()
+        destination = self.client.post(
+            "/api/v1/proposals",
+            json=_proposal_payload("CP03190", [_item_payload("1", product_code="300.23", quantity="10.0000", requires_galvanization=False)]),
+            headers=headers,
+        ).json()
+        destination_item_id = destination["items"][0]["id"]
+        source = self._proposal_ready_for_expedition("CP03191", headers, [_item_payload("1", product_code="300.23", quantity="10.0000", requires_galvanization=False)])
+        source_item_id = self.client.get(f"/api/v1/shipping/proposals/{source['id']}", headers=headers).json()["items"][0]["proposal_item_id"]
+
+        response = self.client.post(
+            "/api/v1/shipping/remanagements/review",
+            json={
+                "destination_proposal_id": destination["id"],
+                "items": [{"destination_item_id": destination_item_id, "requested_quantity": "10.0000"}],
+                "allocations": [{"destination_item_id": destination_item_id, "source_proposal_id": source["id"], "source_item_id": source_item_id, "allocated_quantity": "10.0000"}],
+            },
+            headers=headers,
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertFalse(body["valid"])
+        self.assertTrue(any(error["code"] == "REASON_REQUIRED" for error in body["errors"]))
+        # motivo ausente nao impede o calculo do resto - a revisao ainda mostra o plano
+        self.assertEqual(body["items"][0]["status"], "COMPLETO")
+
+    def test_remanagement_review_partial_coverage_reports_status_and_summary(self):
+        headers = self._headers()
+        destination = self.client.post(
+            "/api/v1/proposals",
+            json=_proposal_payload("CP03200", [_item_payload("1", product_code="300.23", quantity="20.0000", requires_galvanization=False)]),
+            headers=headers,
+        ).json()
+        destination_item_id = destination["items"][0]["id"]
+        source = self._proposal_ready_for_expedition("CP03201", headers, [_item_payload("1", product_code="300.23", quantity="14.0000", requires_galvanization=False)])
+        source_item_id = self.client.get(f"/api/v1/shipping/proposals/{source['id']}", headers=headers).json()["items"][0]["proposal_item_id"]
+
+        response = self.client.post(
+            "/api/v1/shipping/remanagements/review",
+            json={
+                "destination_proposal_id": destination["id"],
+                "items": [{"destination_item_id": destination_item_id, "requested_quantity": "20.0000"}],
+                "allocations": [{"destination_item_id": destination_item_id, "source_proposal_id": source["id"], "source_item_id": source_item_id, "allocated_quantity": "14.0000"}],
+                "reason": "Cobertura parcial consciente",
+            },
+            headers=headers,
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertTrue(body["valid"], body)
+        self.assertEqual(body["summary"]["partial_items"], 1)
+        self.assertEqual(body["summary"]["complete_items"], 0)
+        item = body["items"][0]
+        self.assertEqual(item["status"], "PARCIAL")
+        self.assertEqual(item["allocated"], "14.0000")
+        self.assertEqual(item["remaining"], "6.0000")
+
+    def test_remanagement_review_detects_balance_drop_since_allocation(self):
+        headers = self._headers()
+        destination = self.client.post(
+            "/api/v1/proposals",
+            json=_proposal_payload("CP03210", [_item_payload("1", product_code="300.23", quantity="10.0000", requires_galvanization=False)]),
+            headers=headers,
+        ).json()
+        destination_item_id = destination["items"][0]["id"]
+        source = self._proposal_ready_for_expedition("CP03211", headers, [_item_payload("1", product_code="300.23", quantity="10.0000", requires_galvanization=False)])
+        source_detail = self.client.get(f"/api/v1/shipping/proposals/{source['id']}", headers=headers).json()
+        source_item_id = source_detail["items"][0]["proposal_item_id"]
+
+        # O plano foi desenhado (Fase 4) quando a origem tinha 10 UN prontas,
+        # mas antes da revisao a origem entregou tudo ao proprio cliente dela.
+        started = self.client.post(f"/api/v1/shipping/proposals/{source['id']}/start-separation", json={"version": source_detail["version"]}, headers=headers).json()
+        separated = self.client.post(f"/api/v1/shipping/proposals/{source['id']}/separate-items", json={"version": started["version"]}, headers=headers).json()
+        delivered = self.client.post(f"/api/v1/shipping/proposals/{source['id']}/deliver-items", json={"version": separated["version"]}, headers=headers)
+        self.assertEqual(delivered.status_code, 200, delivered.text)
+
+        response = self.client.post(
+            "/api/v1/shipping/remanagements/review",
+            json={
+                "destination_proposal_id": destination["id"],
+                "items": [{"destination_item_id": destination_item_id, "requested_quantity": "10.0000"}],
+                "allocations": [{"destination_item_id": destination_item_id, "source_proposal_id": source["id"], "source_item_id": source_item_id, "allocated_quantity": "10.0000"}],
+                "reason": "Motivo valido",
+            },
+            headers=headers,
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertFalse(body["valid"])
+        self.assertTrue(any(error["code"] == "ALLOCATION_EXCEEDS_SOURCE_SNAPSHOT" and error["destination_item_id"] == destination_item_id for error in body["errors"]))
+        self.assertEqual(body["items"][0]["status"], "INVALIDO")
+
+    def test_remanagement_review_multiple_products_have_independent_summary(self):
+        headers = self._headers()
+        destination = self.client.post(
+            "/api/v1/proposals",
+            json=_proposal_payload("CP03220", [
+                _item_payload("1", product_code="300.23", quantity="20.0000", requires_galvanization=False),
+                _item_payload("2", product_code="401.20", quantity="5.0000", requires_galvanization=False),
+            ]),
+            headers=headers,
+        ).json()
+        item1_id = destination["items"][0]["id"]
+        item2_id = destination["items"][1]["id"]
+        source_a = self._proposal_ready_for_expedition("CP03221", headers, [_item_payload("1", product_code="300.23", quantity="20.0000", requires_galvanization=False)])
+        source_b = self._proposal_ready_for_expedition("CP03222", headers, [_item_payload("1", product_code="401.20", quantity="5.0000", requires_galvanization=False)])
+        source_a_item_id = self.client.get(f"/api/v1/shipping/proposals/{source_a['id']}", headers=headers).json()["items"][0]["proposal_item_id"]
+        source_b_item_id = self.client.get(f"/api/v1/shipping/proposals/{source_b['id']}", headers=headers).json()["items"][0]["proposal_item_id"]
+
+        response = self.client.post(
+            "/api/v1/shipping/remanagements/review",
+            json={
+                "destination_proposal_id": destination["id"],
+                "items": [
+                    {"destination_item_id": item1_id, "requested_quantity": "20.0000"},
+                    {"destination_item_id": item2_id, "requested_quantity": "5.0000"},
+                ],
+                "allocations": [
+                    {"destination_item_id": item1_id, "source_proposal_id": source_a["id"], "source_item_id": source_a_item_id, "allocated_quantity": "20.0000"},
+                    {"destination_item_id": item2_id, "source_proposal_id": source_b["id"], "source_item_id": source_b_item_id, "allocated_quantity": "5.0000"},
+                ],
+                "reason": "Motivo valido",
+            },
+            headers=headers,
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertTrue(body["valid"], body)
+        self.assertEqual(body["summary"]["product_count"], 2)
+        self.assertEqual(body["summary"]["source_proposal_count"], 2)
+        self.assertEqual(body["summary"]["complete_items"], 2)
+
     def test_compensated_remanagement_concurrency_never_overspends_source_ready_balance(self):
         headers = self._headers()
         destination = self.client.post("/api/v1/proposals", json=_proposal_payload("CP03005", [_item_payload("1", requires_galvanization=False)]), headers=headers).json()
@@ -2044,6 +2559,230 @@ class ProposalsIntegrationTests(unittest.TestCase):
         self.assertEqual(history["total"], 1)
         source_after = self.client.get(f"/api/v1/shipping/proposals/{source['id']}", headers=headers).json()
         self.assertEqual(source_after["items"][0]["remanaged_quantity"], "2.0000")
+
+    def test_remanagement_confirm_single_source_persists_and_matches_legacy_effects(self):
+        headers = self._headers()
+        destination = self.client.post(
+            "/api/v1/proposals",
+            json=_proposal_payload("CP03230", [_item_payload("1", product_code="300.23", quantity="10.0000", requires_galvanization=False)]),
+            headers=headers,
+        ).json()
+        destination_item_id = destination["items"][0]["id"]
+        source = self._proposal_ready_for_expedition("CP03231", headers, [_item_payload("1", product_code="300.23", quantity="15.0000", requires_galvanization=False)])
+        source_item_id = self.client.get(f"/api/v1/shipping/proposals/{source['id']}", headers=headers).json()["items"][0]["proposal_item_id"]
+
+        payload = {
+            "operation_id": "confirm-op-single-0001",
+            "destination_proposal_id": destination["id"],
+            "items": [{"destination_item_id": destination_item_id, "requested_quantity": "10.0000"}],
+            "allocations": [{"destination_item_id": destination_item_id, "source_proposal_id": source["id"], "source_item_id": source_item_id, "allocated_quantity": "10.0000"}],
+            "reason": "Confirmacao Fase 7 - origem unica",
+        }
+        response = self.client.post("/api/v1/shipping/remanagements/confirm", json=payload, headers=headers)
+        self.assertEqual(response.status_code, 201, response.text)
+        body = response.json()
+        self.assertEqual(body["operation_id"], "confirm-op-single-0001")
+        self.assertEqual(body["status"], "CONFIRMED")
+        self.assertEqual(body["destination_proposal_id"], destination["id"])
+        self.assertEqual(body["source_proposals"], [source["id"]])
+        self.assertEqual(body["products"], 1)
+        self.assertEqual(body["allocations"], 1)
+        self.assertEqual(len(body["remanagements"]), 1)
+
+        # mesmos efeitos colaterais que apply_remanagement (fluxo legado) ja produzia.
+        source_after = self.client.get(f"/api/v1/proposals/{source['id']}", headers=headers).json()
+        self.assertEqual(source_after["current_area"], "EXPEDICAO")
+        self.assertEqual(source_after["production_status"], "ITEM_PENDENTE_FABRICACAO")
+        self.assertTrue(source_after["has_production_pending"])
+
+        destination_shipping = self.client.get(f"/api/v1/shipping/proposals/{destination['id']}", headers=headers).json()
+        self.assertEqual(destination_shipping["items"][0]["available_quantity"], "10.0000")
+
+        history = self.client.get(f"/api/v1/shipping/remanagements?proposal_id={source['id']}", headers=headers).json()
+        self.assertEqual(history["total"], 1)
+        self.assertEqual(history["items"][0]["correlation_id"], "confirm-op-single-0001")
+        self.assertEqual(history["items"][0]["reason"], "Confirmacao Fase 7 - origem unica")
+
+    def test_remanagement_confirm_multiple_sources_creates_one_row_per_source_sharing_operation(self):
+        headers = self._headers()
+        destination = self.client.post(
+            "/api/v1/proposals",
+            json=_proposal_payload("CP03240", [_item_payload("1", product_code="300.23", quantity="20.0000", requires_galvanization=False)]),
+            headers=headers,
+        ).json()
+        destination_item_id = destination["items"][0]["id"]
+        source_a = self._proposal_ready_for_expedition("CP03241", headers, [_item_payload("1", product_code="300.23", quantity="12.0000", requires_galvanization=False)])
+        source_b = self._proposal_ready_for_expedition("CP03242", headers, [_item_payload("1", product_code="300.23", quantity="8.0000", requires_galvanization=False)])
+        source_a_item_id = self.client.get(f"/api/v1/shipping/proposals/{source_a['id']}", headers=headers).json()["items"][0]["proposal_item_id"]
+        source_b_item_id = self.client.get(f"/api/v1/shipping/proposals/{source_b['id']}", headers=headers).json()["items"][0]["proposal_item_id"]
+
+        payload = {
+            "operation_id": "confirm-op-multi-0001",
+            "destination_proposal_id": destination["id"],
+            "items": [{"destination_item_id": destination_item_id, "requested_quantity": "20.0000"}],
+            "allocations": [
+                {"destination_item_id": destination_item_id, "source_proposal_id": source_a["id"], "source_item_id": source_a_item_id, "allocated_quantity": "12.0000"},
+                {"destination_item_id": destination_item_id, "source_proposal_id": source_b["id"], "source_item_id": source_b_item_id, "allocated_quantity": "8.0000"},
+            ],
+            "reason": "Confirmacao Fase 7 - duas origens, mesmo item destino",
+        }
+        response = self.client.post("/api/v1/shipping/remanagements/confirm", json=payload, headers=headers)
+        self.assertEqual(response.status_code, 201, response.text)
+        body = response.json()
+        self.assertEqual(sorted(body["source_proposals"]), sorted([source_a["id"], source_b["id"]]))
+        self.assertEqual(body["allocations"], 2)
+        self.assertEqual(len(body["remanagements"]), 2)
+
+        # duas linhas ProposalRemanagement, uma por origem, mas o mesmo ExpeditionItem
+        # do destino foi incrementado duas vezes (nao duplicado).
+        destination_shipping = self.client.get(f"/api/v1/shipping/proposals/{destination['id']}", headers=headers).json()
+        self.assertEqual(len(destination_shipping["items"]), 1)
+        self.assertEqual(destination_shipping["items"][0]["available_quantity"], "20.0000")
+        # origin so vira "MISTO" quando mistura remanejamento com disponibilidade
+        # de OUTRA natureza (ex.: producao propria) - duas origens que sao ambas
+        # remanejamento continuam "REMANEJAMENTO" (mesma regra ja usada pelo
+        # fluxo legado em apply_remanagement).
+        self.assertEqual(destination_shipping["items"][0]["origin"], "REMANEJAMENTO")
+
+        history_a = self.client.get(f"/api/v1/shipping/remanagements?proposal_id={source_a['id']}", headers=headers).json()
+        history_b = self.client.get(f"/api/v1/shipping/remanagements?proposal_id={source_b['id']}", headers=headers).json()
+        self.assertEqual(history_a["total"], 1)
+        self.assertEqual(history_b["total"], 1)
+        self.assertEqual(history_a["items"][0]["correlation_id"], "confirm-op-multi-0001")
+        self.assertEqual(history_b["items"][0]["correlation_id"], "confirm-op-multi-0001")
+        self.assertNotEqual(history_a["items"][0]["id"], history_b["items"][0]["id"])
+
+        source_a_after = self.client.get(f"/api/v1/proposals/{source_a['id']}", headers=headers).json()
+        source_b_after = self.client.get(f"/api/v1/proposals/{source_b['id']}", headers=headers).json()
+        self.assertTrue(source_a_after["has_production_pending"])
+        self.assertTrue(source_b_after["has_production_pending"])
+
+    def test_remanagement_confirm_retry_with_same_operation_id_is_idempotent(self):
+        headers = self._headers()
+        destination = self.client.post(
+            "/api/v1/proposals",
+            json=_proposal_payload("CP03250", [_item_payload("1", product_code="300.23", quantity="10.0000", requires_galvanization=False)]),
+            headers=headers,
+        ).json()
+        destination_item_id = destination["items"][0]["id"]
+        source = self._proposal_ready_for_expedition("CP03251", headers, [_item_payload("1", product_code="300.23", quantity="10.0000", requires_galvanization=False)])
+        source_item_id = self.client.get(f"/api/v1/shipping/proposals/{source['id']}", headers=headers).json()["items"][0]["proposal_item_id"]
+
+        payload = {
+            "operation_id": "confirm-op-retry-0001",
+            "destination_proposal_id": destination["id"],
+            "items": [{"destination_item_id": destination_item_id, "requested_quantity": "10.0000"}],
+            "allocations": [{"destination_item_id": destination_item_id, "source_proposal_id": source["id"], "source_item_id": source_item_id, "allocated_quantity": "10.0000"}],
+            "reason": "Confirmacao Fase 7 - retry",
+        }
+        first = self.client.post("/api/v1/shipping/remanagements/confirm", json=payload, headers=headers)
+        self.assertEqual(first.status_code, 201, first.text)
+        second = self.client.post("/api/v1/shipping/remanagements/confirm", json=payload, headers=headers)
+        self.assertEqual(second.status_code, 201, second.text)
+        self.assertEqual(first.json()["remanagements"], second.json()["remanagements"])
+
+        history = self.client.get(f"/api/v1/shipping/remanagements?proposal_id={source['id']}", headers=headers).json()
+        self.assertEqual(history["total"], 1)
+        destination_shipping = self.client.get(f"/api/v1/shipping/proposals/{destination['id']}", headers=headers).json()
+        self.assertEqual(destination_shipping["items"][0]["available_quantity"], "10.0000")
+
+    def test_remanagement_confirm_rejects_incompatible_plan_and_persists_nothing(self):
+        headers = self._headers()
+        destination = self.client.post(
+            "/api/v1/proposals",
+            json=_proposal_payload("CP03260", [_item_payload("1", product_code="300.23", quantity="10.0000", requires_galvanization=False)]),
+            headers=headers,
+        ).json()
+        destination_item_id = destination["items"][0]["id"]
+        wrong_code_source = self._proposal_ready_for_expedition("CP03261", headers, [_item_payload("1", product_code="999.99", quantity="10.0000", requires_galvanization=False)])
+        wrong_code_item_id = self.client.get(f"/api/v1/shipping/proposals/{wrong_code_source['id']}", headers=headers).json()["items"][0]["proposal_item_id"]
+
+        payload = {
+            "operation_id": "confirm-op-invalid-0001",
+            "destination_proposal_id": destination["id"],
+            "items": [{"destination_item_id": destination_item_id, "requested_quantity": "10.0000"}],
+            "allocations": [{"destination_item_id": destination_item_id, "source_proposal_id": wrong_code_source["id"], "source_item_id": wrong_code_item_id, "allocated_quantity": "10.0000"}],
+            "reason": "Deveria ser bloqueado",
+        }
+        response = self.client.post("/api/v1/shipping/remanagements/confirm", json=payload, headers=headers)
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertEqual(response.json()["error"]["code"], "EXPEDITION_REMANAGEMENT_INVALID")
+
+        history = self.client.get(f"/api/v1/shipping/remanagements?proposal_id={wrong_code_source['id']}", headers=headers).json()
+        self.assertEqual(history["total"], 0)
+        source_after = self.client.get(f"/api/v1/proposals/{wrong_code_source['id']}", headers=headers).json()
+        self.assertFalse(source_after["has_production_pending"])
+
+    def test_remanagement_confirm_rejects_self_reference_and_missing_reason(self):
+        headers = self._headers()
+        destination = self.client.post(
+            "/api/v1/proposals",
+            json=_proposal_payload("CP03270", [_item_payload("1", product_code="300.23", quantity="10.0000", requires_galvanization=False)]),
+            headers=headers,
+        ).json()
+        destination_item_id = destination["items"][0]["id"]
+
+        self_reference = self.client.post(
+            "/api/v1/shipping/remanagements/confirm",
+            json={
+                "operation_id": "confirm-op-self-0001",
+                "destination_proposal_id": destination["id"],
+                "items": [{"destination_item_id": destination_item_id, "requested_quantity": "10.0000"}],
+                "allocations": [{"destination_item_id": destination_item_id, "source_proposal_id": destination["id"], "source_item_id": destination_item_id, "allocated_quantity": "10.0000"}],
+                "reason": "Origem igual ao destino",
+            },
+            headers=headers,
+        )
+        self.assertEqual(self_reference.status_code, 409, self_reference.text)
+        self.assertEqual(self_reference.json()["error"]["code"], "EXPEDITION_REMANAGEMENT_INVALID")
+
+        source = self._proposal_ready_for_expedition("CP03271", headers, [_item_payload("1", product_code="300.23", quantity="10.0000", requires_galvanization=False)])
+        source_item_id = self.client.get(f"/api/v1/shipping/proposals/{source['id']}", headers=headers).json()["items"][0]["proposal_item_id"]
+        missing_reason = self.client.post(
+            "/api/v1/shipping/remanagements/confirm",
+            json={
+                "operation_id": "confirm-op-noreason-0001",
+                "destination_proposal_id": destination["id"],
+                "items": [{"destination_item_id": destination_item_id, "requested_quantity": "10.0000"}],
+                "allocations": [{"destination_item_id": destination_item_id, "source_proposal_id": source["id"], "source_item_id": source_item_id, "allocated_quantity": "10.0000"}],
+                "reason": "   ",
+            },
+            headers=headers,
+        )
+        self.assertEqual(missing_reason.status_code, 422, missing_reason.text)
+
+    def test_remanagement_confirm_concurrency_never_overspends_source_ready_balance(self):
+        headers = self._headers()
+        destination = self.client.post(
+            "/api/v1/proposals",
+            json=_proposal_payload("CP03280", [_item_payload("1", product_code="300.23", quantity="10.0000", requires_galvanization=False)]),
+            headers=headers,
+        ).json()
+        destination_item_id = destination["items"][0]["id"]
+        source = self._proposal_ready_for_expedition("CP03281", headers, [_item_payload("1", product_code="300.23", quantity="3.0000", requires_galvanization=False)])
+        source_item_id = self.client.get(f"/api/v1/shipping/proposals/{source['id']}", headers=headers).json()["items"][0]["proposal_item_id"]
+
+        def send(operation_id: str):
+            with TestClient(create_app()) as concurrent_client:
+                return concurrent_client.post("/api/v1/shipping/remanagements/confirm", json={
+                    "operation_id": operation_id,
+                    "destination_proposal_id": destination["id"],
+                    "items": [{"destination_item_id": destination_item_id, "requested_quantity": "10.0000"}],
+                    "allocations": [{"destination_item_id": destination_item_id, "source_proposal_id": source["id"], "source_item_id": source_item_id, "allocated_quantity": "2.0000"}],
+                    "reason": "Disputa concorrente controlada",
+                }, headers=headers)
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            responses = list(executor.map(send, ["confirm-op-concurrency-0001", "confirm-op-concurrency-0002"]))
+        # 3.0000 disponivel, 2.0000 pedido por tentativa: a segunda tentativa a
+        # travar o lock sempre le o saldo JA reduzido pela primeira (2.0000 >
+        # 1.0000 restante) e e bloqueada - nunca as duas passam.
+        self.assertEqual(sorted(response.status_code for response in responses), [201, 409])
+
+        source_after = self.client.get(f"/api/v1/shipping/proposals/{source['id']}", headers=headers).json()
+        self.assertEqual(source_after["items"][0]["remanaged_quantity"], "2.0000")
+        history = self.client.get(f"/api/v1/shipping/remanagements?proposal_id={source['id']}", headers=headers).json()
+        self.assertEqual(history["total"], 1)
 
     def test_official_fiscal_partial_total_duplicate_cancel_and_withdrawal(self):
         headers = self._headers()
@@ -2494,6 +3233,20 @@ class ProposalsIntegrationTests(unittest.TestCase):
             )
             return dict(result.scalar_one())
 
+    async def _proposal_created_event_metadata(self, proposal_id: int) -> dict:
+        session_factory = get_sessionmaker()
+        async with session_factory() as session:
+            result = await session.execute(
+                text(
+                    "SELECT metadata FROM proposal_events "
+                    "WHERE proposal_id = :proposal_id "
+                    "AND event_type = 'PROPOSAL_CREATED' "
+                    "ORDER BY id DESC LIMIT 1"
+                ),
+                {"proposal_id": proposal_id},
+            )
+            return dict(result.scalar_one())
+
     async def _galvanization_load_update_metadata(self, load_id: int) -> dict:
         session_factory = get_sessionmaker()
         async with session_factory() as session:
@@ -2533,13 +3286,13 @@ def _proposal_payload(proposal_number: str, items: list[dict] | None = None) -> 
     }
 
 
-def _item_payload(item_number: str, *, produce_internally=True, requires_galvanization=True) -> dict:
+def _item_payload(item_number: str, *, produce_internally=True, requires_galvanization=True, product_code="COD", quantity="2.0000", unit="un") -> dict:
     return {
         "item_number": item_number,
-        "product_code": "COD",
+        "product_code": product_code,
         "description": "Linha 1\nLinha 2",
-        "quantity": "2.0000",
-        "unit": "un",
+        "quantity": quantity,
+        "unit": unit,
         "unit_weight": "3.5000",
         "total_weight": "7.0000",
         "produce_internally": produce_internally,

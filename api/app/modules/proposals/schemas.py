@@ -251,6 +251,7 @@ class ProposalCreate(BaseModel):
     source: str = Field(default="MANUAL", max_length=80)
     warehouse_status: str | None = Field(default=None, max_length=120)
     notes: str | None = None
+    import_metadata: dict[str, Any] | None = None
     items: list[ProposalItemCreate] = Field(min_length=1)
 
     @field_validator("proposal_number", "customer_name", "project_name", "purchase_order", "batch_reference", "source", mode="before")
@@ -265,6 +266,37 @@ class ProposalCreate(BaseModel):
         if normalized not in {"MANUAL", "NOMUS_API", "NOMUS_PDF", "IMPORT", "SYSTEM"}:
             raise ValueError("origem invalida")
         return normalized
+
+    @field_validator("import_metadata")
+    @classmethod
+    def validate_import_metadata(cls, value: dict[str, Any] | None) -> dict[str, Any] | None:
+        if value is None:
+            return None
+        allowed = {
+            "origem",
+            "batch_id",
+            "extraction_method",
+            "template_id",
+            "parser_version",
+            "requires_human_review",
+            "warning_codes",
+            "nome_arquivo",
+            "hash_sha256",
+            "observacao",
+        }
+        unknown = set(value) - allowed
+        if unknown:
+            raise ValueError("metadados de importacao invalidos")
+        blocked = {"price", "valor", "discount", "desconto", "margin", "margem", "token", "password", "secret"}
+        for key, item in value.items():
+            normalized = "".join(char for char in str(key).lower() if char.isalnum())
+            if any(term in normalized for term in blocked):
+                raise ValueError("metadados de importacao contem campo bloqueado")
+            if isinstance(item, (dict, tuple, set)):
+                raise ValueError("metadados de importacao devem ser simples")
+            if isinstance(item, list) and (len(item) > 50 or any(not isinstance(entry, str) for entry in item)):
+                raise ValueError("lista de metadados de importacao invalida")
+        return value
 
 
 class ProposalUpdate(BaseModel):
@@ -985,6 +1017,199 @@ class RemanagementCompatibleItem(BaseModel):
     destination_reallocatable_production: Decimal
     max_remanageable: Decimal
     weight_snapshot: Decimal | None = None
+
+
+class RemanagementDestinationItem(BaseModel):
+    item_id: int
+    item_version: int
+    item_number: str
+    product_code: str | None = None
+    description: str
+    unit: str | None = None
+    total_quantity: Decimal
+    already_attended: Decimal
+    remanageable_need: Decimal
+    selectable: bool
+    block_reason: str | None = None
+
+
+class RemanagementAvailabilityItemRequest(BaseModel):
+    destination_item_id: int
+    requested_quantity: Decimal = Field(gt=0)
+
+
+class RemanagementAvailabilityRequest(BaseModel):
+    destination_proposal_id: int
+    items: list[RemanagementAvailabilityItemRequest] = Field(min_length=1)
+
+
+class RemanagementSourceCandidate(BaseModel):
+    source_proposal_id: int
+    source_proposal_number: str
+    source_item_id: int
+    source_item_version: int
+    client: str
+    site: str | None = None
+    available_quantity: Decimal
+    unit: str | None = None
+    operational_status: str | None = None
+
+
+class RemanagementDestinationItemAvailability(BaseModel):
+    destination_item_id: int
+    product_code: str
+    description: str
+    unit: str | None = None
+    requested_quantity: Decimal
+    total_available: Decimal
+    coverage_status: str
+    candidates: list[RemanagementSourceCandidate]
+
+
+class RemanagementAvailabilityResponse(BaseModel):
+    destination_proposal_id: int
+    items: list[RemanagementDestinationItemAvailability]
+
+
+class RemanagementCompensationItemRequest(BaseModel):
+    destination_item_id: int
+    requested_quantity: Decimal = Field(gt=0)
+
+
+class RemanagementCompensationAllocationRequest(BaseModel):
+    destination_item_id: int
+    source_proposal_id: int
+    source_item_id: int
+    allocated_quantity: Decimal = Field(gt=0)
+
+
+class RemanagementCompensationRequest(BaseModel):
+    destination_proposal_id: int
+    items: list[RemanagementCompensationItemRequest] = Field(min_length=1)
+    allocations: list[RemanagementCompensationAllocationRequest] = Field(min_length=1)
+
+
+class CompensationTransfer(BaseModel):
+    source_proposal_id: int
+    source_item_id: int
+    ready_quantity_to_destination: Decimal
+    obligation_quantity_to_source: Decimal
+
+
+class CompensationProductPlan(BaseModel):
+    product_code: str
+    destination_item_id: int
+    total_to_receive: Decimal
+    allocated_quantity: Decimal
+    remaining_quantity: Decimal
+    coverage: str
+    transfers: list[CompensationTransfer]
+
+
+class CompensationPlanError(BaseModel):
+    code: str
+    message: str
+    destination_item_id: int | None = None
+    source_item_id: int | None = None
+
+
+class FutureMutationPlanOut(BaseModel):
+    expedition_ready_transfers: list[dict]
+    production_obligation_transfers: list[dict]
+    status_recalculations: list[dict]
+    movement_records: list[dict]
+
+
+class RemanagementCompensationPlanResponse(BaseModel):
+    destination_proposal_id: int
+    products: list[CompensationProductPlan]
+    affected_proposals: list[int]
+    total_ready_transferred: Decimal
+    total_obligation_transferred: Decimal
+    future_mutations: FutureMutationPlanOut
+    warnings: list[str]
+    errors: list[CompensationPlanError]
+    valid: bool
+
+
+class RemanagementReviewRequest(BaseModel):
+    destination_proposal_id: int
+    items: list[RemanagementCompensationItemRequest] = Field(min_length=1)
+    allocations: list[RemanagementCompensationAllocationRequest] = Field(min_length=1)
+    # Sem min_length de proposito: "Revalidar" pode ser chamado antes do
+    # usuario preencher o motivo. A ausencia vira um CompensationPlanError
+    # estruturado (REASON_REQUIRED) em vez de um 422 cru.
+    reason: str = Field(default="", max_length=1000)
+
+
+class RemanagementReviewSource(BaseModel):
+    source_proposal_id: int
+    source_item_id: int
+    ready_transfer: Decimal
+    production_compensation: Decimal
+    source_before: Decimal
+    source_after_simulated: Decimal
+
+
+class RemanagementReviewItem(BaseModel):
+    destination_item_id: int
+    product_code: str
+    requested: Decimal
+    allocated: Decimal
+    remaining: Decimal
+    status: str
+    sources: list[RemanagementReviewSource]
+
+
+class RemanagementReviewSummary(BaseModel):
+    product_count: int
+    source_proposal_count: int
+    source_item_count: int
+    total_quantity: Decimal | None = None
+    total_unit: str | None = None
+    complete_items: int
+    partial_items: int
+    not_allocated_items: int
+    invalid_items: int
+
+
+class RemanagementReviewResult(BaseModel):
+    destination_proposal_id: int
+    valid: bool
+    warnings: list[str]
+    errors: list[CompensationPlanError]
+    summary: RemanagementReviewSummary
+    items: list[RemanagementReviewItem]
+
+
+class RemanagementConfirmRequest(BaseModel):
+    operation_id: str = Field(min_length=8, max_length=100)
+    destination_proposal_id: int
+    items: list[RemanagementCompensationItemRequest] = Field(min_length=1)
+    allocations: list[RemanagementCompensationAllocationRequest] = Field(min_length=1)
+    reason: str = Field(min_length=1, max_length=1000)
+
+    @field_validator("reason", "operation_id", mode="before")
+    @classmethod
+    def strip_confirm_text(cls, value):
+        return value.strip() if isinstance(value, str) else value
+
+
+class RemanagementConfirmSourceSummary(BaseModel):
+    source_proposal_id: int
+    remanagement_id: int
+    code: str
+
+
+class RemanagementConfirmResult(BaseModel):
+    operation_id: str
+    status: str
+    destination_proposal_id: int
+    source_proposals: list[int]
+    products: int
+    allocations: int
+    confirmed_at: datetime
+    remanagements: list[RemanagementConfirmSourceSummary]
 
 
 class FiscalAction(BaseModel):

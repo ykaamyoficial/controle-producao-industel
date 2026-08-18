@@ -12,19 +12,33 @@ from app.ui.numeric_utils import format_decimal
 
 
 class EarlyRemanagementDeliveryDialog(QDialog):
-    """Troca compensada: material pronto A->B e producao pendente B->A."""
+    """Troca compensada: material pronto A->B e producao pendente B->A.
 
-    def __init__(self, service, parent=None):
+    Ponte temporaria (Fase 1 do novo fluxo de Remanejamento): quando aberta
+    com `preselected_destination_id`, a proposta destino chega ja escolhida
+    pela nova Etapa 1 (`RemanagementDestinationStepDialog`) e fica travada
+    aqui - o usuario nao escolhe o destino duas vezes. Essa ponte reaproveita
+    o fluxo legado (origem/mapeamento/simulacao/confirmacao) sem duplicar
+    nenhuma regra de negocio; sera substituida quando as Fases 2+ do novo
+    fluxo estiverem prontas (ver `app/ui/process_page.py:open_early_remanagement_delivery`).
+    """
+
+    RESULT_BACK = 2
+
+    def __init__(self, service, parent=None, preselected_destination_id: int | None = None):
         super().__init__(parent)
         self.service = service
         self.compatible_rows: list[dict] = []
         self.idempotency_key = str(uuid4())
+        self.preselected_destination_id = preselected_destination_id
         self.setWindowTitle("Remanejamento compensado")
         apply_large_dialog_geometry(self, parent)
         style_dialog_from_parent(self, parent)
         self._build()
         self.load_destinations()
         self.load_sources()
+        if self.preselected_destination_id is not None:
+            self._lock_destination(self.preselected_destination_id)
 
     def _build(self):
         root = QVBoxLayout(self)
@@ -65,7 +79,12 @@ class EarlyRemanagementDeliveryDialog(QDialog):
         cancel = ModernButton("Cancelar", "clear")
         confirm = ModernButton("Simular e confirmar", "save", accent=True)
         cancel.clicked.connect(self.reject); confirm.clicked.connect(self.apply)
-        footer.addStretch(); footer.addWidget(cancel); footer.addWidget(confirm)
+        footer.addStretch()
+        if self.preselected_destination_id is not None:
+            back = ModernButton("Voltar", "clear")
+            back.clicked.connect(lambda: self.done(self.RESULT_BACK))
+            footer.addWidget(back)
+        footer.addWidget(cancel); footer.addWidget(confirm)
         root.addLayout(footer)
 
         self.dest_search.textChanged.connect(self.load_destinations)
@@ -103,6 +122,15 @@ class EarlyRemanagementDeliveryDialog(QDialog):
 
     def _selection_changed(self):
         self.load_sources(); self.load_compatible_items()
+
+    def _lock_destination(self, destination_id: int):
+        for row in range(self.dest_table.rowCount()):
+            if int(self.dest_table.item(row, 0).data(Qt.UserRole)) == destination_id:
+                self.dest_table.selectRow(row)
+                self.dest_search.setEnabled(False)
+                self.dest_table.setEnabled(False)
+                return
+        QMessageBox.warning(self, "Remanejamento", "A proposta destino selecionada nao esta mais disponivel. Selecione o destino novamente.")
 
     def load_compatible_items(self):
         source_id, destination_id = self._selected_id(self.source_table), self._selected_id(self.dest_table)

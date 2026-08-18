@@ -25,12 +25,16 @@ from api.app.modules.proposals.admin_correction import (
     preview as build_administrative_preview,
     snapshot as administrative_snapshot,
 )
+from api.app.modules.proposals.compensation import Allocation, CompensationError, CompensationPlan, ItemSnapshot, RequestedItem, build_compensation_plan
 from api.app.modules.proposals.domain import ProductionStateMachine, ProposalStateMachine
 from api.app.modules.proposals.models import ExpeditionEvent, ExpeditionItem, FiscalEvent, FiscalInvoice, FiscalInvoiceItem, FiscalRecord, FiscalItem, GalvanizationLoad, GalvanizationLoadEvent, GalvanizationLoadItem, ProductionAllocationTransfer, Proposal, ProposalEvent, ProposalItem, ProposalRemanagement, ProposalRemanagementItem, SyncRun
 from api.app.modules.proposals.remanagement import calculate_item_balance, items_are_compatible, max_remanageable, quantity
 from api.app.modules.proposals.weights import calculate_known_weight, calculate_weight_coverage, normalize_known_weight
 from api.app.shared.formatting import format_quantity
 from api.app.modules.proposals.schemas import (
+    CompensationPlanError,
+    CompensationProductPlan,
+    CompensationTransfer,
     ExpeditionItemsRequest,
     ExpeditionItemSummary,
     ExpeditionProposalDetail,
@@ -52,6 +56,7 @@ from api.app.modules.proposals.schemas import (
     FiscalRecordSummary,
     FiscalRegisterInvoiceRequest,
     FiscalWithdrawalRequest,
+    FutureMutationPlanOut,
     GalvanizationLoadCreate,
     GalvanizationLoadDetail,
     GalvanizationLoadSummary,
@@ -94,9 +99,24 @@ from api.app.modules.proposals.schemas import (
     ProductionProposalListItem,
     ProductionResumeRequest,
     ProductionStartRequest,
+    RemanagementAvailabilityRequest,
+    RemanagementAvailabilityResponse,
     RemanagementCompatibleItem,
+    RemanagementCompensationPlanResponse,
+    RemanagementCompensationRequest,
+    RemanagementConfirmRequest,
+    RemanagementConfirmResult,
+    RemanagementConfirmSourceSummary,
+    RemanagementDestinationItem,
+    RemanagementDestinationItemAvailability,
     RemanagementItemBalance,
     RemanagementPreview,
+    RemanagementReviewItem,
+    RemanagementReviewRequest,
+    RemanagementReviewResult,
+    RemanagementReviewSource,
+    RemanagementReviewSummary,
+    RemanagementSourceCandidate,
     RemanagementSummary,
     PaginatedRemanagementResponse,
     SyncSummary,
@@ -889,6 +909,31 @@ async def _locked_remanagement_proposals(session: AsyncSession, source_id: int, 
     return by_id[source_id], by_id[destination_id]
 
 
+async def _locked_remanagement_participants(session: AsyncSession, proposal_ids: list[int]) -> dict[int, Proposal]:
+    """Generaliza `_locked_remanagement_proposals` para N propostas (Fase 7:
+    um destino + varias origens distintas). Mesmo formato de consulta (lock
+    ordenado por id para evitar deadlock entre confirmacoes concorrentes que
+    compartilhem alguma proposta)."""
+    unique_ids = sorted(set(proposal_ids))
+    rows = (
+        (await session.execute(
+            select(Proposal)
+            .options(selectinload(Proposal.items).selectinload(ProposalItem.expedition_item))
+            .where(Proposal.id.in_(unique_ids))
+            .order_by(Proposal.id)
+            .with_for_update()
+        ))
+        .scalars()
+        .unique()
+        .all()
+    )
+    by_id = {int(row.id): row for row in rows}
+    missing = [proposal_id for proposal_id in unique_ids if proposal_id not in by_id]
+    if missing:
+        raise ApiError(error_codes.PROPOSAL_NOT_FOUND, "Proposta de origem ou destino nao encontrada.", status_code=404)
+    return by_id
+
+
 async def _evaluate_remanagement(session: AsyncSession, payload: ExpeditionRemanagementDeliveryRequest, source: Proposal, destination: Proposal):
     _ensure_proposal_not_cancelled(source)
     _ensure_proposal_not_cancelled(destination)
@@ -1088,7 +1133,12 @@ async def apply_remanagement(session: AsyncSession, payload: ExpeditionRemanagem
             previous_source_status = source_expedition.status
             source_expedition.remanaged_quantity = quantity(source_expedition.remanaged_quantity + qty)
             source_expedition.separated_quantity = max(source_expedition.delivered_quantity, min(source_expedition.separated_quantity, source_expedition.available_quantity - source_expedition.remanaged_quantity))
-            source_expedition.status = "REMANEJADO" if balance.source_ready_after <= 0 else "DISPONIVEL_PARCIAL"
+            # "DISPONIVEL_PARCIAL" nao existe em ck_expedition_items_status (bug
+            # pre-existente, nunca exercitado pelos testes legados porque so
+            # cobriam remanejamento total da origem). Com saldo ainda restante o
+            # item continua no MESMO status que ja tinha (ainda elegivel para a
+            # propria separacao/entrega) - so vira REMANEJADO quando esgotado.
+            source_expedition.status = "REMANEJADO" if balance.source_ready_after <= 0 else previous_source_status
             _touch(source_expedition, actor)
             destination_expedition = destination_item.expedition_item
             if destination_expedition is None:
@@ -1148,6 +1198,277 @@ async def apply_remanagement(session: AsyncSession, payload: ExpeditionRemanagem
     return _remanagement_summary(await _get_remanagement_by_key(session, payload.idempotency_key))
 
 
+async def _get_remanagement_batch_by_operation_id(session: AsyncSession, operation_id: str) -> list[ProposalRemanagement]:
+    """Um `operation_id` (Fase 7) pode abranger varias linhas
+    `ProposalRemanagement` (uma por origem distinta), todas compartilhando o
+    mesmo `correlation_id`. Usado tanto para o replay idempotente quanto para
+    montar a resposta apos o commit."""
+    return (
+        (await session.execute(
+            select(ProposalRemanagement)
+            .options(selectinload(ProposalRemanagement.items).selectinload(ProposalRemanagementItem.production_transfer))
+            .where(ProposalRemanagement.correlation_id == operation_id)
+            .order_by(ProposalRemanagement.id)
+        ))
+        .scalars()
+        .unique()
+        .all()
+    )
+
+
+def _confirm_result_from_rows(operation_id: str, rows: list[ProposalRemanagement]) -> RemanagementConfirmResult:
+    destination_id = rows[0].destination_proposal_id
+    source_ids = sorted({row.source_proposal_id for row in rows})
+    destination_item_ids = {item.destination_item_id for row in rows for item in row.items}
+    allocations = sum(len(row.items) for row in rows)
+    confirmed_at = max((row.created_at for row in rows if row.created_at is not None), default=datetime.now(UTC))
+    return RemanagementConfirmResult(
+        operation_id=operation_id,
+        status="CONFIRMED",
+        destination_proposal_id=destination_id,
+        source_proposals=source_ids,
+        products=len(destination_item_ids),
+        allocations=allocations,
+        confirmed_at=confirmed_at,
+        remanagements=[
+            RemanagementConfirmSourceSummary(source_proposal_id=row.source_proposal_id, remanagement_id=row.id, code=row.code or f"RM-{int(row.id):06d}")
+            for row in rows
+        ],
+    )
+
+
+async def confirm_remanagement_batch(session: AsyncSession, payload: RemanagementConfirmRequest, actor: User, *, request_id: str | None) -> RemanagementConfirmResult:
+    """Fase 7 do novo fluxo de Remanejamento: unico ponto que de fato grava no
+    banco o plano montado nas Fases 1-6. Revalida tudo dentro da transacao
+    (destino, cada origem, cada saldo) sem confiar em nenhuma fotografia das
+    fases anteriores, trava destino e todas as origens distintas com
+    `_locked_remanagement_participants` e persiste em um unico
+    `session.commit()` no final - qualquer excecao no meio reverte tudo (tudo
+    ou nada), exatamente como `apply_remanagement` (fluxo legado) ja faz para
+    uma unica origem.
+
+    Uma "operacao" do usuario (`operation_id`) pode abranger varias propostas
+    de origem diferentes para o mesmo destino. O modelo existente
+    `ProposalRemanagement` so suporta uma origem por linha, entao cada origem
+    distinta vira uma linha propria, todas compartilhando o mesmo
+    `correlation_id=operation_id` (campo ja existente, reaproveitado como
+    chave de agrupamento do lote - nenhuma migracao nova) e cada uma com seu
+    proprio `idempotency_key=f"{operation_id}:{source_proposal_id}"`, unico
+    por (operacao, origem) - protege contra duplo clique/retry de rede tanto
+    no nivel da operacao inteira quanto de cada linha individual."""
+    existing_rows = await _get_remanagement_batch_by_operation_id(session, payload.operation_id)
+    if existing_rows:
+        return _confirm_result_from_rows(payload.operation_id, existing_rows)
+
+    source_proposal_ids = sorted({allocation.source_proposal_id for allocation in payload.allocations})
+    if payload.destination_proposal_id in source_proposal_ids:
+        raise ApiError(error_codes.EXPEDITION_REMANAGEMENT_INVALID, "Origem e destino precisam ser propostas diferentes.", status_code=409)
+
+    try:
+        preloaded = await _locked_remanagement_participants(session, [payload.destination_proposal_id, *source_proposal_ids])
+        existing_rows = await _get_remanagement_batch_by_operation_id(session, payload.operation_id)
+        if existing_rows:
+            return _confirm_result_from_rows(payload.operation_id, existing_rows)
+
+        for source_id in source_proposal_ids:
+            source_proposal = preloaded[source_id]
+            _ensure_proposal_not_cancelled(source_proposal)
+            if not source_proposal.active:
+                raise ApiError(error_codes.EXPEDITION_REMANAGEMENT_INVALID, f"Proposta de origem {source_proposal.proposal_number} nao esta mais ativa para remanejamento.", status_code=409)
+
+        compensation_payload = RemanagementCompensationRequest(destination_proposal_id=payload.destination_proposal_id, items=payload.items, allocations=payload.allocations)
+        destination, requested_items, allocations, item_snapshots, items_by_id = await _load_compensation_snapshots(session, compensation_payload, preloaded_proposals=preloaded)
+        plan = build_compensation_plan(destination_proposal_id=destination.id, requested_items=requested_items, allocations=allocations, item_snapshots=item_snapshots)
+        if plan.errors:
+            first_error = plan.errors[0]
+            raise ApiError(
+                error_codes.EXPEDITION_REMANAGEMENT_INVALID,
+                first_error.message,
+                status_code=409,
+                details={"code": first_error.code, "destination_item_id": first_error.destination_item_id, "source_item_id": first_error.source_item_id},
+            )
+        if not plan.lines:
+            raise ApiError(error_codes.EXPEDITION_REMANAGEMENT_INVALID, "Nenhuma linha de compensacao valida para confirmar.", status_code=409)
+
+        fresh_balances = await _batch_item_allocation_balances(session, list(items_by_id.values()))
+
+        lines_by_source: dict[int, list] = {}
+        for line in plan.lines:
+            lines_by_source.setdefault(line.source_proposal_id, []).append(line)
+
+        destination_before = {"area": destination.current_area, "status": destination.current_status, "production_status": destination.production_status, "shipping_status": destination.shipping_status}
+        sources_before = {
+            source_id: {"area": preloaded[source_id].current_area, "status": preloaded[source_id].current_status, "production_status": preloaded[source_id].production_status, "shipping_status": preloaded[source_id].shipping_status}
+            for source_id in source_proposal_ids
+        }
+
+        created_rows: list[ProposalRemanagement] = []
+        transferred_by_destination_item: dict[int, Decimal] = {}
+
+        for source_id in source_proposal_ids:
+            source_lines = lines_by_source.get(source_id)
+            if not source_lines:
+                continue
+            source_proposal = preloaded[source_id]
+            remanagement = ProposalRemanagement(
+                source_proposal_id=source_proposal.id,
+                destination_proposal_id=destination.id,
+                reason=payload.reason,
+                idempotency_key=f"{payload.operation_id}:{source_proposal.id}",
+                request_id=request_id,
+                correlation_id=payload.operation_id,
+                source_version_snapshot=source_proposal.version,
+                destination_version_snapshot=destination.version,
+                created_by=actor.id,
+            )
+            session.add(remanagement)
+            await session.flush()
+            remanagement.code = f"RM-{int(remanagement.id):06d}"
+            created_rows.append(remanagement)
+
+            for line in source_lines:
+                source_item = items_by_id[line.source_item_id]
+                destination_item = items_by_id[line.destination_item_id]
+                qty = line.ready_quantity_to_destination
+                source_balance = fresh_balances[source_item.id]
+                destination_balance = fresh_balances[destination_item.id]
+                source_ready_after = source_balance.ready_available - qty
+                item_row = ProposalRemanagementItem(
+                    remanagement_id=remanagement.id,
+                    source_item_id=source_item.id,
+                    destination_item_id=destination_item.id,
+                    quantity=qty,
+                    source_ready_before=source_balance.ready_available,
+                    source_ready_after=source_ready_after,
+                    destination_need_before=destination_balance.destination_need,
+                    destination_need_after=destination_balance.destination_need - qty,
+                    destination_ready_before=destination_balance.ready_available,
+                    destination_ready_after=destination_balance.ready_available + qty,
+                    destination_reallocatable_before=destination_balance.reallocatable_production,
+                    destination_reallocatable_after=destination_balance.reallocatable_production - qty,
+                    production_reallocated_quantity=qty,
+                    weight_snapshot=source_item.unit_weight,
+                    product_code_snapshot=source_item.product_code,
+                    unit_snapshot=source_item.unit,
+                )
+                session.add(item_row)
+                await session.flush()
+                session.add(ProductionAllocationTransfer(remanagement_item_id=item_row.id, from_item=destination_item, to_item=source_item, quantity=qty, created_by=actor.id))
+
+                source_expedition = source_item.expedition_item
+                if source_expedition is None:
+                    raise ApiError(error_codes.EXPEDITION_REMANAGEMENT_INVALID, "Item de origem nao possui disponibilidade oficial na Expedicao.", status_code=409)
+                previous_source_status = source_expedition.status
+                source_expedition.remanaged_quantity = quantity(source_expedition.remanaged_quantity + qty)
+                source_expedition.separated_quantity = max(source_expedition.delivered_quantity, min(source_expedition.separated_quantity, source_expedition.available_quantity - source_expedition.remanaged_quantity))
+                # Mesma correcao aplicada em apply_remanagement: "DISPONIVEL_PARCIAL"
+                # nao existe em ck_expedition_items_status - com saldo restante o
+                # item mantem o status atual, so vira REMANEJADO quando esgotado.
+                source_expedition.status = "REMANEJADO" if source_ready_after <= 0 else previous_source_status
+                _touch(source_expedition, actor)
+
+                # Um item destino pode receber de mais de uma origem na mesma
+                # operacao: a segunda origem processada precisa encontrar o
+                # MESMO ExpeditionItem criado pela primeira, nunca duplicar.
+                destination_expedition = destination_item.expedition_item
+                if destination_expedition is None:
+                    destination_expedition = ExpeditionItem(proposal_id=destination.id, proposal_item_id=destination_item.id, available_quantity=qty, origin="REMANEJAMENTO", status="EM_SEPARACAO", created_by=actor.id, updated_by=actor.id)
+                    destination_expedition.proposal = destination
+                    destination_expedition.proposal_item = destination_item
+                    session.add(destination_expedition)
+                    await session.flush()
+                    destination_item.expedition_item = destination_expedition
+                else:
+                    destination_expedition.available_quantity = quantity(destination_expedition.available_quantity + qty)
+                    destination_expedition.origin = "MISTO" if destination_expedition.origin != "REMANEJAMENTO" else destination_expedition.origin
+                    if destination_expedition.status not in {"SEPARACAO_INICIADA", "SEPARADO", "ENTREGUE_PARCIAL"}:
+                        destination_expedition.status = "EM_SEPARACAO"
+                    _touch(destination_expedition, actor)
+
+                transferred_by_destination_item[destination_item.id] = transferred_by_destination_item.get(destination_item.id, Decimal("0")) + qty
+
+                event_metadata = {
+                    "operation_id": payload.operation_id,
+                    "remanagement_id": remanagement.id,
+                    "code": remanagement.code,
+                    "source_item_id": source_item.id,
+                    "destination_item_id": destination_item.id,
+                    "quantity": str(qty),
+                    "reason": payload.reason,
+                    "source_ready_before": str(source_balance.ready_available),
+                    "source_ready_after": str(source_ready_after),
+                    "destination_need_before": str(destination_balance.destination_need),
+                    "destination_need_after": str(destination_balance.destination_need - qty),
+                    "production_reallocated_quantity": str(qty),
+                }
+                await _record_expedition_event(session, source_proposal, "COMPENSATED_REMANAGEMENT_READY_SENT", actor, expedition_item=source_expedition, request_id=request_id, from_status=previous_source_status, to_status=source_expedition.status, metadata=event_metadata)
+                await _record_expedition_event(session, destination, "COMPENSATED_REMANAGEMENT_READY_RECEIVED", actor, expedition_item=destination_expedition, request_id=request_id, to_status=destination_expedition.status, metadata=event_metadata)
+
+            source_proposal.has_production_pending = True
+            source_proposal.production_status = "ITEM_PENDENTE_FABRICACAO"
+            source_proposal.flow_situation = "PENDENTE_POR_REMANEJAMENTO"
+            _touch(source_proposal, actor)
+
+        # Destino e recalculado UMA vez, com o total transferido somado de
+        # TODAS as origens - nunca uma vez por origem (evitaria contar so a
+        # ultima origem processada como se fosse o total).
+        mapped_destination_pending = {
+            item_id: max(fresh_balances[item_id].production_pending - transferred, Decimal("0"))
+            for item_id, transferred in transferred_by_destination_item.items()
+        }
+        destination_has_production_pending = any(
+            mapped_destination_pending.get(int(item.id), _loaded_item_balance(item).production_pending) > 0
+            for item in _internal_items(destination)
+        )
+        destination.shipping_status = "EM_SEPARACAO"
+        if not destination_has_production_pending:
+            destination.production_status = "FINALIZADO"
+            destination.has_production_pending = False
+            destination.current_area = "EXPEDICAO"
+            destination.current_status = "EM_SEPARACAO"
+            destination.general_status = "EM_EXPEDICAO"
+            destination.flow_situation = "NORMAL"
+        else:
+            destination.has_production_pending = True
+            destination.flow_situation = "PARCIAL_COM_PENDENCIA"
+        _touch(destination, actor)
+        destination_after = {"area": destination.current_area, "status": destination.current_status, "production_status": destination.production_status, "shipping_status": destination.shipping_status}
+
+        for remanagement in created_rows:
+            source_proposal = preloaded[remanagement.source_proposal_id]
+            source_after = {"area": source_proposal.current_area, "status": source_proposal.current_status, "production_status": source_proposal.production_status, "shipping_status": source_proposal.shipping_status}
+            await _record_event(
+                session, source_proposal, "COMPENSATED_REMANAGEMENT_APPLIED", actor, request_id=request_id,
+                from_area=sources_before[source_proposal.id]["area"], from_status=sources_before[source_proposal.id]["status"],
+                to_area=source_proposal.current_area, to_status=source_proposal.current_status,
+                metadata={"operation_id": payload.operation_id, "remanagement_id": remanagement.id, "code": remanagement.code, "destination_proposal_id": destination.id, "reason": payload.reason, "state_before": sources_before[source_proposal.id], "state_after": source_after},
+            )
+            await _record_event(
+                session, destination, "COMPENSATED_REMANAGEMENT_RECEIVED", actor, request_id=request_id,
+                from_area=destination_before["area"], from_status=destination_before["status"],
+                to_area=destination.current_area, to_status=destination.current_status,
+                metadata={"operation_id": payload.operation_id, "remanagement_id": remanagement.id, "code": remanagement.code, "source_proposal_id": source_proposal.id, "reason": payload.reason, "state_before": destination_before, "state_after": destination_after},
+            )
+
+        await auth_repository.create_security_event(
+            session, "COMPENSATED_REMANAGEMENT_APPLIED", actor_user_id=actor.id, request_id=request_id,
+            details={"operation_id": payload.operation_id, "destination_proposal_id": destination.id, "source_proposal_ids": source_proposal_ids, "remanagement_ids": [row.id for row in created_rows]},
+        )
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        existing_rows = await _get_remanagement_batch_by_operation_id(session, payload.operation_id)
+        if existing_rows:
+            return _confirm_result_from_rows(payload.operation_id, existing_rows)
+        raise
+    except Exception:
+        await session.rollback()
+        raise
+
+    final_rows = await _get_remanagement_batch_by_operation_id(session, payload.operation_id)
+    return _confirm_result_from_rows(payload.operation_id, final_rows)
+
+
 async def compatible_remanagement_items(session: AsyncSession, source_proposal_id: int, destination_proposal_id: int) -> list[RemanagementCompatibleItem]:
     if source_proposal_id == destination_proposal_id:
         return []
@@ -1170,6 +1491,464 @@ async def compatible_remanagement_items(session: AsyncSession, source_proposal_i
                 continue
             result.append(RemanagementCompatibleItem(source_item_id=source_item.id, destination_item_id=destination_item.id, source_item_number=source_item.item_number, destination_item_number=destination_item.item_number, product_code=source_item.product_code, description=source_item.description, unit=source_item.unit, source_item_version=source_item.version, destination_item_version=destination_item.version, source_ready_available=source_balance.ready_available, destination_need=destination_balance.destination_need, destination_reallocatable_production=destination_balance.reallocatable_production, max_remanageable=maximum, weight_snapshot=source_item.unit_weight))
     return result
+
+
+async def remanagement_destination_items(session: AsyncSession, destination_proposal_id: int) -> list[RemanagementDestinationItem]:
+    """Fase 2 do novo fluxo de Remanejamento: itens da proposta destino ja
+    escolhida na Fase 1, com a mesma necessidade remanejavel usada por
+    `compatible_remanagement_items`/`_evaluate_remanagement` - nenhuma formula
+    nova, apenas `_item_allocation_balance` calculada sem exigir uma origem."""
+    destination = await get_proposal(session, destination_proposal_id)
+    _ensure_proposal_not_cancelled(destination)
+    if not destination.active:
+        raise ApiError(error_codes.EXPEDITION_REMANAGEMENT_INVALID, "A proposta destino nao esta mais ativa para remanejamento.", status_code=409)
+    result = []
+    for item in _active_items(destination):
+        balance = await _item_allocation_balance(session, item)
+        need = balance.destination_need
+        code = (item.product_code or "").strip()
+        block_reason = None
+        if not code:
+            block_reason = "Item sem codigo de produto para busca de remanejamento."
+        elif need <= 0:
+            block_reason = "Item sem necessidade pendente de remanejamento."
+        result.append(RemanagementDestinationItem(
+            item_id=item.id,
+            item_version=item.version,
+            item_number=item.item_number,
+            product_code=item.product_code,
+            description=item.description,
+            unit=item.unit,
+            total_quantity=item.quantity,
+            already_attended=(balance.requested - need).quantize(Decimal("0.0001")),
+            remanageable_need=need,
+            selectable=block_reason is None,
+            block_reason=block_reason,
+        ))
+    return result
+
+
+def _normalized_product_code(value) -> str:
+    return str(value or "").strip().upper()
+
+
+async def _batch_item_allocation_balances(session: AsyncSession, items: list[ProposalItem]) -> dict[int, "ItemAllocationBalance"]:
+    """Versao em lote de `_item_allocation_balance`: mesmas 3 agregacoes sobre
+    `ProductionAllocationTransfer`, mas agrupadas por `item_id` em vez de uma
+    consulta por item, para varrer muitos itens (Fase 3) sem N+1."""
+    if not items:
+        return {}
+    item_ids = [item.id for item in items]
+    production_out = {
+        int(item_id): Decimal(str(total or "0"))
+        for item_id, total in (await session.execute(
+            select(ProductionAllocationTransfer.from_item_id, func.coalesce(func.sum(ProductionAllocationTransfer.quantity), 0))
+            .where(ProductionAllocationTransfer.from_item_id.in_(item_ids))
+            .group_by(ProductionAllocationTransfer.from_item_id)
+        )).all()
+    }
+    production_in_pending = {
+        int(item_id): Decimal(str(total or "0"))
+        for item_id, total in (await session.execute(
+            select(ProductionAllocationTransfer.to_item_id, func.coalesce(func.sum(ProductionAllocationTransfer.quantity - ProductionAllocationTransfer.completed_quantity), 0))
+            .where(ProductionAllocationTransfer.to_item_id.in_(item_ids))
+            .where(ProductionAllocationTransfer.status != "COMPLETED")
+            .group_by(ProductionAllocationTransfer.to_item_id)
+        )).all()
+    }
+    production_in_completed = {
+        int(item_id): Decimal(str(total or "0"))
+        for item_id, total in (await session.execute(
+            select(ProductionAllocationTransfer.to_item_id, func.coalesce(func.sum(ProductionAllocationTransfer.completed_quantity), 0))
+            .where(ProductionAllocationTransfer.to_item_id.in_(item_ids))
+            .group_by(ProductionAllocationTransfer.to_item_id)
+        )).all()
+    }
+    balances = {}
+    for item in items:
+        expedition = item.expedition_item
+        balances[item.id] = calculate_item_balance(
+            requested=item.quantity,
+            produced=item.produced,
+            produce_internally=item.produce_internally,
+            expedition_available=expedition.available_quantity if expedition else 0,
+            delivered=expedition.delivered_quantity if expedition else 0,
+            remanaged_out=expedition.remanaged_quantity if expedition else 0,
+            production_reallocated_out=production_out.get(item.id, 0),
+            production_reallocated_in_pending=production_in_pending.get(item.id, 0),
+            production_reallocated_in_completed=production_in_completed.get(item.id, 0),
+        )
+    return balances
+
+
+async def find_remanagement_sources(session: AsyncSession, payload: RemanagementAvailabilityRequest) -> RemanagementAvailabilityResponse:
+    """Fase 3 do novo fluxo de Remanejamento: para cada item que a Fase 2
+    marcou como necessario no destino, descobre automaticamente quais outras
+    propostas tem saldo pronto na Expedicao com o mesmo `product_code` -
+    reutiliza `_item_allocation_balance`/`calculate_item_balance` (mesmo
+    calculo de saldo do fluxo legado) e `items_are_compatible` (mesma regra
+    de compatibilidade da gravacao real) em vez de inventar formula ou
+    correspondencia por descricao. Somente leitura: nenhuma origem e
+    escolhida, nenhum saldo e reservado."""
+    destination = await get_proposal(session, payload.destination_proposal_id)
+    _ensure_proposal_not_cancelled(destination)
+    if not destination.active:
+        raise ApiError(error_codes.EXPEDITION_REMANAGEMENT_INVALID, "A proposta destino nao esta mais ativa para remanejamento.", status_code=409)
+    destination_items = {int(item.id): item for item in _active_items(destination)}
+
+    requested_rows: list[tuple[ProposalItem, Decimal]] = []
+    for requested in payload.items:
+        destination_item = destination_items.get(requested.destination_item_id)
+        if destination_item is None:
+            raise ApiError(error_codes.EXPEDITION_REMANAGEMENT_INVALID, "Item nao pertence a proposta destino.", status_code=409)
+        code = _normalized_product_code(destination_item.product_code)
+        if not code:
+            raise ApiError(error_codes.EXPEDITION_REMANAGEMENT_INVALID, f"Item {destination_item.item_number} nao possui codigo de produto para busca.", status_code=409)
+        # Nunca confiar cegamente na quantidade que a Fase 2 enviou: revalida
+        # contra a necessidade remanejavel atual (mesmo calculo da Fase 2).
+        destination_balance = await _item_allocation_balance(session, destination_item)
+        effective_quantity = min(quantity(requested.requested_quantity), destination_balance.destination_need)
+        requested_rows.append((destination_item, effective_quantity))
+
+    if await _sync_expedition_from_available_items(session):
+        await session.commit()
+
+    codes = sorted({_normalized_product_code(item.product_code) for item, _ in requested_rows})
+    candidates_by_code: dict[str, list[ProposalItem]] = {code: [] for code in codes}
+    balances: dict[int, "ItemAllocationBalance"] = {}
+    candidate_stmt = (
+        select(ProposalItem)
+        .join(Proposal, ProposalItem.proposal_id == Proposal.id)
+        .options(selectinload(ProposalItem.proposal))
+        .where(func.upper(ProposalItem.product_code).in_(codes))
+        .where(ProposalItem.proposal_id != payload.destination_proposal_id)
+        .where(ProposalItem.active.is_(True))
+        .where(Proposal.active.is_(True))
+        .where(_proposal_operational_clause())
+    )
+    candidate_items = (await session.execute(candidate_stmt)).scalars().unique().all()
+    balances = await _batch_item_allocation_balances(session, candidate_items)
+    for item in candidate_items:
+        # Mesma exclusao ja aplicada por `compatible_remanagement_items`: item
+        # pendente de galvanizacao nao pode ser origem ate essa etapa ficar
+        # rastreavel quantitativamente.
+        if item.requires_galvanization == "SIM":
+            continue
+        balance = balances.get(item.id)
+        if balance is None or balance.ready_available <= 0:
+            continue
+        candidates_by_code.setdefault(_normalized_product_code(item.product_code), []).append(item)
+
+    result_items = []
+    for destination_item, effective_quantity in requested_rows:
+        code = _normalized_product_code(destination_item.product_code)
+        matches = [
+            candidate_item for candidate_item in candidates_by_code.get(code, [])
+            if items_are_compatible(candidate_item, destination_item)[0]
+        ]
+        matches.sort(key=lambda candidate_item: balances[candidate_item.id].ready_available, reverse=True)
+        candidates = [
+            RemanagementSourceCandidate(
+                source_proposal_id=candidate_item.proposal_id,
+                source_proposal_number=candidate_item.proposal.proposal_number,
+                source_item_id=candidate_item.id,
+                source_item_version=candidate_item.version,
+                client=candidate_item.proposal.customer_name,
+                site=candidate_item.proposal.project_name,
+                available_quantity=balances[candidate_item.id].ready_available,
+                unit=candidate_item.unit,
+                operational_status=candidate_item.proposal.shipping_status,
+            )
+            for candidate_item in matches
+        ]
+        total_available = sum((candidate.available_quantity for candidate in candidates), Decimal("0")).quantize(Decimal("0.0001"))
+        if effective_quantity > 0 and total_available >= effective_quantity:
+            coverage_status = "SUFICIENTE"
+        elif total_available > 0:
+            coverage_status = "PARCIAL"
+        else:
+            coverage_status = "SEM_DISPONIBILIDADE"
+        result_items.append(RemanagementDestinationItemAvailability(
+            destination_item_id=destination_item.id,
+            product_code=destination_item.product_code,
+            description=destination_item.description,
+            unit=destination_item.unit,
+            requested_quantity=effective_quantity,
+            total_available=total_available,
+            coverage_status=coverage_status,
+            candidates=candidates,
+        ))
+    return RemanagementAvailabilityResponse(destination_proposal_id=destination.id, items=result_items)
+
+
+def _compensation_plan_response(plan: CompensationPlan) -> RemanagementCompensationPlanResponse:
+    return RemanagementCompensationPlanResponse(
+        destination_proposal_id=plan.destination_proposal_id,
+        products=[
+            CompensationProductPlan(
+                product_code=product.product_code,
+                destination_item_id=product.destination_item_id,
+                total_to_receive=product.total_to_receive,
+                allocated_quantity=product.allocated_quantity,
+                remaining_quantity=product.remaining_quantity,
+                coverage=product.coverage,
+                transfers=[
+                    CompensationTransfer(
+                        source_proposal_id=line.source_proposal_id,
+                        source_item_id=line.source_item_id,
+                        ready_quantity_to_destination=line.ready_quantity_to_destination,
+                        obligation_quantity_to_source=line.obligation_quantity_to_source,
+                    )
+                    for line in product.transfers
+                ],
+            )
+            for product in plan.products
+        ],
+        affected_proposals=plan.affected_proposals,
+        total_ready_transferred=plan.total_ready_transferred,
+        total_obligation_transferred=plan.total_obligation_transferred,
+        future_mutations=FutureMutationPlanOut(
+            expedition_ready_transfers=plan.future_mutations.expedition_ready_transfers,
+            production_obligation_transfers=plan.future_mutations.production_obligation_transfers,
+            status_recalculations=plan.future_mutations.status_recalculations,
+            movement_records=plan.future_mutations.movement_records,
+        ),
+        warnings=plan.warnings,
+        errors=[
+            CompensationPlanError(code=error.code, message=error.message, destination_item_id=error.destination_item_id, source_item_id=error.source_item_id)
+            for error in plan.errors
+        ],
+        valid=plan.valid,
+    )
+
+
+async def _load_compensation_snapshots(
+    session: AsyncSession,
+    payload: RemanagementCompensationRequest,
+    *,
+    preloaded_proposals: dict[int, Proposal] | None = None,
+) -> tuple[Proposal, list[RequestedItem], list[Allocation], dict[int, ItemSnapshot], dict[int, ProposalItem]]:
+    """Fonte unica de leitura do motor de compensacao (Fase 5), da revisao/
+    simulacao (Fase 6) e da confirmacao transacional (Fase 7): carrega o
+    destino, revalida cada item pedido contra a necessidade *atual* e cada
+    origem alocada contra o saldo *atual* - `item_snapshots[...].available_for_transfer`
+    e sempre um numero fresco lido agora, nunca uma fotografia antiga confiada
+    as cegas. Fase 6 chama esta mesma funcao para "revalidar disponibilidades"
+    (secao 16 do prompt da Fase 6) em vez de reimplementar a consulta.
+
+    `preloaded_proposals`, usado pela Fase 7, permite passar propostas ja
+    carregadas e travadas (`_locked_remanagement_participants`) para que a
+    revalidacao dentro da transacao de confirmacao nunca faca uma leitura
+    solta e destravada do destino/origens - destino e itens de origem vem
+    exclusivamente do dicionario ja travado quando fornecido. O saldo
+    (`_item_allocation_balance`/`_batch_item_allocation_balances`) continua
+    sendo lido agora, na mesma sessao, pois nao faz parte do preload de
+    propostas."""
+    if preloaded_proposals is not None:
+        destination = preloaded_proposals.get(payload.destination_proposal_id)
+        if destination is None:
+            raise ApiError(error_codes.PROPOSAL_NOT_FOUND, "Proposta destino nao encontrada.", status_code=404)
+    else:
+        destination = await get_proposal(session, payload.destination_proposal_id)
+    _ensure_proposal_not_cancelled(destination)
+    if not destination.active:
+        raise ApiError(error_codes.EXPEDITION_REMANAGEMENT_INVALID, "A proposta destino nao esta mais ativa para remanejamento.", status_code=409)
+    destination_items = {int(item.id): item for item in _active_items(destination)}
+
+    requested_items: list[RequestedItem] = []
+    item_snapshots: dict[int, ItemSnapshot] = {}
+    items_by_id: dict[int, ProposalItem] = {}
+    for requested in payload.items:
+        destination_item = destination_items.get(requested.destination_item_id)
+        if destination_item is None:
+            raise ApiError(error_codes.EXPEDITION_REMANAGEMENT_INVALID, "Item nao pertence a proposta destino.", status_code=409)
+        code = _normalized_product_code(destination_item.product_code)
+        if not code:
+            raise ApiError(error_codes.EXPEDITION_REMANAGEMENT_INVALID, f"Item {destination_item.item_number} nao possui codigo de produto para compensacao.", status_code=409)
+        # Mesma revalidacao da Fase 3: nunca confiar cegamente na quantidade
+        # que o cliente enviou, sempre clampar contra a necessidade atual.
+        destination_balance = await _item_allocation_balance(session, destination_item)
+        effective_quantity = min(quantity(requested.requested_quantity), destination_balance.destination_need)
+        requested_items.append(RequestedItem(destination_item_id=destination_item.id, requested_quantity=effective_quantity))
+        items_by_id[destination_item.id] = destination_item
+        item_snapshots[destination_item.id] = ItemSnapshot(
+            item_id=destination_item.id,
+            proposal_id=destination.id,
+            product_code=destination_item.product_code or "",
+            unit=destination_item.unit,
+            requires_galvanization=destination_item.requires_galvanization,
+            produce_internally=destination_item.produce_internally,
+            flow_defined=destination_item.flow_defined,
+            available_for_transfer=destination_balance.destination_need,
+        )
+
+    source_item_ids = sorted({allocation.source_item_id for allocation in payload.allocations})
+    if source_item_ids:
+        if preloaded_proposals is not None:
+            preloaded_items_by_id = {
+                int(item.id): item
+                for proposal in preloaded_proposals.values()
+                for item in _active_items(proposal)
+            }
+            missing_ids = [item_id for item_id in source_item_ids if item_id not in preloaded_items_by_id]
+            if missing_ids:
+                raise ApiError(error_codes.EXPEDITION_REMANAGEMENT_INVALID, "Item de origem nao pertence a nenhuma proposta travada para esta confirmacao.", status_code=409)
+            source_items = [preloaded_items_by_id[item_id] for item_id in source_item_ids]
+        else:
+            source_items = (
+                (await session.execute(
+                    select(ProposalItem)
+                    .options(selectinload(ProposalItem.proposal))
+                    .where(ProposalItem.id.in_(source_item_ids))
+                    .where(ProposalItem.active.is_(True))
+                ))
+                .scalars()
+                .unique()
+                .all()
+            )
+        source_balances = await _batch_item_allocation_balances(session, source_items)
+        for item in source_items:
+            items_by_id[item.id] = item
+            item_snapshots[item.id] = ItemSnapshot(
+                item_id=item.id,
+                proposal_id=item.proposal_id,
+                product_code=item.product_code or "",
+                unit=item.unit,
+                requires_galvanization=item.requires_galvanization,
+                produce_internally=item.produce_internally,
+                flow_defined=item.flow_defined,
+                available_for_transfer=source_balances[item.id].ready_available,
+            )
+
+    allocations = [
+        Allocation(
+            destination_item_id=allocation.destination_item_id,
+            source_proposal_id=allocation.source_proposal_id,
+            source_item_id=allocation.source_item_id,
+            allocated_quantity=allocation.allocated_quantity,
+        )
+        for allocation in payload.allocations
+    ]
+    return destination, requested_items, allocations, item_snapshots, items_by_id
+
+
+async def build_remanagement_compensation_plan(session: AsyncSession, payload: RemanagementCompensationRequest) -> RemanagementCompensationPlanResponse:
+    """Fase 5 do novo fluxo de Remanejamento: recebe o plano de alocacao da
+    Fase 4 (destination_item_id -> [source_proposal_id, source_item_id,
+    allocated_quantity]) e devolve um plano de compensacao determinístico via
+    o motor puro `build_compensation_plan` (`compensation.py`). So le dados
+    (revalida destino/itens/saldos reais) - nao persiste nada."""
+    destination, requested_items, allocations, item_snapshots, _items_by_id = await _load_compensation_snapshots(session, payload)
+    plan = build_compensation_plan(
+        destination_proposal_id=destination.id,
+        requested_items=requested_items,
+        allocations=allocations,
+        item_snapshots=item_snapshots,
+    )
+    return _compensation_plan_response(plan)
+
+
+async def simulate_remanagement_review(session: AsyncSession, payload: RemanagementReviewRequest) -> RemanagementReviewResult:
+    """Fase 6 do novo fluxo de Remanejamento: revisao/simulacao final antes da
+    confirmacao. Reusa a MESMA leitura de saldo da Fase 5
+    (`_load_compensation_snapshots`, que ja consulta o saldo *atual* de cada
+    origem/destino - isso e a revalidacao pedida na secao 16) e o MESMO motor
+    de compensacao (`build_compensation_plan`); esta funcao apenas adiciona o
+    comparativo antes/depois e a validacao do motivo. Nenhuma escrita."""
+    destination, requested_items, allocations, item_snapshots, _items_by_id = await _load_compensation_snapshots(
+        session,
+        RemanagementCompensationRequest(destination_proposal_id=payload.destination_proposal_id, items=payload.items, allocations=payload.allocations),
+    )
+    plan = build_compensation_plan(
+        destination_proposal_id=destination.id,
+        requested_items=requested_items,
+        allocations=allocations,
+        item_snapshots=item_snapshots,
+    )
+
+    reason = (payload.reason or "").strip()
+    errors = list(plan.errors)
+    if not reason:
+        errors.append(CompensationError(code="REASON_REQUIRED", message="Informe o motivo do remanejamento."))
+
+    products_by_item = {product.destination_item_id: product for product in plan.products}
+    review_items = []
+    complete = partial = not_allocated = invalid = 0
+    source_proposal_ids: set[int] = set()
+    source_item_ids: set[int] = set()
+    aggregate_units: dict[str, str] = {}  # chave normalizada (upper) -> grafia original para exibicao
+    aggregate_total = Decimal("0")
+
+    for requested in requested_items:
+        product = products_by_item.get(requested.destination_item_id)
+        allocated = product.allocated_quantity if product else Decimal("0")
+        remaining = max(requested.requested_quantity - allocated, Decimal("0"))
+        has_error = any(error.destination_item_id == requested.destination_item_id for error in plan.errors)
+        if has_error:
+            status = "INVALIDO"
+            invalid += 1
+        elif allocated <= 0:
+            status = "NAO_ALOCADO"
+            not_allocated += 1
+        elif allocated >= requested.requested_quantity:
+            status = "COMPLETO"
+            complete += 1
+        else:
+            status = "PARCIAL"
+            partial += 1
+
+        sources = []
+        for line in (product.transfers if product else []):
+            source_proposal_ids.add(line.source_proposal_id)
+            source_item_ids.add(line.source_item_id)
+            source_snapshot = item_snapshots.get(line.source_item_id)
+            before = source_snapshot.available_for_transfer if source_snapshot else Decimal("0")
+            after = max(before - line.ready_quantity_to_destination, Decimal("0"))
+            sources.append(RemanagementReviewSource(
+                source_proposal_id=line.source_proposal_id,
+                source_item_id=line.source_item_id,
+                ready_transfer=line.ready_quantity_to_destination,
+                production_compensation=line.obligation_quantity_to_source,
+                source_before=before,
+                source_after_simulated=after,
+            ))
+
+        destination_snapshot = item_snapshots.get(requested.destination_item_id)
+        unit = ((destination_snapshot.unit if destination_snapshot else None) or "").strip()
+        aggregate_units.setdefault(unit.upper(), unit)
+        aggregate_total += allocated
+        review_items.append(RemanagementReviewItem(
+            destination_item_id=requested.destination_item_id,
+            product_code=destination_snapshot.product_code if destination_snapshot else "",
+            requested=requested.requested_quantity,
+            allocated=allocated,
+            remaining=remaining,
+            status=status,
+            sources=sources,
+        ))
+
+    total_quantity = aggregate_total.quantize(Decimal("0.0001")) if len(aggregate_units) == 1 else None
+    total_unit = next(iter(aggregate_units.values())) if len(aggregate_units) == 1 else None
+    summary = RemanagementReviewSummary(
+        product_count=len(review_items),
+        source_proposal_count=len(source_proposal_ids),
+        source_item_count=len(source_item_ids),
+        total_quantity=total_quantity,
+        total_unit=total_unit,
+        complete_items=complete,
+        partial_items=partial,
+        not_allocated_items=not_allocated,
+        invalid_items=invalid,
+    )
+    valid = not errors and complete + partial > 0
+    return RemanagementReviewResult(
+        destination_proposal_id=destination.id,
+        valid=valid,
+        warnings=list(plan.warnings),
+        errors=[CompensationPlanError(code=error.code, message=error.message, destination_item_id=error.destination_item_id, source_item_id=error.source_item_id) for error in errors],
+        summary=summary,
+        items=review_items,
+    )
 
 
 async def list_remanagements(session: AsyncSession, *, proposal_id: int | None, limit: int, offset: int) -> PaginatedRemanagementResponse:
@@ -2756,7 +3535,13 @@ async def create_proposal(session: AsyncSession, payload: ProposalCreate, actor:
         for item_payload in payload.items:
             session.add(await _new_item(session, proposal.id, proposal.proposal_number, item_payload, actor))
         await session.flush()
-        await _record_event(session, proposal, "PROPOSAL_CREATED", actor, request_id=request_id, metadata={"items": len(payload.items)})
+        event_metadata = {
+            "items": len(payload.items),
+            "source": payload.source,
+        }
+        if payload.import_metadata:
+            event_metadata["import_metadata"] = payload.import_metadata
+        await _record_event(session, proposal, "PROPOSAL_CREATED", actor, request_id=request_id, metadata=event_metadata)
         await session.commit()
     except IntegrityError as exc:
         await session.rollback()

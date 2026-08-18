@@ -20,6 +20,11 @@ class Proposal(Base):
         Index("ix_proposals_customer_name", "customer_name"),
         Index("ix_proposals_project_name", "project_name"),
         Index("ix_proposals_current_area_status", "current_area", "current_status"),
+        Index("ix_proposals_current_area", "current_area"),
+        Index("ix_proposals_current_status", "current_status"),
+        Index("ix_proposals_customer_status", "customer_name", "current_status"),
+        Index("ix_proposals_deadline_date", "deadline_date"),
+        Index("ix_proposals_parent_proposal_id", "parent_proposal_id"),
         Index("ix_proposals_synced_at", "synced_at"),
     )
 
@@ -84,6 +89,7 @@ class ProposalItem(Base):
         UniqueConstraint("proposal_id", "item_number", name="uq_proposal_items_proposal_id_item_number"),
         Index("ix_proposal_items_proposal_id", "proposal_id"),
         Index("ix_proposal_items_legacy_current_process_id", "legacy_current_process_id"),
+        Index("ix_proposal_items_proposal_produced", "proposal_id", "produced"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
@@ -199,6 +205,7 @@ class GalvanizationLoadItem(Base):
         Index("ix_galvanization_load_items_proposal", "proposal_id"),
         Index("ix_galvanization_load_items_item", "proposal_item_id"),
         Index("ix_galvanization_load_items_status", "status"),
+        Index("ix_galvanization_load_items_load_status", "load_id", "status"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
@@ -259,6 +266,7 @@ class ExpeditionItem(Base):
         Index("ix_expedition_items_proposal", "proposal_id"),
         Index("ix_expedition_items_item", "proposal_item_id"),
         Index("ix_expedition_items_status", "status"),
+        Index("ix_expedition_items_proposal_status", "proposal_id", "status"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
@@ -400,6 +408,7 @@ class FiscalRecord(Base):
         Index("ix_fiscal_records_status", "status_fiscal"),
         Index("ix_fiscal_records_situation", "fiscal_situation"),
         Index("ix_fiscal_records_entry_date", "entry_date"),
+        Index("ix_fiscal_records_status_entry", "status_fiscal", "entry_date"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)

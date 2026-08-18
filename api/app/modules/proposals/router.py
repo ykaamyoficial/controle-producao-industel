@@ -82,8 +82,17 @@ from api.app.modules.proposals.schemas import (
     ProductionProposalDetail,
     ProductionResumeRequest,
     ProductionStartRequest,
+    RemanagementAvailabilityRequest,
+    RemanagementAvailabilityResponse,
     RemanagementCompatibleItem,
+    RemanagementCompensationPlanResponse,
+    RemanagementCompensationRequest,
+    RemanagementConfirmRequest,
+    RemanagementConfirmResult,
+    RemanagementDestinationItem,
     RemanagementPreview,
+    RemanagementReviewRequest,
+    RemanagementReviewResult,
     RemanagementSummary,
     WarehouseStatusRequest,
 )
@@ -379,6 +388,44 @@ async def create_remanagement(payload: ExpeditionRemanagementDeliveryRequest, re
 @router.get("/shipping/remanagements/compatible-items", response_model=list[RemanagementCompatibleItem])
 async def get_compatible_remanagement_items(source_proposal_id: int = Query(gt=0), destination_proposal_id: int = Query(gt=0), session: AsyncSession = Depends(get_db_session), _actor: User = Depends(require_permission(EXPEDITION_UPDATE))):
     return await service.compatible_remanagement_items(session, source_proposal_id, destination_proposal_id)
+
+
+@router.get("/shipping/remanagements/destination-items", response_model=list[RemanagementDestinationItem])
+async def get_remanagement_destination_items(destination_proposal_id: int = Query(gt=0), session: AsyncSession = Depends(get_db_session), _actor: User = Depends(require_permission(EXPEDITION_UPDATE))):
+    return await service.remanagement_destination_items(session, destination_proposal_id)
+
+
+@router.post("/shipping/remanagements/availability", response_model=RemanagementAvailabilityResponse)
+async def get_remanagement_availability(payload: RemanagementAvailabilityRequest, session: AsyncSession = Depends(get_db_session), _actor: User = Depends(require_permission(EXPEDITION_UPDATE))):
+    """Fase 3: busca somente leitura (POST por ter um corpo estruturado de
+    itens/quantidades, mas nunca chama `session.commit()`)."""
+    return await service.find_remanagement_sources(session, payload)
+
+
+@router.post("/shipping/remanagements/compensation-plan", response_model=RemanagementCompensationPlanResponse)
+async def get_remanagement_compensation_plan(payload: RemanagementCompensationRequest, session: AsyncSession = Depends(get_db_session), _actor: User = Depends(require_permission(EXPEDITION_UPDATE))):
+    """Fase 5: motor de compensacao, somente leitura/simulacao - nunca chama
+    `session.commit()`. Recebe o plano de alocacao (Fase 4) e devolve o plano
+    de compensacao determinístico para a Fase 6 revisar."""
+    return await service.build_remanagement_compensation_plan(session, payload)
+
+
+@router.post("/shipping/remanagements/review", response_model=RemanagementReviewResult)
+async def get_remanagement_review(payload: RemanagementReviewRequest, session: AsyncSession = Depends(get_db_session), _actor: User = Depends(require_permission(EXPEDITION_UPDATE))):
+    """Fase 6: revisao/simulacao final, somente leitura - nunca chama
+    `session.commit()`. Revalida saldos (mesma fonte da Fase 5) e valida o
+    motivo antes de habilitar a confirmacao."""
+    return await service.simulate_remanagement_review(session, payload)
+
+
+@router.post("/shipping/remanagements/confirm", response_model=RemanagementConfirmResult, status_code=status.HTTP_201_CREATED)
+async def confirm_remanagement(payload: RemanagementConfirmRequest, request: Request, session: AsyncSession = Depends(get_db_session), actor: User = Depends(require_permission(EXPEDITION_UPDATE))):
+    """Fase 7: unico endpoint do novo fluxo que de fato grava no banco.
+    Revalida tudo dentro de uma unica transacao (destino, cada origem
+    distinta, cada saldo), trava as propostas envolvidas e persiste tudo ou
+    nada. Idempotente por `operation_id` (retry seguro em caso de timeout de
+    rede ou duplo clique)."""
+    return await service.confirm_remanagement_batch(session, payload, actor, request_id=getattr(request.state, "request_id", None))
 
 
 @router.get("/shipping/remanagements", response_model=PaginatedRemanagementResponse)

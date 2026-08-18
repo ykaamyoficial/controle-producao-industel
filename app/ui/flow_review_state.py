@@ -65,6 +65,10 @@ def route_requires_reason(route: FlowRoute) -> bool:
     return FLOW_ROUTES[route].requires_reason
 
 
+def route_includes_production(route: FlowRoute) -> bool:
+    return FLOW_ROUTES[route].produce == "SIM"
+
+
 class ItemState(Enum):
     PADRAO = "padrao"
     EXCECAO_EXISTENTE = "excecao_existente"
@@ -169,12 +173,15 @@ def apply_default(
     scope: str,
     preserve_exceptions: bool,
     overwrite_exceptions: bool = False,
+    global_reason: str = "",
 ) -> int:
     """Applies a default route to eligible items in memory only. Returns items changed.
 
-    scope: "undefined_only" (default, safest) or "all_editable".
+    scope: "undefined_only" (default, safest) or "all_editable". A global reason
+    is copied only to routes that require one and respects the exception policy.
     """
     proposal.default_route = route
+    normalized_reason = str(global_reason or "").strip()
     changed = 0
     for item in proposal.items:
         if not item.is_editable:
@@ -184,12 +191,20 @@ def apply_default(
         is_preexisting_exception = item.original_route != FlowRoute.INDEFINIDO and item.original_route != route
         if is_preexisting_exception and preserve_exceptions and not overwrite_exceptions:
             continue
-        if item.proposed_route == route:
-            continue
+
+        route_changed = item.proposed_route != route
+        reason_changed = False
         item.proposed_route = route
-        if not route_requires_reason(route):
+        if route_requires_reason(route):
+            preserve_existing_reason = preserve_exceptions and bool((item.proposed_reason or "").strip())
+            if normalized_reason and (overwrite_exceptions or not preserve_existing_reason):
+                reason_changed = item.proposed_reason != normalized_reason
+                item.proposed_reason = normalized_reason
+        elif item.proposed_reason:
             item.proposed_reason = ""
-        changed += 1
+            reason_changed = True
+        if route_changed or reason_changed:
+            changed += 1
     return changed
 
 
@@ -200,9 +215,17 @@ def apply_default_to_all(
     scope: str,
     preserve_exceptions: bool,
     overwrite_exceptions: bool = False,
+    global_reason: str = "",
 ) -> int:
     return sum(
-        apply_default(proposal, route, scope=scope, preserve_exceptions=preserve_exceptions, overwrite_exceptions=overwrite_exceptions)
+        apply_default(
+            proposal,
+            route,
+            scope=scope,
+            preserve_exceptions=preserve_exceptions,
+            overwrite_exceptions=overwrite_exceptions,
+            global_reason=global_reason,
+        )
         for proposal in proposals
     )
 
