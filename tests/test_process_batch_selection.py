@@ -159,7 +159,7 @@ class FakeBatchDialogService(FakeProductionService):
         }
 
 
-def _run_synchronously(_owner, operation, on_success, on_error):
+def _run_synchronously(_owner, operation, on_success, on_error, **_kwargs):
     try:
         on_success(operation())
     except Exception as exc:

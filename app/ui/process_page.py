@@ -64,7 +64,13 @@ class ProcessPage(QWidget):
         self.proxy.setFilterCaseSensitivity(Qt.CaseInsensitive)
         self._refresh_thread = None
         self._refreshing = False
-        self._refresh_coordinator = RefreshCoordinator(self)
+        # Passa `_start_worker` (que resolve `start_worker` no namespace deste
+        # modulo a cada chamada) para o coordinator em vez de deixa-lo usar o
+        # `start_worker` importado dentro de refresh_coordinator.py: assim,
+        # testes que fazem `patch("app.ui.process_page.start_worker", ...)`
+        # continuam interceptando a chamada real, como faziam antes de o
+        # refresh passar a delegar ao RefreshCoordinator.
+        self._refresh_coordinator = RefreshCoordinator(self, start_worker=self._start_worker)
         self._refresh_view_state = (0, 0)
         self._build()
 
@@ -287,6 +293,9 @@ class ProcessPage(QWidget):
         if hasattr(self.service, "can_access_area"):
             return bool(self.service.can_access_area(area))
         return True
+
+    def _start_worker(self, owner, loader, on_success, on_error, *, operation_name=None):
+        return start_worker(owner, loader, on_success, on_error, operation_name=operation_name)
 
     def refresh(self, *, debounced: bool = False):
         self._refresh_view_state = (
