@@ -118,5 +118,10 @@
     "classification": "ADDITIVE",
     "summary": "Adiciona operation_id opcional e indexado as emissoes fiscais para evitar duplicacao em retry de lotes.",
     "justification": "Apenas ADD COLUMN nullable e indice em tabela fiscal existente. Registros antigos permanecem validos e o campo so e preenchido por novas operacoes de emissao."
+  },
+  "20260817_0024": {
+    "classification": "ADDITIVE",
+    "summary": "Cria indices para consultas de listagem/paginacao operacional (proposals, proposal_items, galvanization_load_items, expedition_items, fiscal_records).",
+    "justification": "Apenas CREATE INDEX em tabelas ja existentes, sem alterar colunas nem dados. Nenhum consumidor pre-existente e afetado; downgrade remove os mesmos indices de forma simetrica."
   }
 }
