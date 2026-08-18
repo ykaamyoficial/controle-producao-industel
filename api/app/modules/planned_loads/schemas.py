@@ -63,10 +63,9 @@ class PlannedLoadItemSummary(BaseModel):
     description: str
     total_quantity: Decimal
     planned_quantity: Decimal
-    # Disponibilidade/divergencia real chega na Fase PL2 - ate la estes campos
-    # ficam com os valores neutros (0 disponivel, tudo "faltante", sem
-    # divergencia), nunca escondidos, para o contrato de resposta ja nascer
-    # estavel e o frontend nao precisar mudar de schema entre fases.
+    # Disponibilidade/divergencia real (FASE_PL2) computada em
+    # service._annotate_loads. Defaults abaixo so entram em jogo se algum
+    # caminho futuro montar este schema sem passar por la.
     currently_available_quantity: Decimal = Decimal("0")
     missing_quantity: Decimal
     free_for_other_plans_quantity: Decimal = Decimal("0")
@@ -120,3 +119,43 @@ class PaginatedPlannedLoadResponse(BaseModel):
 class PlannedLoadDetail(PlannedLoadSummary):
     items: list[PlannedLoadItemSummary] = Field(default_factory=list)
     history: list[PlannedLoadHistoryEntry] = Field(default_factory=list)
+
+
+class PlannedLoadVersionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    version: int = Field(ge=1)
+
+
+class PlannedLoadBuildReadyItem(BaseModel):
+    proposal_item_id: int
+    item_number: str
+    description: str
+    planned_quantity: Decimal
+    available_quantity: Decimal
+
+
+class PlannedLoadBuildPendingItem(BaseModel):
+    proposal_item_id: int
+    item_number: str
+    description: str
+    planned_quantity: Decimal
+    available_quantity: Decimal
+    missing_quantity: Decimal
+
+
+class PlannedLoadBuildResult(BaseModel):
+    planned_load_id: int
+    fully_available: bool
+    total_planned_quantity: Decimal
+    total_available_quantity: Decimal
+    total_missing_quantity: Decimal
+    ready_items: list[PlannedLoadBuildReadyItem] = Field(default_factory=list)
+    pending_items: list[PlannedLoadBuildPendingItem] = Field(default_factory=list)
+
+
+class PlannedLoadConvertedRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    version: int = Field(ge=1)
+    real_load_id: int = Field(gt=0)

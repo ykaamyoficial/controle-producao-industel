@@ -10,11 +10,14 @@ from api.app.modules.auth.permissions import GALVANIZATION_UPDATE, GALVANIZATION
 from api.app.modules.planned_loads import service
 from api.app.modules.planned_loads.schemas import (
     PaginatedPlannedLoadResponse,
+    PlannedLoadBuildResult,
+    PlannedLoadConvertedRequest,
     PlannedLoadCreate,
     PlannedLoadDetail,
     PlannedLoadItemUpdate,
     PlannedLoadItemsRequest,
     PlannedLoadUpdate,
+    PlannedLoadVersionRequest,
 )
 
 
@@ -100,3 +103,35 @@ async def delete_planned_load_item(
     actor: User = Depends(require_permission(GALVANIZATION_UPDATE)),
 ):
     return await service.delete_planned_load_item(session, planned_load_id, item_id, version, actor, request_id=_request_id(request))
+
+
+@router.post("/planned-loads/{planned_load_id}/cancel", response_model=PlannedLoadDetail)
+async def cancel_planned_load(
+    planned_load_id: int,
+    payload: PlannedLoadVersionRequest,
+    request: Request,
+    session: AsyncSession = Depends(get_db_session),
+    actor: User = Depends(require_permission(GALVANIZATION_UPDATE)),
+):
+    return await service.cancel_planned_load(session, planned_load_id, payload, actor, request_id=_request_id(request))
+
+
+@router.post("/planned-loads/{planned_load_id}/build", response_model=PlannedLoadBuildResult)
+async def build_planned_load(
+    planned_load_id: int,
+    request: Request,
+    session: AsyncSession = Depends(get_db_session),
+    actor: User = Depends(require_permission(GALVANIZATION_UPDATE)),
+):
+    return await service.build_planned_load(session, planned_load_id, actor, request_id=_request_id(request))
+
+
+@router.post("/planned-loads/{planned_load_id}/mark-converted", response_model=PlannedLoadDetail)
+async def mark_planned_load_converted(
+    planned_load_id: int,
+    payload: PlannedLoadConvertedRequest,
+    request: Request,
+    session: AsyncSession = Depends(get_db_session),
+    actor: User = Depends(require_permission(GALVANIZATION_UPDATE)),
+):
+    return await service.mark_planned_load_converted(session, planned_load_id, payload, actor, request_id=_request_id(request))
