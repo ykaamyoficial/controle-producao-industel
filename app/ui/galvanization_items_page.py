@@ -42,6 +42,7 @@ from app.ui.galvanization_load_dialog import (
 from app.ui.galvanization_load_details_dialog import GalvanizationLoadDetailsDialog
 from app.ui.action_center.handlers.galvanization import resolve_return_load_ids
 from app.ui.action_center.load_action_center import GalvanizationLoadActionCenter
+from app.ui.planned_loads_page import PlannedLoadsPage
 from app.ui.process_page import ProcessPage
 
 
@@ -499,9 +500,11 @@ class GalvanizationAreaPage(QWidget):
         self.proposals_page = ProcessPage(service, "GALVANIZACAO", "Galvanizacao")
         self.items_page = GalvanizationItemsPage(service)
         self.loads_page = GalvanizationLoadsPage(service)
+        self.planned_loads_page = PlannedLoadsPage(service)
         self.tabs.addTab(self.proposals_page, "Propostas")
         self.tabs.addTab(self.items_page, "Itens")
         self.tabs.addTab(self.loads_page, "Cargas")
+        self.tabs.addTab(self.planned_loads_page, "Planejamento de Cargas")
         self.tabs.currentChanged.connect(self._on_tab_changed)
         layout.addWidget(self.tabs)
 
