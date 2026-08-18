@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import re
-import time
+import uuid
+from contextlib import nullcontext
 from dataclasses import dataclass
 from dataclasses import replace
 from datetime import date, timedelta
@@ -24,6 +25,7 @@ from app.services.nomus_import_progress import (
     emit_progress,
     progress_percent_for_products,
 )
+from app.services.nomus_import_metrics import NomusImportMetricsCollector, NomusImportMetricsSnapshot
 from app.services.nomus_product_service import (
     NomusProductService,
     NomusProductWeight,
@@ -32,6 +34,11 @@ from app.services.nomus_product_service import (
     WARNING_PRODUCT_RESPONSE_INVALID,
     WARNING_PRODUCT_WEIGHT_INVALID,
     WARNING_PRODUCT_WEIGHT_MISSING,
+)
+from app.services.nomus_proposal_locator import (
+    NomusProposalEnvelopeError,
+    NomusProposalLocateResult,
+    NomusProposalLocator,
 )
 from app.services.proposal_import.confidence import calculate_overall_confidence
 from app.services.proposal_import.normalizers import (
@@ -142,6 +149,14 @@ class NomusApiImporter:
         self.client = client
         self.max_search_pages = max(1, int(max_search_pages or 1))
         self.product_service = NomusProductService(client)
+        self.locator = NomusProposalLocator(
+            client,
+            page_size=50,
+            neighbor_limit=min(6, max(0, self.max_search_pages - 1)),
+            fallback_max_pages=self.max_search_pages,
+        )
+        self.last_metrics: NomusImportMetricsSnapshot | None = None
+        self._metrics_collector: NomusImportMetricsCollector | None = None
 
     def fetch_proposal(
         self,
@@ -152,7 +167,10 @@ class NomusApiImporter:
         if not requested:
             raise NomusApiInvalidResponseError("Informe o numero da proposta ou o ID do pedido Nomus.")
 
-        started = time.monotonic()
+        collector = NomusImportMetricsCollector(f"unit-{uuid.uuid4().hex[:12]}", proposal_count=1)
+        self._metrics_collector = collector
+        self.locator.set_metrics_collector(collector)
+        succeeded = False
         normalized = normalize_requested_identifier(requested)
         _progress(
             progress_callback,
@@ -166,35 +184,48 @@ class NomusApiImporter:
                 result = self._fetch_by_internal_id(requested, progress_callback=progress_callback)
             else:
                 log.info("Importacao Nomus iniciada | endpoint=%s,%s | identificador=%s", PROPOSAL_ENDPOINT, ORDER_ENDPOINT, normalized.safe_log)
-                matches, pages_read, pagination_exhausted, endpoint = self._find_order_in_pages(
-                    requested,
-                    progress_callback=progress_callback,
-                )
-                if not matches:
-                    suffix = "paginacao esgotada" if pagination_exhausted else "limite de paginas atingido"
-                    raise NomusApiOrderNotFoundError(
-                        f"Nenhuma proposta Nomus encontrada para {normalized.safe_log} nas {pages_read} paginas consultadas ({suffix})."
+                with collector.stage("location"):
+                    location = self._locate_order_optimized(
+                        requested,
+                        progress_callback=progress_callback,
                     )
-                if len(matches) > 1:
+                if not location.matches:
+                    raise NomusApiOrderNotFoundError(
+                        f"Nenhuma proposta Nomus encontrada para {normalized.safe_log} nas {location.pages_checked} paginas consultadas (busca por pagina estimada e vizinhas)."
+                    )
+                if len(location.matches) > 1:
                     raise NomusApiAmbiguousOrderError(
                         f"Mais de um pedido Nomus foi encontrado para {normalized.safe_log}. Informe o ID interno do pedido."
                     )
-                result = self.convert_order_payload(
-                    matches[0],
-                    requested_identifier=requested,
-                    endpoint=endpoint,
-                    search_pages=pages_read,
-                    progress_callback=progress_callback,
-                )
+                with collector.stage("data_items"):
+                    result = self.convert_order_payload(
+                        location.matches[0],
+                        requested_identifier=requested,
+                        endpoint=location.endpoint,
+                        search_pages=location.pages_checked,
+                        progress_callback=progress_callback,
+                    )
+            succeeded = True
         except NomusApiImportError:
             raise
+        except NomusProposalEnvelopeError as exc:
+            raise NomusApiInvalidResponseError(str(exc)) from exc
         except NomusApiClientError as exc:
             raise NomusApiImportError(exc.user_message) from exc
         finally:
+            collector.set_status_counts({"READY": int(succeeded), "FAILED": int(not succeeded)})
+            self.last_metrics = collector.finish()
+            self.locator.set_metrics_collector(None)
+            self._metrics_collector = None
             log.info(
-                "Importacao Nomus finalizada | identificador=%s | tempo_ms=%s",
+                "Importacao Nomus finalizada | identificador=%s | tempo_ms=%s | localizacao_ms=%s | dados_itens_ms=%s | requisicoes_http=%s | paginas=%s | consultas_peso=%s",
                 normalized.safe_log,
-                int((time.monotonic() - started) * 1000),
+                self.last_metrics.total_ms,
+                self.last_metrics.location_ms,
+                self.last_metrics.data_items_ms,
+                self.last_metrics.http_requests_total,
+                self.last_metrics.requested_pages_total,
+                self.last_metrics.weight_lookup_requests,
             )
         return result
 
@@ -217,7 +248,9 @@ class NomusApiImporter:
                     detail=f"Consultando endpoint {base_endpoint}.",
                     indeterminate=True,
                 )
-                payload = self._client_get(endpoint)
+                location_stage = self._metrics_collector.stage("location") if self._metrics_collector else nullcontext()
+                with location_stage:
+                    payload = self._client_get(endpoint)
                 order_payload = _coerce_order_payload(payload)
                 _progress(
                     progress_callback,
@@ -226,12 +259,14 @@ class NomusApiImporter:
                     PROGRESS_RANGES[STAGE_SEARCH][1],
                     detail="Pedido Nomus encontrado pelo ID interno.",
                 )
-                return self.convert_order_payload(
-                    order_payload,
-                    requested_identifier=requested,
-                    endpoint=endpoint,
-                    progress_callback=progress_callback,
-                )
+                data_stage = self._metrics_collector.stage("data_items") if self._metrics_collector else nullcontext()
+                with data_stage:
+                    return self.convert_order_payload(
+                        order_payload,
+                        requested_identifier=requested,
+                        endpoint=endpoint,
+                        progress_callback=progress_callback,
+                    )
             except NomusApiOrderNotFoundError as exc:
                 last_error = exc
                 continue
@@ -242,6 +277,47 @@ class NomusApiImporter:
                 raise
         raise NomusApiOrderNotFoundError(f"Nenhuma proposta Nomus encontrada para ID {normalized.safe_log}.") from last_error
 
+    def _locate_order_optimized(
+        self,
+        requested_identifier: str,
+        *,
+        progress_callback: ProgressCallback | None = None,
+    ) -> NomusProposalLocateResult:
+        total_pages_checked = 0
+        last_result = NomusProposalLocateResult([], PROPOSAL_ENDPOINT, None, 0, None, False)
+        for endpoint in (PROPOSAL_ENDPOINT, ORDER_ENDPOINT):
+            _progress(
+                progress_callback,
+                STAGE_SEARCH,
+                "Localizando a proposta",
+                detail=f"Calculando pagina estimada em {endpoint}.",
+                indeterminate=True,
+            )
+            result = self.locator.locate_proposal(
+                requested_identifier,
+                endpoint,
+                progress_callback=lambda detail: _progress(
+                    progress_callback,
+                    STAGE_SEARCH,
+                    "Localizando a proposta",
+                    detail=detail,
+                    indeterminate=True,
+                ),
+            )
+            total_pages_checked += result.pages_checked
+            result = replace(result, pages_checked=total_pages_checked)
+            last_result = result
+            if result.found:
+                _progress(
+                    progress_callback,
+                    STAGE_SEARCH,
+                    "Proposta localizada",
+                    PROGRESS_RANGES[STAGE_SEARCH][1],
+                    detail=f"Encontrada em {endpoint}, pagina {result.matched_page}.",
+                )
+                return result
+        return last_result
+
     def convert_order_payload(
         self,
         payload: dict[str, Any],
@@ -250,19 +326,20 @@ class NomusApiImporter:
         endpoint: str = ORDER_ENDPOINT,
         search_pages: int | None = None,
         progress_callback: ProgressCallback | None = None,
+        enrich_product_weights: bool = False,
     ) -> StandardProposalImportResult:
         order = parse_order_payload(payload)
-        unique_products = _unique_product_ids(order.items)
         _progress(
             progress_callback,
             STAGE_ITEMS,
             "Itens carregados",
             PROGRESS_RANGES[STAGE_ITEMS][1],
             detail=f"{len(order.items)} item(ns) operacional(is) carregado(s).",
-            processed_products=0,
-            total_products=len(unique_products),
         )
-        order = self._enrich_order_weights_from_products(order, progress_callback=progress_callback)
+        if enrich_product_weights:
+            order = self._enrich_order_weights_from_products(order, progress_callback=progress_callback)
+        else:
+            log.info("Consulta de peso por produto ignorada | proposta=%s", normalize_requested_identifier(order.codigo_pedido or order.raw_id or "").safe_log)
         if requested_identifier and not _identifier_matches_any(requested_identifier, order):
             normalized = normalize_requested_identifier(requested_identifier)
             raise NomusApiOrderNotFoundError(f"O pedido retornado nao corresponde a {normalized.safe_log}.")
@@ -346,6 +423,9 @@ class NomusApiImporter:
         return matches, total_pages_read, False, last_endpoint
 
     def _client_get(self, endpoint: str, params: dict[str, Any] | None = None) -> dict[str, Any] | list[Any]:
+        if self._metrics_collector is not None:
+            page = int(params["pagina"]) if params and params.get("pagina") is not None else None
+            self._metrics_collector.record_http_request(endpoint, page)
         return self.client.get(endpoint, params=params)
 
     def _enrich_order_weights_from_products(
@@ -394,6 +474,8 @@ class NomusApiImporter:
                 continue
             product_id = str(item.product_id).strip()
             if product_id not in cache:
+                if self._metrics_collector is not None:
+                    self._metrics_collector.record_http_request("produtos", weight_lookup=True)
                 cache[product_id] = self.product_service.fetch_product_weight(product_id)
                 processed_products += 1
                 _progress(
@@ -669,8 +751,10 @@ def _record_matches_identifier(requested: str, record: dict[str, Any]) -> bool:
 def _identifiers_match(left: Any, right: Any) -> bool:
     a = normalize_requested_identifier(str(left))
     b = normalize_requested_identifier(str(right))
-    if a.prefix or b.prefix:
+    if a.prefix and b.prefix:
         return a.prefix == b.prefix and a.number == b.number
+    if a.prefix and not b.prefix:
+        return False
     if a.number is not None and b.number is not None:
         return a.number == b.number
     return a.compact == b.compact

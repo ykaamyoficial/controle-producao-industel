@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 import unittest
-from decimal import Decimal
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -110,21 +109,22 @@ class NomusImportProgressWorkerTests(unittest.TestCase):
         self.assertIn("Nenhuma proposta", errors[0])
         self.assertNotIn("detalhe interno", errors[0])
 
-    def test_importer_counts_repeated_products_once_in_progress(self):
+    def test_importer_does_not_emit_product_lookup_progress_by_default(self):
         payload = [_proposal_payload()]
         payload[0]["itensProposta"].append(dict(payload[0]["itensProposta"][0], item="2"))
-        client = FakeNomusClient([payload, {"id": 17517, "pesoLiquidoUnitario": "1"}])
+        client = FakeNomusClient([payload])
         importer = NomusApiImporter(client, max_search_pages=1)
         events: list[NomusImportProgressEvent] = []
 
         result = importer.fetch_proposal("CP04934", progress_callback=events.append)
 
-        product_events = [event for event in events if event.stage == STAGE_PRODUCTS and event.total_products]
-        self.assertEqual(client.calls, [("propostas", {"pagina": 1}), ("produtos/17517", None)])
-        self.assertEqual({event.total_products for event in product_events}, {1})
-        self.assertEqual(product_events[-1].processed_products, 1)
-        self.assertEqual(result.items[0].total_weight, Decimal("220"))
-        self.assertEqual(result.items[1].total_weight, Decimal("220"))
+        product_events = [event for event in events if event.stage == STAGE_PRODUCTS]
+        self.assertEqual(client.calls, [("propostas", {"pagina": 1})])
+        self.assertEqual(product_events, [])
+        self.assertIsNone(result.items[0].total_weight)
+        self.assertIsNone(result.items[1].total_weight)
+        self.assertTrue(result.items[0].weight_needs_confirmation)
+        self.assertTrue(result.items[1].weight_needs_confirmation)
 
 
 def _proposal_payload():

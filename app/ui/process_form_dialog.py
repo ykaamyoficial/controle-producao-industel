@@ -15,6 +15,8 @@ from app.ui.components.modern_button import ModernButton
 from app.ui.dialog_utils import apply_large_dialog_geometry, style_dialog_from_parent
 from app.ui.item_flow_dialog import FLOW_OPTIONS
 from app.ui.nomus_api_import_dialog import NomusApiImportDialog
+from app.ui.nomus_batch_import_dialog import NomusBatchImportDialog
+from app.ui.nomus_batch_conference_dialog import NomusBatchConferenceDialog
 from app.ui.proposal_import_dialog import ProposalImportDialog
 from app.ui.table_utils import configure_wrapping_table, resize_rows_to_contents
 
@@ -95,6 +97,13 @@ class ProcessFormDialog(QDialog):
             if api_reason:
                 api_import_button.setToolTip(api_reason)
             heading_row.addWidget(api_import_button)
+            batch_import_button = ModernButton("Importar lote Nomus", "batch")
+            batch_import_button.setToolTip("Localizar varias propostas do Nomus sem salvar automaticamente")
+            batch_import_button.clicked.connect(self.open_nomus_batch_import)
+            batch_import_button.setEnabled(api_enabled)
+            if api_reason:
+                batch_import_button.setToolTip(api_reason)
+            heading_row.addWidget(batch_import_button)
         caption = QLabel("Preencha os dados gerais e organize os itens que compoem a proposta.")
         caption.setObjectName("Caption")
         self.import_notice = QLabel("")
@@ -272,6 +281,29 @@ class ProcessFormDialog(QDialog):
             allow_pdf_selection=False,
         )
         self._transfer_import_dialog_data(importer)
+
+    def open_nomus_batch_import(self):
+        lookup = NomusBatchImportDialog(self)
+        if lookup.exec() != QDialog.Accepted:
+            return
+        self.last_nomus_batch_result = lookup.batch_result
+        self.last_nomus_batch_ready_results = list(lookup.ready_results)
+        ready_count = len(self.last_nomus_batch_ready_results)
+        if lookup.batch_result is None:
+            return
+        conference = NomusBatchConferenceDialog(lookup.batch_result, self.service, self)
+        conference.exec()
+        self.last_nomus_batch_persistence_result = conference.persistence_result
+        persisted = list(conference.persistence_results.values())
+        saved = len([result for result in persisted if result.success])
+        existing = len([result for result in persisted if result.status.value == "ALREADY_EXISTS"])
+        failed = len([result for result in persisted if result.status.value == "FAILED"])
+        if persisted:
+            notice = f"Lote Nomus finalizado: {saved} gravada(s), {existing} ja cadastrada(s), {failed} falha(s)."
+        else:
+            notice = f"Lote Nomus preparado com {ready_count} proposta(s), sem gravacao confirmada."
+        self.import_notice.setText(notice)
+        self.import_notice.show()
 
     def _transfer_import_dialog_data(self, importer: ProposalImportDialog) -> bool:
         """Extract and validate data from a headless import dialog, then fill the form directly."""

@@ -86,6 +86,17 @@ class NomusApiFormIntegrationTests(unittest.TestCase):
             form.close()
 
     @patch("app.services.nomus_api_config.NomusApiConfigStore", return_value=FakeStore())
+    def test_new_form_shows_enabled_nomus_batch_button_when_configured(self, _store):
+        form = ProcessFormDialog(FakeService())
+        try:
+            button = self._button_by_text(form, "Importar lote Nomus")
+
+            self.assertIsNotNone(button)
+            self.assertTrue(button.isEnabled())
+        finally:
+            form.close()
+
+    @patch("app.services.nomus_api_config.NomusApiConfigStore", return_value=FakeStore())
     def test_api_button_is_disabled_without_edit_permission(self, _store):
         form = ProcessFormDialog(FakeDisabledService())
         try:

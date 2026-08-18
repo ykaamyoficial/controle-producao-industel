@@ -67,12 +67,12 @@ class NomusApiImporterTests(unittest.TestCase):
                 "status": "ATIVO",
             }
         )
-        client = FakeNomusClient([payload, {"id": 450993}])
+        client = FakeNomusClient([payload])
         importer = NomusApiImporter(client, max_search_pages=2)
 
         result = importer.fetch_proposal("CP04934")
 
-        self.assertEqual(client.calls, [("propostas", {"pagina": 1}), ("produtos/450993", None)])
+        self.assertEqual(client.calls, [("propostas", {"pagina": 1})])
         self.assertEqual(result.proposal.proposal_number, "CP 04934")
         self.assertEqual(result.items[0].product_code, "450.993")
 
@@ -113,79 +113,85 @@ class NomusApiImporterTests(unittest.TestCase):
         self.assertEqual(result.proposal.proposal_date.isoformat(), "2026-07-07")
         self.assertEqual(result.proposal.deadline_raw, "2026-08-06")
 
-    def test_fetch_by_code_uses_product_register_unit_weight_to_calculate_item_total(self):
+    def test_fetch_by_code_does_not_use_product_register_weight(self):
         payload = [_proposal_payload(proposta="CP 04934", raw_id=4931)]
         payload[0]["itensProposta"][0]["idProduto"] = 17517
-        product_payload = {
-            "id": 17517,
-            "codigo": "132310001",
-            "pesoLiquidoUnitario": "12,5",
-            "valorUnitario": "999.99",
-        }
-        client = FakeNomusClient([payload, product_payload])
+        client = FakeNomusClient([payload])
         importer = NomusApiImporter(client, max_search_pages=1)
 
         result = importer.fetch_proposal("CP04934")
 
-        self.assertEqual(client.calls, [("propostas", {"pagina": 1}), ("produtos/17517", None)])
-        self.assertEqual(result.items[0].unit_weight, Decimal("12.5"))
-        self.assertEqual(result.items[0].total_weight, Decimal("2750.0"))
-        self.assertEqual(result.items[0].source_method, "nomus_product_net_weight")
-        self.assertFalse(result.items[0].weight_needs_confirmation)
+        self.assertEqual(client.calls, [("propostas", {"pagina": 1})])
+        self.assertIsNone(result.items[0].unit_weight)
+        self.assertIsNone(result.items[0].total_weight)
+        self.assertEqual(result.items[0].source_method, "nomus_api")
+        self.assertTrue(result.items[0].weight_needs_confirmation)
         serialized = json.dumps(result.to_dict(), ensure_ascii=False).lower()
         self.assertNotIn("valorunitario", serialized)
 
-    def test_fetch_by_code_uses_gross_weight_as_product_fallback(self):
+    def test_explicit_product_enrichment_uses_product_register_weight(self):
         payload = [_proposal_payload(proposta="CP 04934", raw_id=4931)]
         payload[0]["itensProposta"][0]["idProduto"] = 17517
-        product_payload = {"id": 17517, "pesoBrutoUnitario": "2"}
-        client = FakeNomusClient([payload, product_payload])
+        client = FakeNomusClient([{"id": 17517, "pesoLiquidoUnitario": "12,5"}])
         importer = NomusApiImporter(client, max_search_pages=1)
 
-        result = importer.fetch_proposal("CP04934")
+        result = importer.convert_order_payload(
+            payload[0],
+            requested_identifier="CP04934",
+            enrich_product_weights=True,
+        )
 
-        self.assertEqual(result.items[0].unit_weight, Decimal("2"))
-        self.assertEqual(result.items[0].total_weight, Decimal("440"))
-        self.assertIn("NOMUS_PRODUCT_GROSS_WEIGHT_USED", {warning.code for warning in result.warnings})
+        self.assertEqual(client.calls, [("produtos/17517", None)])
+        self.assertEqual(result.items[0].unit_weight, Decimal("12.5"))
+        self.assertEqual(result.items[0].total_weight, Decimal("2750.0"))
+        self.assertEqual(result.items[0].source_method, "nomus_product_net_weight")
+        serialized = json.dumps(result.to_dict(), ensure_ascii=False).lower()
+        self.assertNotIn("valorunitario", serialized)
 
     def test_fetch_by_code_preserves_order_item_weight_when_product_has_no_weight(self):
         payload = [_proposal_payload(proposta="CP 04934", raw_id=4931)]
         payload[0]["itensProposta"][0]["idProduto"] = 17517
         payload[0]["itensProposta"][0]["pesoTotal"] = "123"
-        client = FakeNomusClient([payload, {"id": 17517}])
+        client = FakeNomusClient([payload])
         importer = NomusApiImporter(client, max_search_pages=1)
 
         result = importer.fetch_proposal("CP04934")
 
+        self.assertEqual(client.calls, [("propostas", {"pagina": 1})])
         self.assertEqual(result.items[0].total_weight, Decimal("123"))
         self.assertEqual(result.items[0].source_method, "nomus_order_item_weight")
 
-    def test_fetch_by_code_uses_product_cache_for_repeated_items(self):
+    def test_explicit_product_enrichment_uses_product_cache_for_repeated_items(self):
         payload = [_proposal_payload(proposta="CP 04934", raw_id=4931)]
         payload[0]["itensProposta"].append(dict(payload[0]["itensProposta"][0]))
         payload[0]["itensProposta"][0]["idProduto"] = 17517
         payload[0]["itensProposta"][1]["idProduto"] = 17517
         payload[0]["itensProposta"][1]["item"] = "2"
-        client = FakeNomusClient([payload, {"id": 17517, "pesoLiquidoUnitario": "1"}])
+        client = FakeNomusClient([{"id": 17517, "pesoLiquidoUnitario": "1"}])
         importer = NomusApiImporter(client, max_search_pages=1)
 
-        result = importer.fetch_proposal("CP04934")
+        result = importer.convert_order_payload(
+            payload[0],
+            requested_identifier="CP04934",
+            enrich_product_weights=True,
+        )
 
-        self.assertEqual(client.calls, [("propostas", {"pagina": 1}), ("produtos/17517", None)])
+        self.assertEqual(client.calls, [("produtos/17517", None)])
         self.assertEqual(result.items[0].total_weight, Decimal("220"))
         self.assertEqual(result.items[1].total_weight, Decimal("220"))
 
-    def test_product_lookup_failure_keeps_item_pending_without_canceling_proposal(self):
+    def test_missing_weight_keeps_item_pending_without_canceling_proposal(self):
         payload = [_proposal_payload(proposta="CP 04934", raw_id=4931)]
         payload[0]["itensProposta"][0]["idProduto"] = 17517
-        client = FakeNomusClient([payload, []])
+        client = FakeNomusClient([payload])
         importer = NomusApiImporter(client, max_search_pages=1)
 
         result = importer.fetch_proposal("CP04934")
 
+        self.assertEqual(client.calls, [("propostas", {"pagina": 1})])
         self.assertIsNone(result.items[0].total_weight)
         self.assertTrue(result.items[0].weight_needs_confirmation)
-        self.assertIn("NOMUS_PRODUCT_RESPONSE_INVALID", {warning.code for warning in result.warnings})
+        self.assertIn("NOMUS_API_WEIGHT_MISSING", {warning.code for warning in result.warnings})
 
     def test_fetch_by_code_does_not_match_different_prefix(self):
         client = FakeNomusClient([
