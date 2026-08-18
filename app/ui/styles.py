@@ -46,6 +46,9 @@ def app_stylesheet(palette: dict) -> str:
     QWidget#DashboardContent {{
         background: {bg};
     }}
+    QWidget#MainContent {{
+        background: {bg};
+    }}
     QWidget#FiscalPage, QWidget#FiscalTabPage, QWidget#FiscalTabContent {{
         background: {bg};
     }}
@@ -77,6 +80,12 @@ def app_stylesheet(palette: dict) -> str:
         border: 1px solid {border};
         {radius(14)}
     }}
+    QTabWidget#OperationalTabs::pane {{
+        background: {bg};
+        border: 0;
+        border-radius: 0;
+        top: 0;
+    }}
     QTabBar {{
         background: {bg};
         border: 0;
@@ -100,6 +109,45 @@ def app_stylesheet(palette: dict) -> str:
     QTabBar::tab:hover {{
         background: {surface};
         color: {text};
+    }}
+    QTabWidget#OperationalTabs::tab-bar {{
+        left: 0px;
+    }}
+    QTabBar#OperationalTabBar {{
+        background: {bg};
+        border: 0;
+        border-bottom: 1px solid {border};
+        min-height: 44px;
+    }}
+    QTabBar#OperationalTabBar::tab {{
+        background: {bg};
+        color: {muted};
+        border: 0;
+        border-radius: 0;
+        border-bottom: 3px solid transparent;
+        padding: 12px 18px 9px 18px;
+        margin: 0;
+        font-weight: 600;
+    }}
+    QTabBar#OperationalTabBar::tab:selected {{
+        background: {bg};
+        color: {text};
+        border: 0;
+        border-bottom: 3px solid {accent};
+        font-weight: 800;
+    }}
+    QTabBar#OperationalTabBar::tab:hover:!selected {{
+        background: {surface_alt};
+        color: {text};
+        border-bottom: 3px solid {border};
+    }}
+    QTabBar#OperationalTabBar::tab:disabled {{
+        background: {bg};
+        color: {muted};
+        border-bottom: 3px solid transparent;
+    }}
+    QTabBar#OperationalTabBar:focus {{
+        border-bottom: 1px solid {accent};
     }}
     QFrame#Sidebar {{
         background: {surface};
@@ -212,8 +260,92 @@ def app_stylesheet(palette: dict) -> str:
         border: 1px solid {border};
         {radius(16)}
     }}
+    QScrollArea#FlowSetupScroll,
+    QScrollArea#FlowSetupScroll > QWidget,
+    QScrollArea#FlowSetupScroll > QWidget > QWidget,
+    QWidget#FlowSetupContent {{
+        background: {bg};
+        border: 0;
+        border-radius: 0;
+    }}
+    QFrame#FlowSetupSection {{
+        background: {surface};
+        border: 1px solid {border};
+        {radius(8)}
+    }}
+    QFrame#FlowPrimaryPanel {{
+        background: {surface_alt};
+        border: 1px solid {accent};
+        {radius(8)}
+    }}
+    QLabel#FlowMetricValue {{
+        color: {text};
+        font-size: 18px;
+        font-weight: 800;
+    }}
+    QScrollArea#NomusBatchScrollArea,
+    QScrollArea#NomusBatchScrollArea > QWidget,
+    QScrollArea#NomusBatchScrollArea > QWidget > QWidget,
+    QWidget#NomusBatchScrollContent {{
+        background: {bg};
+        border: 0;
+        border-radius: 0;
+    }}
+    QFrame#NomusBatchFooter {{
+        background: {bg};
+        border: 0;
+        border-top: 1px solid {border};
+        border-radius: 0;
+    }}
+    QLabel#NomusBatchStage {{
+        background: transparent;
+        color: {text};
+        font-size: 13px;
+        font-weight: 800;
+    }}
+    QLabel#NomusBatchProgressPercent {{
+        background: {surface_alt};
+        color: {text};
+        border: 1px solid {border};
+        border-radius: 8px;
+        padding: 3px 6px;
+        font-size: 11px;
+        font-weight: 800;
+    }}
+    QProgressBar#NomusBatchProgressBar {{
+        background: {surface_alt};
+        border: 1px solid {border};
+        border-radius: 8px;
+        min-height: 18px;
+        max-height: 18px;
+    }}
+    QProgressBar#NomusBatchProgressBar::chunk {{
+        background: {accent};
+        border-radius: 7px;
+        width: 12px;
+        margin: 1px;
+    }}
+    QPlainTextEdit#NomusBatchProposalInput {{
+        background: {surface};
+        color: {text};
+        border: 1px solid {border};
+        border-radius: 8px;
+        padding: 8px 10px;
+        selection-background-color: {accent};
+        selection-color: {accent_text};
+    }}
+    QPlainTextEdit#NomusBatchProposalInput:focus {{
+        border: 1px solid {accent};
+    }}
+    QFrame#OperationalHeader {{
+        background: {bg};
+        border: 0;
+        border-bottom: 1px solid {border};
+        border-radius: 0;
+    }}
     QFrame#TopBar QLabel,
     QFrame#FilterBar QLabel,
+    QFrame#OperationalHeader QLabel,
     QFrame#Card QLabel,
     QFrame#KpiCard QLabel,
     QFrame#Panel QLabel {{
@@ -270,7 +402,7 @@ def app_stylesheet(palette: dict) -> str:
     QLineEdit:focus, QComboBox:focus, QTextEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus {{
         border: 1px solid {accent};
     }}
-    QLineEdit[validationState="error"], QTableWidget[validationState="error"] {{
+    QLineEdit[validationState="error"], QTextEdit[validationState="error"], QTableWidget[validationState="error"] {{
         border: 2px solid {danger};
     }}
     QLineEdit[validationState="warning"] {{
@@ -290,6 +422,18 @@ def app_stylesheet(palette: dict) -> str:
         color: {palette["success"]};
         font-size: 11px;
         font-weight: 700;
+    }}
+    QPushButton#FlowValidationButton {{
+        background: transparent;
+        color: {danger};
+        border: 1px solid {danger};
+        {radius(8)}
+        padding: 7px 10px;
+        font-weight: 700;
+        text-align: left;
+    }}
+    QPushButton#FlowValidationButton:hover {{
+        background: {surface_alt};
     }}
     QComboBox::drop-down {{
         border: 0;
@@ -348,6 +492,33 @@ def app_stylesheet(palette: dict) -> str:
         background: {surface};
         {radius(12)}
     }}
+    QTreeWidget#FlowReviewTree {{
+        background: {surface};
+        color: {text};
+        alternate-background-color: {surface_alt};
+        border: 1px solid {border};
+        {radius(8)}
+        selection-background-color: {accent};
+        selection-color: {accent_text};
+        outline: 0;
+    }}
+    QTreeWidget#FlowReviewTree::viewport {{
+        background: {surface};
+        {radius(8)}
+    }}
+    QTreeWidget#FlowReviewTree::item:selected {{
+        background: {accent};
+        color: {accent_text};
+    }}
+    QTableView#OperationalTable {{
+        background: {surface};
+        border: 0;
+        border-radius: 0;
+    }}
+    QTableView#OperationalTable::viewport {{
+        background: {surface};
+        border-radius: 0;
+    }}
     QTableView::item, QTableWidget::item {{
         padding: 3px 8px;
         border: 0;
@@ -369,8 +540,26 @@ def app_stylesheet(palette: dict) -> str:
     }}
     QWidget#OperationalEmptyState {{
         background: {surface};
-        border: 1px solid {border};
-        {radius(14)}
+        border: 0;
+        border-radius: 0;
+    }}
+    QWidget#EmptyStateContent {{
+        background: transparent;
+        border: 0;
+    }}
+    QLabel#EmptyStateIcon {{
+        background: transparent;
+    }}
+    QLabel#EmptyStateTitle {{
+        background: transparent;
+        color: {text};
+        font-size: 14px;
+        font-weight: 800;
+    }}
+    QLabel#EmptyStateDescription {{
+        background: transparent;
+        color: {muted};
+        font-size: 11px;
     }}
     QTableCornerButton::section {{
         background: {surface_alt};
@@ -462,7 +651,9 @@ def area_color(area: str, palette: dict) -> str:
         "GALVANIZACAO": palette.get("area_galvanization", palette["secondary"]),
         "EXPEDICAO": palette.get("area_expedition", palette["warning"]),
         "ALMOXARIFADO": palette.get("area_stock", palette["muted"]),
-        "FISCAL": palette.get("secondary", palette["accent"]),
+        "FISCAL": palette.get("area_fiscal", palette["danger"]),
+        "PARCIAIS": palette.get("area_partials", palette.get("area_stock", palette["muted"])),
+        "REMANEJAMENTOS": palette.get("area_partials", palette.get("area_stock", palette["muted"])),
     }
     return colors.get(area, palette["accent"])
 

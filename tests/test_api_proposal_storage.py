@@ -21,9 +21,117 @@ from app.services.api_proposal_storage import (
     _proposal_create_payload,
     user_message_for_api_error,
 )
+from api.app.modules.proposals.schemas import ProposalCreate
 
 
 class ApiProposalStorageTests(unittest.TestCase):
+    @staticmethod
+    def _candidate(item_id: int, *, available="1.0000", item_number: str | None = None) -> dict:
+        return {
+            "proposal_id": 10,
+            "item_id": item_id,
+            "item_number": item_number or str(item_id),
+            "available_quantity": available,
+            "version": 1,
+        }
+
+    @staticmethod
+    def _storage_with_load_api(*, current_items=None, candidate_pages=None):
+        storage = OfficialProposalApiStorage.__new__(OfficialProposalApiStorage)
+        client = MagicMock()
+        proposals = MagicMock()
+        proposals.get_galvanization_load.return_value = {
+            "id": 7,
+            "version": 4,
+            "items": list(current_items or []),
+        }
+        pages = list(candidate_pages or [{"items": [], "total": 0}])
+        proposals.list_galvanization_candidates.side_effect = pages
+        proposals.update_galvanization_load.return_value = {"id": 7, "version": 5, "items": []}
+        storage._client = lambda: (client, proposals, "token")
+        return storage, client, proposals
+
+    def test_add_single_selected_item_finds_candidate_beyond_first_page(self):
+        first_page = [self._candidate(item_id) for item_id in range(1, 201)]
+        target = self._candidate(999, item_number="8350.19")
+        storage, client, proposals = self._storage_with_load_api(
+            candidate_pages=[
+                {"items": first_page, "total": 201},
+                {"items": [target], "total": 201},
+            ]
+        )
+
+        result = storage.add_items_to_galvanization_load(7, item_ids=[999])
+
+        self.assertEqual(result["added_item_ids"], [999])
+        self.assertEqual(result["rejected_items"], [])
+        offsets = [call.kwargs["offset"] for call in proposals.list_galvanization_candidates.call_args_list]
+        self.assertEqual(offsets, [0, 200])
+        payload = proposals.update_galvanization_load.call_args.args[2]
+        self.assertEqual([row["proposal_item_id"] for row in payload["items"]], [999])
+        client.close.assert_called_once()
+
+    def test_item_already_in_load_returns_specific_reason_and_is_not_duplicated(self):
+        storage, _client, proposals = self._storage_with_load_api(
+            current_items=[
+                {
+                    "proposal_item_id": 77,
+                    "item_number": "8350.19",
+                    "sent_quantity": "1.0000",
+                    "active": True,
+                }
+            ]
+        )
+
+        with self.assertRaisesRegex(ValueError, "Item 8350.19: ja pertence a esta carga"):
+            storage.add_items_to_galvanization_load(7, item_ids=[77])
+
+        proposals.update_galvanization_load.assert_not_called()
+
+    def test_mixed_item_selection_adds_eligible_and_reports_rejected_items(self):
+        candidates = [
+            self._candidate(88, item_number="88.1"),
+            self._candidate(99, available="0.0000", item_number="99.1"),
+            self._candidate(123, item_number="NAO-SELECIONADO"),
+        ]
+        storage, _client, proposals = self._storage_with_load_api(
+            current_items=[
+                {
+                    "proposal_item_id": 77,
+                    "item_number": "77.1",
+                    "sent_quantity": "1.0000",
+                    "active": True,
+                }
+            ],
+            candidate_pages=[{"items": candidates, "total": 3}],
+        )
+
+        result = storage.add_items_to_galvanization_load(7, item_ids=[77, 88, 99, 88])
+
+        self.assertEqual(result["added_item_ids"], [88])
+        self.assertEqual({row["item_id"] for row in result["rejected_items"]}, {77, 99})
+        payload = proposals.update_galvanization_load.call_args.args[2]
+        payload_ids = [row["proposal_item_id"] for row in payload["items"]]
+        self.assertEqual(payload_ids.count(88), 1)
+        self.assertNotIn(123, payload_ids)
+
+    def test_item_eligibility_explains_real_non_candidate_state(self):
+        storage, _client, proposals = self._storage_with_load_api()
+        proposals.get_item.return_value = {
+            "id": 45,
+            "item_number": "45.2",
+            "active": True,
+            "requires_galvanization": "SIM",
+            "flow_defined": True,
+            "produced": False,
+            "galvanized": False,
+        }
+
+        result = storage.galvanization_item_eligibility([45])
+
+        self.assertEqual(result["eligible_item_ids"], [])
+        self.assertEqual(result["rejected_items"][0]["reason"], "ainda nao foi produzido")
+
     def test_galvanization_load_details_uses_one_official_read_and_maps_all_sections(self):
         storage = OfficialProposalApiStorage.__new__(OfficialProposalApiStorage)
         client = MagicMock()
@@ -140,6 +248,51 @@ class ApiProposalStorageTests(unittest.TestCase):
         self.assertTrue(payload["items"][0]["produce_internally"])
         self.assertFalse(payload["items"][0]["requires_galvanization"])
         self.assertNotIn("valor_total", payload)
+        self.assertEqual(payload["import_metadata"], {"origem": "NOMUS_PDF"})
+
+    def test_nomus_batch_metadata_is_whitelisted_for_creation_audit(self):
+        payload = _proposal_create_payload(
+            {
+                "proposta": "CP05301",
+                "cliente": "Cliente",
+                "_import_source": "NOMUS_API",
+                "itens": [{"numero_item": "1", "descricao": "Item", "quantidade": "1"}],
+            },
+            {
+                "origem": "NOMUS_API",
+                "batch_id": "batch-1",
+                "extraction_method": "nomus_api",
+                "warning_codes": ["DATE_REVIEW"],
+                "token": "must-not-leave-desktop",
+            },
+        )
+
+        self.assertEqual(payload["source"], "NOMUS_API")
+        self.assertEqual(payload["import_metadata"]["batch_id"], "batch-1")
+        self.assertNotIn("token", payload["import_metadata"])
+
+    def test_proposal_exists_uses_exact_official_filter(self):
+        storage = OfficialProposalApiStorage.__new__(OfficialProposalApiStorage)
+        storage.list_proposals = MagicMock(return_value=[{"proposta": "CP05301"}])
+
+        self.assertTrue(storage.proposal_exists(" cp05301 "))
+        storage.list_proposals.assert_called_once_with(
+            proposal_number="CP05301",
+            limit=2,
+            offset=0,
+        )
+
+    def test_official_schema_rejects_financial_import_metadata(self):
+        payload = {
+            "proposal_number": "CP05301",
+            "customer_name": "Cliente",
+            "source": "NOMUS_API",
+            "items": [{"item_number": "1", "description": "Item", "quantity": "1"}],
+            "import_metadata": {"valor_total": "999.00"},
+        }
+
+        with self.assertRaises(ValueError):
+            ProposalCreate.model_validate(payload)
 
     def test_user_messages_are_clear_for_conflict_and_connection(self):
         conflict = ApiBusinessError("PROPOSAL_VERSION_CONFLICT", "conflito", status_code=409)

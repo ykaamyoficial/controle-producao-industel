@@ -27,9 +27,18 @@ from PySide6.QtWidgets import (
 )
 
 from app.models.operational_report_table_model import OperationalReportTableModel
+from app.ui.components.area_identity import style_area_header, style_area_title
 from app.ui.components.kpi_card import KpiCard
 from app.ui.components.modern_button import ModernButton
 from app.ui.components.modern_table import ModernTable
+from app.ui.components.operational_layout import (
+    OPERATIONAL_ACTION_SPACING,
+    OPERATIONAL_FIELD_HORIZONTAL_SPACING,
+    OPERATIONAL_FIELD_VERTICAL_SPACING,
+    OPERATIONAL_PAGE_MARGINS,
+    OPERATIONAL_SECTION_SPACING,
+)
+from app.ui.components.operational_header import configure_operational_header
 from app.ui.dialog_utils import apply_large_dialog_geometry, style_dialog_from_parent
 from app.ui.table_utils import configure_wrapping_table, item_product_code, resize_rows_to_contents
 
@@ -135,18 +144,26 @@ class OperationalReportsPage(QWidget):
 
     def _build(self) -> None:
         root = QVBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(12)
+        root.setContentsMargins(*OPERATIONAL_PAGE_MARGINS)
+        root.setSpacing(OPERATIONAL_SECTION_SPACING)
 
         filters = QFrame()
-        filters.setObjectName("FilterBar")
+        self.filters_header = filters
         fl = QVBoxLayout(filters)
-        fl.setContentsMargins(16, 12, 16, 12)
-        fl.setSpacing(10)
+        configure_operational_header(
+            filters,
+            fl,
+            margins=(16, 12, 16, 10),
+            spacing=8,
+            area="PRODUCAO",
+            palette=self.service.palette,
+        )
 
         header = QHBoxLayout()
         title = QLabel("Relatorios Operacionais")
         title.setObjectName("FilterTitle")
+        self.title_label = title
+        style_area_title(title, "PRODUCAO", self.service.palette)
         subtitle = QLabel("Consultas por area para acompanhar producao, galvanizacao, expedicao, almoxarifado e remanejamentos.")
         subtitle.setObjectName("Caption")
         subtitle.setWordWrap(True)
@@ -189,8 +206,8 @@ class OperationalReportsPage(QWidget):
         self.area.currentIndexChanged.connect(self._sync_report_types)
 
         grid = QGridLayout()
-        grid.setHorizontalSpacing(10)
-        grid.setVerticalSpacing(8)
+        grid.setHorizontalSpacing(OPERATIONAL_FIELD_HORIZONTAL_SPACING)
+        grid.setVerticalSpacing(OPERATIONAL_FIELD_VERTICAL_SPACING)
         self._add_field(grid, 0, 0, "Area", self.area)
         self._add_field(grid, 0, 2, "Tipo de relatorio", self.report_type)
         self._add_field(grid, 0, 4, "Data inicial", self.start)
@@ -205,7 +222,7 @@ class OperationalReportsPage(QWidget):
         fl.addLayout(grid)
 
         actions = QHBoxLayout()
-        actions.setSpacing(8)
+        actions.setSpacing(OPERATIONAL_ACTION_SPACING)
         actions.addStretch()
         actions.addWidget(self.generate_btn)
         actions.addWidget(self.clear_btn)
@@ -252,6 +269,8 @@ class OperationalReportsPage(QWidget):
 
     def _sync_report_types(self) -> None:
         area = self.area.currentData() or "PRODUCAO"
+        style_area_header(self.filters_header, area, self.service.palette)
+        style_area_title(self.title_label, area, self.service.palette)
         self.report_type.clear()
         for label, value in REPORT_TYPES.get(area, []):
             self.report_type.addItem(label, value)

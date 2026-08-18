@@ -205,26 +205,46 @@ class OfficialProposalApiStorage:
         self.refresh_count = 0
 
     def list_proposals(self, **filters) -> list[dict[str, Any]]:
+        return self.list_proposals_page(**filters)["items"]
+
+    def list_proposals_page(self, **filters) -> dict[str, Any]:
         client, proposals, token = self._client()
         try:
             payload = proposals.list_proposals(token, **filters)
-            return [_api_proposal_to_process(row) for row in payload.get("items", [])]
+            return {"items": [_api_proposal_to_process(row) for row in payload.get("items", [])], "total": payload.get("total")}
         finally:
             client.close()
 
+    def proposal_exists(self, proposal_number: str) -> bool:
+        normalized = str(proposal_number or "").strip().upper()
+        if not normalized:
+            return False
+        rows = self.list_proposals(
+            proposal_number=normalized,
+            limit=2,
+            offset=0,
+        )
+        return any(str(row.get("proposta") or "").strip().upper() == normalized for row in rows)
+
     def list_production_proposals(self, **filters) -> list[dict[str, Any]]:
+        return self.list_production_proposals_page(**filters)["items"]
+
+    def list_production_proposals_page(self, **filters) -> dict[str, Any]:
         client, proposals, token = self._client()
         try:
             payload = proposals.list_production_proposals(token, **filters)
-            return [_api_production_to_process(row) for row in payload.get("items", [])]
+            return {"items": [_api_production_to_process(row) for row in payload.get("items", [])], "total": payload.get("total")}
         finally:
             client.close()
 
     def production_items_queue(self, **filters) -> list[dict[str, Any]]:
+        return self.production_items_queue_page(**filters)["items"]
+
+    def production_items_queue_page(self, **filters) -> dict[str, Any]:
         client, proposals, token = self._client()
         try:
             payload = proposals.list_production_items(token, **filters)
-            return [_api_production_item_row_to_process_item(row) for row in payload.get("items", [])]
+            return {"items": [_api_production_item_row_to_process_item(row) for row in payload.get("items", [])], "total": payload.get("total")}
         finally:
             client.close()
 
@@ -539,18 +559,24 @@ class OfficialProposalApiStorage:
             client.close()
 
     def galvanization_items_queue(self, **filters) -> list[dict[str, Any]]:
+        return self.galvanization_items_queue_page(**filters)["items"]
+
+    def galvanization_items_queue_page(self, **filters) -> dict[str, Any]:
         client, proposals, token = self._client()
         try:
             payload = proposals.list_galvanization_candidates(token, include_unavailable=True, **filters)
-            return [_api_galvanization_item_row_to_process_item(row) for row in payload.get("items", [])]
+            return {"items": [_api_galvanization_item_row_to_process_item(row) for row in payload.get("items", [])], "total": payload.get("total")}
         finally:
             client.close()
 
     def galvanization_loads(self) -> list[dict[str, Any]]:
+        return self.galvanization_loads_page()["items"]
+
+    def galvanization_loads_page(self, **filters) -> dict[str, Any]:
         client, proposals, token = self._client()
         try:
-            payload = proposals.list_galvanization_loads(token)
-            return [_api_galvanization_load_to_legacy(row) for row in payload.get("items", [])]
+            payload = proposals.list_galvanization_loads(token, **filters)
+            return {"items": [_api_galvanization_load_to_legacy(row) for row in payload.get("items", [])], "total": payload.get("total")}
         finally:
             client.close()
 
@@ -704,10 +730,18 @@ class OfficialProposalApiStorage:
         client, proposals, token = self._client()
         try:
             current = proposals.get_galvanization_load(token, int(load_id))
-            selected_ids = {int(value) for value in (item_ids or []) if value}
+            selected_ids = list(dict.fromkeys(int(value) for value in (item_ids or []) if value))
+            selected_id_set = set(selected_ids)
             selected_proposals = {int(value) for value in (proposal_ids or []) if value}
+            if not selected_ids and not selected_proposals:
+                raise ValueError("Selecione ao menos um item ou proposta para adicionar a carga.")
             existing_ids = {
                 int(row.get("proposal_item_id"))
+                for row in current.get("items", [])
+                if row.get("active", True) and row.get("proposal_item_id")
+            }
+            existing_by_id = {
+                int(row.get("proposal_item_id")): row
                 for row in current.get("items", [])
                 if row.get("active", True) and row.get("proposal_item_id")
             }
@@ -719,19 +753,48 @@ class OfficialProposalApiStorage:
                 for row in current.get("items", [])
                 if row.get("active", True) and row.get("proposal_item_id")
             ]
-            candidates = proposals.list_galvanization_candidates(token, limit=200, offset=0).get("items", [])
+            candidates = self._all_galvanization_candidates(proposals, token, include_unavailable=True)
+            candidates_by_id = {int(row.get("item_id") or 0): row for row in candidates if row.get("item_id")}
             added_ids: list[int] = []
-            for row in candidates:
+            rejected_items: list[dict[str, Any]] = []
+            requested_candidates = (
+                [candidates_by_id[item_id] for item_id in selected_ids if item_id in candidates_by_id]
+                if selected_ids
+                else [row for row in candidates if int(row.get("proposal_id") or 0) in selected_proposals]
+            )
+            for item_id in selected_ids:
+                if item_id in existing_ids:
+                    row = existing_by_id[item_id]
+                    rejected_items.append(
+                        self._galvanization_rejection(item_id, row, "ja pertence a esta carga")
+                    )
+                elif item_id not in candidates_by_id:
+                    try:
+                        item = proposals.get_item(token, item_id)
+                    except Exception:
+                        item = {"id": item_id}
+                    rejected_items.append(
+                        self._galvanization_rejection(item_id, item, self._galvanization_item_rejection_reason(item))
+                    )
+
+            for row in requested_candidates:
                 proposal_id = int(row.get("proposal_id") or 0)
                 proposal_item_id = int(row.get("item_id") or 0)
                 if not proposal_item_id or proposal_item_id in existing_ids:
                     continue
-                if selected_ids and proposal_item_id not in selected_ids:
+                if selected_id_set and proposal_item_id not in selected_id_set:
                     continue
-                if not selected_ids and selected_proposals and proposal_id not in selected_proposals:
+                if not selected_id_set and selected_proposals and proposal_id not in selected_proposals:
                     continue
-                available = row.get("available_quantity")
-                if available in (None, "", 0, "0"):
+                available = _decimal(row.get("available_quantity"), default="0")
+                if available <= 0:
+                    rejected_items.append(
+                        self._galvanization_rejection(
+                            proposal_item_id,
+                            row,
+                            "esta sem saldo disponivel para uma nova inclusao em carga",
+                        )
+                    )
                     continue
                 entries.append({
                     "proposal_item_id": proposal_item_id,
@@ -740,16 +803,94 @@ class OfficialProposalApiStorage:
                 })
                 added_ids.append(proposal_item_id)
             if not added_ids:
-                raise ValueError("Nenhum item elegivel novo foi encontrado para adicionar a esta carga.")
+                reasons = [row["message"] for row in rejected_items]
+                if reasons:
+                    raise ValueError("Nenhum item foi adicionado.\n\n" + "\n".join(reasons))
+                raise ValueError("Nenhum item elegivel foi encontrado entre os IDs selecionados.")
             payload = {
                 "version": int(current["version"]),
                 "items": entries,
             }
             updated = proposals.update_galvanization_load(token, int(load_id), payload)
             updated["added_item_ids"] = added_ids
+            updated["rejected_items"] = rejected_items
             return updated
         finally:
             client.close()
+
+    def galvanization_item_eligibility(self, item_ids: list[int]) -> dict[str, Any]:
+        selected_ids = list(dict.fromkeys(int(value) for value in item_ids if value))
+        if not selected_ids:
+            return {"eligible_item_ids": [], "rejected_items": []}
+        client, proposals, token = self._client()
+        try:
+            candidates = self._all_galvanization_candidates(proposals, token, include_unavailable=True)
+            by_id = {int(row.get("item_id") or 0): row for row in candidates if row.get("item_id")}
+            eligible_ids: list[int] = []
+            rejected_items: list[dict[str, Any]] = []
+            for item_id in selected_ids:
+                candidate = by_id.get(item_id)
+                if candidate is not None and _decimal(candidate.get("available_quantity"), default="0") > 0:
+                    eligible_ids.append(item_id)
+                    continue
+                if candidate is not None:
+                    reason = "esta sem saldo disponivel para uma nova inclusao em carga"
+                    rejected_items.append(self._galvanization_rejection(item_id, candidate, reason))
+                    continue
+                try:
+                    item = proposals.get_item(token, item_id)
+                except Exception:
+                    item = {"id": item_id}
+                rejected_items.append(
+                    self._galvanization_rejection(item_id, item, self._galvanization_item_rejection_reason(item))
+                )
+            return {"eligible_item_ids": eligible_ids, "rejected_items": rejected_items}
+        finally:
+            client.close()
+
+    @staticmethod
+    def _all_galvanization_candidates(proposals, token: str, *, include_unavailable: bool) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        offset = 0
+        limit = 200
+        while True:
+            payload = proposals.list_galvanization_candidates(
+                token,
+                include_unavailable=include_unavailable,
+                limit=limit,
+                offset=offset,
+            )
+            page = list(payload.get("items") or [])
+            rows.extend(page)
+            offset += len(page)
+            total = int(payload.get("total") or len(rows))
+            if not page or offset >= total:
+                return rows
+
+    @staticmethod
+    def _galvanization_item_rejection_reason(item: dict[str, Any]) -> str:
+        if not item.get("active", True):
+            return "esta cancelado ou inativo"
+        requires = str(item.get("requires_galvanization") or "").strip().upper()
+        if requires not in {"SIM", "TRUE", "1"}:
+            return "nao precisa de galvanizacao"
+        if not item.get("flow_defined"):
+            return "esta sem fluxo definido"
+        if not item.get("produced"):
+            return "ainda nao foi produzido"
+        if item.get("galvanized"):
+            return "ja retornou integralmente da galvanizacao"
+        return "nao possui saldo elegivel para inclusao nesta carga"
+
+    @staticmethod
+    def _galvanization_rejection(item_id: int, item: dict[str, Any], reason: str) -> dict[str, Any]:
+        label = str(item.get("item_number") or item.get("numero_item") or item_id)
+        return {
+            "item_id": int(item_id),
+            "item_number": label,
+            "reason": reason,
+            "message": f"Item {label}: {reason}.",
+        }
 
     def release_galvanization_load(self, load_id: int) -> None:
         client, proposals, token = self._client()
@@ -788,10 +929,13 @@ class OfficialProposalApiStorage:
             client.close()
 
     def list_expedition_proposals(self, **filters) -> list[dict[str, Any]]:
+        return self.list_expedition_proposals_page(**filters)["items"]
+
+    def list_expedition_proposals_page(self, **filters) -> dict[str, Any]:
         client, proposals, token = self._client()
         try:
             payload = proposals.list_expedition_proposals(token, **filters)
-            return [_api_expedition_to_process(row) for row in payload.get("items", [])]
+            return {"items": [_api_expedition_to_process(row) for row in payload.get("items", [])], "total": payload.get("total")}
         finally:
             client.close()
 
@@ -890,6 +1034,41 @@ class OfficialProposalApiStorage:
         finally:
             client.close()
 
+    def remanagement_destination_items(self, destination_id: int) -> list[dict[str, Any]]:
+        client, proposals, token = self._client()
+        try:
+            return proposals.remanagement_destination_items(token, destination_id)
+        finally:
+            client.close()
+
+    def remanagement_availability(self, payload: dict[str, Any]) -> dict[str, Any]:
+        client, proposals, token = self._client()
+        try:
+            return proposals.remanagement_availability(token, payload)
+        finally:
+            client.close()
+
+    def remanagement_compensation_plan(self, payload: dict[str, Any]) -> dict[str, Any]:
+        client, proposals, token = self._client()
+        try:
+            return proposals.remanagement_compensation_plan(token, payload)
+        finally:
+            client.close()
+
+    def remanagement_review(self, payload: dict[str, Any]) -> dict[str, Any]:
+        client, proposals, token = self._client()
+        try:
+            return proposals.remanagement_review(token, payload)
+        finally:
+            client.close()
+
+    def remanagement_confirm(self, payload: dict[str, Any]) -> dict[str, Any]:
+        client, proposals, token = self._client()
+        try:
+            return proposals.remanagement_confirm(token, payload)
+        finally:
+            client.close()
+
     def preview_material_remanagement(self, payload: dict[str, Any]) -> dict[str, Any]:
         client, proposals, token = self._client()
         try:
@@ -934,6 +1113,9 @@ class OfficialProposalApiStorage:
             client.close()
 
     def fiscal_rows(self, filters: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+        return self.fiscal_rows_page(filters)["items"]
+
+    def fiscal_rows_page(self, filters: dict[str, Any] | None = None) -> dict[str, Any]:
         filters = filters or {}
         client, proposals, token = self._client()
         try:
@@ -942,11 +1124,11 @@ class OfficialProposalApiStorage:
                 search=filters.get("text") or None,
                 status=filters.get("status_fiscal") or None,
                 situation=filters.get("situacao_fiscal") or None,
-                limit=200,
-                offset=0,
+                limit=int(filters.get("limit") or 50),
+                offset=int(filters.get("offset") or 0),
             )
-            rows = [_api_fiscal_record_to_legacy(row) for row in payload.get("items", [])]
-            return _filter_fiscal_rows(rows, filters)
+            rows = _filter_fiscal_rows([_api_fiscal_record_to_legacy(row) for row in payload.get("items", [])], filters)
+            return {"items": rows, "total": payload.get("total")}
         finally:
             client.close()
 
@@ -1305,18 +1487,28 @@ class OfficialProposalApiStorage:
         return borrowed, ChatApiClient(borrowed), token
 
     def chat_conversations(self, **filters) -> list[dict[str, Any]]:
+        return self.chat_conversations_page(**filters)["items"]
+
+    def chat_conversations_page(self, **filters) -> dict[str, Any]:
         client, chat, token = self._chat_client()
         try:
             payload = chat.list_conversations(token, **filters)
-            return payload.get("items", [])
+            return {"items": payload.get("items", []), "total": payload.get("total")}
         finally:
             client.close()
 
     def chat_messages(self, conversation_id: int, **filters) -> list[dict[str, Any]]:
+        return self.chat_messages_page(conversation_id, **filters)["items"]
+
+    def chat_messages_page(self, conversation_id: int, **filters) -> dict[str, Any]:
         client, chat, token = self._chat_client()
         try:
             payload = chat.list_messages(token, conversation_id, **filters)
-            return payload.get("items", [])
+            return {
+                "items": payload.get("items", []),
+                "total": payload.get("total", 0),
+                "has_more": bool(payload.get("has_more")),
+            }
         finally:
             client.close()
 
@@ -1499,7 +1691,7 @@ def user_message_for_api_error(exc: Exception) -> str:
 
 
 def _proposal_create_payload(data: dict[str, Any], import_metadata: dict[str, Any] | None) -> dict[str, Any]:
-    return {
+    payload = {
         "proposal_number": str(data.get("proposta") or "").strip(),
         "customer_name": str(data.get("cliente") or "").strip(),
         "project_name": _optional(data.get("obra_site")),
@@ -1512,6 +1704,10 @@ def _proposal_create_payload(data: dict[str, Any], import_metadata: dict[str, An
         "notes": _optional(data.get("observacoes_gerais")),
         "items": [_item_create_payload(item) for item in data.get("itens") or []],
     }
+    safe_metadata = _safe_import_metadata(import_metadata)
+    if safe_metadata:
+        payload["import_metadata"] = safe_metadata
+    return payload
 
 
 def _proposal_update_payload(data: dict[str, Any], current: dict[str, Any]) -> dict[str, Any]:
@@ -2254,6 +2450,35 @@ def _source(data: dict[str, Any], import_metadata: dict[str, Any] | None) -> str
         return "NOMUS_PDF"
     source = str(data.get("_import_source") or "").upper()
     return "NOMUS_API" if source == "NOMUS_API" else "MANUAL"
+
+
+def _safe_import_metadata(import_metadata: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(import_metadata, dict):
+        return {}
+    allowed = {
+        "origem",
+        "batch_id",
+        "extraction_method",
+        "template_id",
+        "parser_version",
+        "requires_human_review",
+        "warning_codes",
+        "nome_arquivo",
+        "hash_sha256",
+        "observacao",
+    }
+    safe: dict[str, Any] = {}
+    for key in allowed:
+        value = import_metadata.get(key)
+        if value in (None, "", []):
+            continue
+        if isinstance(value, list):
+            safe[key] = [str(item)[:80] for item in value[:50]]
+        elif isinstance(value, bool):
+            safe[key] = value
+        else:
+            safe[key] = str(value)[:500]
+    return safe
 
 
 def _optional(value: Any) -> str | None:

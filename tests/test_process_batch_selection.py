@@ -9,7 +9,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QPoint, Qt
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QLabel
 
 from app.services.backend_adapter import OFFICIAL_COLOR_PALETTES
 from app.ui.batch_status_dialog import BatchStatusDialog
@@ -218,6 +218,24 @@ class ProcessBatchSelectionTests(unittest.TestCase):
     @staticmethod
     def _select_visible_row(page: ProcessPage, row: int = 0):
         page._handle_table_click(page.proxy.index(row, 1))
+
+    def test_empty_state_uses_content_region_without_card_identity(self):
+        page, _service = self._page()
+        page.model.set_rows([])
+        page._update_empty_state()
+
+        self.assertIs(page.table_stack.currentWidget(), page.empty_state)
+        self.assertEqual(page.empty_state.objectName(), "OperationalEmptyState")
+        self.assertNotEqual(page.empty_state.objectName(), "Panel")
+        self.assertNotEqual(page.empty_state.objectName(), "Card")
+
+    def test_filter_without_results_uses_specific_empty_message(self):
+        page, _service = self._page()
+        page.search.setText("sem-correspondencia")
+
+        self.assertIs(page.table_stack.currentWidget(), page.empty_state)
+        labels = [label.text() for label in page.empty_state.findChildren(QLabel)]
+        self.assertIn("Nenhum resultado para os filtros aplicados", labels)
 
     def test_normal_mode_has_no_checkbox_and_activation_adds_temporary_column(self):
         page, _service = self._page()

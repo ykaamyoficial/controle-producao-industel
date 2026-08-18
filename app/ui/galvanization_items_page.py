@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMenu,
     QMessageBox,
+    QStackedLayout,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -19,9 +20,21 @@ from PySide6.QtWidgets import (
 from app.models.galvanization_load_table_model import GalvanizationLoadTableModel
 from app.models.item_table_model import ItemTableModel
 from app.ui.background_worker import start_worker
+from app.ui.refresh_coordinator import RefreshCoordinator
+from app.ui.components.area_identity import style_area_title
+from app.ui.components.empty_state import EmptyState
 from app.ui.components.modern_button import ModernButton
 from app.ui.components.modern_table import ModernTable
+from app.ui.components.operational_layout import (
+    OPERATIONAL_ACTION_SPACING,
+    OPERATIONAL_PAGE_MARGINS,
+    OPERATIONAL_PAGE_SPACING,
+    OPERATIONAL_TABLE_STACK_MARGINS,
+)
+from app.ui.components.operational_header import configure_operational_header
+from app.ui.components.top_tabs import configure_operational_tabs
 from app.ui.components.toast_notification import ToastNotification
+from app.ui.resilience import show_operation_error
 from app.ui.galvanization_load_dialog import (
     GalvanizationLoadDialog,
     GalvanizationReturnDialog,
@@ -38,23 +51,35 @@ class GalvanizationItemsPage(QWidget):
     def __init__(self, service, parent=None):
         super().__init__(parent)
         self.service = service
+        self._action_thread = None
+        self._action_busy = False
         self.model = ItemTableModel(service, "GALVANIZACAO")
         self._refresh_thread = None
         self._refreshing = False
+        self._refresh_coordinator = RefreshCoordinator(self)
         self._build()
 
     def _build(self):
         root = QVBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(10)
+        root.setContentsMargins(*OPERATIONAL_PAGE_MARGINS)
+        root.setSpacing(OPERATIONAL_PAGE_SPACING)
 
         filters = QFrame()
-        filters.setObjectName("Panel")
         fl = QHBoxLayout(filters)
-        fl.setContentsMargins(14, 12, 14, 12)
-        fl.setSpacing(8)
+        configure_operational_header(
+            filters,
+            fl,
+            margins=(16, 12, 16, 10),
+            spacing=8,
+            area="GALVANIZACAO",
+            palette=self.service.palette,
+        )
+        title = QLabel("Itens de galvanizacao")
+        title.setObjectName("FilterTitle")
+        style_area_title(title, "GALVANIZACAO", self.service.palette)
         self.search = QLineEdit()
         self.search.setPlaceholderText("Proposta, cliente, obra/site ou lote")
+        self.search.textChanged.connect(lambda _text: self.refresh(debounced=True))
         self.situation = QComboBox()
         self.situation.addItem("Todos", "")
         self.situation.addItem("Disponivel para carga", "DISPONIVEL")
@@ -63,6 +88,7 @@ class GalvanizationItemsPage(QWidget):
         clear_btn = ModernButton("Limpar", "clear")
         apply_btn.clicked.connect(self.refresh)
         clear_btn.clicked.connect(self.clear)
+        fl.addWidget(title)
         fl.addWidget(QLabel("Buscar"))
         fl.addWidget(self.search, 1)
         fl.addWidget(QLabel("Situacao"))
@@ -72,7 +98,7 @@ class GalvanizationItemsPage(QWidget):
         root.addWidget(filters)
 
         actions = QHBoxLayout()
-        actions.setSpacing(8)
+        actions.setSpacing(OPERATIONAL_ACTION_SPACING)
         self.assemble_load_button = ModernButton("Montar carga", "load", accent=True)
         self.assemble_load_button.clicked.connect(self.open_assemble_load)
         self.register_return_button = ModernButton("Registrar retorno", "status")
@@ -91,7 +117,20 @@ class GalvanizationItemsPage(QWidget):
         self.table.status_shortcut_enabled = False
         self.table.setToolTip("")
         self.table.setModel(self.model)
-        root.addWidget(self.table, 1)
+        self.empty_state = EmptyState(
+            "Nenhum item para galvanizacao",
+            "Itens disponiveis, em carga ou em retorno aparecerao aqui.",
+            self.service.palette,
+            icon="load",
+        )
+        table_stack_frame = QFrame()
+        table_stack_frame.setObjectName("TableStack")
+        table_stack = QStackedLayout(table_stack_frame)
+        table_stack.setContentsMargins(*OPERATIONAL_TABLE_STACK_MARGINS)
+        table_stack.addWidget(self.table)
+        table_stack.addWidget(self.empty_state)
+        self.table_stack = table_stack
+        root.addWidget(table_stack_frame, 1)
 
         self.assemble_load_button.setVisible(self._can_mount_load())
         self.register_return_button.setVisible(self._can_mount_load())
@@ -150,32 +189,30 @@ class GalvanizationItemsPage(QWidget):
         self.situation.setCurrentIndex(0)
         self.refresh()
 
-    def refresh(self):
-        if self._refreshing:
-            return
+    def refresh(self, *, debounced: bool = False):
         self._set_loading(True)
         text = self.search.text().strip()
         filters = {"text": text or None}
         situation = self.situation.currentData()
         if situation:
             filters["situation"] = situation
-        self._refresh_thread = start_worker(
-            self,
+        self._refresh_coordinator.request(
             lambda: self.service.galvanization_items_queue(filters),
             self._refresh_success,
             self._refresh_error,
+            operation_name="galvanization_items_page.refresh",
+            immediate=not debounced,
         )
 
     def _refresh_success(self, rows):
         self.model.set_rows(rows)
         self.table.apply_column_layout()
+        self.table_stack.setCurrentWidget(self.table if rows else self.empty_state)
         self._set_loading(False)
 
     def _refresh_error(self, exc):
-        self.model.set_rows([])
-        self.table.apply_column_layout()
         self._set_loading(False)
-        ToastNotification(self.window(), str(exc), "error")
+        show_operation_error(self, exc, self.refresh, title="Galvanização")
 
     def _set_loading(self, loading: bool):
         self._refreshing = loading
@@ -193,22 +230,34 @@ class GalvanizationLoadsPage(QWidget):
         super().__init__(parent)
         self.service = service
         self.model = GalvanizationLoadTableModel(service)
+        self._action_thread = None
+        self._action_busy = False
         self._refresh_thread = None
         self._refreshing = False
+        self._refresh_coordinator = RefreshCoordinator(self)
         self._build()
 
     def _build(self):
         root = QVBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(10)
+        root.setContentsMargins(*OPERATIONAL_PAGE_MARGINS)
+        root.setSpacing(OPERATIONAL_PAGE_SPACING)
 
         filters = QFrame()
-        filters.setObjectName("Panel")
         fl = QHBoxLayout(filters)
-        fl.setContentsMargins(14, 12, 14, 12)
-        fl.setSpacing(8)
+        configure_operational_header(
+            filters,
+            fl,
+            margins=(16, 12, 16, 10),
+            spacing=8,
+            area="GALVANIZACAO",
+            palette=self.service.palette,
+        )
+        title = QLabel("Cargas de galvanizacao")
+        title.setObjectName("FilterTitle")
+        style_area_title(title, "GALVANIZACAO", self.service.palette)
         self.search = QLineEdit()
         self.search.setPlaceholderText("Carga ou motorista")
+        self.search.textChanged.connect(lambda _text: self.refresh(debounced=True))
         self.status = QComboBox()
         self.status.addItem("Todos", "")
         self.status.addItem("Aguardando liberacao", "AGUARDANDO_LIBERACAO")
@@ -219,6 +268,7 @@ class GalvanizationLoadsPage(QWidget):
         clear_btn = ModernButton("Limpar", "clear")
         apply_btn.clicked.connect(self.refresh)
         clear_btn.clicked.connect(self.clear)
+        fl.addWidget(title)
         fl.addWidget(QLabel("Buscar"))
         fl.addWidget(self.search, 1)
         fl.addWidget(QLabel("Status"))
@@ -240,24 +290,36 @@ class GalvanizationLoadsPage(QWidget):
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self.open_context_menu)
         self.table.doubleClicked.connect(self._open_details_from_index)
-        root.addWidget(self.table, 1)
+        self.empty_state = EmptyState(
+            "Nenhuma carga encontrada",
+            "Cargas montadas para galvanizacao aparecerao aqui.",
+            self.service.palette,
+            icon="load",
+        )
+        table_stack_frame = QFrame()
+        table_stack_frame.setObjectName("TableStack")
+        table_stack = QStackedLayout(table_stack_frame)
+        table_stack.setContentsMargins(*OPERATIONAL_TABLE_STACK_MARGINS)
+        table_stack.addWidget(self.table)
+        table_stack.addWidget(self.empty_state)
+        self.table_stack = table_stack
+        root.addWidget(table_stack_frame, 1)
 
     def clear(self):
         self.search.clear()
         self.status.setCurrentIndex(0)
         self.refresh()
 
-    def refresh(self):
-        if self._refreshing:
-            return
+    def refresh(self, *, debounced: bool = False):
         self._set_loading(True)
         text = self.search.text().strip()
         status = self.status.currentData() or None
-        self._refresh_thread = start_worker(
-            self,
+        self._refresh_coordinator.request(
             lambda: self._load_filtered(text, status),
             self._refresh_success,
             self._refresh_error,
+            operation_name="galvanization_items_page.filtered_refresh",
+            immediate=not debounced,
         )
 
     def _load_filtered(self, text: str, status: str | None) -> list[dict]:
@@ -277,11 +339,13 @@ class GalvanizationLoadsPage(QWidget):
     def _refresh_success(self, rows):
         self.model.set_rows(rows)
         self.table.apply_column_layout()
+        self.table_stack.setCurrentWidget(self.table if rows else self.empty_state)
         self._set_loading(False)
 
     def _refresh_error(self, exc):
         self.model.set_rows([])
         self.table.apply_column_layout()
+        self.table_stack.setCurrentWidget(self.empty_state)
         self._set_loading(False)
         ToastNotification(self.window(), str(exc), "error")
 
@@ -377,14 +441,36 @@ class GalvanizationLoadsPage(QWidget):
     def release_load(self, load_id: int) -> bool:
         if QMessageBox.question(self, "Liberar carga", f"Liberar a carga {load_id} para envio?") != QMessageBox.Yes:
             return False
-        try:
-            self.service.release_galvanization_load(load_id)
-        except Exception as exc:
-            QMessageBox.critical(self, "Liberar carga", str(exc))
+        if self._action_busy:
             return False
-        ToastNotification(self.window(), f"Carga {load_id} liberada para envio.", "success")
-        self.refresh()
+        self._action_busy = True
+        self._set_action_controls(False)
+
+        def success(_result):
+            self._action_busy = False
+            self._set_action_controls(True)
+            ToastNotification(self.window(), f"Carga {load_id} liberada para envio.", "success")
+            self.refresh()
+
+        def error(exc):
+            self._action_busy = False
+            self._set_action_controls(True)
+            QMessageBox.critical(self, "Liberar carga", str(exc))
+
+        self._action_thread = start_worker(
+            self,
+            lambda: self.service.release_galvanization_load(load_id),
+            success,
+            error,
+            operation_name="galvanization_loads.release_load",
+        )
         return True
+
+    def _set_action_controls(self, enabled: bool):
+        for name in ("table", "search", "status"):
+            widget = getattr(self, name, None)
+            if widget is not None:
+                widget.setEnabled(enabled)
 
     def return_selected(self):
         load_id = self.selected_load_id()
@@ -407,8 +493,9 @@ class GalvanizationAreaPage(QWidget):
         super().__init__(parent)
         self.service = service
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setContentsMargins(*OPERATIONAL_PAGE_MARGINS)
         self.tabs = QTabWidget()
+        configure_operational_tabs(self.tabs, area="GALVANIZACAO", palette=self.service.palette)
         self.proposals_page = ProcessPage(service, "GALVANIZACAO", "Galvanizacao")
         self.items_page = GalvanizationItemsPage(service)
         self.loads_page = GalvanizationLoadsPage(service)

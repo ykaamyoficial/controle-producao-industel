@@ -33,6 +33,7 @@ def dashboard_chart_colors(palette: dict) -> list[str]:
         palette.get("area_production", palette["success"]),
         palette.get("area_galvanization", palette["secondary"]),
         palette.get("area_expedition", palette["warning"]),
+        palette.get("area_fiscal", palette["danger"]),
         palette["danger"],
         palette["accent_hover"],
         palette.get("area_stock", palette["muted"]),

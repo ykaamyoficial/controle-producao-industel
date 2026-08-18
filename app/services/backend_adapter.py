@@ -9,6 +9,7 @@ from app.services.api_reports import ApiExecutiveDashboardService, ApiOperationa
 from app.services.status_sorting import sort_fiscal_rows, sort_process_rows
 from app.services.app_paths import ensure_app_data_dirs, get_config_example_path, get_config_path
 from app.services.app_logging import get_logger
+from app.services.short_cache import ShortLivedCache
 from app.services.configuration_service import get_configuration_service
 log = get_logger('backend')
 _UNSET = object()
@@ -31,7 +32,7 @@ ITEM_NO_PRODUCTION_LABELS = {'pronta_entrega': 'Pronta entrega', 'comprado_terce
 AREA_FINISHED_STATUS = {'PRODUCAO': {'FINALIZADO'}, 'GALVANIZACAO': {'RETORNOU_GALVANIZACAO'}, 'EXPEDICAO': {'ENTREGUE'}, 'ALMOXARIFADO': {'ALMOXARIFADO_ENTREGUE', 'SEM_PARAFUSOS'}}
 STATUS_FLOW_ORDER = {'CONTROLE GERAL': ['AGUARDANDO_LIBERACAO', 'LIBERADO_PRODUCAO', 'EM_PRODUCAO', 'EM_GALVANIZACAO', 'EM_EXPEDICAO', 'ENTREGUE', 'CANCELADA'], 'PRODUCAO': ['NAO_INICIADO', 'INICIADO', 'PARADO', 'FINALIZADO_PARCIAL', 'FINALIZADO', 'ITEM_PENDENTE_FABRICACAO'], 'GALVANIZACAO': ['AGUARDANDO_ENVIO', 'DISPONIVEL_PARCIAL', 'EM_CARGA', 'ENVIADO_GALVANIZACAO', 'RETORNOU_PARCIAL', 'RETORNOU_GALVANIZACAO'], 'EXPEDICAO': ['EM_SEPARACAO', 'AGUARDANDO_SEPARACAO_PARCIAL', 'SEPARACAO_INICIADA', 'SEPARADO', 'ENTREGUE_PARCIAL', 'ENTREGUE'], 'ALMOXARIFADO': ['AGUARDANDO_CONFIRMACAO', 'EM_SEPARACAO', 'SEPARADO', 'SEM_PARAFUSOS', 'ALMOXARIFADO_ENTREGUE_PARCIAL', 'ALMOXARIFADO_ENTREGUE']}
 STATUS_FLOW_ORDER['EXPEDICAO'].insert(3, 'SEPARADO_COM_PENDENCIA')
-COLOR_PALETTES = {'aurora': {'label': 'Aurora profissional', 'bg': '#f5f7fb', 'surface': '#ffffff', 'surface_alt': '#e8f1ff', 'text': '#0f172a', 'muted': '#475569', 'border': '#cbd5e1', 'accent': '#006fc9', 'accent_hover': '#005aa3', 'accent_text': '#ffffff', 'secondary': '#be123c', 'success': '#047857', 'warning': '#b45309', 'danger': '#b91c1c', 'info': '#0369a1', 'disabled': '#94a3b8', 'area_control': '#006fc9', 'area_production': '#047857', 'area_galvanization': '#7c3aed', 'area_expedition': '#c2410c', 'area_stock': '#64748b', 'tree_selected': '#bfdbfe', 'tree_heading': '#dbeafe'}, 'grafite': {'label': 'Grafite alto contraste', 'bg': '#0f172a', 'surface': '#172033', 'surface_alt': '#24324a', 'text': '#f8fafc', 'muted': '#cbd5e1', 'border': '#475569', 'accent': '#38bdf8', 'accent_hover': '#7dd3fc', 'accent_text': '#0f172a', 'secondary': '#fb923c', 'success': '#34d399', 'warning': '#facc15', 'danger': '#fb7185', 'info': '#7dd3fc', 'disabled': '#64748b', 'area_control': '#38bdf8', 'area_production': '#34d399', 'area_galvanization': '#a78bfa', 'area_expedition': '#fb923c', 'area_stock': '#94a3b8', 'tree_selected': '#0e7490', 'tree_heading': '#1e293b'}}
+COLOR_PALETTES = {'aurora': {'label': 'Aurora profissional', 'bg': '#f5f7fb', 'surface': '#ffffff', 'surface_alt': '#e8f1ff', 'text': '#0f172a', 'muted': '#475569', 'border': '#cbd5e1', 'accent': '#006fc9', 'accent_hover': '#005aa3', 'accent_text': '#ffffff', 'secondary': '#be123c', 'success': '#047857', 'warning': '#b45309', 'danger': '#b91c1c', 'info': '#0369a1', 'disabled': '#94a3b8', 'area_control': '#006fc9', 'area_production': '#047857', 'area_galvanization': '#7c3aed', 'area_expedition': '#c2410c', 'area_fiscal': '#b91c1c', 'area_stock': '#64748b', 'area_partials': '#64748b', 'tree_selected': '#bfdbfe', 'tree_heading': '#dbeafe'}, 'grafite': {'label': 'Grafite alto contraste', 'bg': '#0f172a', 'surface': '#172033', 'surface_alt': '#24324a', 'text': '#f8fafc', 'muted': '#cbd5e1', 'border': '#475569', 'accent': '#38bdf8', 'accent_hover': '#7dd3fc', 'accent_text': '#0f172a', 'secondary': '#fb923c', 'success': '#34d399', 'warning': '#facc15', 'danger': '#fb7185', 'info': '#7dd3fc', 'disabled': '#64748b', 'area_control': '#38bdf8', 'area_production': '#34d399', 'area_galvanization': '#a78bfa', 'area_expedition': '#fb923c', 'area_fiscal': '#fb7185', 'area_stock': '#94a3b8', 'area_partials': '#94a3b8', 'tree_selected': '#0e7490', 'tree_heading': '#1e293b'}}
 
 class AppError(Exception):
     pass
@@ -192,12 +193,24 @@ class BackendService:
         self._api_access_token: str | None = None
         self._api_refresh_token: str | None = None
         self._avatar_cache: dict[int, bytes | None] = {}
+        self._read_cache = ShortLivedCache(default_ttl=2.0)
         # Callback opcional, setado pela MainWindow: chamado depois que uma
         # conversa e confirmada como lida no backend, para que o badge global
         # do cabecalho seja atualizado sem o dialog de chat precisar conhecer
         # o widget do header diretamente.
         self.on_conversation_marked_read = None
         log.info('Backend inicializado | banco_operacional=PostgreSQL via API')
+
+    def _cached_read(self, key: str, loader, *, ttl: float | None = None):
+        cache = getattr(self, '_read_cache', None)
+        if cache is None:
+            cache = self._read_cache = ShortLivedCache(default_ttl=2.0)
+        return cache.get_or_load(key, loader, ttl=ttl)
+
+    def _invalidate_operational_cache(self):
+        cache = getattr(self, '_read_cache', None)
+        if cache is not None:
+            cache.invalidate()
 
     @property
     def palettes(self):
@@ -419,6 +432,34 @@ class BackendService:
         return legacy.area_status_label(area, status)
 
     def process_rows(self, area: str | None=None, filters: dict[str, str] | None=None) -> list[dict[str, Any]]:
+        normalized = tuple(sorted((str(key), str(value or "")) for key, value in (filters or {}).items()))
+        return self._cached_read(
+            f"process_rows:{area or ''}:{normalized}",
+            lambda: self._process_rows_uncached(area, filters),
+            ttl=2.0,
+        )
+
+    def process_rows_page(self, area: str | None = None, filters: dict[str, str] | None = None, *, limit: int = 50, offset: int = 0) -> dict[str, Any]:
+        """Contrato paginado para telas progressivas; mantém process_rows legado."""
+        filters = dict(filters or {})
+        filters.update({"limit": limit, "offset": offset})
+        storage = self.official_proposal_storage
+        try:
+            if area == "CONTROLE GERAL":
+                return storage.list_proposals_page(limit=limit, offset=offset, customer=filters.get("cliente") or None, current_status=filters.get("status") or None)
+            if area == "PRODUCAO":
+                return storage.list_production_proposals_page(limit=limit, offset=offset, search=filters.get("text") or None, status=filters.get("status") or None)
+            if area == "EXPEDICAO":
+                return storage.list_expedition_proposals_page(limit=limit, offset=offset, search=filters.get("text") or None)
+            if area == "GALVANIZACAO":
+                return storage.galvanization_items_queue_page(limit=limit, offset=offset, search=filters.get("text") or None, situation=filters.get("situation") or None)
+            if area == "FISCAL":
+                return storage.fiscal_rows_page({**filters, "limit": limit, "offset": offset})
+            return {"items": [], "total": 0}
+        except Exception as exc:
+            raise self._api_app_error(exc) from exc
+
+    def _process_rows_uncached(self, area: str | None=None, filters: dict[str, str] | None=None) -> list[dict[str, Any]]:
         filters = dict(filters or {})
         if area == 'CONTROLE GERAL':
             try:
@@ -742,20 +783,30 @@ class BackendService:
     def production_items_queue(self, filters: dict[str, Any] | None=None) -> list[dict[str, Any]]:
         filters = filters or {}
         try:
-            return self.official_proposal_storage.production_items_queue(search=filters.get('text') or None, pending=filters.get('pending'), limit=500, offset=0)
+            key = f"production_items:{tuple(sorted(filters.items()))}"
+            return self._cached_read(
+                key,
+                lambda: self.official_proposal_storage.production_items_queue(search=filters.get('text') or None, pending=filters.get('pending'), limit=500, offset=0),
+                ttl=2.0,
+            )
         except Exception as exc:
             raise self._api_app_error(exc) from exc
 
     def galvanization_items_queue(self, filters: dict[str, Any] | None=None) -> list[dict[str, Any]]:
         filters = filters or {}
         try:
-            return self.official_proposal_storage.galvanization_items_queue(search=filters.get('text') or None, situation=filters.get('situation') or None, limit=200, offset=0)
+            key = f"galvanization_items:{tuple(sorted(filters.items()))}"
+            return self._cached_read(
+                key,
+                lambda: self.official_proposal_storage.galvanization_items_queue(search=filters.get('text') or None, situation=filters.get('situation') or None, limit=200, offset=0),
+                ttl=2.0,
+            )
         except Exception as exc:
             raise self._api_app_error(exc) from exc
 
     def galvanization_loads(self) -> list[dict[str, Any]]:
         try:
-            return self.official_proposal_storage.galvanization_loads()
+            return self._cached_read("galvanization_loads", self.official_proposal_storage.galvanization_loads, ttl=2.0)
         except Exception as exc:
             raise self._api_app_error(exc) from exc
 
@@ -783,10 +834,32 @@ class BackendService:
         except Exception as exc:
             raise self._api_app_error(exc) from exc
 
+    def chat_conversations_page(self, filters: dict[str, Any] | None = None) -> dict[str, Any]:
+        filters = filters or {}
+        try:
+            return self.official_proposal_storage.chat_conversations_page(
+                status=filters.get('status') or None,
+                search=filters.get('search') or None,
+                conversation_id=filters.get('conversation_id') or None,
+                limit=filters.get('limit') or 50,
+                offset=filters.get('offset') or 0,
+            )
+        except Exception as exc:
+            raise self._api_app_error(exc) from exc
+
     def chat_messages(self, conversation_id: int, filters: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         filters = filters or {}
         try:
-            return self.official_proposal_storage.chat_messages(conversation_id, limit=filters.get('limit') or 500, offset=filters.get('offset') or 0)
+            return self.official_proposal_storage.chat_messages(conversation_id, limit=filters.get('limit') or 50, offset=filters.get('offset') or 0)
+        except Exception as exc:
+            raise self._api_app_error(exc) from exc
+
+    def chat_messages_page(self, conversation_id: int, filters: dict[str, Any] | None = None) -> dict[str, Any]:
+        filters = filters or {}
+        try:
+            return self.official_proposal_storage.chat_messages_page(
+                conversation_id, limit=filters.get('limit') or 50, offset=filters.get('offset') or 0
+            )
         except Exception as exc:
             raise self._api_app_error(exc) from exc
 
@@ -828,7 +901,7 @@ class BackendService:
 
     def chat_unread_summary(self) -> dict[str, Any]:
         try:
-            return self.official_proposal_storage.chat_unread_summary()
+            return self._cached_read("chat_unread_summary", self.official_proposal_storage.chat_unread_summary, ttl=1.0)
         except Exception as exc:
             raise self._api_app_error(exc) from exc
 
@@ -948,6 +1021,7 @@ class BackendService:
     ) -> int:
         if not self.can_edit('GALVANIZACAO'):
             raise AppError('Seu usuario nao pode alterar cargas de galvanizacao.')
+        self._invalidate_operational_cache()
         try:
             if load_weight is _UNSET:
                 if expected_version is None:
@@ -992,6 +1066,7 @@ class BackendService:
     ) -> dict[str, Any]:
         if not self.can_edit("GALVANIZACAO"):
             raise AppError("Seu usuario nao pode alterar cargas de galvanizacao.")
+        self._invalidate_operational_cache()
         try:
             return self.official_proposal_storage.add_items_to_galvanization_load(
                 load_id, item_ids=item_ids, proposal_ids=proposal_ids
@@ -999,9 +1074,16 @@ class BackendService:
         except Exception as exc:
             raise self._api_app_error(exc) from exc
 
+    def galvanization_item_eligibility(self, item_ids: list[int]) -> dict[str, Any]:
+        try:
+            return self.official_proposal_storage.galvanization_item_eligibility(item_ids)
+        except Exception as exc:
+            raise self._api_app_error(exc) from exc
+
     def release_galvanization_load(self, load_id: int):
         if not self.can_edit('GALVANIZACAO'):
             raise AppError('Seu usuario nao pode liberar cargas de galvanizacao.')
+        self._invalidate_operational_cache()
         try:
             self.official_proposal_storage.release_galvanization_load(load_id)
             return
@@ -1021,6 +1103,7 @@ class BackendService:
     def register_galvanization_partial_return(self, load_id: int, returned_items: list[dict[str, Any]], observation: str='') -> int:
         if not self.can_edit('GALVANIZACAO'):
             raise AppError('Seu usuario nao pode registrar retorno de galvanizacao.')
+        self._invalidate_operational_cache()
         try:
             return self.official_proposal_storage.register_galvanization_partial_return(load_id, returned_items, observation)
         except Exception as exc:
@@ -1028,8 +1111,12 @@ class BackendService:
 
     def fiscal_rows(self, filters: dict[str, Any] | None=None) -> list[dict[str, Any]]:
         try:
-            rows = self.official_proposal_storage.fiscal_rows(filters)
-            return sort_fiscal_rows(self._merge_partial_operational_rows(rows, 'FISCAL'))
+            key = f"fiscal_rows:{repr(filters or {})}"
+            return self._cached_read(
+                key,
+                lambda: sort_fiscal_rows(self._merge_partial_operational_rows(self.official_proposal_storage.fiscal_rows(filters), 'FISCAL')),
+                ttl=2.0,
+            )
         except Exception as exc:
             raise self._api_app_error(exc) from exc
 
@@ -1045,13 +1132,17 @@ class BackendService:
 
     def fiscal_indicators(self) -> dict[str, Any]:
         try:
-            return self.official_proposal_storage.fiscal_indicators()
+            return self._cached_read("fiscal_indicators", self.official_proposal_storage.fiscal_indicators, ttl=1.0)
         except Exception as exc:
             raise self._api_app_error(exc) from exc
 
     def fiscal_indicator_rows(self, indicator: str) -> list[dict[str, Any]]:
         try:
-            return self.official_proposal_storage.fiscal_indicator_rows(indicator)
+            return self._cached_read(
+                f"fiscal_indicator_rows:{indicator}",
+                lambda: self.official_proposal_storage.fiscal_indicator_rows(indicator),
+                ttl=1.0,
+            )
         except Exception as exc:
             raise self._api_app_error(exc) from exc
 
@@ -1087,6 +1178,7 @@ class BackendService:
             raise legacy.AppError('Usuario nao autenticado.')
         if not self.can_register_fiscal_emission():
             raise legacy.AppError('Seu usuario nao tem permissao para registrar emissao fiscal.')
+        self._invalidate_operational_cache()
         try:
             return self.official_proposal_storage.register_fiscal_emission(fiscal_processo_id, emissions, numero_controle, observacao)
         except Exception as exc:
@@ -1097,6 +1189,7 @@ class BackendService:
             raise legacy.AppError('Usuario nao autenticado.')
         if not self.can_register_fiscal_emission():
             raise legacy.AppError('Seu usuario nao tem permissao para registrar emissao fiscal.')
+        self._invalidate_operational_cache()
         try:
             if hasattr(self.official_proposal_storage, "register_fiscal_batch"):
                 return self.official_proposal_storage.register_fiscal_batch(draft, operation_id=operation_id)
@@ -1158,6 +1251,82 @@ class BackendService:
     def remanagement_compatible_items(self, source_id: int, destination_id: int) -> list[dict[str, Any]]:
         try:
             return self.official_proposal_storage.remanagement_compatible_items(source_id, destination_id)
+        except Exception as exc:
+            raise self._api_app_error(exc) from exc
+
+    def remanagement_destination_items(self, destination_id: int) -> list[dict[str, Any]]:
+        try:
+            return self.official_proposal_storage.remanagement_destination_items(destination_id)
+        except Exception as exc:
+            raise self._api_app_error(exc) from exc
+
+    def remanagement_availability(self, destination_id: int, items: list[dict[str, Any]]) -> dict[str, Any]:
+        payload = {
+            "destination_proposal_id": destination_id,
+            "items": [{"destination_item_id": row["destination_item_id"], "requested_quantity": str(row["requested_quantity"])} for row in items],
+        }
+        try:
+            return self.official_proposal_storage.remanagement_availability(payload)
+        except Exception as exc:
+            raise self._api_app_error(exc) from exc
+
+    def remanagement_compensation_plan(self, destination_id: int, items: list[dict[str, Any]], allocations: list[dict[str, Any]]) -> dict[str, Any]:
+        payload = {
+            "destination_proposal_id": destination_id,
+            "items": [{"destination_item_id": row["destination_item_id"], "requested_quantity": str(row["requested_quantity"])} for row in items],
+            "allocations": [
+                {
+                    "destination_item_id": row["destination_item_id"],
+                    "source_proposal_id": row["source_proposal_id"],
+                    "source_item_id": row["source_item_id"],
+                    "allocated_quantity": str(row["allocated_quantity"]),
+                }
+                for row in allocations
+            ],
+        }
+        try:
+            return self.official_proposal_storage.remanagement_compensation_plan(payload)
+        except Exception as exc:
+            raise self._api_app_error(exc) from exc
+
+    def remanagement_review(self, destination_id: int, items: list[dict[str, Any]], allocations: list[dict[str, Any]], reason: str) -> dict[str, Any]:
+        payload = {
+            "destination_proposal_id": destination_id,
+            "items": [{"destination_item_id": row["destination_item_id"], "requested_quantity": str(row["requested_quantity"])} for row in items],
+            "allocations": [
+                {
+                    "destination_item_id": row["destination_item_id"],
+                    "source_proposal_id": row["source_proposal_id"],
+                    "source_item_id": row["source_item_id"],
+                    "allocated_quantity": str(row["allocated_quantity"]),
+                }
+                for row in allocations
+            ],
+            "reason": reason,
+        }
+        try:
+            return self.official_proposal_storage.remanagement_review(payload)
+        except Exception as exc:
+            raise self._api_app_error(exc) from exc
+
+    def remanagement_confirm(self, operation_id: str, destination_id: int, items: list[dict[str, Any]], allocations: list[dict[str, Any]], reason: str) -> dict[str, Any]:
+        payload = {
+            "operation_id": operation_id,
+            "destination_proposal_id": destination_id,
+            "items": [{"destination_item_id": row["destination_item_id"], "requested_quantity": str(row["requested_quantity"])} for row in items],
+            "allocations": [
+                {
+                    "destination_item_id": row["destination_item_id"],
+                    "source_proposal_id": row["source_proposal_id"],
+                    "source_item_id": row["source_item_id"],
+                    "allocated_quantity": str(row["allocated_quantity"]),
+                }
+                for row in allocations
+            ],
+            "reason": reason,
+        }
+        try:
+            return self.official_proposal_storage.remanagement_confirm(payload)
         except Exception as exc:
             raise self._api_app_error(exc) from exc
 
@@ -1590,6 +1759,7 @@ class BackendService:
     def update_status(self, process_id: int, area: str, status: str, observation: str='', item_ids: list[int] | None=None, produced_weight: float | None=None):
         if not self.user:
             raise legacy.AppError('Usuario nao autenticado.')
+        self._invalidate_operational_cache()
         if area == 'CONTROLE GERAL':
             try:
                 process = self.official_proposal_storage.get_process(process_id)
@@ -1669,6 +1839,12 @@ class BackendService:
             raise legacy.AppError('Usuario nao autenticado.')
         try:
             return self.official_proposal_storage.save_process(data, process_id, import_metadata)
+        except Exception as exc:
+            raise AppError(user_message_for_api_error(exc)) from exc
+
+    def proposal_exists(self, proposal_number: str) -> bool:
+        try:
+            return self.official_proposal_storage.proposal_exists(proposal_number)
         except Exception as exc:
             raise AppError(user_message_for_api_error(exc)) from exc
 

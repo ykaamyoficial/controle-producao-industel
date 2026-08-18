@@ -3,22 +3,38 @@ from __future__ import annotations
 from PySide6.QtCore import QRegularExpression, Qt
 from PySide6.QtGui import QAction, QTextDocument
 from PySide6.QtPrintSupport import QPrinter
-from PySide6.QtWidgets import QAbstractItemView, QFileDialog, QComboBox, QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMenu, QStackedLayout, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QAbstractItemView, QDialog, QFileDialog, QComboBox, QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMenu, QStackedLayout, QVBoxLayout, QWidget
 
 from app.controllers.process_controller import ProcessController
 from app.models.process_table_model import ProcessTableModel
 from app.services.app_logging import get_logger
+from app.services.remanagement_flow_state import RemanagementFlowState
 from app.ui.action_center.batch_action_center import BatchProposalActionCenter
 from app.ui.background_worker import start_worker
+from app.ui.refresh_coordinator import RefreshCoordinator
 from app.ui.components.empty_state import EmptyState
+from app.ui.components.area_identity import area_subtitle, style_area_title
 from app.ui.components.modern_button import ModernButton
+from app.ui.components.operational_layout import (
+    OPERATIONAL_ACTION_SPACING,
+    OPERATIONAL_FIELD_HORIZONTAL_SPACING,
+    OPERATIONAL_PAGE_MARGINS,
+    OPERATIONAL_PAGE_SPACING,
+    OPERATIONAL_TABLE_STACK_MARGINS,
+)
+from app.ui.components.operational_header import configure_operational_header
 from app.ui.components.modern_table import ModernTable, ProcessFilterProxy
 from app.ui.components.batch_selection import BatchSelectionController, BatchSelectionHeader
 from app.ui.status_dialog import open_proposal_action_center
 from app.ui.components.toast_notification import ToastNotification
+from app.ui.resilience import show_operation_error
 from app.ui.process_form_dialog import ProcessFormDialog
 from app.ui.batch_status_dialog import BatchStatusDialog
-from app.ui.early_remanagement_dialog import EarlyRemanagementDeliveryDialog
+from app.ui.remanagement_allocation_dialog import RemanagementAllocationStepDialog
+from app.ui.remanagement_availability_dialog import RemanagementAvailabilityStepDialog
+from app.ui.remanagement_destination_step_dialog import RemanagementDestinationStepDialog
+from app.ui.remanagement_item_selection_dialog import RemanagementItemSelectionStepDialog
+from app.ui.remanagement_review_dialog import RemanagementReviewStepDialog
 from app.ui.flow_review_dialog import FlowReviewDialog
 from app.ui.process_detail_dialog import ProcessDetailDialog
 from app.ui.proposal_chat_dialog import ProposalChatDialog
@@ -48,18 +64,25 @@ class ProcessPage(QWidget):
         self.proxy.setFilterCaseSensitivity(Qt.CaseInsensitive)
         self._refresh_thread = None
         self._refreshing = False
+        self._refresh_coordinator = RefreshCoordinator(self)
+        self._refresh_view_state = (0, 0)
         self._build()
 
     def _build(self):
         root = QVBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(8)
+        root.setContentsMargins(*OPERATIONAL_PAGE_MARGINS)
+        root.setSpacing(OPERATIONAL_PAGE_SPACING)
 
         filters = QFrame()
-        filters.setObjectName("FilterBar")
         fl = QVBoxLayout(filters)
-        fl.setContentsMargins(14, 10, 14, 10)
-        fl.setSpacing(8)
+        configure_operational_header(
+            filters,
+            fl,
+            margins=(16, 12, 16, 10),
+            spacing=8,
+            area=self.area,
+            palette=self.service.palette,
+        )
         self.search = QLineEdit()
         self.search.setPlaceholderText("Pesquisar proposta, cliente, site ou lote")
         self.status = QComboBox()
@@ -96,6 +119,7 @@ class ProcessPage(QWidget):
         remanage_btn.clicked.connect(self.open_early_remanagement_delivery)
         title = QLabel(self.title)
         title.setObjectName("FilterTitle")
+        style_area_title(title, self.area, self.service.palette)
         subtitle = QLabel(self._area_subtitle())
         subtitle.setObjectName("FilterSubtitle")
         title_col = QVBoxLayout()
@@ -109,12 +133,12 @@ class ProcessPage(QWidget):
         fl.addLayout(top_row)
 
         filter_actions = QHBoxLayout()
-        filter_actions.setSpacing(8)
+        filter_actions.setSpacing(OPERATIONAL_ACTION_SPACING)
         filter_actions.addWidget(apply_btn)
         filter_actions.addWidget(clear_btn)
 
         proposal_actions = QHBoxLayout()
-        proposal_actions.setSpacing(8)
+        proposal_actions.setSpacing(OPERATIONAL_ACTION_SPACING)
         proposal_actions.addStretch()
         proposal_actions.addWidget(details_btn)
         can_edit_current_area = self._can_edit_area(self.area or "")
@@ -160,7 +184,7 @@ class ProcessPage(QWidget):
             proposal_actions.addWidget(widget)
 
         field_row = QGridLayout()
-        field_row.setHorizontalSpacing(10)
+        field_row.setHorizontalSpacing(OPERATIONAL_FIELD_HORIZONTAL_SPACING)
         field_row.setVerticalSpacing(3)
         self._add_filter_field(field_row, 0, 0, "Busca geral", self.search)
         self._add_filter_field(field_row, 0, 2, "Status", self.status)
@@ -197,12 +221,12 @@ class ProcessPage(QWidget):
             "Nenhuma proposta encontrada",
             "Ajuste os filtros ou cadastre uma nova proposta.",
             self.service.palette,
+            icon="search",
         )
-        self.empty_state.setObjectName("OperationalEmptyState")
         table_stack_frame = QFrame()
         table_stack_frame.setObjectName("TableStack")
         table_stack = QStackedLayout(table_stack_frame)
-        table_stack.setContentsMargins(0, 0, 0, 0)
+        table_stack.setContentsMargins(*OPERATIONAL_TABLE_STACK_MARGINS)
         table_stack.addWidget(self.table)
         table_stack.addWidget(self.empty_state)
         self.table_stack = table_stack
@@ -221,14 +245,7 @@ class ProcessPage(QWidget):
         self._update_batch_controls()
 
     def _area_subtitle(self) -> str:
-        subtitles = {
-            "CONTROLE GERAL": "Visao geral das propostas e liberacoes.",
-            "PRODUCAO": "Acompanhe fabricacao, parciais e pendencias.",
-            "GALVANIZACAO": "Controle cargas, retornos e propostas na galvanizacao.",
-            "EXPEDICAO": "Gerencie separacao, entregas e remanejamentos.",
-            "ALMOXARIFADO": "Acompanhe separacao de materiais complementares.",
-        }
-        return subtitles.get(self.area or "", "Acompanhe propostas e acoes operacionais.")
+        return area_subtitle(self.area)
 
     def _apply_search_filter(self, text: str):
         self.proxy.setFilterRegularExpression(QRegularExpression(text))
@@ -237,7 +254,25 @@ class ProcessPage(QWidget):
 
     def _update_empty_state(self):
         has_rows = self.proxy.rowCount() > 0
+        if not has_rows:
+            if self._has_active_filters():
+                self.empty_state.set_text(
+                    "Nenhum resultado para os filtros aplicados",
+                    "Ajuste a busca, status ou prazo para ampliar a consulta.",
+                )
+            else:
+                self.empty_state.set_text(
+                    "Nenhum registro disponivel",
+                    "Assim que houver propostas nesta area, elas aparecerao aqui.",
+                )
         self.table_stack.setCurrentWidget(self.table if has_rows else self.empty_state)
+
+    def _has_active_filters(self) -> bool:
+        return bool(
+            self.search.text().strip()
+            or (self.status.currentData() or "")
+            or (self.prazo.currentText() and self.prazo.currentText() != "TODOS")
+        )
 
     def _add_filter_field(self, layout, row, column, label_text, widget):
         label = QLabel(label_text)
@@ -253,9 +288,11 @@ class ProcessPage(QWidget):
             return bool(self.service.can_access_area(area))
         return True
 
-    def refresh(self):
-        if self._refreshing:
-            return
+    def refresh(self, *, debounced: bool = False):
+        self._refresh_view_state = (
+            self.table.verticalScrollBar().value() if hasattr(self, "table") else 0,
+            self.table.horizontalScrollBar().value() if hasattr(self, "table") else 0,
+        )
         self.status.blockSignals(True)
         current = self.status.currentData() or ""
         self.status.clear()
@@ -273,11 +310,12 @@ class ProcessPage(QWidget):
             self.prazo.currentText() if self.prazo.currentText() != "TODOS" else "",
         )
         self._set_loading(True)
-        self._refresh_thread = start_worker(
-            self,
+        self._refresh_coordinator.request(
             lambda: (self.controller.rows_for(self.area, filters), self._fetch_chat_status()),
             self._refresh_success,
             self._refresh_error,
+            operation_name="process_page.refresh",
+            immediate=not debounced,
         )
 
     def _fetch_chat_status(self) -> dict[int, dict]:
@@ -318,16 +356,15 @@ class ProcessPage(QWidget):
         self.batch_selection.remember_rows(rows)
         self.model.set_rows(rows)
         self.table.apply_column_layout()
+        self.table.verticalScrollBar().setValue(self._refresh_view_state[0])
+        self.table.horizontalScrollBar().setValue(self._refresh_view_state[1])
         self._update_empty_state()
         self._set_loading(False)
         self._sync_batch_header()
 
     def _refresh_error(self, exc):
-        self.model.set_rows([])
-        self.table.apply_column_layout()
-        self._update_empty_state()
         self._set_loading(False)
-        ToastNotification(self.window(), str(exc), "error")
+        show_operation_error(self, exc, self.refresh, title="Controle geral")
 
     def _set_loading(self, loading: bool):
         self._refreshing = loading
@@ -579,13 +616,89 @@ class ProcessPage(QWidget):
             self.refresh()
 
     def open_early_remanagement_delivery(self):
+        # Novo fluxo de Remanejamento: Etapa 1 (destino) -> Etapa 2 (itens do
+        # destino) -> Etapa 3 (busca automatica na Expedicao) -> Etapa 4
+        # (alocacao por origem) -> Etapa 6 (revisao/simulacao) -> Etapa 7
+        # (persistencia transacional real, dentro do proprio dialogo da
+        # Etapa 6 - ver `RemanagementReviewStepDialog._confirm_clicked`). A
+        # ponte para a tela legada foi removida: o novo fluxo agora grava de
+        # fato. As telas compartilham um unico `RemanagementFlowState` para
+        # que "Voltar" preserve o que ja foi escolhido.
         if not self._can_edit_area("EXPEDICAO"):
             ToastNotification(self.window(), "Seu usuario nao pode realizar remanejamentos.", "error")
             return
-        dialog = EarlyRemanagementDeliveryDialog(self.service, self)
-        if dialog.exec():
-            self.refresh()
-            ToastNotification(self.window(), "Remanejamento compensado registrado com sucesso.", "success")
+        flow_state = RemanagementFlowState()
+        stage = "destination"
+        while True:
+            if stage == "destination":
+                step1 = RemanagementDestinationStepDialog(self.service, self, state=flow_state)
+                if step1.exec() != QDialog.Accepted:
+                    return
+                stage = "items"
+                continue
+
+            if stage == "items":
+                step2 = RemanagementItemSelectionStepDialog(self.service, self, flow_state)
+                if step2.load_error:
+                    ToastNotification(self.window(), step2.load_error, "error")
+                    stage = "destination"
+                    continue
+                result = step2.exec()
+                if result == RemanagementItemSelectionStepDialog.RESULT_BACK:
+                    stage = "destination"
+                    continue
+                if result != QDialog.Accepted:
+                    return
+                stage = "availability"
+                continue
+
+            if stage == "availability":
+                step3 = RemanagementAvailabilityStepDialog(self.service, self, flow_state)
+                if step3.load_error:
+                    ToastNotification(self.window(), step3.load_error, "error")
+                    stage = "items"
+                    continue
+                result = step3.exec()
+                if result == RemanagementAvailabilityStepDialog.RESULT_BACK:
+                    stage = "items"
+                    continue
+                if result != QDialog.Accepted:
+                    return
+                stage = "allocation"
+                continue
+
+            if stage == "allocation":
+                step4 = RemanagementAllocationStepDialog(self.service, self, flow_state)
+                if step4.load_error:
+                    ToastNotification(self.window(), step4.load_error, "error")
+                    stage = "availability"
+                    continue
+                result = step4.exec()
+                if result == RemanagementAllocationStepDialog.RESULT_BACK:
+                    stage = "availability"
+                    continue
+                if result != QDialog.Accepted:
+                    return
+                stage = "review"
+                continue
+
+            if stage == "review":
+                step6 = RemanagementReviewStepDialog(self.service, self, flow_state)
+                if step6.load_error:
+                    ToastNotification(self.window(), step6.load_error, "error")
+                    stage = "allocation"
+                    continue
+                result = step6.exec()
+                if result == RemanagementReviewStepDialog.RESULT_BACK:
+                    stage = "allocation"
+                    continue
+                if result != QDialog.Accepted:
+                    return
+                self.refresh()
+                ToastNotification(self.window(), "Remanejamento compensado registrado com sucesso.", "success")
+                return
+
+            return
 
     def open_context_menu(self, position):
         index = self.table.indexAt(position)

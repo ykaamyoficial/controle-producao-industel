@@ -13,13 +13,42 @@ from app.version import APP_VERSION
 LOGGER_NAME = "controle_producao"
 
 
+class SafeRotatingFileHandler(RotatingFileHandler):
+    """Rotacao tolerante a lock de arquivo no Windows.
+
+    O Desktop pode ser aberto junto com um processo de diagnostico, updater ou
+    outra instancia. Nessa situacao o Windows pode impedir ``rename`` durante
+    a rotacao. A falha nao pode quebrar o fluxo da aplicacao nem descartar
+    metricas: a instancia continua gravando no arquivo atual e desabilita
+    apenas a nova rotacao para este processo.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._rotation_disabled = False
+
+    def shouldRollover(self, record):  # noqa: N802 - API da classe base
+        if self._rotation_disabled:
+            return False
+        return super().shouldRollover(record)
+
+    def doRollover(self):  # noqa: N802 - API da classe base
+        try:
+            super().doRollover()
+        except OSError:
+            # Em Windows, outro processo pode manter o arquivo aberto. O
+            # stream atual continua utilizavel; somente a troca de arquivos
+            # deixa de ser tentada repetidamente nesta instancia.
+            self._rotation_disabled = True
+
+
 def configure_logging() -> logging.Logger:
     logger = logging.getLogger(LOGGER_NAME)
     if logger.handlers:
         return logger
     log_dir = get_logs_dir()
     log_dir.mkdir(parents=True, exist_ok=True)
-    handler = RotatingFileHandler(
+    handler = SafeRotatingFileHandler(
         log_dir / "controle_producao.log",
         maxBytes=2 * 1024 * 1024,
         backupCount=10,

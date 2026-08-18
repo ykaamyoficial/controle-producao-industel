@@ -81,9 +81,12 @@ class ProcessTableModel(QAbstractTableModel):
         self.endResetModel()
 
     def set_rows(self, rows: list[dict[str, Any]]):
+        if rows == self.rows:
+            return False
         self.beginResetModel()
         self.rows = rows
         self.endResetModel()
+        return True
 
     def rowCount(self, parent=QModelIndex()) -> int:
         return 0 if parent.isValid() else len(self.rows)
