@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from PySide6.QtWidgets import QLabel, QWidget
 
+from app.ui.components.operational_layout import OPERATIONAL_AREA_ACCENT_WIDTH
 from app.ui.styles import area_color
 from app.ui.theme_tokens import with_alpha
 
@@ -43,7 +44,7 @@ def style_area_header(frame: QWidget, area: str | None, palette: dict) -> QWidge
         f"background: {background};"
         "border: 0;"
         f"border-bottom: 1px solid {border};"
-        f"border-left: 3px solid {color};"
+        f"border-left: {OPERATIONAL_AREA_ACCENT_WIDTH}px solid {color};"
         "border-radius: 0;"
         "}"
     )

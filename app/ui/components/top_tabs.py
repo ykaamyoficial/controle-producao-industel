@@ -3,6 +3,7 @@ from __future__ import annotations
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QTabWidget
 
+from app.ui.components.operational_layout import OPERATIONAL_TAB_GAP, OPERATIONAL_TAB_HORIZONTAL_PADDING
 from app.ui.styles import area_color
 
 
@@ -39,8 +40,8 @@ def configure_operational_tabs(tabs: QTabWidget, area: str | None = None, palett
             "border: 0;"
             "border-radius: 0;"
             "border-bottom: 3px solid transparent;"
-            "padding: 12px 18px 9px 18px;"
-            "margin: 0;"
+            f"padding: 12px {OPERATIONAL_TAB_HORIZONTAL_PADDING}px 9px {OPERATIONAL_TAB_HORIZONTAL_PADDING}px;"
+            f"margin: 0 {OPERATIONAL_TAB_GAP}px 0 0;"
             "font-weight: 600;"
             "}"
             "QTabBar#OperationalTabBar::tab:selected {"
