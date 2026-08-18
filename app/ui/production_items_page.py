@@ -169,7 +169,7 @@ class ProductionItemsPage(QWidget):
         self.actions_button = ModernButton("Acoes", "status", accent=True)
         self.actions_button.clicked.connect(self.open_action_center)
         self.batch_actions_button = ModernButton("Acoes em lote", "batch", accent=True)
-        self.batch_actions_button.clicked.connect(self.activate_batch_selection)
+        self.batch_actions_button.clicked.connect(self._on_batch_actions_button_clicked)
         self.cancel_batch_button = ModernButton("Cancelar selecao", "close")
         self.cancel_batch_button.clicked.connect(self.cancel_batch_selection)
         self.batch_count_label = QLabel("0 itens selecionados")
@@ -385,6 +385,18 @@ class ProductionItemsPage(QWidget):
         )
         if dialog.exec() or dialog.changed:
             self.cancel_batch_selection()
+
+    def _on_batch_actions_button_clicked(self):
+        """O mesmo botao ativa o modo de selecao por checkbox (rotulo
+        "Acoes em lote") e, uma vez ativo, abre a central padrao de acoes
+        para a selecao acumulada (rotulo passa a "Acoes" - ver
+        activate_batch_selection). Sem esse roteamento por estado, o clique
+        em "Acoes" com o modo ja ativo reentraria em activate_batch_selection,
+        que retorna sem fazer nada por self._batch_mode ja estar True."""
+        if self._batch_mode:
+            self.open_action_center()
+        else:
+            self.activate_batch_selection()
 
     def activate_batch_selection(self):
         if not (self.service.can_edit("PRODUCAO") or self._can_mount_load()):
@@ -610,18 +622,6 @@ class ProductionItemsPage(QWidget):
             QMessageBox.warning(self, "Montar carga", "Defina primeiro o fluxo de todos os itens selecionados.")
             return
 
-        if load_id:
-            item_ids = [int(row["api_id"]) for row in rows if row.get("api_id")]
-            self._set_action_busy(True)
-            self._action_thread = start_worker(
-                self,
-                lambda: self.service.add_items_to_galvanization_load(load_id, item_ids=item_ids),
-                lambda detail: (self._set_action_busy(False), self._show_load_addition_summary(detail), self.refresh()),
-                lambda exc: (self._set_action_busy(False), QMessageBox.warning(self, "Adicionar a carga", str(exc))),
-                operation_name="production_items_page.add_items_to_load",
-            )
-            return
-
         already_produced = [row for row in rows if row.get("produzido")]
         pending = [row for row in rows if not row.get("produzido")]
         if any(str(row.get("status_producao") or "").strip().upper() == "PARADO" for row in pending):
@@ -641,12 +641,46 @@ class ProductionItemsPage(QWidget):
             self._set_action_busy(False)
             if failures:
                 QMessageBox.warning(self, "Montar carga", "Falha ao registrar producao de parte dos itens:\n\n" + "\n".join(failures))
-            self._open_load_dialog_for_rows(produced_rows)
+            if load_id:
+                self._add_produced_rows_to_load(produced_rows, load_id)
+            else:
+                self._open_load_dialog_for_rows(produced_rows)
 
         self._action_thread = start_worker(
             self, complete_and_prepare, prepared,
             lambda exc: (self._set_action_busy(False), QMessageBox.warning(self, "Montar carga", str(exc))),
             operation_name="production_items_page.prepare_galvanization_load",
+        )
+
+    def _add_produced_rows_to_load(self, produced_rows: list[dict], load_id: int):
+        if not produced_rows:
+            self.refresh()
+            return
+
+        galvanization_rows = [
+            row
+            for row in produced_rows
+            if str(row.get("precisa_galvanizacao") or "").strip().lower() == "sim" and row.get("api_id")
+        ]
+        skipped_count = len(produced_rows) - len(galvanization_rows)
+        if skipped_count:
+            ToastNotification(
+                self.window(),
+                f"{len(produced_rows)} item(ns) produzido(s) — {skipped_count} nao precisam de galvanizacao e seguem direto para Expedicao.",
+                "success",
+            )
+        if not galvanization_rows:
+            self.refresh()
+            return
+
+        item_ids = [int(row["api_id"]) for row in galvanization_rows]
+        self._set_action_busy(True)
+        self._action_thread = start_worker(
+            self,
+            lambda: self.service.add_items_to_galvanization_load(load_id, item_ids=item_ids),
+            lambda detail: (self._set_action_busy(False), self._show_load_addition_summary(detail), self.refresh()),
+            lambda exc: (self._set_action_busy(False), QMessageBox.warning(self, "Adicionar a carga", str(exc))),
+            operation_name="production_items_page.add_items_to_load",
         )
 
     def _open_load_dialog_for_rows(self, produced_rows: list[dict]):

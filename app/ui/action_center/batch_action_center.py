@@ -193,31 +193,37 @@ class BatchProposalActionCenter(QDialog):
                 }
             )
 
-        load_eligible_ids = self._eligible_load_item_ids()
-        if can_mount_load and load_eligible_ids:
+        load_eligible_rows = [row for row in self.item_rows if self._is_load_eligible(row)]
+        load_eligible_ids = [int(row.get("api_id") or row.get("id")) for row in load_eligible_rows]
+        if can_mount_load and load_eligible_rows:
+            # Adicionar a uma carga existente e criar carga nova levam os
+            # itens pelo mesmo pipeline de montagem (producao pendente e
+            # registrada automaticamente antes de entrar na carga - ver
+            # ProductionItemsPage.open_assemble_load), logo compartilham a
+            # mesma elegibilidade: a diferenca entre as duas acoes e somente
+            # o destino (carga existente vs. carga nova), nunca quais itens
+            # qualificam.
             actions.append(
                 {
                     "id": "MANAGE_LOAD_EXISTING",
                     "label": "Adicionar a uma carga existente",
                     "description": self._coverage_description(
-                        len(load_eligible_ids), total, "Escolha uma carga aberta e inclua os itens elegiveis."
+                        len(load_eligible_rows), total, "Escolha uma carga aberta e inclua os itens elegiveis."
                     ),
+                    "eligible_item_ids": load_eligible_ids,
                     "icon": "load",
                     "status": "",
                     "area": self.area,
                 }
             )
-
-        new_load_rows = [row for row in self.item_rows if self._is_new_load_eligible(row)]
-        if can_mount_load and new_load_rows:
             actions.append(
                 {
                     "id": "MANAGE_LOAD_NEW",
                     "label": "Criar nova carga",
                     "description": self._coverage_description(
-                        len(new_load_rows), total, "Crie uma carga com os itens elegiveis selecionados."
+                        len(load_eligible_rows), total, "Crie uma carga com os itens elegiveis selecionados."
                     ),
-                    "eligible_item_ids": [int(row.get("api_id") or row.get("id")) for row in new_load_rows],
+                    "eligible_item_ids": load_eligible_ids,
                     "icon": "new",
                     "status": "",
                     "area": self.area,
@@ -242,24 +248,10 @@ class BatchProposalActionCenter(QDialog):
         )
 
     @staticmethod
-    def _is_new_load_eligible(row: dict) -> bool:
+    def _is_load_eligible(row: dict) -> bool:
         needs_galvanization = str(row.get("precisa_galvanizacao") or "").strip().lower() in {"sim", "true", "1"}
         paused = str(row.get("status_producao") or "").strip().upper() == "PARADO"
         return bool(row.get("fluxo_definido") and needs_galvanization and not paused)
-
-    def _eligible_load_item_ids(self) -> set[int]:
-        if hasattr(self.service, "galvanization_item_eligibility"):
-            try:
-                result = self.service.galvanization_item_eligibility(self.item_ids)
-                return {int(value) for value in result.get("eligible_item_ids") or []}
-            except Exception as exc:
-                log.warning("Nao foi possivel validar itens para carga: %s", exc)
-                return set()
-        return {
-            int(row.get("api_id") or row.get("id"))
-            for row in self.item_rows
-            if row.get("produzido") and self._is_new_load_eligible(row)
-        }
 
     def _has_galvanization_load_candidates(self) -> bool:
         try:
@@ -511,12 +503,14 @@ class BatchProposalActionCenter(QDialog):
             return
         observation = self.observation.toPlainText().strip()
         if descriptor.id == "MANAGE_LOAD_EXISTING":
+            eligible_ids = {int(value) for value in descriptor.raw.get("eligible_item_ids") or self.item_ids}
+            rows = [row for row in self.item_rows if int(row.get("api_id") or row.get("id") or 0) in eligible_ids]
             load_id = choose_existing_load_for_addition(self.service, self)
             if load_id is None:
                 return
             self.changed = True
             self.accept()
-            self.item_action_host.open_assemble_load(self.item_rows, load_id=load_id)
+            self.item_action_host.open_assemble_load(rows, load_id=load_id)
             return
         if descriptor.id == "MANAGE_LOAD_NEW":
             eligible_ids = {int(value) for value in descriptor.raw.get("eligible_item_ids") or self.item_ids}

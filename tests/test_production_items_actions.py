@@ -49,6 +49,7 @@ class FakeProductionItemsService:
 
     def __init__(self, eligible_load_ids=None):
         self.eligible_load_ids = set(eligible_load_ids or ())
+        self.calls: list[tuple] = []
 
     def can_edit(self, _area):
         return True
@@ -79,6 +80,13 @@ class FakeProductionItemsService:
             if item_id not in self.eligible_load_ids
         ]
         return {"eligible_item_ids": eligible, "rejected_items": rejected}
+
+    def update_status(self, proposal_id, area, status, observation, item_ids=None):
+        self.calls.append(("update_status", proposal_id, area, status, observation, item_ids))
+
+    def add_items_to_galvanization_load(self, load_id, *, item_ids=None, proposal_ids=None):
+        self.calls.append(("add_items_to_galvanization_load", load_id, item_ids, proposal_ids))
+        return {"added_item_ids": list(item_ids or []), "rejected_items": [], "proposals": []}
 
 
 class ProductionItemsSelectionTests(unittest.TestCase):
@@ -203,6 +211,66 @@ class ProductionItemsSelectionTests(unittest.TestCase):
         )
         page.close()
 
+    def test_batch_actions_button_reopens_standard_dialog_once_selection_mode_is_active(self):
+        """Cenario 2: com o modo de selecao por checkbox ja ativo (rotulo do
+        botao passou de "Acoes em lote" para "Acoes"), o mesmo clique
+        precisa abrir a central padrao de acoes, e nao apenas reentrar em
+        activate_batch_selection (que retornaria sem efeito)."""
+        rows = [make_item(101), make_item(102, proposal_id=20)]
+        page = self._page(rows)
+        page.batch_actions_button.click()
+        self.assertTrue(page._batch_mode)
+        self.assertEqual(page.batch_actions_button.text(), "Acoes")
+        page.batch_selection.select_many(rows)
+        fake_dialog = MagicMock()
+        fake_dialog.exec.return_value = 0
+        fake_dialog.changed = False
+
+        with patch("app.ui.production_items_page.BatchProposalActionCenter", return_value=fake_dialog) as ctor:
+            page.batch_actions_button.click()
+
+        ctor.assert_called_once_with(
+            page.service,
+            [10, 20],
+            "PRODUCAO",
+            page,
+            proposal_labels={10: "CP10", 20: "CP20"},
+            item_rows=rows,
+            item_action_host=page,
+        )
+        page.close()
+
+    def test_add_single_pending_item_to_existing_load_registers_production_first(self):
+        """Cenario 6 + 7: um unico item ainda pendente de producao, ao ser
+        encaminhado para "Adicionar a uma carga existente", primeiro
+        registra a producao automaticamente (mesmo passo que "Criar nova
+        carga" ja fazia) e so entao inclui o item na carga escolhida."""
+        rows = [make_item(101)]
+        page = self._page(rows)
+        page.refresh = MagicMock()
+
+        def _run_synchronously(_owner, operation, on_success, on_error, **_kwargs):
+            try:
+                result = operation()
+            except Exception as exc:
+                on_error(exc)
+            else:
+                on_success(result)
+            return None
+
+        with patch("app.ui.production_items_page.start_worker", side_effect=_run_synchronously), \
+             patch("app.ui.production_items_page.QMessageBox.information"):
+            page.open_assemble_load(rows, load_id=55)
+
+        update_calls = [call for call in page.service.calls if call[0] == "update_status"]
+        self.assertEqual(
+            update_calls,
+            [("update_status", 10, "PRODUCAO", "FINALIZADO", "Producao registrada automaticamente ao montar carga", [101])],
+        )
+        load_calls = [call for call in page.service.calls if call[0] == "add_items_to_galvanization_load"]
+        self.assertEqual(load_calls, [("add_items_to_galvanization_load", 55, [101], None)])
+        page.close()
+
     def test_mixed_load_result_is_consolidated_in_one_message(self):
         page = self._page([make_item(101)])
         detail = {
@@ -228,8 +296,14 @@ class ProductionItemsStandardActionCenterTests(unittest.TestCase):
         cls.app = QApplication.instance() or QApplication([])
 
     def test_item_context_uses_standard_header_and_reports_mixed_coverage(self):
-        rows = [make_item(101, produced=True), make_item(102, produced=True)]
-        service = FakeProductionItemsService(eligible_load_ids={101})
+        # Item 101 esta pendente de producao mas ja tem fluxo definido e
+        # precisa de galvanizacao: "Adicionar a uma carga existente" usa a
+        # MESMA elegibilidade de "Criar nova carga" (producao pendente e
+        # registrada automaticamente ao montar a carga - ver
+        # ProductionItemsPage.open_assemble_load), entao nao exige mais que
+        # o item ja esteja "produzido" para aparecer.
+        rows = [make_item(101), make_item(102, galvanize="nao")]
+        service = FakeProductionItemsService()
         dialog = BatchProposalActionCenter(service, [10], "PRODUCAO", item_rows=rows, item_action_host=MagicMock())
 
         self.assertEqual(dialog.item_ids, [101, 102])
@@ -237,9 +311,20 @@ class ProductionItemsStandardActionCenterTests(unittest.TestCase):
         load_action = next(action for action in dialog.actions if action.id == "MANAGE_LOAD_EXISTING")
         self.assertIn("Disponivel para 1 de 2 itens", load_action.description)
 
-    def test_existing_load_action_forwards_all_selected_rows_for_consolidated_result(self):
-        rows = [make_item(101, produced=True), make_item(102, produced=True)]
-        service = FakeProductionItemsService(eligible_load_ids={101})
+    def test_single_pending_item_is_eligible_for_existing_load(self):
+        """Cenario 7: selecionar somente 1 item, ainda pendente de producao,
+        precisa continuar oferecendo "Adicionar a uma carga existente"."""
+        rows = [make_item(101)]
+        service = FakeProductionItemsService()
+        dialog = BatchProposalActionCenter(service, [10], "PRODUCAO", item_rows=rows, item_action_host=MagicMock())
+
+        self.assertEqual(dialog._title_label.text(), "1 item selecionado")
+        load_action = next(action for action in dialog.actions if action.id == "MANAGE_LOAD_EXISTING")
+        self.assertNotIn("Disponivel para", load_action.description)
+
+    def test_existing_load_action_forwards_only_contextually_eligible_items(self):
+        rows = [make_item(101), make_item(102, galvanize="nao")]
+        service = FakeProductionItemsService()
         host = MagicMock()
         dialog = BatchProposalActionCenter(service, [10], "PRODUCAO", item_rows=rows, item_action_host=host)
         action = next(value for value in dialog.actions if value.id == "MANAGE_LOAD_EXISTING")
@@ -247,7 +332,7 @@ class ProductionItemsStandardActionCenterTests(unittest.TestCase):
         with patch("app.ui.action_center.batch_action_center.choose_existing_load_for_addition", return_value=7):
             dialog.run_action(action)
 
-        host.open_assemble_load.assert_called_once_with(rows, load_id=7)
+        host.open_assemble_load.assert_called_once_with([rows[0]], load_id=7)
         self.assertTrue(dialog.changed)
         self.assertTrue(dialog.result())
 
