@@ -682,8 +682,19 @@ async def register_galvanization_return(session: AsyncSession, load_id: int, pay
         _touch(load_item, actor)
         affected_proposals.add(int(load_item.proposal_id))
         await _record_load_event(session, load, "GALVANIZATION_ITEM_RETURNED", actor, load_item=load_item, request_id=request_id, from_status=previous, to_status=load_item.status, metadata={"quantity": str(qty), "observation": payload.observation})
+    # Os proposals afetados sao resolvidos uma unica vez aqui, antes de
+    # qualquer fusao. _merge_equal_status_partial_children reatribui
+    # GalvanizationLoadItem.proposal_id das filhas fundidas para a
+    # sobrevivente, entao procurar de novo em load.items por proposal_id
+    # depois da fusao pode nao encontrar mais nenhum item para a filha
+    # fundida (StopIteration). Guardamos a referencia ao objeto Proposal
+    # aqui para que a fusao subsequente nao invalide a consulta.
+    proposal_by_id: dict[int, Proposal] = {
+        proposal_id: next(item.proposal for item in load.items if int(item.proposal_id) == proposal_id)
+        for proposal_id in affected_proposals
+    }
     for proposal_id in affected_proposals:
-        proposal = next(item.proposal for item in load.items if int(item.proposal_id) == proposal_id)
+        proposal = proposal_by_id[proposal_id]
         if _proposal_is_cancelled(proposal):
             await _record_event(session, proposal, "GALVANIZATION_RETURN_RECORDED_AFTER_CANCELLATION", actor, request_id=request_id, from_area=proposal.current_area, from_status=proposal.current_status, to_area=proposal.current_area, to_status=proposal.current_status, metadata={"load_id": load.id, "observation": payload.observation, "terminal_state_preserved": True})
         else:
@@ -694,15 +705,14 @@ async def register_galvanization_return(session: AsyncSession, load_id: int, pay
     # separadas no backend e fazia a lista de itens consultar somente uma
     # delas. A uniao continua respeitando area, status e conjunto de cargas.
     parent_ids = {
-        int(item.proposal.parent_proposal_id)
-        for item in load.items
-        if item.active and item.proposal is not None and item.proposal.parent_proposal_id is not None
-        and int(item.proposal_id) in affected_proposals
+        int(proposal.parent_proposal_id)
+        for proposal in proposal_by_id.values()
+        if proposal.parent_proposal_id is not None
     }
     for parent_id in parent_ids:
         await _merge_equal_status_partial_children(session, parent_id, actor, request_id=request_id)
     for proposal_id in affected_proposals:
-        proposal = next(item.proposal for item in load.items if int(item.proposal_id) == proposal_id)
+        proposal = proposal_by_id[proposal_id]
         if proposal.parent_proposal_id is not None:
             await _reborn_parent_when_children_converge(session, proposal, actor, request_id=request_id)
     previous_load_status = load.status
@@ -2634,6 +2644,7 @@ async def _merge_equal_status_partial_children(
             .options(
                 selectinload(Proposal.items),
                 selectinload(Proposal.galvanization_load_items),
+                selectinload(Proposal.parent_proposal),
             )
             .where(Proposal.parent_proposal_id == parent_id)
             .where(Proposal.active.is_(True))
@@ -2998,40 +3009,54 @@ def _recalculate_expedition_proposal_state(proposal: Proposal, actor: User | int
     any_delivered = any(item.delivered_quantity > Decimal("0") for item in relevant)
     any_separated = any(item.separated_quantity > Decimal("0") for item in relevant)
     all_proposal_items_delivered = all(item.delivered for item in _active_items(proposal))
+    # Uma proposta mista (itens de producao real "SIM" pendentes + itens
+    # "NAO" de pronta entrega ja liberados para Expedicao) nao pode ter sua
+    # current_area arrancada da Producao so porque a sincronizacao passiva
+    # de Expedicao criou/atualizou ExpeditionItem para os itens "NAO". A
+    # producao interna ainda pendente continua vivendo na mesma proposal_id.
+    keep_in_production = proposal.current_area == "PRODUCAO" and any(
+        not item.produced for item in _internal_items(proposal)
+    )
     if not remaining and all_proposal_items_delivered and not proposal.has_production_pending:
-        proposal.current_area = "FINALIZADO"
+        if not keep_in_production:
+            proposal.current_area = "FINALIZADO"
         proposal.current_status = "ENTREGUE"
         proposal.general_status = "ENTREGUE"
         proposal.shipping_status = "ENTREGUE"
         proposal.is_completed = True
         proposal.flow_situation = "NORMAL"
     elif any_delivered:
-        proposal.current_area = "EXPEDICAO"
+        if not keep_in_production:
+            proposal.current_area = "EXPEDICAO"
         proposal.current_status = "ENTREGUE_PARCIAL"
         proposal.general_status = "EM_EXPEDICAO"
         proposal.shipping_status = "ENTREGUE_PARCIAL"
         proposal.is_completed = False
         proposal.flow_situation = "PARCIAL_COM_PENDENCIA"
     elif remaining and len(separated_open) == len(remaining):
-        proposal.current_area = "EXPEDICAO"
+        if not keep_in_production:
+            proposal.current_area = "EXPEDICAO"
         proposal.current_status = "SEPARADO"
         proposal.general_status = "EM_EXPEDICAO"
         proposal.shipping_status = "SEPARADO"
         proposal.is_completed = False
     elif proposal.shipping_status == "AGUARDANDO_SEPARACAO_PARCIAL" and any_separated:
-        proposal.current_area = "EXPEDICAO"
+        if not keep_in_production:
+            proposal.current_area = "EXPEDICAO"
         proposal.current_status = "SEPARADO_COM_PENDENCIA"
         proposal.general_status = "EM_EXPEDICAO"
         proposal.shipping_status = "SEPARADO_COM_PENDENCIA"
         proposal.is_completed = False
     elif any_separated:
-        proposal.current_area = "EXPEDICAO"
+        if not keep_in_production:
+            proposal.current_area = "EXPEDICAO"
         proposal.current_status = "SEPARACAO_INICIADA"
         proposal.general_status = "EM_EXPEDICAO"
         proposal.shipping_status = "SEPARACAO_INICIADA"
         proposal.is_completed = False
     else:
-        proposal.current_area = "EXPEDICAO"
+        if not keep_in_production:
+            proposal.current_area = "EXPEDICAO"
         proposal.current_status = "EM_SEPARACAO"
         proposal.general_status = "EM_EXPEDICAO"
         proposal.shipping_status = "EM_SEPARACAO"
