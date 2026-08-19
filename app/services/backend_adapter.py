@@ -2074,6 +2074,12 @@ class BackendService:
             return self.area_status_label(area, status) if status else '-'
         if key == 'status_almoxarifado' and row:
             return self.area_status_label('ALMOXARIFADO', value) if value else '-'
+        if key == 'status_producao' and row:
+            return self.area_status_label('PRODUCAO', value) if value else '-'
+        if key == 'status_galvanizacao' and row:
+            return self.area_status_label('GALVANIZACAO', value) if value else '-'
+        if key == 'status_expedicao' and row:
+            return self.area_status_label('EXPEDICAO', value) if value else '-'
         if key == 'necessita_almoxarifado' and row:
             return self.status_label(value) if value else '-'
         if key == 'almoxarifado_info':

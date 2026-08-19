@@ -6,54 +6,58 @@ from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
 from PySide6.QtGui import QBrush, QColor
 
 from app.ui.components.batch_selection import BatchSelectionController
+from app.ui.format_utils import format_proposal_label
 
 
+# Tabela principal reduzida a identificacao operacional (Proposta | Cliente |
+# Etapa/Status | Prazo | Obra/Site) + os dois icones de atalho (status/chat)
+# que ja existiam. Colunas removidas (Peso/Saldo, ID, Tipo, PD/Pedido, Lote,
+# Localizacao como coluna separada) continuam acessiveis nos mesmos dados de
+# `row` de sempre (nada foi apagado do model) e ficam visiveis na aba
+# "Resumo"/"Fluxo" de `ProcessDetailDialog` - so a apresentacao em lista
+# mudou. `status_localizacao` ja resolvia (via `current_location()` em
+# `ProcessTableModel.data()`, role by role) a etapa/area+status unificada
+# antes desta mudanca; aqui so ganhou o rotulo "Etapa/Status" e voltou a ficar
+# logo apos "Cliente".
 DEFAULT_COLUMNS = [
     ("status_icon", ""),
     ("proposta", "Proposta"),
     ("chat_icon", ""),
     ("cliente", "Cliente"),
-    ("status_localizacao", "Status"),
-    ("obra_site", "Obra/Site"),
-    ("progresso_peso", "Peso/Saldo"),
+    ("status_localizacao", "Etapa/Status"),
     ("prazo_entrega", "Prazo"),
-    ("id", "ID"),
-    ("tipo_processo", "Tipo"),
-    ("pedido_compra", "PD / Pedido"),
-    ("lote", "Lote"),
-    ("localizacao_atual", "Localizacao"),
+    ("obra_site", "Obra/Site"),
 ]
 
 
+# Cada area usa a MESMA coluna "status_<area>" de sempre (preserva a chave
+# esperada por telas/testes que dependem dela, ex. `test_table_column_order`)
+# como badge unico de Etapa/Status daquela area - sem duplicar Controle
+# Geral/Producao/Galvanizacao/etc. na mesma linha, porque a pagina em si ja
+# esta filtrada para uma unica area. As colunas extras que existiam antes
+# (Carga, Envio/Retorno Galvanizacao, Almox., Entrada) nao desaparecem: elas
+# continuam nos mesmos campos de `row` e passam a ficar visiveis na aba
+# "Fluxo" de Detalhes (ver `app/ui/process_detail/fluxo_tab.py`).
 AREA_COLUMNS = {
     "PRODUCAO": [
         ("status_icon", ""),
-        ("proposta", "Proposta"), ("chat_icon", ""), ("cliente", "Cliente"), ("status_producao", "Status producao"),
-        ("obra_site", "Obra/Site"), ("progresso_peso", "Peso/Saldo"), ("prazo_entrega", "Prazo"),
-        ("id", "ID"), ("tipo_processo", "Tipo"), ("pedido_compra", "PD / Pedido"),
-        ("lote", "Lote"), ("data_entrada", "Entrada"),
+        ("proposta", "Proposta"), ("chat_icon", ""), ("cliente", "Cliente"), ("status_producao", "Etapa/Status"),
+        ("prazo_entrega", "Prazo"), ("obra_site", "Obra/Site"),
     ],
     "GALVANIZACAO": [
         ("status_icon", ""),
-        ("proposta", "Proposta"), ("chat_icon", ""), ("cliente", "Cliente"), ("status_galvanizacao", "Status galvanizacao"),
-        ("obra_site", "Obra/Site"), ("progresso_peso", "Peso/Saldo"), ("prazo_entrega", "Prazo"),
-        ("id", "ID"), ("tipo_processo", "Tipo"), ("pedido_compra", "PD / Pedido"),
-        ("lote", "Lote"), ("carga_galvanizacao", "Carga"), ("data_envio_galv", "Envio Galv."),
-        ("data_prevista_retorno_galv", "Prev. Retorno"), ("data_retorno_galv", "Retorno Galv."),
+        ("proposta", "Proposta"), ("chat_icon", ""), ("cliente", "Cliente"), ("status_galvanizacao", "Etapa/Status"),
+        ("prazo_entrega", "Prazo"), ("obra_site", "Obra/Site"),
     ],
     "EXPEDICAO": [
         ("status_icon", ""),
-        ("proposta", "Proposta"), ("chat_icon", ""), ("cliente", "Cliente"), ("status_expedicao", "Status expedicao"),
-        ("obra_site", "Obra/Site"), ("progresso_peso", "Peso/Saldo"), ("prazo_entrega", "Prazo"),
-        ("id", "ID"), ("tipo_processo", "Tipo"), ("pedido_compra", "PD / Pedido"),
-        ("lote", "Lote"), ("almoxarifado_info", "Almox."),
+        ("proposta", "Proposta"), ("chat_icon", ""), ("cliente", "Cliente"), ("status_expedicao", "Etapa/Status"),
+        ("prazo_entrega", "Prazo"), ("obra_site", "Obra/Site"),
     ],
     "ALMOXARIFADO": [
         ("status_icon", ""),
-        ("proposta", "Proposta"), ("chat_icon", ""), ("cliente", "Cliente"), ("status_almoxarifado", "Status almoxarifado"),
-        ("obra_site", "Obra/Site"), ("progresso_peso", "Peso/Saldo"), ("prazo_entrega", "Prazo"),
-        ("id", "ID"), ("tipo_processo", "Tipo"), ("pedido_compra", "PD / Pedido"),
-        ("lote", "Lote"), ("data_entrada", "Entrada"), ("necessita_almoxarifado", "Necessita"),
+        ("proposta", "Proposta"), ("chat_icon", ""), ("cliente", "Cliente"), ("status_almoxarifado", "Etapa/Status"),
+        ("prazo_entrega", "Prazo"), ("obra_site", "Obra/Site"),
     ],
 }
 
@@ -135,6 +139,8 @@ class ProcessTableModel(QAbstractTableModel):
         if role in (Qt.DisplayRole, Qt.EditRole):
             if key in {"status_icon", "chat_icon"}:
                 return ""
+            if key == "proposta":
+                return format_proposal_label(row.get(key))
             return self.service.display_cell(key, row.get(key), row)
         if role == Qt.ToolTipRole:
             if key == "status_icon":

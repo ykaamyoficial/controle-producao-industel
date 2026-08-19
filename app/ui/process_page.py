@@ -48,6 +48,27 @@ log = get_logger("process_page")
 # BatchStatusDialog antigo com o painel de busca/adicionar.
 _CHECKBOX_BATCH_AREAS = ("PRODUCAO", "CONTROLE GERAL", "EXPEDICAO", "ALMOXARIFADO", "GALVANIZACAO")
 
+# Colunas de "Exportar selecao Excel/PDF" - deliberadamente FIXAS e mais
+# completas que `self.model.columns` (que desde a reorganizacao da FASE B tem
+# so ~5 colunas visiveis por area). O dado continua existindo em cada `row`
+# independente do que a tabela mostra (ver `app/models/process_table_model.py`),
+# entao a exportacao nao deve ficar mais pobre so porque a tabela ficou mais
+# enxuta visualmente - "status_localizacao" resolve a Etapa/Status de forma
+# universal (`BackendService.display_cell` chama `current_location()`),
+# funcionando igual em qualquer area, nao so em Controle Geral.
+EXPORT_COLUMNS = [
+    ("proposta", "Proposta"),
+    ("cliente", "Cliente"),
+    ("obra_site", "Obra/Site"),
+    ("status_localizacao", "Etapa/Status"),
+    ("prazo_entrega", "Prazo"),
+    ("progresso_peso", "Peso/Saldo"),
+    ("id", "ID"),
+    ("tipo_processo", "Tipo"),
+    ("pedido_compra", "PD / Pedido"),
+    ("lote", "Lote"),
+]
+
 
 class ProcessPage(QWidget):
     def __init__(self, service, area: str | None, title: str, parent=None):
@@ -773,7 +794,7 @@ class ProcessPage(QWidget):
         if not rows:
             ToastNotification(self.window(), "Selecione uma ou mais propostas.", "error")
             return
-        columns = [(key, label) for key, label in self.model.columns if key not in {"status_icon", "chat_icon"}]
+        columns = EXPORT_COLUMNS
         suffix = "csv" if kind == "csv" else "pdf"
         path, _ = QFileDialog.getSaveFileName(self, "Exportar selecao", f"processos_selecionados.{suffix}", f"*.{suffix}")
         if not path:
