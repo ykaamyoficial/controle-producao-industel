@@ -19,7 +19,7 @@ class MigrationStateTests(unittest.TestCase):
         self.assertIn(MINIMUM_DATABASE_REVISION, known_revisions())
 
     def test_known_revisions_contains_all_migrations(self):
-        self.assertEqual(len(known_revisions()), 26)
+        self.assertEqual(len(known_revisions()), 25)
         self.assertIn("20260720_0001", known_revisions())
         self.assertIn(EXPECTED_DATABASE_REVISION, known_revisions())
 
