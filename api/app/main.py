@@ -24,7 +24,6 @@ from api.app.modules.health.router import router as health_router
 from api.app.modules.maintenance.router import router as maintenance_admin_router
 from api.app.modules.roles.router import router as roles_router
 from api.app.modules.nomus_integration.router import router as nomus_integration_router
-from api.app.modules.planned_loads.router import router as planned_loads_router
 from api.app.modules.proposal_import.router import router as proposal_import_router
 from api.app.modules.proposals.router import router as proposals_router
 from api.app.modules.provisioning.router import router as provisioning_router
@@ -160,7 +159,6 @@ def create_app() -> FastAPI:
     application.include_router(roles_router, prefix="/api/v1")
     application.include_router(security_events_router, prefix="/api/v1")
     application.include_router(proposals_router, prefix="/api/v1")
-    application.include_router(planned_loads_router, prefix="/api/v1")
     application.include_router(chat_router, prefix="/api/v1")
     application.include_router(proposal_import_router, prefix="/api/v1")
     application.include_router(nomus_integration_router, prefix="/api/v1")

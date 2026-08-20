@@ -5,7 +5,6 @@ from typing import Any
 from urllib.parse import urlparse, urlunparse
 from app.integrations.api.exceptions import ApiBusinessError
 from app.services.api_proposal_storage import OfficialProposalApiStorage, api_permission_level, user_message_for_api_error
-from app.services.api_planned_load_storage import ApiPlannedLoadStorage
 from app.services.api_reports import ApiExecutiveDashboardService, ApiOperationalReportsService
 from app.services.status_sorting import sort_fiscal_rows, sort_process_rows
 from app.services.app_paths import ensure_app_data_dirs, get_config_example_path, get_config_path
@@ -190,7 +189,6 @@ class BackendService:
     def __init__(self):
         self.config = load_app_config()
         self.official_proposal_storage = OfficialProposalApiStorage()
-        self.official_planned_load_storage = ApiPlannedLoadStorage(self.official_proposal_storage)
         self.user = None
         self._api_access_token: str | None = None
         self._api_refresh_token: str | None = None
@@ -823,100 +821,6 @@ class BackendService:
             return self.official_proposal_storage.galvanization_load_all_items(load_id)
         except Exception as exc:
             raise self._api_app_error(exc) from exc
-
-    # ---- Carga Planejada (FASE_PL5) ---------------------------------
-    # Mesmas permissoes de galvanizacao (GALVANIZATION_VIEW/UPDATE) --
-    # nenhuma permissao nova foi criada para este modulo. Leitura sem
-    # verificacao client-side (a API e a autoridade final e ja rejeita com
-    # 403/PERMISSION_DENIED); escrita verifica can_edit aqui so para nao
-    # deixar o usuario preencher um dialogo inteiro antes de descobrir que
-    # nao pode salvar.
-
-    def _planned_load_app_error(self, exc: Exception) -> AppError:
-        if isinstance(exc, ApiBusinessError) and exc.error_code in {
-            "PLANNED_LOAD_VERSION_CONFLICT",
-            "PLANNED_LOAD_ITEM_VERSION_CONFLICT",
-        }:
-            return VersionConflictError(user_message_for_api_error(exc))
-        return self._api_app_error(exc)
-
-    def planned_loads_page(self, **filters) -> dict[str, Any]:
-        try:
-            return self.official_planned_load_storage.list_planned_loads(**filters)
-        except Exception as exc:
-            raise self._planned_load_app_error(exc) from exc
-
-    def planned_load_detail(self, planned_load_id: int) -> dict[str, Any]:
-        try:
-            return self.official_planned_load_storage.get_planned_load(planned_load_id)
-        except Exception as exc:
-            raise self._planned_load_app_error(exc) from exc
-
-    def create_planned_load(self, payload: dict[str, Any]) -> dict[str, Any]:
-        if not self.can_edit("GALVANIZACAO"):
-            raise legacy.AppError("Seu usuario nao pode criar planejamentos de carga.")
-        try:
-            return self.official_planned_load_storage.create_planned_load(payload)
-        except Exception as exc:
-            raise self._planned_load_app_error(exc) from exc
-
-    def update_planned_load(self, planned_load_id: int, payload: dict[str, Any]) -> dict[str, Any]:
-        if not self.can_edit("GALVANIZACAO"):
-            raise legacy.AppError("Seu usuario nao pode alterar planejamentos de carga.")
-        try:
-            return self.official_planned_load_storage.update_planned_load(planned_load_id, payload)
-        except Exception as exc:
-            raise self._planned_load_app_error(exc) from exc
-
-    def add_planned_load_items(self, planned_load_id: int, items: list[dict[str, Any]]) -> dict[str, Any]:
-        if not self.can_edit("GALVANIZACAO"):
-            raise legacy.AppError("Seu usuario nao pode alterar planejamentos de carga.")
-        try:
-            return self.official_planned_load_storage.add_planned_load_items(planned_load_id, items)
-        except Exception as exc:
-            raise self._planned_load_app_error(exc) from exc
-
-    def update_planned_load_item(self, planned_load_id: int, item_id: int, payload: dict[str, Any]) -> dict[str, Any]:
-        if not self.can_edit("GALVANIZACAO"):
-            raise legacy.AppError("Seu usuario nao pode alterar planejamentos de carga.")
-        try:
-            return self.official_planned_load_storage.update_planned_load_item(planned_load_id, item_id, payload)
-        except Exception as exc:
-            raise self._planned_load_app_error(exc) from exc
-
-    def delete_planned_load_item(self, planned_load_id: int, item_id: int, version: int) -> dict[str, Any]:
-        if not self.can_edit("GALVANIZACAO"):
-            raise legacy.AppError("Seu usuario nao pode alterar planejamentos de carga.")
-        try:
-            return self.official_planned_load_storage.delete_planned_load_item(planned_load_id, item_id, version)
-        except Exception as exc:
-            raise self._planned_load_app_error(exc) from exc
-
-    # -- conversao/cancelamento (FASE_PL7) -----------------------------
-
-    def cancel_planned_load(self, planned_load_id: int, version: int) -> dict[str, Any]:
-        if not self.can_edit("GALVANIZACAO"):
-            raise legacy.AppError("Seu usuario nao pode cancelar planejamentos de carga.")
-        try:
-            return self.official_planned_load_storage.cancel_planned_load(planned_load_id, version)
-        except Exception as exc:
-            raise self._planned_load_app_error(exc) from exc
-
-    def build_planned_load(self, planned_load_id: int) -> dict[str, Any]:
-        if not self.can_edit("GALVANIZACAO"):
-            raise legacy.AppError("Seu usuario nao pode montar carga a partir de um planejamento.")
-        try:
-            return self.official_planned_load_storage.build_planned_load(planned_load_id)
-        except Exception as exc:
-            raise self._planned_load_app_error(exc) from exc
-
-    def mark_planned_load_converted(self, planned_load_id: int, version: int, real_load_id: int) -> dict[str, Any]:
-        if not self.can_edit("GALVANIZACAO"):
-            raise legacy.AppError("Seu usuario nao pode converter um planejamento em carga.")
-        try:
-            return self.official_planned_load_storage.mark_planned_load_converted(planned_load_id, version, real_load_id)
-        except Exception as exc:
-            raise self._planned_load_app_error(exc) from exc
 
     def chat_conversations(self, filters: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         filters = filters or {}
