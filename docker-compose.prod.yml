@@ -12,6 +12,12 @@
 # falha explicitamente se nao forem definidos, em vez de silenciosamente subir
 # uma imagem errada. Ver docs/architecture/DOCKER_RELEASE_IMAGES.md.
 
+# Nome de projeto fixo -- sem isso o Compose usa o nome da pasta (ex.: a
+# pasta local "Nova pasta" virava "novapasta"), o que tambem faz volumes/rede
+# colidirem com docker-compose.dev.yml quando os dois sao rodados na mesma
+# pasta sem "-p" explicito.
+name: controle_producao_industel
+
 services:
   postgres:
     image: postgres:16

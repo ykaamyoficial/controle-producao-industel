@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
 
 from api.app.core.config import EXPECTED_DATABASE_REVISION, MINIMUM_DATABASE_REVISION
 from api.app.core.migration_state import build_migration_state, known_revisions, script_head_revision
@@ -19,7 +20,11 @@ class MigrationStateTests(unittest.TestCase):
         self.assertIn(MINIMUM_DATABASE_REVISION, known_revisions())
 
     def test_known_revisions_contains_all_migrations(self):
-        self.assertEqual(len(known_revisions()), 25)
+        migration_files = [
+            path for path in Path("api/alembic/versions").glob("*.py")
+            if path.name != "__init__.py"
+        ]
+        self.assertEqual(len(known_revisions()), len(migration_files))
         self.assertIn("20260720_0001", known_revisions())
         self.assertIn(EXPECTED_DATABASE_REVISION, known_revisions())
 

@@ -148,5 +148,10 @@
     "classification": "ADDITIVE",
     "summary": "Adiciona coluna nullable request_id em proposal_attachments para correlacionar foto com o evento do historico na timeline.",
     "justification": "ADD COLUMN nullable sem default obrigatorio e CREATE INDEX sobre a propria coluna nova. Nenhum dado existente e alterado; linhas antigas ficam com request_id NULL."
+  },
+  "20260904_0030": {
+    "classification": "TRANSITIONAL",
+    "summary": "Adiciona coluna nullable legacy_id (+ UNIQUE) em users, galvanization_loads, fiscal_records e fiscal_invoices, e source_hash em users, para permitir sincronizacao idempotente do banco SQLite legado, no mesmo padrao ja usado em proposals/proposal_items.",
+    "justification": "ADD COLUMN nullable sem default obrigatorio seguido de CREATE UNIQUE CONSTRAINT sobre a coluna nova em cada tabela -- classificado TRANSITIONAL (nao ADDITIVE puro) porque adiciona uma UNIQUE constraint, mesmo padrao ja aprovado em uq_proposals_legacy_id/uq_proposal_items_legacy_id (20260720_0003). Postgres permite multiplos NULL em coluna UNIQUE, entao nenhum registro existente (todos com legacy_id NULL) pode violar a constraint na propria migration. Nenhuma coluna, linha ou constraint existente e alterada ou removida."
   }
 }

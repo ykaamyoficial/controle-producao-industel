@@ -91,11 +91,22 @@ Na Etapa 8, a tela `ProcessFormDialog` passou a usar esse client por meio de `Of
 
 ## Sync legado
 
-O endpoint `/api/v1/admin/sync/proposals` foi removido.
+O endpoint `/api/v1/admin/sync/proposals` foi removido do router nesta etapa
+(a logica de servico `sync_batch`/`SyncRun` permaneceu implementada e testada,
+apenas desconectada). Foi **reconectado posteriormente** para permitir a
+migracao pontual de um banco SQLite de producao real (nao um banco de teste)
+para o PostgreSQL oficial na primeira subida do sistema. O endpoint exige
+`require_superuser` (nao ha permissao dedicada) e preserva as regras de
+idempotencia por `legacy_id`/`source_hash`, `dry_run`, lock consultivo e
+auditoria via `SyncRun`/`security_events` descritas em
+`API_PROPOSALS_READ_MODEL.md`.
 
-O script `scripts/sync_proposals_to_api.bat` foi desativado.
+O script `scripts/sync_proposals_to_api.bat` continua desativado (usar
+`python -m tools.legacy_sqlite_migration.proposal_sync` diretamente).
 
-O modulo `app.integrations.api.proposal_sync` permanece somente como codigo historico/testavel; a CLI recusa execucao sem `ALLOW_DEPRECATED_PROPOSAL_SYNC=1`.
+O modulo `tools.legacy_sqlite_migration.proposal_sync` (cliente) exige
+`ALLOW_DEPRECATED_PROPOSAL_SYNC=1` como confirmacao deliberada de que se trata
+de uma migracao de dados legados reais, nao uma chamada acidental.
 
 ## Limites assumidos
 

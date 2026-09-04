@@ -34,6 +34,8 @@ from api.app.modules.proposals import service
 from api.app.modules.proposals.schemas import (
     ExpeditionItemsRequest,
     ExpeditionProposalDetail,
+    FiscalSyncBatch,
+    GalvanizationSyncBatch,
     ExpeditionRemanagementDeliveryRequest,
     ExpeditionRemanageRequest,
     ExpeditionVersionRequest,
@@ -74,6 +76,7 @@ from api.app.modules.proposals.schemas import (
     ProposalItemSummary,
     ProposalItemUpdate,
     ProposalStatusChangeRequest,
+    ProposalSyncBatch,
     ProposalUpdate,
     ProductionCompleteItemsRequest,
     ProductionItemFlowRequest,
@@ -94,6 +97,7 @@ from api.app.modules.proposals.schemas import (
     RemanagementReviewRequest,
     RemanagementReviewResult,
     RemanagementSummary,
+    SyncSummary,
     WarehouseStatusRequest,
 )
 
@@ -189,6 +193,26 @@ async def administrative_correction_preview(
     _actor: User = Depends(require_superuser),
 ):
     return await service.preview_administrative_correction(session, proposal_id, payload)
+
+
+@router.post("/admin/sync/proposals", response_model=SyncSummary, status_code=status.HTTP_200_OK)
+async def sync_proposals(payload: ProposalSyncBatch, request: Request, session: AsyncSession = Depends(get_db_session), actor: User = Depends(require_superuser)):
+    return await service.sync_batch(session, payload, actor, request_id=getattr(request.state, "request_id", None))
+
+
+@router.post("/admin/sync/galvanization", response_model=SyncSummary, status_code=status.HTTP_200_OK)
+async def sync_galvanization(payload: GalvanizationSyncBatch, request: Request, session: AsyncSession = Depends(get_db_session), actor: User = Depends(require_superuser)):
+    return await service.sync_galvanization_batch(session, payload, actor, request_id=getattr(request.state, "request_id", None))
+
+
+@router.post("/admin/sync/fiscal", response_model=SyncSummary, status_code=status.HTTP_200_OK)
+async def sync_fiscal(payload: FiscalSyncBatch, request: Request, session: AsyncSession = Depends(get_db_session), actor: User = Depends(require_superuser)):
+    return await service.sync_fiscal_batch(session, payload, actor, request_id=getattr(request.state, "request_id", None))
+
+
+@router.post("/admin/sync/expedition-backfill", response_model=SyncSummary, status_code=status.HTTP_200_OK)
+async def sync_expedition_backfill(request: Request, session: AsyncSession = Depends(get_db_session), actor: User = Depends(require_superuser)):
+    return await service.sync_expedition_backfill(session, actor, request_id=getattr(request.state, "request_id", None))
 
 
 @router.get("/production/proposals", response_model=PaginatedProductionResponse)

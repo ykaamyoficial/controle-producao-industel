@@ -4,13 +4,13 @@ from fastapi import APIRouter, Depends, File, Query, Request, Response, UploadFi
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.app.database.session import get_db_session
-from api.app.modules.auth.dependencies import get_current_active_user, require_permission
+from api.app.modules.auth.dependencies import get_current_active_user, require_permission, require_superuser
 from api.app.modules.auth.models import User
 from api.app.modules.auth.permissions import USERS_CREATE, USERS_DISABLE, USERS_MANAGE_PERMISSIONS, USERS_UPDATE, USERS_VIEW
 from api.app.modules.auth.schemas import UserOut
 from api.app.modules.auth.service import public_user
 from api.app.modules.users import service
-from api.app.modules.users.schemas import ChangePassword, MeUpdate, PasswordReset, UserCreate, UserList, UserUpdate
+from api.app.modules.users.schemas import ChangePassword, MeUpdate, PasswordReset, SyncSummary, UserCreate, UserList, UserSyncBatch, UserUpdate
 
 
 router = APIRouter(prefix="/users", tags=["users"])
@@ -106,3 +106,8 @@ async def assign_role(user_id: int, role_id: int, session: AsyncSession = Depend
 @router.delete("/{user_id}/roles/{role_id}", response_model=UserOut)
 async def remove_role(user_id: int, role_id: int, session: AsyncSession = Depends(get_db_session), actor: User = Depends(require_permission(USERS_MANAGE_PERMISSIONS))):
     return public_user(await service.remove_role(session, user_id, role_id, actor))
+
+
+@router.post("/admin/sync", response_model=SyncSummary, status_code=status.HTTP_200_OK)
+async def sync_users(payload: UserSyncBatch, request: Request, session: AsyncSession = Depends(get_db_session), actor: User = Depends(require_superuser)):
+    return await service.sync_users_batch(session, payload, actor, request_id=getattr(request.state, "request_id", None))

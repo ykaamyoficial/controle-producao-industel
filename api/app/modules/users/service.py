@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from sqlalchemy import delete, func, select
+from datetime import UTC, datetime
+
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -14,7 +16,10 @@ from api.app.modules.auth.service import effective_permissions, public_user
 from api.app.modules.auth.tokens import utcnow
 from api.app.modules.auth.permissions import USERS_MANAGE_PERMISSIONS
 from api.app.modules.provisioning.service import _ensure_admin_role
-from api.app.modules.users.schemas import ChangePassword, MeUpdate, UserCreate, UserList, UserUpdate
+from api.app.modules.proposals.models import SyncRun
+from api.app.modules.users.schemas import ChangePassword, MeUpdate, SyncSummary, UserCreate, UserList, UserSyncBatch, UserSyncPayload, UserUpdate
+
+USERS_SYNC_LOCK_ID = 202607200006
 
 
 async def update_me(session: AsyncSession, actor: User, payload: MeUpdate) -> User:
@@ -322,3 +327,113 @@ def _remove_role_by_code(user: User, code: str) -> None:
 
 def _managed_role_code(user_id: int) -> str:
     return f"desktop_user_{int(user_id)}"
+
+
+async def sync_users_batch(session: AsyncSession, batch: UserSyncBatch, actor: User, *, request_id: str | None) -> SyncSummary:
+    errors = _validate_user_sync_batch(batch)
+    if errors:
+        return SyncSummary(received=len(batch.users), rejected=len(errors), errors=errors, dry_run=batch.dry_run)
+    if batch.dry_run:
+        return await _simulate_user_sync(session, batch)
+
+    locked = bool((await session.execute(text("SELECT pg_try_advisory_xact_lock(:lock_id)").bindparams(lock_id=USERS_SYNC_LOCK_ID))).scalar_one())
+    if not locked:
+        raise ApiError(error_codes.SYNC_ALREADY_RUNNING, "Ja existe sincronizacao de usuarios em andamento.", status_code=409)
+
+    run = SyncRun(sync_type="users", status="RUNNING", source_identifier=batch.source_identifier, actor_user_id=actor.id, request_id=request_id)
+    session.add(run)
+    await session.flush()
+    await repository.create_security_event(session, "USER_SYNC_STARTED", actor_user_id=actor.id, request_id=request_id, details={"sync_run_id": run.id, "received": len(batch.users)})
+
+    summary = SyncSummary(received=len(batch.users), dry_run=False, sync_run_id=run.id)
+    try:
+        for payload in batch.users:
+            await _upsert_synced_user(session, payload, batch.default_password, actor, summary)
+        run.status = "COMPLETED" if not summary.errors else "PARTIAL"
+        run.finished_at = datetime.now(UTC)
+        run.received_count = summary.received
+        run.created_count = summary.created
+        run.updated_count = summary.updated
+        run.unchanged_count = summary.unchanged
+        run.rejected_count = summary.rejected
+        run.error_count = len(summary.errors)
+        run.details = {"batch_number": batch.batch_number, "batch_total": batch.batch_total, "errors": summary.errors[:20]}
+        event = "USER_SYNC_COMPLETED" if run.status == "COMPLETED" else "USER_SYNC_PARTIAL"
+        await repository.create_security_event(session, event, actor_user_id=actor.id, request_id=request_id, details={"sync_run_id": run.id, "received": summary.received, "created": summary.created, "updated": summary.updated, "unchanged": summary.unchanged, "rejected": summary.rejected})
+        await session.commit()
+        return summary
+    except Exception as exc:
+        await session.rollback()
+        raise ApiError(error_codes.SYNC_BATCH_FAILED, "Nao foi possivel sincronizar o lote de usuarios.", status_code=422) from exc
+
+
+def _validate_user_sync_batch(batch: UserSyncBatch) -> list[str]:
+    errors: list[str] = []
+    legacy_ids: set[int] = set()
+    usernames: set[str] = set()
+    for payload in batch.users:
+        if payload.legacy_id in legacy_ids:
+            errors.append(f"usuario legacy_id duplicado no lote: {payload.legacy_id}")
+        legacy_ids.add(payload.legacy_id)
+        normalized = repository.normalize_username(payload.username)
+        if normalized in usernames:
+            errors.append(f"username duplicado no lote: {payload.username}")
+        usernames.add(normalized)
+    return errors
+
+
+async def _simulate_user_sync(session: AsyncSession, batch: UserSyncBatch) -> SyncSummary:
+    summary = SyncSummary(received=len(batch.users), dry_run=True)
+    for payload in batch.users:
+        existing = (await session.execute(select(User).where(User.legacy_id == payload.legacy_id))).scalars().first()
+        if existing is None:
+            summary.created += 1
+        elif existing.source_hash != payload.source_hash:
+            summary.updated += 1
+        else:
+            summary.unchanged += 1
+    return summary
+
+
+async def _upsert_synced_user(session: AsyncSession, payload: UserSyncPayload, default_password: str, actor: User, summary: SyncSummary) -> None:
+    normalized_username = repository.normalize_username(payload.username)
+    existing_by_username = (await session.execute(select(User).where(func.lower(User.username) == normalized_username.lower()))).scalars().first()
+    if existing_by_username is not None and existing_by_username.legacy_id != payload.legacy_id:
+        # Username ja usado por um usuario que nao veio deste lote (ex.: o
+        # admin padrao criado pelo bootstrap) -- nunca sobrescrever.
+        summary.errors.append(f"username '{payload.username}' ja existe e nao pertence ao legacy_id {payload.legacy_id}; pulado")
+        return
+
+    existing = (await session.execute(select(User).where(User.legacy_id == payload.legacy_id))).scalars().first()
+    if existing is None:
+        user = User(
+            legacy_id=payload.legacy_id,
+            username=normalized_username,
+            display_name=payload.display_name,
+            password_hash=hash_password(default_password),
+            active=payload.active,
+            is_superuser=payload.is_superuser,
+            password_must_change=True,
+            created_by=actor.id,
+            updated_by=actor.id,
+        )
+        session.add(user)
+        await session.flush()
+        summary.created += 1
+    else:
+        user = existing
+        if existing.source_hash == payload.source_hash:
+            summary.unchanged += 1
+            return
+        user.username = normalized_username
+        user.display_name = payload.display_name
+        user.active = payload.active
+        user.is_superuser = payload.is_superuser
+        user.updated_by = actor.id
+        summary.updated += 1
+    user.source_hash = payload.source_hash
+    if payload.is_superuser:
+        await _ensure_role_attached(session, user, await _ensure_admin_role(session))
+    if payload.permission_codes:
+        await _replace_managed_user_role(session, user, payload.permission_codes)
+    await repository.create_security_event(session, "USER_CREATED" if existing is None else "USER_UPDATED", actor_user_id=actor.id, target_user_id=user.id)

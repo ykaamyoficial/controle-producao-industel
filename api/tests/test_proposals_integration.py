@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
 import unittest
 from concurrent.futures import ThreadPoolExecutor
@@ -452,10 +453,46 @@ class ProposalsIntegrationTests(unittest.TestCase):
         numbers = [item["proposal_number"] for page in (page_one, page_two, page_three) for item in page["items"]]
         self.assertEqual(numbers, ["CP90001", "CP90002", "CP90003", "CP90004", "CP90005"])
 
-    def test_legacy_sync_endpoint_is_disabled(self):
+    def test_sync_endpoint_requires_superuser(self):
+        headers = asyncio.run(self._operator_headers())
+        response = self.client.post("/api/v1/admin/sync/proposals", json=_sync_batch_payload(), headers=headers)
+        self.assertEqual(response.status_code, 403)
+
+    def test_sync_endpoint_creates_and_dedups_by_legacy_id(self):
         headers = self._headers()
-        response = self.client.post("/api/v1/admin/sync/proposals", json={"proposals": []}, headers=headers)
-        self.assertEqual(response.status_code, 404)
+        payload = _sync_batch_payload()
+
+        first = self.client.post("/api/v1/admin/sync/proposals", json=payload, headers=headers)
+        self.assertEqual(first.status_code, 200)
+        first_body = first.json()
+        self.assertEqual(first_body["created"], 1)
+        self.assertEqual(first_body["item_created"], 1)
+        self.assertEqual(first_body["rejected"], 0)
+
+        listed = self.client.get("/api/v1/proposals?proposal_number=CPLEGACY01", headers=headers).json()
+        self.assertEqual(listed["total"], 1)
+
+        second = self.client.post("/api/v1/admin/sync/proposals", json=payload, headers=headers)
+        self.assertEqual(second.status_code, 200)
+        second_body = second.json()
+        self.assertEqual(second_body["created"], 0)
+        self.assertEqual(second_body["updated"], 0)
+        self.assertEqual(second_body["unchanged"], 1)
+        # unchanged proposals short-circuit before visiting items, so item
+        # counters stay at 0 rather than incrementing item_unchanged.
+        self.assertEqual(second_body["item_created"], 0)
+        self.assertEqual(second_body["item_updated"], 0)
+
+    def test_sync_endpoint_dry_run_does_not_persist(self):
+        headers = self._headers()
+        payload = _sync_batch_payload(legacy_id=9002, proposal_number="CPLEGACY02", dry_run=True)
+
+        response = self.client.post("/api/v1/admin/sync/proposals", json=payload, headers=headers)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["created"], 1)
+
+        listed = self.client.get("/api/v1/proposals?proposal_number=CPLEGACY02", headers=headers).json()
+        self.assertEqual(listed["total"], 0)
 
     def test_official_production_flow_with_galvanization_and_partial(self):
         headers = self._headers()
@@ -3492,6 +3529,45 @@ def _item_payload(item_number: str, *, produce_internally=True, requires_galvani
         "total_weight": "7.0000",
         "produce_internally": produce_internally,
         "requires_galvanization": requires_galvanization,
+    }
+
+
+def _sync_batch_payload(*, legacy_id: int = 9001, proposal_number: str = "CPLEGACY01", dry_run: bool = False) -> dict:
+    proposal_hash = hashlib.sha256(f"proposal-{legacy_id}".encode()).hexdigest()
+    item_hash = hashlib.sha256(f"item-{legacy_id}-1".encode()).hexdigest()
+    return {
+        "source_identifier": "controle_producao.db",
+        "dry_run": dry_run,
+        "batch_number": 1,
+        "batch_total": 1,
+        "proposals": [
+            {
+                "legacy_id": legacy_id,
+                "proposal_number": proposal_number,
+                "customer_name": "Cliente Legado",
+                "project_name": "Obra Legada",
+                "current_area": "PRODUCAO",
+                "current_status": "EM PRODUCAO",
+                "general_status": "EM PRODUCAO",
+                "source": "sqlite",
+                "source_hash": proposal_hash,
+                "items": [
+                    {
+                        "legacy_id": legacy_id * 10 + 1,
+                        "item_number": "1",
+                        "product_code": "COD",
+                        "description": "Item legado",
+                        "quantity": "2.0000",
+                        "unit": "un",
+                        "unit_weight": "3.5000",
+                        "total_weight": "7.0000",
+                        "produce_internally": "sim",
+                        "requires_galvanization": "nao",
+                        "source_hash": item_hash,
+                    }
+                ],
+            }
+        ],
     }
 
 

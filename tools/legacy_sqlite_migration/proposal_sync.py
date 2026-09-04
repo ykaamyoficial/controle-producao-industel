@@ -98,8 +98,11 @@ def map_process(row: dict[str, Any], items: list[dict[str, Any]]) -> dict[str, A
 def map_item(row: dict[str, Any]) -> dict[str, Any]:
     quantity = _decimal(row.get("quantidade"))
     unit_weight = _decimal(row.get("peso"))
-    produce_internally = _text(row.get("produzir_internamente")) or "indefinido"
-    requires_galvanization = _text(row.get("precisa_galvanizacao")) or "indefinido"
+    # O restante do sistema (service.py: rotas de galvanizacao/expedicao/producao)
+    # compara esses campos contra "SIM"/"NAO"/"INDEFINIDO" em maiusculo -- o
+    # SQLite legado guarda em minusculo, entao normalizamos aqui na origem.
+    produce_internally = (_text(row.get("produzir_internamente")) or "indefinido").upper()
+    requires_galvanization = (_text(row.get("precisa_galvanizacao")) or "indefinido").upper()
     item = {
         "legacy_id": int(row["id"]),
         "legacy_current_process_id": int(row["processo_atual_id"]) if row.get("processo_atual_id") else None,
@@ -112,7 +115,10 @@ def map_item(row: dict[str, Any]) -> dict[str, Any]:
         "total_weight": str((quantity * unit_weight).quantize(Decimal("0.0001"))),
         "produce_internally": produce_internally,
         "requires_galvanization": requires_galvanization,
-        "flow_defined": produce_internally != "indefinido" or requires_galvanization != "indefinido",
+        # Mesma regra de "fluxo definido" usada pelo restante do sistema
+        # (service.py, linha ~3978): so conta como definido quando os dois
+        # eixos foram decididos, nao apenas um.
+        "flow_defined": produce_internally != "INDEFINIDO" and requires_galvanization != "INDEFINIDO",
         "produced": bool(row.get("produzido") or False),
         "galvanized": bool(row.get("galvanizado") or False),
         "delivered": bool(row.get("entregue") or False),
@@ -228,8 +234,10 @@ def _parse_datetime(value: Any) -> datetime | None:
 def main() -> None:
     if os.environ.get("ALLOW_DEPRECATED_PROPOSAL_SYNC") != "1":
         print(
-            "Sincronizacao SQLite -> API desativada na Etapa 7. "
-            "Propostas e itens agora sao oficiais no PostgreSQL pela API.",
+            "Ferramenta de migracao de dados legados (SQLite -> API). "
+            "Requer confirmacao explicita: defina ALLOW_DEPRECATED_PROPOSAL_SYNC=1 "
+            "para confirmar que voce quer importar um banco SQLite legado real "
+            "para o PostgreSQL oficial via POST /api/v1/admin/sync/proposals.",
             file=sys.stderr,
         )
         raise SystemExit(2)

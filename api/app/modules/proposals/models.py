@@ -166,6 +166,7 @@ class GalvanizationLoad(Base):
     __tablename__ = "galvanization_loads"
     __table_args__ = (
         UniqueConstraint("code", name="uq_galvanization_loads_code"),
+        UniqueConstraint("legacy_id", name="uq_galvanization_loads_legacy_id"),
         CheckConstraint("load_weight IS NULL OR load_weight > 0", name="ck_galvanization_loads_load_weight_positive"),
         Index("ix_galvanization_loads_status", "status"),
         Index("ix_galvanization_loads_expected_return", "expected_return_date"),
@@ -173,6 +174,7 @@ class GalvanizationLoad(Base):
     )
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    legacy_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     code: Mapped[str | None] = mapped_column(String(40), nullable=True)
     driver_name: Mapped[str] = mapped_column(String(180), nullable=False)
     max_weight: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), nullable=True)
@@ -405,6 +407,7 @@ class FiscalRecord(Base):
     __tablename__ = "fiscal_records"
     __table_args__ = (
         UniqueConstraint("proposal_id", name="uq_fiscal_records_proposal"),
+        UniqueConstraint("legacy_id", name="uq_fiscal_records_legacy_id"),
         Index("ix_fiscal_records_status", "status_fiscal"),
         Index("ix_fiscal_records_situation", "fiscal_situation"),
         Index("ix_fiscal_records_entry_date", "entry_date"),
@@ -412,6 +415,7 @@ class FiscalRecord(Base):
     )
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    legacy_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     proposal_id: Mapped[int] = mapped_column(ForeignKey("proposals.id", ondelete="CASCADE"), nullable=False)
     status_fiscal: Mapped[str] = mapped_column(String(80), nullable=False, server_default="FALTA_EMITIR_NOTA_FISCAL")
     fiscal_situation: Mapped[str] = mapped_column(String(80), nullable=False, server_default="AGUARDANDO_NF")
@@ -468,12 +472,14 @@ class FiscalInvoice(Base):
     __tablename__ = "fiscal_invoices"
     __table_args__ = (
         UniqueConstraint("invoice_number", "series", name="uq_fiscal_invoices_number_series"),
+        UniqueConstraint("legacy_id", name="uq_fiscal_invoices_legacy_id"),
         Index("ix_fiscal_invoices_record", "fiscal_record_id"),
         Index("ix_fiscal_invoices_number", "invoice_number"),
         Index("ix_fiscal_invoices_status", "status"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    legacy_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     fiscal_record_id: Mapped[int] = mapped_column(ForeignKey("fiscal_records.id", ondelete="CASCADE"), nullable=False)
     proposal_id: Mapped[int] = mapped_column(ForeignKey("proposals.id", ondelete="CASCADE"), nullable=False)
     invoice_number: Mapped[str] = mapped_column(String(80), nullable=False)

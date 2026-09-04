@@ -25,6 +25,7 @@ class ProposalItemSummary(BaseModel):
     flow_defined: bool
     produced: bool
     galvanized: bool
+    sent_to_galvanization: bool = False
     delivered: bool
     synced_at: datetime
     source_hash: str | None = None
@@ -605,6 +606,7 @@ class GalvanizationCandidateItem(BaseModel):
     customer_name: str
     project_name: str | None = None
     lot: str | None = None
+    current_status: str | None = None
     item_id: int
     item_number: str
     product_code: str | None = None
@@ -1530,3 +1532,107 @@ class SyncSummary(BaseModel):
     item_created: int = 0
     item_updated: int = 0
     item_unchanged: int = 0
+
+
+class GalvanizationLoadItemSyncPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    proposal_item_legacy_id: int = Field(gt=0)
+    sent_quantity: Decimal = Field(ge=0)
+    returned_quantity: Decimal = Field(default=Decimal("0"), ge=0)
+    unit_weight: Decimal | None = Field(default=None, ge=0)
+    sent_weight: Decimal | None = Field(default=None, ge=0)
+    returned_weight: Decimal | None = Field(default=None, ge=0)
+    status: str = Field(max_length=80)
+    returned_at: datetime | None = None
+
+
+class GalvanizationLoadSyncPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    legacy_id: int = Field(gt=0)
+    driver_name: str = Field(min_length=1, max_length=180)
+    max_weight: Decimal | None = Field(default=None, ge=0)
+    total_weight: Decimal = Field(default=Decimal("0"), ge=0)
+    status: str = Field(max_length=80)
+    expected_return_date: date | None = None
+    sent_at: datetime | None = None
+    returned_at: datetime | None = None
+    closed_at: datetime | None = None
+    notes: str | None = Field(default=None, max_length=2000)
+    source_hash: str = Field(min_length=64, max_length=64)
+    items: list[GalvanizationLoadItemSyncPayload] = Field(default_factory=list)
+
+    @field_validator("driver_name", mode="before")
+    @classmethod
+    def strip_driver_name(cls, value):
+        return value.strip() if isinstance(value, str) else value
+
+
+class GalvanizationSyncBatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source_identifier: str = Field(min_length=1, max_length=300)
+    dry_run: bool = False
+    batch_number: int = Field(default=1, ge=1)
+    batch_total: int = Field(default=1, ge=1)
+    loads: list[GalvanizationLoadSyncPayload] = Field(default_factory=list, max_length=200)
+
+
+class FiscalItemSyncPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    proposal_item_legacy_id: int = Field(gt=0)
+    total_quantity: Decimal = Field(ge=0)
+    billed_quantity: Decimal = Field(default=Decimal("0"), ge=0)
+    total_weight: Decimal | None = Field(default=None, ge=0)
+    billed_weight: Decimal = Field(default=Decimal("0"), ge=0)
+    status: str = Field(max_length=40)
+
+
+class FiscalInvoiceItemSyncPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    proposal_item_legacy_id: int = Field(gt=0)
+    quantity: Decimal = Field(ge=0)
+    weight: Decimal | None = Field(default=None, ge=0)
+
+
+class FiscalInvoiceSyncPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    legacy_id: int = Field(gt=0)
+    invoice_number: str = Field(min_length=1, max_length=80)
+    series: str | None = Field(default=None, max_length=40)
+    issued_at: datetime
+    emission_type: str = Field(default="PARCIAL", max_length=40)
+    observation: str | None = Field(default=None, max_length=2000)
+    source: str = Field(default="MANUAL", max_length=40)
+    items: list[FiscalInvoiceItemSyncPayload] = Field(default_factory=list)
+
+
+class FiscalRecordSyncPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    legacy_id: int = Field(gt=0)
+    proposal_legacy_id: int = Field(gt=0)
+    status_fiscal: str = Field(max_length=80)
+    fiscal_situation: str = Field(max_length=80)
+    entry_date: date
+    last_emission_at: datetime | None = None
+    invoice_withdrawn_at: datetime | None = None
+    withdrawal_observation: str | None = Field(default=None, max_length=2000)
+    observation: str | None = Field(default=None, max_length=2000)
+    source_hash: str = Field(min_length=64, max_length=64)
+    items: list[FiscalItemSyncPayload] = Field(default_factory=list)
+    invoices: list[FiscalInvoiceSyncPayload] = Field(default_factory=list)
+
+
+class FiscalSyncBatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source_identifier: str = Field(min_length=1, max_length=300)
+    dry_run: bool = False
+    batch_number: int = Field(default=1, ge=1)
+    batch_total: int = Field(default=1, ge=1)
+    records: list[FiscalRecordSyncPayload] = Field(default_factory=list, max_length=200)

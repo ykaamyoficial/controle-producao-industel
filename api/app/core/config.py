@@ -11,7 +11,7 @@ API_VERSION = "0.8.0"
 API_STAGE = "official-fiscal"
 API_CONTRACT_VERSION = "v1"
 SERVICE_NAME = "controle-producao-api"
-EXPECTED_DATABASE_REVISION = "20260817_0024"
+EXPECTED_DATABASE_REVISION = "20260904_0030"
 # Revisao mais antiga que este server_version ainda consegue operar (Fase 04, Secao 19).
 # Hoje e igual a EXPECTED_DATABASE_REVISION porque esta release depende da
 # hierarquia mae/filhas e nao possui tolerancia retroativa deliberada -- sera
@@ -118,6 +118,24 @@ class Settings(BaseSettings):
     audit_retention_debug_days: int = Field(default=7, ge=1, alias="AUDIT_RETENTION_DEBUG_DAYS")
     audit_retention_technical_days: int = Field(default=30, ge=1, alias="AUDIT_RETENTION_TECHNICAL_DAYS")
     audit_retention_audit_days: int = Field(default=730, ge=1, alias="AUDIT_RETENTION_AUDIT_DAYS")
+
+    # Anexos do chat (Fase 1): raiz local controlada pela API. O banco guarda
+    # apenas metadados/caminhos relativos; upload/download entram em fase futura.
+    chat_storage_root: str = Field(default="data/storage", alias="CHAT_STORAGE_ROOT")
+    chat_max_image_mb: int = Field(default=20, ge=1, alias="CHAT_MAX_IMAGE_MB")
+    chat_max_document_mb: int = Field(default=50, ge=1, alias="CHAT_MAX_DOCUMENT_MB")
+    chat_max_video_mb: int = Field(default=200, ge=1, alias="CHAT_MAX_VIDEO_MB")
+    chat_max_attachments_per_message: int = Field(default=10, ge=1, alias="CHAT_MAX_ATTACHMENTS_PER_MESSAGE")
+    chat_max_total_attachment_mb: int = Field(default=300, ge=1, alias="CHAT_MAX_TOTAL_ATTACHMENT_MB")
+    chat_storage_min_free_mb: int = Field(default=0, ge=0, alias="CHAT_STORAGE_MIN_FREE_MB")
+    chat_attachment_deleted_retention_days: int = Field(default=30, ge=1, alias="CHAT_ATTACHMENT_DELETED_RETENTION_DAYS")
+
+    # Anexos de proposta (fotos de evidencia em acoes de producao/galvanizacao/
+    # expedicao/fiscal/controle geral). Reusa o mesmo storage local do chat
+    # (CHAT_STORAGE_ROOT), sob um namespace proprio ("proposals/").
+    proposal_attachment_max_image_mb: int = Field(default=20, ge=1, alias="PROPOSAL_ATTACHMENT_MAX_IMAGE_MB")
+    proposal_attachment_max_video_mb: int = Field(default=100, ge=1, alias="PROPOSAL_ATTACHMENT_MAX_VIDEO_MB")
+    proposal_attachment_max_per_proposal: int = Field(default=30, ge=1, alias="PROPOSAL_ATTACHMENT_MAX_PER_PROPOSAL")
 
     model_config = SettingsConfigDict(
         env_file=str(Path(__file__).resolve().parents[2] / ".env"),

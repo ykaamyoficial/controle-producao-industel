@@ -56,6 +56,7 @@ from api.app.modules.proposals.schemas import (
     FiscalRecordSummary,
     FiscalRegisterInvoiceRequest,
     FiscalWithdrawalRequest,
+    FiscalSyncBatch,
     FutureMutationPlanOut,
     GalvanizationLoadCreate,
     GalvanizationLoadDetail,
@@ -63,6 +64,7 @@ from api.app.modules.proposals.schemas import (
     GalvanizationLoadUpdate,
     GalvanizationLoadVersionRequest,
     GalvanizationReturnRequest,
+    GalvanizationSyncBatch,
     PaginatedExpeditionResponse,
     PaginatedFiscalResponse,
     PaginatedProposalResponse,
@@ -205,6 +207,8 @@ GALVANIZATION_LOAD_EDITABLE_STATUSES = {"AGUARDANDO_LIBERACAO"}
 GALVANIZATION_LOAD_RETURNABLE_STATUSES = {"LIBERADA_PARA_ENVIO", "RETORNO_PARCIAL"}
 EXPEDITION_ACTIVE_STATUSES = {"EM_SEPARACAO", "AGUARDANDO_SEPARACAO_PARCIAL", "SEPARACAO_INICIADA", "SEPARADO_COM_PENDENCIA", "SEPARADO", "ENTREGUE_PARCIAL"}
 SYNC_LOCK_ID = 202607200003
+GALVANIZATION_SYNC_LOCK_ID = 202607200004
+FISCAL_SYNC_LOCK_ID = 202607200005
 # Mantido apenas como contrato interno/compatibilidade de testes antigos. A API e o
 # desktop nunca usam este catalogo como lista de escolha; as opcoes sao calculadas
 # por proposta em get_allowed_administrative_corrections().
@@ -241,8 +245,6 @@ def _flow_lock_reason(item: ProposalItem) -> str | None:
     most advanced (final) operational stage down to the earliest."""
     if not item.active:
         return "Item removido da proposta."
-    if item.fiscal_item is not None and item.fiscal_item.active and item.fiscal_item.billed_quantity > 0:
-        return "Item ja possui emissao fiscal registrada."
     if item.delivered:
         return "Item ja foi entregue ao cliente."
     if item.expedition_item is not None and item.expedition_item.active and item.expedition_item.separated_quantity > 0:
@@ -276,6 +278,7 @@ def item_summary(row: ProposalItem) -> ProposalItemSummary:
         flow_defined=row.flow_defined,
         produced=row.produced,
         galvanized=row.galvanized,
+        sent_to_galvanization=any(load_item.active for load_item in row.galvanization_load_items),
         delivered=row.delivered,
         synced_at=row.synced_at,
         source_hash=row.source_hash,
@@ -3362,6 +3365,7 @@ ACTIVITY_TEMPLATES = {
     ),
     "PRODUCTION_WEIGHTS_UPDATED": lambda who, md: f"{who} atualizou o peso de {md.get('changed', 'alguns')} item(ns).",
     "PRODUCTION_COMPLETED": lambda who, md: f"{who} concluiu a producao.",
+    "PRODUCTION_PARTIALLY_COMPLETED": lambda who, md: f"{who} concluiu parcialmente a producao.",
     "PROPOSAL_PARTIAL_CHILD_CREATED": lambda who, md: f"{who} criou a parcial {md.get('child_proposal_number', '')} a partir da proposta mae.",
     "PROPOSAL_PARTIAL_CHILD_MERGED": lambda who, md: f"{who} uniu uma parcial ao grupo operacional equivalente.",
     "PROPOSAL_PARTIAL_CHILD_GROUPED": lambda who, md: f"{who} consolidou parciais com o mesmo status operacional.",
@@ -4457,6 +4461,7 @@ def _galvanization_candidate_item(proposal: Proposal, item: ProposalItem, availa
         "customer_name": proposal.customer_name,
         "project_name": proposal.project_name,
         "lot": proposal.lot,
+        "current_status": proposal.current_status,
         "item_id": item.id,
         "item_number": item.item_number,
         "product_code": item.product_code,
@@ -6037,3 +6042,341 @@ def _apply_item(item: ProposalItem, payload) -> None:
             value = value.quantize(Decimal("0.0001"))
         setattr(item, field, value)
     item.synced_at = datetime.now(UTC)
+
+
+async def _resolve_proposal_items_by_legacy_id(session: AsyncSession, legacy_ids: set[int]) -> dict[int, ProposalItem]:
+    if not legacy_ids:
+        return {}
+    rows = (await session.execute(select(ProposalItem).where(ProposalItem.legacy_id.in_(legacy_ids)))).scalars().all()
+    return {int(row.legacy_id): row for row in rows if row.legacy_id is not None}
+
+
+async def _resolve_proposals_by_legacy_id(session: AsyncSession, legacy_ids: set[int]) -> dict[int, Proposal]:
+    if not legacy_ids:
+        return {}
+    rows = (await session.execute(select(Proposal).where(Proposal.legacy_id.in_(legacy_ids)))).scalars().all()
+    return {int(row.legacy_id): row for row in rows if row.legacy_id is not None}
+
+
+async def sync_galvanization_batch(session: AsyncSession, batch: GalvanizationSyncBatch, actor: User, *, request_id: str | None) -> SyncSummary:
+    errors = _validate_galvanization_batch(batch)
+    if errors:
+        return SyncSummary(received=len(batch.loads), rejected=len(errors), errors=errors, dry_run=batch.dry_run)
+    if batch.dry_run:
+        return await _simulate_galvanization(session, batch)
+
+    locked = bool((await session.execute(text("SELECT pg_try_advisory_xact_lock(:lock_id)").bindparams(lock_id=GALVANIZATION_SYNC_LOCK_ID))).scalar_one())
+    if not locked:
+        raise ApiError(error_codes.SYNC_ALREADY_RUNNING, "Ja existe sincronizacao de galvanizacao em andamento.", status_code=409)
+
+    run = SyncRun(sync_type="galvanization", status="RUNNING", source_identifier=batch.source_identifier, actor_user_id=actor.id, request_id=request_id)
+    session.add(run)
+    await session.flush()
+    await auth_repository.create_security_event(session, "GALVANIZATION_SYNC_STARTED", actor_user_id=actor.id, request_id=request_id, details={"sync_run_id": run.id, "received": len(batch.loads)})
+
+    summary = SyncSummary(received=len(batch.loads), dry_run=False, sync_run_id=run.id)
+    try:
+        item_legacy_ids = {item.proposal_item_legacy_id for load in batch.loads for item in load.items}
+        items_by_legacy_id = await _resolve_proposal_items_by_legacy_id(session, item_legacy_ids)
+        for payload in batch.loads:
+            await _upsert_galvanization_load(session, payload, items_by_legacy_id, summary)
+        run.status = "COMPLETED" if not summary.errors else "PARTIAL"
+        run.finished_at = datetime.now(UTC)
+        _copy_counts(run, summary)
+        run.details = {"batch_number": batch.batch_number, "batch_total": batch.batch_total, "errors": summary.errors[:20]}
+        event = "GALVANIZATION_SYNC_COMPLETED" if run.status == "COMPLETED" else "GALVANIZATION_SYNC_PARTIAL"
+        await auth_repository.create_security_event(session, event, actor_user_id=actor.id, request_id=request_id, details={"sync_run_id": run.id, "received": summary.received, "created": summary.created, "updated": summary.updated, "unchanged": summary.unchanged, "rejected": summary.rejected})
+        await session.commit()
+        return summary
+    except Exception as exc:
+        await session.rollback()
+        raise ApiError(error_codes.SYNC_BATCH_FAILED, "Nao foi possivel sincronizar o lote de galvanizacao.", status_code=422) from exc
+
+
+def _validate_galvanization_batch(batch: GalvanizationSyncBatch) -> list[str]:
+    errors: list[str] = []
+    legacy_ids: set[int] = set()
+    for load in batch.loads:
+        if load.legacy_id in legacy_ids:
+            errors.append(f"carga legacy_id duplicado no lote: {load.legacy_id}")
+        legacy_ids.add(load.legacy_id)
+        item_ids: set[int] = set()
+        for item in load.items:
+            if item.proposal_item_legacy_id in item_ids:
+                errors.append(f"item legacy_id duplicado na carga {load.legacy_id}: {item.proposal_item_legacy_id}")
+            item_ids.add(item.proposal_item_legacy_id)
+    return errors
+
+
+async def _simulate_galvanization(session: AsyncSession, batch: GalvanizationSyncBatch) -> SyncSummary:
+    summary = SyncSummary(received=len(batch.loads), dry_run=True)
+    for payload in batch.loads:
+        existing = (await session.execute(select(GalvanizationLoad).where(GalvanizationLoad.legacy_id == payload.legacy_id))).scalars().first()
+        if existing is None:
+            summary.created += 1
+        else:
+            summary.updated += 1
+    return summary
+
+
+async def _upsert_galvanization_load(session: AsyncSession, payload: GalvanizationLoadSyncPayload, items_by_legacy_id: dict[int, ProposalItem], summary: SyncSummary) -> None:
+    existing = (await session.execute(select(GalvanizationLoad).options(selectinload(GalvanizationLoad.items)).where(GalvanizationLoad.legacy_id == payload.legacy_id))).scalars().first()
+    if existing is None:
+        load = GalvanizationLoad(code=f"CGLEGADO{payload.legacy_id:05d}")
+        session.add(load)
+        summary.created += 1
+        existing_items: list[GalvanizationLoadItem] = []
+    else:
+        load = existing
+        existing_items = list(existing.items)
+        summary.updated += 1
+    _apply_galvanization_load(load, payload)
+    await session.flush()
+    for item_payload in payload.items:
+        proposal_item = items_by_legacy_id.get(item_payload.proposal_item_legacy_id)
+        if proposal_item is None:
+            summary.errors.append(f"item legado {item_payload.proposal_item_legacy_id} nao encontrado na carga {payload.legacy_id}")
+            continue
+        item = next((candidate for candidate in existing_items if candidate.proposal_item_id == proposal_item.id), None)
+        if item is None:
+            item = GalvanizationLoadItem(load_id=load.id, proposal_id=proposal_item.proposal_id, proposal_item_id=proposal_item.id)
+            session.add(item)
+            summary.item_created += 1
+        else:
+            summary.item_updated += 1
+        _apply_galvanization_load_item(item, item_payload)
+
+
+def _apply_galvanization_load(load: GalvanizationLoad, payload: GalvanizationLoadSyncPayload) -> None:
+    for field in ("legacy_id", "driver_name", "max_weight", "total_weight", "status", "expected_return_date", "sent_at", "returned_at", "closed_at", "notes"):
+        setattr(load, field, getattr(payload, field))
+
+
+def _apply_galvanization_load_item(item: GalvanizationLoadItem, payload: GalvanizationLoadItemSyncPayload) -> None:
+    for field in ("sent_quantity", "returned_quantity", "unit_weight", "sent_weight", "returned_weight", "status", "returned_at"):
+        value = getattr(payload, field)
+        if isinstance(value, Decimal):
+            value = value.quantize(Decimal("0.0001"))
+        setattr(item, field, value)
+
+
+async def sync_fiscal_batch(session: AsyncSession, batch: FiscalSyncBatch, actor: User, *, request_id: str | None) -> SyncSummary:
+    errors = _validate_fiscal_batch(batch)
+    if errors:
+        return SyncSummary(received=len(batch.records), rejected=len(errors), errors=errors, dry_run=batch.dry_run)
+    if batch.dry_run:
+        return await _simulate_fiscal(session, batch)
+
+    locked = bool((await session.execute(text("SELECT pg_try_advisory_xact_lock(:lock_id)").bindparams(lock_id=FISCAL_SYNC_LOCK_ID))).scalar_one())
+    if not locked:
+        raise ApiError(error_codes.SYNC_ALREADY_RUNNING, "Ja existe sincronizacao fiscal em andamento.", status_code=409)
+
+    run = SyncRun(sync_type="fiscal", status="RUNNING", source_identifier=batch.source_identifier, actor_user_id=actor.id, request_id=request_id)
+    session.add(run)
+    await session.flush()
+    await auth_repository.create_security_event(session, "FISCAL_SYNC_STARTED", actor_user_id=actor.id, request_id=request_id, details={"sync_run_id": run.id, "received": len(batch.records)})
+
+    summary = SyncSummary(received=len(batch.records), dry_run=False, sync_run_id=run.id)
+    try:
+        proposal_legacy_ids = {record.proposal_legacy_id for record in batch.records}
+        proposals_by_legacy_id = await _resolve_proposals_by_legacy_id(session, proposal_legacy_ids)
+        item_legacy_ids = {
+            item.proposal_item_legacy_id
+            for record in batch.records
+            for item in record.items
+        } | {
+            invoice_item.proposal_item_legacy_id
+            for record in batch.records
+            for invoice in record.invoices
+            for invoice_item in invoice.items
+        }
+        items_by_legacy_id = await _resolve_proposal_items_by_legacy_id(session, item_legacy_ids)
+        for payload in batch.records:
+            await _upsert_fiscal_record(session, payload, proposals_by_legacy_id, items_by_legacy_id, summary)
+        run.status = "COMPLETED" if not summary.errors else "PARTIAL"
+        run.finished_at = datetime.now(UTC)
+        _copy_counts(run, summary)
+        run.details = {"batch_number": batch.batch_number, "batch_total": batch.batch_total, "errors": summary.errors[:20]}
+        event = "FISCAL_SYNC_COMPLETED" if run.status == "COMPLETED" else "FISCAL_SYNC_PARTIAL"
+        await auth_repository.create_security_event(session, event, actor_user_id=actor.id, request_id=request_id, details={"sync_run_id": run.id, "received": summary.received, "created": summary.created, "updated": summary.updated, "unchanged": summary.unchanged, "rejected": summary.rejected})
+        await session.commit()
+        return summary
+    except Exception as exc:
+        await session.rollback()
+        raise ApiError(error_codes.SYNC_BATCH_FAILED, "Nao foi possivel sincronizar o lote fiscal.", status_code=422) from exc
+
+
+def _validate_fiscal_batch(batch: FiscalSyncBatch) -> list[str]:
+    errors: list[str] = []
+    legacy_ids: set[int] = set()
+    for record in batch.records:
+        if record.legacy_id in legacy_ids:
+            errors.append(f"registro fiscal legacy_id duplicado no lote: {record.legacy_id}")
+        legacy_ids.add(record.legacy_id)
+    return errors
+
+
+async def _simulate_fiscal(session: AsyncSession, batch: FiscalSyncBatch) -> SyncSummary:
+    summary = SyncSummary(received=len(batch.records), dry_run=True)
+    proposal_legacy_ids = {record.proposal_legacy_id for record in batch.records}
+    proposals_by_legacy_id = await _resolve_proposals_by_legacy_id(session, proposal_legacy_ids)
+    for payload in batch.records:
+        proposal = proposals_by_legacy_id.get(payload.proposal_legacy_id)
+        if proposal is None:
+            summary.errors.append(f"proposta legada {payload.proposal_legacy_id} nao encontrada para o registro fiscal {payload.legacy_id}")
+            continue
+        existing = (await session.execute(select(FiscalRecord).where(FiscalRecord.proposal_id == proposal.id))).scalars().first()
+        if existing is None:
+            summary.created += 1
+        else:
+            summary.updated += 1
+    return summary
+
+
+async def _upsert_fiscal_record(
+    session: AsyncSession,
+    payload: FiscalRecordSyncPayload,
+    proposals_by_legacy_id: dict[int, Proposal],
+    items_by_legacy_id: dict[int, ProposalItem],
+    summary: SyncSummary,
+) -> None:
+    proposal = proposals_by_legacy_id.get(payload.proposal_legacy_id)
+    if proposal is None:
+        summary.errors.append(f"proposta legada {payload.proposal_legacy_id} nao encontrada para o registro fiscal {payload.legacy_id}")
+        return
+
+    # Casa por proposal_id (UNIQUE em fiscal_records), nao por legacy_id: um
+    # FiscalRecord pode ja existir sem legacy_id (auto-provisionado por outro
+    # fluxo de leitura da tela fiscal) antes desta sincronizacao rodar.
+    existing = (
+        await session.execute(
+            select(FiscalRecord)
+            .options(selectinload(FiscalRecord.items), selectinload(FiscalRecord.invoices).selectinload(FiscalInvoice.items))
+            .where(FiscalRecord.proposal_id == proposal.id)
+        )
+    ).scalars().first()
+    if existing is None:
+        record = FiscalRecord(proposal_id=proposal.id)
+        session.add(record)
+        summary.created += 1
+        existing_items: list[FiscalItem] = []
+        existing_invoices: list[FiscalInvoice] = []
+    else:
+        record = existing
+        existing_items = list(existing.items)
+        existing_invoices = list(existing.invoices)
+        summary.updated += 1
+    _apply_fiscal_record(record, payload)
+    record.proposal_id = proposal.id
+    await session.flush()
+
+    fiscal_items_by_proposal_item_id: dict[int, FiscalItem] = {int(item.proposal_item_id): item for item in existing_items}
+    for item_payload in payload.items:
+        proposal_item = items_by_legacy_id.get(item_payload.proposal_item_legacy_id)
+        if proposal_item is None:
+            summary.errors.append(f"item legado {item_payload.proposal_item_legacy_id} nao encontrado no registro fiscal {payload.legacy_id}")
+            continue
+        fiscal_item = fiscal_items_by_proposal_item_id.get(proposal_item.id)
+        if fiscal_item is None:
+            fiscal_item = FiscalItem(fiscal_record_id=record.id, proposal_id=proposal.id, proposal_item_id=proposal_item.id)
+            session.add(fiscal_item)
+            summary.item_created += 1
+        else:
+            summary.item_updated += 1
+        _apply_fiscal_item(fiscal_item, item_payload)
+        fiscal_items_by_proposal_item_id[proposal_item.id] = fiscal_item
+    await session.flush()
+
+    invoices_by_legacy_id: dict[int, FiscalInvoice] = {int(invoice.legacy_id): invoice for invoice in existing_invoices if invoice.legacy_id is not None}
+    invoice_items_by_invoice_id: dict[int, dict[int, FiscalInvoiceItem]] = {
+        invoice.id: {int(line.proposal_item_id): line for line in invoice.items} for invoice in existing_invoices
+    }
+    for invoice_payload in payload.invoices:
+        invoice = invoices_by_legacy_id.get(invoice_payload.legacy_id)
+        is_new_invoice = invoice is None
+        if invoice is None:
+            invoice = FiscalInvoice(fiscal_record_id=record.id, proposal_id=proposal.id)
+            session.add(invoice)
+        _apply_fiscal_invoice(invoice, invoice_payload)
+        await session.flush()
+        existing_invoice_items = {} if is_new_invoice else invoice_items_by_invoice_id.get(invoice.id, {})
+        for invoice_item_payload in invoice_payload.items:
+            proposal_item = items_by_legacy_id.get(invoice_item_payload.proposal_item_legacy_id)
+            if proposal_item is None:
+                summary.errors.append(f"item legado {invoice_item_payload.proposal_item_legacy_id} nao encontrado na emissao {invoice_payload.legacy_id}")
+                continue
+            fiscal_item = fiscal_items_by_proposal_item_id.get(proposal_item.id)
+            if fiscal_item is None:
+                summary.errors.append(f"item fiscal para {invoice_item_payload.proposal_item_legacy_id} nao encontrado no registro {payload.legacy_id}; linha de emissao {invoice_payload.legacy_id} pulada")
+                continue
+            invoice_line = existing_invoice_items.get(proposal_item.id)
+            if invoice_line is None:
+                invoice_line = FiscalInvoiceItem(
+                    fiscal_invoice_id=invoice.id,
+                    fiscal_item_id=fiscal_item.id,
+                    proposal_id=proposal.id,
+                    proposal_item_id=proposal_item.id,
+                )
+                session.add(invoice_line)
+            invoice_line.quantity = invoice_item_payload.quantity.quantize(Decimal("0.0001"))
+            invoice_line.weight = invoice_item_payload.weight.quantize(Decimal("0.0001")) if invoice_item_payload.weight is not None else None
+
+
+def _apply_fiscal_record(record: FiscalRecord, payload: FiscalRecordSyncPayload) -> None:
+    for field in ("legacy_id", "status_fiscal", "fiscal_situation", "entry_date", "last_emission_at", "invoice_withdrawn_at", "withdrawal_observation", "observation"):
+        setattr(record, field, getattr(payload, field))
+
+
+def _apply_fiscal_item(item: FiscalItem, payload: FiscalItemSyncPayload) -> None:
+    for field in ("total_quantity", "billed_quantity", "total_weight", "billed_weight", "status"):
+        value = getattr(payload, field)
+        if isinstance(value, Decimal):
+            value = value.quantize(Decimal("0.0001"))
+        setattr(item, field, value)
+
+
+def _apply_fiscal_invoice(invoice: FiscalInvoice, payload: FiscalInvoiceSyncPayload) -> None:
+    for field in ("legacy_id", "invoice_number", "series", "issued_at", "emission_type", "observation", "source"):
+        setattr(invoice, field, getattr(payload, field))
+
+
+async def sync_expedition_backfill(session: AsyncSession, actor: User, *, request_id: str | None) -> SyncSummary:
+    """Fecha ExpeditionItem para itens legados ja entregues (ProposalItem.delivered=True).
+
+    Nao le o SQLite diretamente -- deriva do que a sincronizacao de propostas
+    (sync_batch) ja gravou em ProposalItem.delivered/delivered_at. Itens
+    produzidos mas ainda nao entregues nao precisam de linha explicita: o
+    backfill preguicoso existente (_sync_expedition_from_available_items,
+    chamado a cada leitura da tela de Expedicao) ja cuida deles a partir do
+    estado de ProposalItem.
+    """
+    rows = (
+        await session.execute(
+            select(ProposalItem)
+            .options(selectinload(ProposalItem.expedition_item))
+            .where(ProposalItem.delivered.is_(True))
+        )
+    ).scalars().all()
+    summary = SyncSummary(received=len(rows), dry_run=False)
+    for item in rows:
+        if item.expedition_item is not None:
+            summary.unchanged += 1
+            continue
+        quantity = item.quantity.quantize(Decimal("0.0001"))
+        session.add(
+            ExpeditionItem(
+                proposal_id=item.proposal_id,
+                proposal_item_id=item.id,
+                available_quantity=quantity,
+                separated_quantity=quantity,
+                delivered_quantity=quantity,
+                origin="LEGADO",
+                status="ENTREGUE",
+                separated_at=item.delivered_at,
+                delivered_at=item.delivered_at,
+            )
+        )
+        summary.created += 1
+    await auth_repository.create_security_event(session, "EXPEDITION_BACKFILL_COMPLETED", actor_user_id=actor.id, request_id=request_id, details={"created": summary.created, "unchanged": summary.unchanged})
+    await session.commit()
+    return summary

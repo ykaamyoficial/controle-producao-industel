@@ -19,6 +19,8 @@ class User(Base, TimestampMixin):
     __tablename__ = "users"
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    legacy_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    source_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     username: Mapped[str] = mapped_column(String(80), nullable=False)
     display_name: Mapped[str] = mapped_column(String(160), nullable=False)
     avatar_bytes: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
@@ -35,7 +37,10 @@ class User(Base, TimestampMixin):
     updated_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
 
     roles: Mapped[list["Role"]] = relationship(secondary="user_roles", back_populates="users", lazy="selectin")
-    __table_args__ = (Index("ix_users_username_lower", func.lower(username), unique=True),)
+    __table_args__ = (
+        Index("ix_users_username_lower", func.lower(username), unique=True),
+        UniqueConstraint("legacy_id", name="uq_users_legacy_id"),
+    )
 
 
 class Role(Base, TimestampMixin):
