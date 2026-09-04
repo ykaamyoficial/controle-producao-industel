@@ -384,12 +384,43 @@ class BackendService:
     def can_edit_area(self, area: str) -> bool:
         return self.can_edit(area)
 
+    def _dashboard_proposals_full(self) -> list[dict[str, Any]]:
+        return self._cached_read(
+            'dashboard_proposals_full',
+            lambda: self.official_proposal_storage.list_proposals(sort_by='updated_at', sort_dir='desc', limit=200, offset=0),
+            ttl=15.0,
+        )
+
+    def _dashboard_production_full(self) -> list[dict[str, Any]]:
+        return self._cached_read(
+            'dashboard_production_full',
+            lambda: self.official_proposal_storage.list_production_proposals(limit=200, offset=0),
+            ttl=15.0,
+        )
+
+    def _dashboard_expedition_full(self) -> list[dict[str, Any]]:
+        return self._cached_read(
+            'dashboard_expedition_full',
+            lambda: self.official_proposal_storage.list_expedition_proposals(limit=200, offset=0),
+            ttl=15.0,
+        )
+
+    def _dashboard_fiscal_indicators(self) -> dict[str, Any]:
+        return self._cached_read('dashboard_fiscal_indicators', self.official_proposal_storage.fiscal_indicators, ttl=15.0)
+
+    def _dashboard_galvanization_candidates(self) -> list[dict[str, Any]]:
+        return self._cached_read(
+            'dashboard_galvanization_candidates',
+            lambda: self.official_proposal_storage.galvanization_load_candidates('', ''),
+            ttl=15.0,
+        )
+
     def dashboard(self) -> dict[str, Any]:
-        rows = self.official_proposal_storage.list_proposals(sort_by='updated_at', sort_dir='desc', limit=200, offset=0)
-        production = len(self.official_proposal_storage.list_production_proposals(limit=200, offset=0))
-        expedition = len(self.official_proposal_storage.list_expedition_proposals(limit=200, offset=0))
-        fiscal = self.official_proposal_storage.fiscal_indicators()
-        galvanization = len(self.official_proposal_storage.galvanization_load_candidates('', ''))
+        rows = self._dashboard_proposals_full()
+        production = len(self._dashboard_production_full())
+        expedition = len(self._dashboard_expedition_full())
+        fiscal = self._dashboard_fiscal_indicators()
+        galvanization = len(self._dashboard_galvanization_candidates())
         delivered = sum((1 for row in rows if row.get('status_geral') == 'ENTREGUE' or row.get('current_status') == 'ENTREGUE'))
         active = sum((1 for row in rows if row.get('status_geral') not in {'ENTREGUE', 'CANCELADA'} and row.get('current_status') not in {'ENTREGUE', 'CANCELADA'}))
         return {'Ativas': active, 'Vencidos': 0, 'Prox. 7 dias': 0, 'Producao': production, 'Galvanizacao': galvanization, 'Expedicao': expedition, 'Pend. remanej.': 0, 'Entregues': delivered, 'Fiscal': fiscal.get('falta_emitir', 0) + fiscal.get('nf_parcial', 0)}
@@ -398,7 +429,7 @@ class BackendService:
         data = self.dashboard()
         areas = [{'label': 'Producao', 'total': data.get('Producao', 0)}, {'label': 'Galvanizacao', 'total': data.get('Galvanizacao', 0)}, {'label': 'Expedicao', 'total': data.get('Expedicao', 0)}, {'label': 'Fiscal', 'total': data.get('Fiscal', 0)}]
         status_counts: dict[str, int] = {}
-        for row in self.official_proposal_storage.list_proposals(sort_by='updated_at', sort_dir='desc', limit=200, offset=0):
+        for row in self._dashboard_proposals_full():
             status = row.get('status_geral') or row.get('current_status') or '-'
             status_counts[status] = status_counts.get(status, 0) + 1
         return {'areas': areas, 'status': [{'label': key, 'total': value} for key, value in status_counts.items()], 'prazos': []}
@@ -1417,19 +1448,10 @@ class BackendService:
             raise self._api_app_error(exc) from exc
 
     def process_loads(self, process_id: int) -> list[dict[str, Any]]:
-        loads = []
         try:
-            galvanization_loads = self.official_proposal_storage.galvanization_loads()
+            return self.official_proposal_storage.galvanization_loads_page(proposal_id=process_id, limit=200, offset=0)["items"]
         except Exception:
-            return loads
-        for load in galvanization_loads:
-            try:
-                items = self.official_proposal_storage.galvanization_load_items(int(load['id']))
-            except Exception:
-                continue
-            if any((int(item.get('processo_id') or 0) == int(process_id) for item in items)):
-                loads.append(load)
-        return loads
+            return []
 
     def audit_rows(self) -> list[dict[str, Any]]:
         try:

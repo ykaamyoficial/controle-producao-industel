@@ -325,12 +325,13 @@ async def list_galvanization_candidates(
 async def list_galvanization_loads(
     status_filter: str | None = Query(default=None, alias="status", max_length=80),
     search: str | None = Query(default=None, max_length=180),
+    proposal_id: int | None = Query(default=None, gt=0),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     session: AsyncSession = Depends(get_db_session),
     _actor: User = Depends(require_permission(GALVANIZATION_VIEW)),
 ):
-    return await service.list_galvanization_loads(session, status=status_filter, search=search, limit=limit, offset=offset)
+    return await service.list_galvanization_loads(session, status=status_filter, search=search, proposal_id=proposal_id, limit=limit, offset=offset)
 
 
 @router.post("/galvanization/loads", response_model=GalvanizationLoadDetail, status_code=status.HTTP_201_CREATED)

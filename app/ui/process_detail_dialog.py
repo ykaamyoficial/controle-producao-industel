@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QDialog, QFrame, QHBoxLayout, QLabel, QTabWidget, QVBoxLayout
 
 from app.services.app_logging import get_logger
+from app.ui.background_worker import start_worker
 from app.ui.components.frameless_dialog import apply_frameless_rounded_dialog
 from app.ui.components.modern_button import ModernButton
 from app.ui.components.status_badge import StatusBadge
@@ -29,13 +31,21 @@ class ProcessDetailDialog(QDialog):
     dados ja existentes via `service` e distribui para cada aba, sem duplicar
     nenhuma regra de negocio."""
 
-    def __init__(self, service, process_id: int, parent=None, process_ids: list[int] | None = None):
+    # Emitido ao final de cada load() (sucesso ou erro) -- usado por testes
+    # pra saber quando a busca em background terminou (mesmo padrao de
+    # QEventLoop de test_background_stability.py) e por quem mais quiser
+    # observar o ciclo de carga.
+    loaded = Signal()
+
+    def __init__(self, service, process_id: int, parent=None, process_ids: list[int] | None = None, area: str | None = None):
         super().__init__(parent)
         self.service = service
         self.process_id = process_id
         self.process_ids = list(dict.fromkeys([int(process_id), *(int(value) for value in (process_ids or []) if value)]))
+        self.area = area
         self.changed = False
         self.process: dict = {}
+        self._load_thread = None
         self.setWindowTitle("Detalhes da proposta")
         apply_large_dialog_geometry(self, parent)
         style_dialog_from_parent(self, parent)
@@ -101,9 +111,45 @@ class ProcessDetailDialog(QDialog):
         self.tabs.addTab(self.historico_tab, "Historico")
         root.addWidget(self.tabs, 1)
 
+    def _fetch(self) -> dict:
+        """Roda em thread de fundo (start_worker) -- so chamadas de servico,
+        nenhum acesso a widget aqui (regra do Qt: widgets so na UI thread)."""
+        if self.area:
+            processes = [self.service.get_process_area_dict(process_id, self.area) for process_id in self.process_ids]
+        else:
+            processes = [self.service.get_process_dict(process_id) for process_id in self.process_ids]
+        process = next((item for item in processes if item), None)
+        partials = self.service.process_partials(self.process_id) if process else []
+        loads = self.service.process_loads(self.process_id) if process else []
+        return {"processes": processes, "process": process, "partials": partials, "loads": loads}
+
     def load(self):
-        processes = [self.service.get_process_dict(process_id) for process_id in self.process_ids]
-        self.process = next((process for process in processes if process), None)
+        self.tabs.setEnabled(False)
+        self.edit_button.setEnabled(False)
+        self.actions_button.setEnabled(False)
+        self.title.setText("Carregando...")
+        self._load_thread = start_worker(self, self._fetch, self._load_success, self._load_error)
+
+    def _load_error(self, exc):
+        try:
+            self.tabs.setEnabled(True)
+            log.exception("Falha ao carregar Detalhes da proposta | process_ids=%r", self.process_ids, exc_info=exc)
+            self.reject()
+        finally:
+            self.loaded.emit()
+
+    def _load_success(self, payload: dict):
+        try:
+            self._render_loaded(payload)
+        finally:
+            self.loaded.emit()
+
+    def _render_loaded(self, payload: dict) -> None:
+        self.tabs.setEnabled(True)
+        self.edit_button.setEnabled(True)
+        self.actions_button.setEnabled(True)
+        processes = payload["processes"]
+        self.process = payload["process"]
         if not self.process:
             log.debug("Nenhuma proposta encontrada para process_ids=%r; fechando Detalhes.", self.process_ids)
             self.reject()
@@ -128,8 +174,8 @@ class ProcessDetailDialog(QDialog):
         self.edit_button.setVisible(not cancelled and len(self.process_ids) == 1)
         self.actions_button.setVisible(not cancelled)
 
-        partials = self.service.process_partials(self.process_id)
-        loads = self.service.process_loads(self.process_id)
+        partials = payload["partials"]
+        loads = payload["loads"]
         partial_row = next((row for row in partials if int(row.get("id") or 0) == int(self.process_id)), partials[0] if partials else {})
 
         self.resumo_tab.load(p, self.process_ids, partials, loads)

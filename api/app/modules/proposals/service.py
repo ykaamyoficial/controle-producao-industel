@@ -527,10 +527,12 @@ async def list_galvanization_candidates(session: AsyncSession, *, search: str | 
     return PaginatedGalvanizationCandidateResponse(items=rows[offset:offset + limit], total=len(rows), limit=limit, offset=offset)
 
 
-async def list_galvanization_loads(session: AsyncSession, *, status: str | None, search: str | None, limit: int, offset: int) -> PaginatedGalvanizationLoadResponse:
+async def list_galvanization_loads(session: AsyncSession, *, status: str | None, search: str | None, proposal_id: int | None = None, limit: int, offset: int) -> PaginatedGalvanizationLoadResponse:
     stmt = select(GalvanizationLoad).options(selectinload(GalvanizationLoad.items).selectinload(GalvanizationLoadItem.proposal), selectinload(GalvanizationLoad.items).selectinload(GalvanizationLoadItem.proposal_item)).where(GalvanizationLoad.active.is_(True))
     if status:
         stmt = stmt.where(GalvanizationLoad.status == status)
+    if proposal_id:
+        stmt = stmt.where(GalvanizationLoad.id.in_(select(GalvanizationLoadItem.load_id).where(GalvanizationLoadItem.proposal_id == proposal_id)))
     rows = (await session.execute(stmt.order_by(GalvanizationLoad.created_at.desc(), GalvanizationLoad.id.desc()))).scalars().unique().all()
     if search:
         needle = search.lower()

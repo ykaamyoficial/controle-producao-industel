@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PySide6.QtCore import QEventLoop, QTimer
 from PySide6.QtWidgets import QApplication
 
 from app.services.backend_adapter import OFFICIAL_COLOR_PALETTES, legacy
@@ -96,9 +97,22 @@ class ProcessDetailDialogTests(unittest.TestCase):
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
 
+    @staticmethod
+    def _wait_loaded(dialog: ProcessDetailDialog) -> None:
+        # ProcessDetailDialog.load() busca em thread de fundo (start_worker);
+        # espera o sinal `loaded` (emitido em _load_success/_load_error) do
+        # mesmo jeito que test_background_stability.py espera workers, com um
+        # teto de seguranca pra nunca travar a suite se algo quebrar.
+        loop = QEventLoop()
+        dialog.loaded.connect(loop.quit)
+        QTimer.singleShot(5000, loop.quit)
+        loop.exec()
+
     def _dialog(self, service=None) -> ProcessDetailDialog:
         service = service or FakeDetailService()
-        return ProcessDetailDialog(service, service.process["id"], None)
+        dialog = ProcessDetailDialog(service, service.process["id"], None)
+        self._wait_loaded(dialog)
+        return dialog
 
     def test_header_uses_shared_proposal_formatting_and_shows_stage_and_deadline(self):
         dialog = self._dialog()
@@ -238,6 +252,7 @@ class ProcessDetailDialogTests(unittest.TestCase):
         service.process_partials = counting_partials
 
         dialog = ProcessDetailDialog(service, 10, None, process_ids=[10, 11])
+        self._wait_loaded(dialog)
 
         # ProcessDetailDialog.load() ainda faz sua propria chamada unica a
         # process_partials(self.process_id) (usada pela aba Fluxo); o que a
@@ -251,7 +266,9 @@ class ProcessDetailDialogTests(unittest.TestCase):
         service.items = [{"id": 1, "numero_item": "1", "descricao": "Item A", "quantidade": "1", "peso": "1", "produzido": True, "galvanizado": True, "entregue": True}]
         dialog = self._dialog(service)
         dialog.load()
+        self._wait_loaded(dialog)
         dialog.load()
+        self._wait_loaded(dialog)
         self.assertEqual(dialog.tabs.count(), 6)
         self.assertEqual(dialog.itens_tab.table.rowCount(), 1)
 

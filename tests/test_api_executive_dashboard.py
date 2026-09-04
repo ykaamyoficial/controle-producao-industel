@@ -35,8 +35,28 @@ class FakeOfficialProposalStorage:
 
 
 class FakeBackendService:
+    """Espelha os metodos de BackendService que ApiExecutiveDashboardService
+    chama hoje (Secao 2 do plano de otimizacao de carregamento: passou a
+    reaproveitar o cache curto do BackendService em vez de bater direto na
+    storage, mesmas chaves/parametros usados pelo Painel Geral)."""
+
     def __init__(self, storage: FakeOfficialProposalStorage):
         self.official_proposal_storage = storage
+
+    def _dashboard_proposals_full(self):
+        return self.official_proposal_storage.list_proposals(sort_by="updated_at", sort_dir="desc", limit=200, offset=0)
+
+    def _dashboard_production_full(self):
+        return self.official_proposal_storage.list_production_proposals(limit=200, offset=0)
+
+    def _dashboard_expedition_full(self):
+        return self.official_proposal_storage.list_expedition_proposals(limit=200, offset=0)
+
+    def _dashboard_fiscal_indicators(self):
+        return self.official_proposal_storage.fiscal_indicators()
+
+    def galvanization_loads(self):
+        return self.official_proposal_storage.galvanization_loads()
 
 
 def _fixture_service():

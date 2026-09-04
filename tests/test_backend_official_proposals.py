@@ -309,6 +309,11 @@ class FakeOfficialProposalStorage:
         self.calls.append(("galvanization_loads",))
         return [{"id": 7, "status": "LIBERADA_PARA_ENVIO"}]
 
+    def galvanization_loads_page(self, **filters):
+        self.calls.append(("galvanization_loads_page", filters))
+        items = [{"id": 7, "status": "LIBERADA_PARA_ENVIO"}]
+        return {"items": items, "total": len(items)}
+
     def galvanization_load_items(self, load_id):
         self.calls.append(("galvanization_load_items", load_id))
         return [{"processo_id": 30, "proposta": "CP00030", "cliente": "ACME", "peso_enviado": "10"}]

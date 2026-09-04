@@ -5,7 +5,6 @@ from typing import Any
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QApplication,
     QCheckBox,
     QComboBox,
     QFrame,
@@ -20,7 +19,9 @@ from PySide6.QtWidgets import (
 )
 
 from app.models.operational_report_table_model import OperationalReportTableModel
+from app.ui.background_worker import start_worker
 from app.ui.components.modern_button import ModernButton
+from app.ui.components.toast_notification import ToastNotification
 from app.ui.components.modern_table import ModernTable
 from app.ui.icons import make_icon
 from app.ui.styles import area_color
@@ -45,6 +46,8 @@ class ExecutiveDashboardPage(QWidget):
         self.fiscal_cards: list[QWidget] = []
         self.alert_model = OperationalReportTableModel(self)
         self.alert_widgets: list[QWidget] = []
+        self._refreshing = False
+        self._refresh_thread = None
         self._build()
 
     def _build(self) -> None:
@@ -295,19 +298,34 @@ class ExecutiveDashboardPage(QWidget):
         }
 
     def _on_refresh_clicked(self) -> None:
-        # "Atualizar" busca o relatorio executivo de forma sincrona (sem
-        # worker/QThread) - o icone gira enquanto a consulta roda, mesmo sem
-        # animar quadro a quadro durante o bloqueio, pra dar feedback visual
-        # de inicio/fim (PDF 10.1: "rotate somente durante operacao").
-        self.refresh_btn.rotate_while(True)
-        QApplication.processEvents()
-        try:
-            self.refresh()
-        finally:
-            self.refresh_btn.rotate_while(False)
+        self.refresh()
 
     def refresh(self) -> None:
-        self.current_data = self.service.executive_dashboard_report(self.filters())
+        # Busca o relatorio executivo em thread de fundo (start_worker) -- o
+        # icone gira enquanto a consulta roda e so para no callback de
+        # sucesso/erro, sem travar a UI (PDF 10.1: "rotate somente durante
+        # operacao").
+        if self._refreshing:
+            return
+        self._refreshing = True
+        self.refresh_btn.rotate_while(True)
+        filters = self.filters()
+        self._refresh_thread = start_worker(
+            self,
+            lambda: self.service.executive_dashboard_report(filters),
+            self._refresh_success,
+            self._refresh_error,
+        )
+
+    def _refresh_error(self, exc):
+        self._refreshing = False
+        self.refresh_btn.rotate_while(False)
+        ToastNotification(self.window(), f"Nao foi possivel atualizar o dashboard executivo: {exc}", "error")
+
+    def _refresh_success(self, data: dict) -> None:
+        self._refreshing = False
+        self.refresh_btn.rotate_while(False)
+        self.current_data = data or {}
         self.reliability_badge.setText(f"Confiabilidade: {str(self.current_data.get('confiabilidade') or '-').title()}")
         self.updated_at.setText("Ultima atualizacao: " + datetime.now().strftime("%d/%m/%Y %H:%M"))
         self.focus_label.setText(self._focus_text())

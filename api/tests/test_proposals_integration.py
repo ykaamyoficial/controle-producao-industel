@@ -265,6 +265,39 @@ class ProposalsIntegrationTests(unittest.TestCase):
         shipping = self.client.get("/api/v1/shipping/proposals", params={"search": "CP-CANCEL-GALV"}, headers=headers)
         self.assertEqual(shipping.json()["total"], 0)
 
+    def test_galvanization_loads_filter_by_proposal_id_avoids_client_side_n_plus_one(self):
+        # Regressao: app/services/backend_adapter.py::process_loads() buscava
+        # TODAS as cargas ativas e, para cada uma, fazia uma chamada HTTP
+        # separada so pra checar se algum item pertencia a proposta aberta
+        # (Detalhes da proposta, aba Cargas). Esse filtro elimina o N+1: uma
+        # unica chamada com ?proposal_id=X ja retorna so as cargas certas.
+        headers = self._headers()
+        proposal_a = self._proposal_ready_for_galvanization("CP-GALVFILTER-A", headers, [_item_payload("1")])
+        proposal_b = self._proposal_ready_for_galvanization("CP-GALVFILTER-B", headers, [_item_payload("1")])
+        item_a = proposal_a["items"][0]
+        item_b = proposal_b["items"][0]
+        load_a = self.client.post(
+            "/api/v1/galvanization/loads",
+            json={"driver_name": "Motorista A", "items": [{"proposal_item_id": item_a["id"], "sent_quantity": "2.0000"}]},
+            headers=headers,
+        ).json()
+        load_b = self.client.post(
+            "/api/v1/galvanization/loads",
+            json={"driver_name": "Motorista B", "items": [{"proposal_item_id": item_b["id"], "sent_quantity": "2.0000"}]},
+            headers=headers,
+        ).json()
+
+        filtered_a = self.client.get("/api/v1/galvanization/loads", params={"proposal_id": proposal_a["id"]}, headers=headers)
+        self.assertEqual(filtered_a.status_code, 200)
+        ids_a = [row["id"] for row in filtered_a.json()["items"]]
+        self.assertIn(load_a["id"], ids_a)
+        self.assertNotIn(load_b["id"], ids_a)
+
+        filtered_b = self.client.get("/api/v1/galvanization/loads", params={"proposal_id": proposal_b["id"]}, headers=headers)
+        ids_b = [row["id"] for row in filtered_b.json()["items"]]
+        self.assertIn(load_b["id"], ids_b)
+        self.assertNotIn(load_a["id"], ids_b)
+
     def test_cancelled_proposal_is_removed_from_fiscal_and_cannot_emit_invoice(self):
         headers = self._headers()
         proposal = self.client.post("/api/v1/proposals", json=_proposal_payload("CP-CANCEL-FISCAL"), headers=headers).json()

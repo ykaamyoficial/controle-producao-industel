@@ -167,11 +167,14 @@ class ApiExecutiveDashboardService:
 
     def generate(self, filters: dict[str, Any] | None = None) -> dict[str, Any]:
         filters = {key: value for key, value in (filters or {}).items() if value not in (None, "")}
-        proposals = self.backend.official_proposal_storage.list_proposals(sort_by="updated_at", sort_dir="desc", limit=200, offset=0)
-        production = self.backend.official_proposal_storage.list_production_proposals(limit=200, offset=0)
-        expedition = self.backend.official_proposal_storage.list_expedition_proposals(limit=200, offset=0)
-        loads = self.backend.official_proposal_storage.galvanization_loads()
-        fiscal = self.backend.official_proposal_storage.fiscal_indicators()
+        # Mesmas chaves/parametros que o Painel Geral (BackendService.dashboard()) usa
+        # -- reaproveita o cache de 15s em vez de bater na API de novo (Secao 2 do
+        # plano de otimizacao de carregamento).
+        proposals = self.backend._dashboard_proposals_full()
+        production = self.backend._dashboard_production_full()
+        expedition = self.backend._dashboard_expedition_full()
+        loads = self.backend.galvanization_loads()
+        fiscal = self.backend._dashboard_fiscal_indicators()
         rows = _filter_dashboard_proposals(proposals, filters)
         production_rows = _filter_dashboard_proposals(production, filters)
         expedition_rows = _filter_dashboard_proposals(expedition, filters)
