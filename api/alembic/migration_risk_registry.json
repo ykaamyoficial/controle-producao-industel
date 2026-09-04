@@ -138,5 +138,15 @@
     "classification": "ADDITIVE",
     "summary": "Adiciona metadados opcionais de exclusao e purge aos anexos do chat.",
     "justification": "Apenas ADD COLUMN nullable em chat_attachments. Registros existentes continuam validos e nenhum dado historico e removido."
+  },
+  "20260824_0028": {
+    "classification": "ADDITIVE",
+    "summary": "Cria proposal_attachments (fotos de evidencia anexadas a acoes de proposta) e indices de consulta.",
+    "justification": "Apenas CREATE TABLE de tabela nova (FK para proposals e users, ambas ja existentes) e CREATE INDEX sobre a propria tabela nova. Nenhuma tabela, coluna ou linha existente e alterada; segue o mesmo padrao ja aprovado ADDITIVE de 20260820_0025 (chat_attachments)."
+  },
+  "20260824_0029": {
+    "classification": "ADDITIVE",
+    "summary": "Adiciona coluna nullable request_id em proposal_attachments para correlacionar foto com o evento do historico na timeline.",
+    "justification": "ADD COLUMN nullable sem default obrigatorio e CREATE INDEX sobre a propria coluna nova. Nenhum dado existente e alterado; linhas antigas ficam com request_id NULL."
   }
 }
