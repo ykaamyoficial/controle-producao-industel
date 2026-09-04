@@ -44,7 +44,7 @@ class ItensTab(QWidget):
         configure_wrapping_table(self.table, description_columns=(2,), code_columns=(1,), min_row_height=42)
         layout.addWidget(self.table, 1)
 
-    def load(self, process_ids: list[int]):
+    def load(self, process_ids: list[int], processes: list[dict[str, Any]] | None = None):
         items: list[dict[str, Any]] = []
         seen_item_ids: set[int] = set()
         for process_id in process_ids:
@@ -67,12 +67,13 @@ class ItensTab(QWidget):
             f"{len(items)} linha(s) | {format_decimal(total_units)} unidade(s) | {weight_label} | "
             f"cobertura {len(weighted_items)}/{len(items)}"
         )
+        # Os nomes de proposta ja foram buscados pelo dialogo pai (um get_process_dict
+        # por process_id, ja necessario para o cabecalho) - reusa esses dados aqui em
+        # vez de refazer uma chamada de rede (process_partials, que dispara busca +
+        # get_proposal completos) por process_id so para montar este dicionario.
         process_names: dict[Any, str] = {}
-        if len(process_ids) > 1:
-            for process_id in process_ids:
-                process_names.update(
-                    {row.get("id"): row.get("proposta") for row in self.service.process_partials(process_id)}
-                )
+        if len(process_ids) > 1 and processes:
+            process_names.update({process.get("id"): process.get("proposta") for process in processes if process})
         for row, item in enumerate(items):
             values = [
                 item.get("numero_item"),
@@ -96,11 +97,32 @@ class ItensTab(QWidget):
         process_name = process_names.get(item.get("processo_atual_id"))
         if process_name:
             parts.append(f"Processo: {process_name}")
-        parts.extend(
-            [
-                f"Produzido: {'Sim' if item.get('produzido') else 'Nao'}",
-                f"Galvanizado: {'Sim' if item.get('galvanizado') else 'Nao'}",
-                f"Entregue: {'Sim' if item.get('entregue') else 'Nao'}",
-            ]
-        )
+        parts.append(ItensTab._current_stage(item))
         return " | ".join(parts)
+
+    @staticmethod
+    def _current_stage(item: dict[str, Any]) -> str:
+        """Rotulo unico com o estagio atual do item, em vez do checklist bruto
+        Produzido/Galvanizado/Entregue - reflete o proximo passo esperado."""
+        produzir = str(item.get("produzir_internamente") or "indefinido").strip().lower()
+        precisa_galvanizacao = str(item.get("precisa_galvanizacao") or "indefinido").strip().lower()
+        produzido = bool(item.get("produzido"))
+        galvanizado = bool(item.get("galvanizado"))
+        enviado_galvanizacao = bool(item.get("enviado_galvanizacao"))
+        entregue = bool(item.get("entregue"))
+
+        if entregue:
+            return "Entregue"
+        if produzir == "indefinido":
+            return "Fluxo nao definido"
+        if produzir == "nao":
+            return "Nao sera produzido"
+        if not produzido:
+            return "Em producao"
+        if precisa_galvanizacao == "sim":
+            if galvanizado:
+                return "Galvanizado - aguardando expedicao"
+            if enviado_galvanizacao:
+                return "Enviado para galvanizacao"
+            return "Produzido - disponivel para galvanizacao"
+        return "Produzido - aguardando expedicao"

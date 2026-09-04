@@ -30,6 +30,33 @@ class FiscalEmissionReviewDialogTests(unittest.TestCase):
         self.assertFalse(dialog.confirm_button.isEnabled())
         self.assertFalse(dialog.back_button.isEnabled())
 
+    def test_error_message_maps_known_backend_codes(self):
+        class FakeError(Exception):
+            def __init__(self, error_code):
+                super().__init__("mensagem tecnica")
+                self.error_code = error_code
+
+        self.assertIn("saldo fiscal", FiscalEmissionReviewDialog._error_message(FakeError("FISCAL_QUANTITY_EXCEEDED")))
+        self.assertIn("concluida", FiscalEmissionReviewDialog._error_message(FakeError("FISCAL_INVALID_STATE")))
+
+    def test_error_message_falls_back_to_exception_text_for_unmapped_codes(self):
+        """Regression: an exception without a recognized error_code must still
+        surface its real message instead of the generic fallback text. This is
+        what makes the confirm-batch flow debuggable -- previously any error
+        without a mapped code (including AppError instances that lost their
+        error_code while being wrapped by BackendService) always displayed the
+        same unhelpful "Nao foi possivel concluir a emissao fiscal." message.
+        """
+        exc = ValueError("Draft fiscal possui item sem identificador.")
+        self.assertEqual(FiscalEmissionReviewDialog._error_message(exc), str(exc))
+
+    def test_error_message_uses_generic_fallback_only_when_exception_has_no_text(self):
+        class BlankError(Exception):
+            def __str__(self):
+                return ""
+
+        self.assertEqual(FiscalEmissionReviewDialog._error_message(BlankError()), "Nao foi possivel concluir a emissao fiscal.")
+
 
 if __name__ == "__main__":
     unittest.main()

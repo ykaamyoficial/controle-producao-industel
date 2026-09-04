@@ -115,13 +115,15 @@ class ProcessDetailDialogTests(unittest.TestCase):
     def test_items_tab_merges_grouped_processes_without_duplicating_shared_items(self):
         service = FakeDetailService()
         service.items = [
-            {"id": 1, "numero_item": "1", "descricao": "Item A", "quantidade": "2", "peso": "5", "produzido": True, "galvanizado": True, "entregue": False},
-            {"id": 2, "numero_item": "2", "descricao": "Item B", "quantidade": "1", "peso": "", "produzido": False, "galvanizado": False, "entregue": False},
+            {"id": 1, "numero_item": "1", "descricao": "Item A", "quantidade": "2", "peso": "5", "produzir_internamente": "sim", "precisa_galvanizacao": "sim", "produzido": True, "galvanizado": True, "entregue": False},
+            {"id": 3, "numero_item": "3", "descricao": "Item C", "quantidade": "1", "peso": "", "produzir_internamente": "sim", "precisa_galvanizacao": "sim", "produzido": True, "galvanizado": False, "enviado_galvanizacao": True, "entregue": False},
+            {"id": 2, "numero_item": "2", "descricao": "Item B", "quantidade": "1", "peso": "", "produzir_internamente": "sim", "precisa_galvanizacao": "nao", "produzido": False, "galvanizado": False, "entregue": False},
         ]
         dialog = self._dialog(service)
-        self.assertEqual(dialog.itens_tab.table.rowCount(), 2)
-        self.assertIn("Produzido: Sim", dialog.itens_tab.table.item(0, 5).text())
-        self.assertIn("Nao informado", dialog.itens_tab.table.item(1, 4).text())
+        self.assertEqual(dialog.itens_tab.table.rowCount(), 3)
+        self.assertIn("Galvanizado - aguardando expedicao", dialog.itens_tab.table.item(0, 5).text())
+        self.assertIn("Enviado para galvanizacao", dialog.itens_tab.table.item(1, 5).text())
+        self.assertIn("Nao informado", dialog.itens_tab.table.item(2, 4).text())
 
     def test_fluxo_tab_hides_almoxarifado_when_not_needed_and_shows_when_needed(self):
         service = FakeDetailService()
@@ -201,6 +203,48 @@ class ProcessDetailDialogTests(unittest.TestCase):
             dialog.change_status()
         opener.assert_called_once_with(service, 10, dialog)
         self.assertTrue(dialog.changed)
+
+    def test_items_tab_uses_already_fetched_process_names_without_extra_network_calls(self):
+        # Regressao: ItensTab.load() chamava service.process_partials(process_id) uma
+        # vez por process_id parcial so para montar o rotulo "Processo: X" - uma
+        # chamada de rede completa (busca + get_proposal) redundante com os dados que
+        # ProcessDetailDialog.load() ja buscou via get_process_dict para cada id.
+        # Isso deixava a abertura do dialogo lenta em propostas com muitas parciais.
+        service = FakeDetailService()
+        service.process = {**service.process, "id": 10, "proposta": "CP 05389"}
+        second_process = {**service.process, "id": 11, "proposta": "CP 05389-P2"}
+        processes_by_id = {10: dict(service.process), 11: dict(second_process)}
+        service.get_process_dict = lambda process_id: dict(processes_by_id.get(process_id) or {}) or None
+        service.items = [
+            {
+                "id": 1,
+                "numero_item": "1",
+                "descricao": "Item A",
+                "quantidade": "1",
+                "peso": "1",
+                "processo_atual_id": 11,
+                "produzido": True,
+                "galvanizado": True,
+                "entregue": False,
+            }
+        ]
+        call_count = {"n": 0}
+        original_partials = service.process_partials
+
+        def counting_partials(process_id):
+            call_count["n"] += 1
+            return original_partials(process_id)
+
+        service.process_partials = counting_partials
+
+        dialog = ProcessDetailDialog(service, 10, None, process_ids=[10, 11])
+
+        # ProcessDetailDialog.load() ainda faz sua propria chamada unica a
+        # process_partials(self.process_id) (usada pela aba Fluxo); o que a
+        # regressao evita e ItensTab.load() somar mais uma chamada por
+        # process_id parcial so para montar os rotulos "Processo: X".
+        self.assertEqual(call_count["n"], 1)
+        self.assertIn("Processo: CP 05389-P2", dialog.itens_tab.table.item(0, 5).text())
 
     def test_reload_does_not_duplicate_tabs_or_rows(self):
         service = FakeDetailService()

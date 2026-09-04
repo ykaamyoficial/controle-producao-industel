@@ -37,7 +37,7 @@ from app.ui.remanagement_item_selection_dialog import RemanagementItemSelectionS
 from app.ui.remanagement_review_dialog import RemanagementReviewStepDialog
 from app.ui.flow_review_dialog import FlowReviewDialog
 from app.ui.process_detail_dialog import ProcessDetailDialog
-from app.ui.proposal_chat_dialog import ProposalChatDialog
+from app.ui.chat_center_page import ChatCenterDialog
 from app.ui.batch_selection_review_dialog import BatchSelectionReviewDialog
 
 log = get_logger("process_page")
@@ -615,7 +615,7 @@ class ProcessPage(QWidget):
                 ToastNotification(self.window(), "Acao registrada com sucesso.", "success")
 
     def open_chat_for_id(self, process_id: int):
-        dialog = ProposalChatDialog(self.service, process_id, self)
+        dialog = ChatCenterDialog(self.service, self, proposal_id=process_id)
         dialog.exec()
         self.refresh()
 

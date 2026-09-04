@@ -3,6 +3,7 @@ from __future__ import annotations
 import time
 import unittest
 
+from PySide6.QtCore import QThread
 from PySide6.QtWidgets import QApplication, QLabel
 
 from app.services.backend_adapter import OFFICIAL_COLOR_PALETTES
@@ -46,10 +47,28 @@ class ProposalActivityPanelTests(unittest.TestCase):
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
 
+    def setUp(self):
+        self._panels: list[ProposalActivityPanel] = []
+
+    def tearDown(self):
+        # Mesma race de tests/test_notification_center_panel.py: refresh()
+        # spina uma QThread real (start_worker) parented ao painel. Sem
+        # esperar ela terminar, o painel pode ser coletado com a thread ainda
+        # rodando -- Qt destroi uma QThread ativa, o que e undefined behavior
+        # (pode segfaultar o processo em outro teste qualquer). Padrao de
+        # quit()+wait() replicado de tests/test_background_stability.py.
+        for panel in self._panels:
+            for thread in panel.findChildren(QThread):
+                thread.quit()
+                thread.wait(2000)
+            self.app.processEvents()
+        self._panels.clear()
+
     def _build_panel(self, activities: list[dict]) -> ProposalActivityPanel:
         service = FakeService()
         service.activities = activities
         panel = ProposalActivityPanel(service, proposal_id=5)
+        self._panels.append(panel)
         panel.refresh()
         self._pump_until(panel, expected_calls=1)
         return panel

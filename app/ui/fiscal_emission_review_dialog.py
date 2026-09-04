@@ -123,9 +123,10 @@ class FiscalEmissionReviewDialog(QDialog):
             "FISCAL_ITEM_INVALID": "Um item fiscal ficou indisponivel ou invalido. Atualize os dados e revise a emissao.",
             "FISCAL_INVOICE_DUPLICATED": "A NF informada ja esta registrada conforme a regra de unicidade atual.",
             "FISCAL_VERSION_CONFLICT": "Os dados fiscais foram alterados por outra operacao. Atualize e tente novamente.",
+            "FISCAL_INVALID_STATE": "Esta proposta fiscal ja esta concluida (NF emitida). Atualize a lista e revise a selecao.",
             "PERMISSION_DENIED": "Seu usuario nao possui permissao para registrar esta emissao.",
         }
-        return messages.get(code, "Nao foi possivel concluir a emissao fiscal.")
+        return messages.get(code, str(exc) or "Nao foi possivel concluir a emissao fiscal.")
 
     def set_retry_state(self):
         self.confirm_button.setEnabled(True)

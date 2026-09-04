@@ -938,7 +938,18 @@ class FlowReviewDialog(QDialog):
             return
         proposals_to_save = [proposal for proposal in self.proposals if build_payload(proposal) is not None]
         if not proposals_to_save:
-            QMessageBox.information(self, "Definir fluxo dos itens", "Nenhuma alteracao para salvar.")
+            locked_reasons = {
+                item.lock_reason
+                for proposal in self.proposals
+                for item in proposal.items
+                if not item.is_editable and item.lock_reason
+            }
+            if locked_reasons:
+                lines = ["Nenhuma alteracao para salvar: todos os itens selecionados estao bloqueados para alteracao de fluxo."]
+                lines.extend(f"- {reason}" for reason in sorted(locked_reasons))
+                QMessageBox.information(self, "Definir fluxo dos itens", "\n".join(lines))
+            else:
+                QMessageBox.information(self, "Definir fluxo dos itens", "Nenhuma alteracao para salvar.")
             return
         summary = summarize(self.proposals)
         if len(self.proposals) == 1:

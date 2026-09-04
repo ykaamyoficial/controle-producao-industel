@@ -3,6 +3,7 @@ from __future__ import annotations
 from PySide6.QtWidgets import QDialog, QFrame, QHBoxLayout, QLabel, QTabWidget, QVBoxLayout
 
 from app.services.app_logging import get_logger
+from app.ui.components.frameless_dialog import apply_frameless_rounded_dialog
 from app.ui.components.modern_button import ModernButton
 from app.ui.components.status_badge import StatusBadge
 from app.ui.dialog_utils import apply_large_dialog_geometry, style_dialog_from_parent
@@ -38,6 +39,7 @@ class ProcessDetailDialog(QDialog):
         self.setWindowTitle("Detalhes da proposta")
         apply_large_dialog_geometry(self, parent)
         style_dialog_from_parent(self, parent)
+        apply_frameless_rounded_dialog(self)
         self._build()
         self.load()
 
@@ -131,7 +133,7 @@ class ProcessDetailDialog(QDialog):
         partial_row = next((row for row in partials if int(row.get("id") or 0) == int(self.process_id)), partials[0] if partials else {})
 
         self.resumo_tab.load(p, self.process_ids, partials, loads)
-        self.itens_tab.load(self.process_ids)
+        self.itens_tab.load(self.process_ids, processes)
         history = self.historico_tab.load(self.process_ids)
         self.fluxo_tab.load(p, partial_row, history)
         self.cargas_tab.load(loads)
