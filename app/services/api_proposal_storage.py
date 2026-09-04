@@ -157,14 +157,26 @@ class _BorrowedApiClient:
     def get(self, path: str, *, access_token: str | None = None, retries: int = 1):
         return self.request("GET", path, access_token=access_token, retries=retries)
 
+    def get_bytes(self, path: str, *, access_token: str | None = None, accept: str = "*/*"):
+        token = access_token if access_token else None
+        try:
+            return self._client.get_bytes(path, access_token=token, accept=accept)
+        except ApiSessionExpiredError:
+            if not access_token:
+                raise
+            state = self._storage.refresh_session(force=True)
+            if not state.access_token:
+                raise
+            return self._client.get_bytes(path, access_token=state.access_token, accept=accept)
+
     def post(self, path: str, *, json_payload: dict[str, Any] | None = None, access_token: str | None = None):
         return self.request("POST", path, json_payload=json_payload, access_token=access_token, retries=0)
 
     def patch(self, path: str, *, json_payload: dict[str, Any] | None = None, access_token: str | None = None):
         return self.request("PATCH", path, json_payload=json_payload, access_token=access_token, retries=0)
 
-    def delete(self, path: str, *, access_token: str | None = None):
-        return self.request("DELETE", path, access_token=access_token, retries=0)
+    def delete(self, path: str, *, json_payload: dict[str, Any] | None = None, access_token: str | None = None):
+        return self.request("DELETE", path, json_payload=json_payload, access_token=access_token, retries=0)
 
     def request(
         self,
@@ -173,18 +185,20 @@ class _BorrowedApiClient:
         *,
         json_payload: dict[str, Any] | None = None,
         access_token: str | None = None,
+        files=None,
+        data: dict[str, Any] | None = None,
         retries: int = 0,
     ):
         token = access_token if access_token else None
         try:
-            return self._client.request(method, path, json_payload=json_payload, access_token=token, retries=retries)
+            return self._client.request(method, path, json_payload=json_payload, access_token=token, files=files, data=data, retries=retries)
         except ApiSessionExpiredError:
             if not access_token:
                 raise
             state = self._storage.refresh_session(force=True)
             if not state.access_token:
                 raise
-            return self._client.request(method, path, json_payload=json_payload, access_token=state.access_token, retries=retries)
+            return self._client.request(method, path, json_payload=json_payload, access_token=state.access_token, files=files, data=data, retries=retries)
 
 
 class OfficialProposalApiStorage:
@@ -1522,10 +1536,13 @@ class OfficialProposalApiStorage:
         area: str | None = None,
         due_at=None,
         is_important: bool = False,
+        client_message_id: str | None = None,
     ) -> dict[str, Any]:
         client, chat, token = self._chat_client()
         try:
             payload: dict[str, Any] = {"body": body, "message_type": message_type}
+            if client_message_id:
+                payload["client_message_id"] = client_message_id
             if mentioned_user_id:
                 payload["mentioned_user_id"] = mentioned_user_id
             if reply_to_message_id:
@@ -1547,10 +1564,65 @@ class OfficialProposalApiStorage:
         finally:
             client.close()
 
+    def chat_upload_attachment(self, message_id: int, path, *, progress_callback=None, cancel_checker=None, client_attachment_id: str | None = None) -> dict[str, Any]:
+        client, chat, token = self._chat_client()
+        try:
+            return chat.upload_attachment_path(
+                token,
+                message_id,
+                path,
+                progress_callback=progress_callback,
+                cancel_checker=cancel_checker,
+                client_attachment_id=client_attachment_id,
+            )
+        finally:
+            client.close()
+
+    def chat_attachment(self, attachment_id: int) -> dict[str, Any]:
+        client, chat, token = self._chat_client()
+        try:
+            return chat.get_attachment(token, attachment_id)
+        finally:
+            client.close()
+
+    def chat_download_attachment(self, attachment_id: int) -> bytes | None:
+        client, chat, token = self._chat_client()
+        try:
+            return chat.download_attachment(token, attachment_id)
+        finally:
+            client.close()
+
+    def chat_download_attachment_to_file(self, attachment_id: int, destination, *, progress_callback=None, cancel_checker=None) -> bool:
+        client, chat, token = self._chat_client()
+        try:
+            return chat.download_attachment_to_file(
+                token,
+                attachment_id,
+                destination,
+                progress_callback=progress_callback,
+                cancel_checker=cancel_checker,
+            )
+        finally:
+            client.close()
+
+    def chat_delete_attachment(self, attachment_id: int, reason: str) -> dict[str, Any]:
+        client, chat, token = self._chat_client()
+        try:
+            return chat.delete_attachment(token, attachment_id, reason)
+        finally:
+            client.close()
+
     def chat_proposal_timeline(self, proposal_id: int, **filters) -> dict[str, Any]:
         client, chat, token = self._chat_client()
         try:
             return chat.get_proposal_timeline(token, proposal_id, **filters)
+        finally:
+            client.close()
+
+    def chat_shared_content(self, conversation_id: int, **filters) -> dict[str, Any]:
+        client, chat, token = self._chat_client()
+        try:
+            return chat.list_shared_content(token, conversation_id, **filters)
         finally:
             client.close()
 
@@ -1968,6 +2040,7 @@ def _api_item_to_process_item(item: dict[str, Any]) -> dict[str, Any]:
         "processo_atual_id": item.get("proposal_id"),
         "produzido": item.get("produced", False),
         "galvanizado": item.get("galvanized", False),
+        "enviado_galvanizacao": item.get("sent_to_galvanization", False),
         "entregue": item.get("delivered", False),
         "version": item.get("version"),
         "editavel": item.get("flow_editable", True),

@@ -69,9 +69,9 @@ class DesktopApiClient:
     def get(self, path: str, *, access_token: str | None = None, retries: int = 1) -> ApiResponse:
         return self.request("GET", path, access_token=access_token, retries=retries)
 
-    def get_bytes(self, path: str, *, access_token: str | None = None) -> bytes | None:
+    def get_bytes(self, path: str, *, access_token: str | None = None, accept: str = "image/*") -> bytes | None:
         safe_path = _normalize_path(path)
-        headers = {"Accept": "image/*", "User-Agent": USER_AGENT, "X-Request-ID": uuid.uuid4().hex, CLIENT_VERSION_HEADER: APP_VERSION}
+        headers = {"Accept": accept, "User-Agent": USER_AGENT, "X-Request-ID": uuid.uuid4().hex, CLIENT_VERSION_HEADER: APP_VERSION}
         _add_performance_headers(headers)
         if access_token:
             headers["Authorization"] = f"Bearer {access_token}"
@@ -81,6 +81,43 @@ class DesktopApiClient:
         if not 200 <= response.status_code < 300:
             self._parse_response(response, headers["X-Request-ID"], method="GET", path=safe_path)
         return response.content
+
+    def download_to_file(
+        self,
+        path: str,
+        destination,
+        *,
+        access_token: str | None = None,
+        accept: str = "*/*",
+        chunk_size: int = 65536,
+        progress_callback=None,
+        cancel_checker=None,
+    ) -> bool:
+        """Baixa via streaming direto para `destination`, sem carregar o arquivo inteiro em RAM
+        (Fase 5) -- espelha o `_ProgressFile` ja usado no upload. Levanta RuntimeError("download_cancelled")
+        se `cancel_checker` sinalizar cancelamento entre chunks. Retorna False em 404."""
+        safe_path = _normalize_path(path)
+        headers = {"Accept": accept, "User-Agent": USER_AGENT, "X-Request-ID": uuid.uuid4().hex, CLIENT_VERSION_HEADER: APP_VERSION}
+        _add_performance_headers(headers)
+        if access_token:
+            headers["Authorization"] = f"Bearer {access_token}"
+        with self._client.stream("GET", safe_path, headers=headers) as response:
+            if response.status_code == 404:
+                return False
+            if not 200 <= response.status_code < 300:
+                response.read()
+                self._parse_response(response, headers["X-Request-ID"], method="GET", path=safe_path)
+            total = int(response.headers.get("content-length") or 0)
+            sent = 0
+            with open(destination, "wb") as handle:
+                for chunk in response.iter_bytes(chunk_size):
+                    if cancel_checker is not None and cancel_checker():
+                        raise RuntimeError("download_cancelled")
+                    handle.write(chunk)
+                    sent += len(chunk)
+                    if progress_callback is not None:
+                        progress_callback(sent, total)
+        return True
 
     def get_status_and_payload(self, path: str) -> tuple[int, Any]:
         """GET somente leitura que nunca levanta excecao por status HTTP
@@ -111,8 +148,8 @@ class DesktopApiClient:
     def patch(self, path: str, *, json_payload: dict[str, Any] | None = None, access_token: str | None = None) -> ApiResponse:
         return self.request("PATCH", path, json_payload=json_payload, access_token=access_token, retries=0)
 
-    def delete(self, path: str, *, access_token: str | None = None) -> ApiResponse:
-        return self.request("DELETE", path, access_token=access_token, retries=0)
+    def delete(self, path: str, *, json_payload: dict[str, Any] | None = None, access_token: str | None = None) -> ApiResponse:
+        return self.request("DELETE", path, json_payload=json_payload, access_token=access_token, retries=0)
 
     def request(
         self,
@@ -122,6 +159,7 @@ class DesktopApiClient:
         json_payload: dict[str, Any] | None = None,
         access_token: str | None = None,
         files: dict[str, tuple[str, bytes, str]] | None = None,
+        data: dict[str, Any] | None = None,
         retries: int = 0,
     ) -> ApiResponse:
         safe_path = _normalize_path(path)
@@ -131,7 +169,7 @@ class DesktopApiClient:
         last_error: ApiClientError | None = None
         for attempt in range(1, attempts + 1):
             try:
-                return self._single_request(method, safe_path, json_payload=json_payload, access_token=access_token, files=files)
+                return self._single_request(method, safe_path, json_payload=json_payload, access_token=access_token, files=files, data=data)
             except (ApiConnectionError, ApiTimeoutError, ApiUnavailableError) as exc:
                 last_error = exc
                 if attempt >= attempts:
@@ -141,7 +179,7 @@ class DesktopApiClient:
             raise last_error
         raise ApiUnexpectedResponseError("request did not execute")
 
-    def _single_request(self, method: str, path: str, *, json_payload: dict[str, Any] | None, access_token: str | None, files=None) -> ApiResponse:
+    def _single_request(self, method: str, path: str, *, json_payload: dict[str, Any] | None, access_token: str | None, files=None, data=None) -> ApiResponse:
         request_id = uuid.uuid4().hex
         headers = {"Accept": "application/json", "User-Agent": USER_AGENT, "X-Request-ID": request_id, CLIENT_VERSION_HEADER: APP_VERSION}
         context = _add_performance_headers(headers)
@@ -150,7 +188,7 @@ class DesktopApiClient:
         started = time.monotonic()
         try:
             response = self._client.request(
-                method.upper(), path, json=None if files else json_payload, files=files, headers=headers,
+                method.upper(), path, json=None if files else json_payload, files=files, data=data if files else None, headers=headers,
                 timeout=self._timeout_for(method, path),
             )
         except httpx.TimeoutException as exc:
@@ -181,7 +219,12 @@ class DesktopApiClient:
         """Timeouts por perfil: consultas e gravações têm limites distintos."""
         normalized = path.split("?", 1)[0]
         if method.upper() == "GET":
-            read_timeout = 8.0 if any(token in normalized for token in ("/conversations", "/notifications", "/unread-summary")) else 12.0
+            if "/chat/attachments/" in normalized and normalized.endswith("/content"):
+                read_timeout = max(60.0, float(self.settings.read_timeout))
+            else:
+                read_timeout = 8.0 if any(token in normalized for token in ("/conversations", "/notifications", "/unread-summary")) else 12.0
+        elif "/chat/messages/" in normalized and normalized.endswith("/attachments"):
+            read_timeout = max(60.0, float(self.settings.read_timeout))
         else:
             read_timeout = 30.0 if any(token in normalized for token in ("/batch", "/production", "/galvanization", "/fiscal")) else 20.0
         read_timeout = max(1.0, min(float(read_timeout), max(1.0, float(self.settings.read_timeout))))
@@ -228,7 +271,7 @@ class DesktopApiClient:
             raise ApiAuthenticationError(message or "Autenticacao invalida.", status_code=401, request_id=request_id)
         if response.status_code == 403:
             raise ApiPermissionError(request_id=request_id)
-        if response.status_code in {400, 422}:
+        if response.status_code in {400, 413, 415, 422}:
             self._log_parse_failure(method=method, path=path, response=response, request_id=request_id, reason=f"validacao rejeitada pela API (code={code or 'desconhecido'})")
             raise ApiValidationError(message or "Dados invalidos para a API.", status_code=response.status_code, request_id=request_id)
         if response.status_code == 503:

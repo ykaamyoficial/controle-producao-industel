@@ -78,21 +78,26 @@ class RunStartupCompatibilityCheckTests(unittest.TestCase):
         result = CompatibilityCheckResult(CompatibilityStatus.COMPATIBLE, "3.2.0", dto=_dto())
         proceed, message = run_startup_compatibility_check(
             config_store_factory=lambda: FakeConfigStore(enabled=True),
+            check_runner=lambda _client: result,
             dialog_factory=_dialog_factory(proceed=True, check_result=result),
         )
         self.assertTrue(proceed)
         self.assertIsNone(message)
-        self.assertEqual(len(DummyDialog.calls), 1)
+        # Compativel nao exige nenhuma acao do usuario -- o dialogo nao chega
+        # a ser construido, so a checagem silenciosa decide.
+        self.assertEqual(len(DummyDialog.calls), 0)
 
     def test_returns_non_blocking_message_when_update_available(self):
         dto = _dto(recommended_desktop_version="3.5.0")
         result = CompatibilityCheckResult(CompatibilityStatus.UPDATE_AVAILABLE, "3.1.5", dto=dto)
         proceed, message = run_startup_compatibility_check(
             config_store_factory=lambda: FakeConfigStore(enabled=True),
+            check_runner=lambda _client: result,
             dialog_factory=_dialog_factory(proceed=True, check_result=result),
         )
         self.assertTrue(proceed)
         self.assertIn("3.5.0", message)
+        self.assertEqual(len(DummyDialog.calls), 0)
 
     def test_blocks_startup_when_dialog_reports_proceed_false(self):
         for state in (
@@ -104,6 +109,7 @@ class RunStartupCompatibilityCheckTests(unittest.TestCase):
                 result = CompatibilityCheckResult(state, "3.0.0")
                 proceed, message = run_startup_compatibility_check(
                     config_store_factory=lambda: FakeConfigStore(enabled=True),
+                    check_runner=lambda _client, _result=result: _result,
                     dialog_factory=_dialog_factory(proceed=False, check_result=result),
                 )
                 self.assertFalse(proceed)
@@ -118,6 +124,7 @@ class RunStartupCompatibilityCheckTests(unittest.TestCase):
 
         proceed, message = run_startup_compatibility_check(
             config_store_factory=lambda: FakeConfigStore(enabled=True),
+            check_runner=lambda _client, _result=gate_result: _result,
             dialog_factory=_dialog_factory(proceed=False, check_result=gate_result),
             maintenance_dialog_factory=_maintenance_dialog_factory(proceed=True, check_result=maintenance_result),
         )
@@ -130,6 +137,7 @@ class RunStartupCompatibilityCheckTests(unittest.TestCase):
 
         proceed, message = run_startup_compatibility_check(
             config_store_factory=lambda: FakeConfigStore(enabled=True),
+            check_runner=lambda _client, _result=gate_result: _result,
             dialog_factory=_dialog_factory(proceed=False, check_result=gate_result),
             maintenance_dialog_factory=_maintenance_dialog_factory(proceed=False, check_result=gate_result),
         )
@@ -139,9 +147,14 @@ class RunStartupCompatibilityCheckTests(unittest.TestCase):
 
     def test_never_raises_when_dialog_check_result_is_missing(self):
         # dialog_factory devolvendo um objeto sem check_result (ex.: excecao inesperada
-        # tratada dentro do dialogo) nao pode derrubar o processo.
+        # tratada dentro do dialogo) nao pode derrubar o processo. A checagem silenciosa
+        # tambem falha (simulando erro de rede), forcando o caminho do dialogo.
+        def raising_check_runner(_client):
+            raise RuntimeError("boom")
+
         proceed, message = run_startup_compatibility_check(
             config_store_factory=lambda: FakeConfigStore(enabled=True),
+            check_runner=raising_check_runner,
             dialog_factory=_dialog_factory(proceed=False, check_result=None),
         )
         self.assertFalse(proceed)

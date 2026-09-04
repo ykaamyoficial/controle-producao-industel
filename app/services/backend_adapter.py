@@ -35,7 +35,17 @@ STATUS_FLOW_ORDER['EXPEDICAO'].insert(3, 'SEPARADO_COM_PENDENCIA')
 COLOR_PALETTES = {'aurora': {'label': 'Aurora profissional', 'bg': '#f5f7fb', 'surface': '#ffffff', 'surface_alt': '#e8f1ff', 'text': '#0f172a', 'muted': '#475569', 'border': '#cbd5e1', 'accent': '#006fc9', 'accent_hover': '#005aa3', 'accent_text': '#ffffff', 'secondary': '#be123c', 'success': '#047857', 'warning': '#b45309', 'danger': '#b91c1c', 'info': '#0369a1', 'disabled': '#94a3b8', 'area_control': '#006fc9', 'area_production': '#047857', 'area_galvanization': '#7c3aed', 'area_expedition': '#c2410c', 'area_fiscal': '#b91c1c', 'area_stock': '#64748b', 'area_partials': '#64748b', 'tree_selected': '#bfdbfe', 'tree_heading': '#dbeafe'}, 'grafite': {'label': 'Grafite alto contraste', 'bg': '#0f172a', 'surface': '#172033', 'surface_alt': '#24324a', 'text': '#f8fafc', 'muted': '#cbd5e1', 'border': '#475569', 'accent': '#38bdf8', 'accent_hover': '#7dd3fc', 'accent_text': '#0f172a', 'secondary': '#fb923c', 'success': '#34d399', 'warning': '#facc15', 'danger': '#fb7185', 'info': '#7dd3fc', 'disabled': '#64748b', 'area_control': '#38bdf8', 'area_production': '#34d399', 'area_galvanization': '#a78bfa', 'area_expedition': '#fb923c', 'area_fiscal': '#fb7185', 'area_stock': '#94a3b8', 'area_partials': '#94a3b8', 'tree_selected': '#0e7490', 'tree_heading': '#1e293b'}}
 
 class AppError(Exception):
-    pass
+    """Erro de aplicacao lancado pelo BackendService.
+
+    Preserva `error_code`/`technical_message` do erro original da API (quando
+    disponiveis) para que dialogs de UI consigam mapear a causa real da falha
+    em vez de caírem sempre numa mensagem generica. Ver `_api_app_error`.
+    """
+
+    def __init__(self, message: str, *, error_code: str | None = None, technical_message: str | None = None):
+        super().__init__(message)
+        self.error_code = error_code
+        self.technical_message = technical_message
 
 class VersionConflictError(AppError):
     """Raised when the API rejects a write because its optimistic-locking `version` is stale."""
@@ -126,7 +136,7 @@ class _OfficialLegacyNamespace:
     user_can_admin = staticmethod(user_can_admin)
 legacy = _OfficialLegacyNamespace()
 THEME_ALIASES = {'aurora': 'claro', 'aurora professional': 'claro', 'aurora profissional': 'claro', 'energia': 'claro', 'verde operacional': 'claro', 'grafite': 'escuro', 'grafite alto contraste': 'escuro', 'pulso': 'escuro', 'pulso executivo': 'escuro'}
-OFFICIAL_COLOR_PALETTES = {'claro': {**COLOR_PALETTES['aurora'], 'label': 'Claro'}, 'escuro': {**COLOR_PALETTES['grafite'], 'label': 'Escuro', 'bg': '#0f172a', 'surface': '#172033', 'surface_alt': '#24324a', 'text': '#f8fafc', 'muted': '#dbeafe', 'border': '#475569', 'accent': '#38bdf8', 'accent_hover': '#7dd3fc', 'accent_text': '#0f172a'}}
+OFFICIAL_COLOR_PALETTES = {'claro': {**COLOR_PALETTES['aurora'], 'label': 'Claro'}, 'escuro': {**COLOR_PALETTES['grafite'], 'label': 'Escuro', 'bg': '#1b2740', 'surface': '#233150', 'surface_alt': '#2c3c5e', 'text': '#f8fafc', 'muted': '#dbeafe', 'border': '#475569', 'accent': '#38bdf8', 'accent_hover': '#7dd3fc', 'accent_text': '#0f172a'}}
 
 def normalize_palette_name(name: str | None) -> str:
     normalized = (name or 'claro').strip().lower()
@@ -359,7 +369,11 @@ class BackendService:
         return True
 
     def _api_app_error(self, exc: Exception) -> AppError:
-        return AppError(user_message_for_api_error(exc))
+        return AppError(
+            user_message_for_api_error(exc),
+            error_code=getattr(exc, "error_code", None),
+            technical_message=getattr(exc, "technical_message", None),
+        )
 
     def can_admin(self) -> bool:
         return bool(self.user and self.user.get('api_superuser'))
@@ -873,10 +887,11 @@ class BackendService:
         area: str | None = None,
         due_at=None,
         is_important: bool = False,
+        client_message_id: str | None = None,
     ) -> dict[str, Any]:
         try:
             return self.official_proposal_storage.chat_send_message(
-                conversation_id, body, message_type, mentioned_user_id, reply_to_message_id, area, due_at, is_important
+                conversation_id, body, message_type, mentioned_user_id, reply_to_message_id, area, due_at, is_important, client_message_id
             )
         except Exception as exc:
             raise self._api_app_error(exc) from exc
@@ -887,9 +902,45 @@ class BackendService:
         except Exception as exc:
             raise self._api_app_error(exc) from exc
 
+    def chat_upload_attachment(self, message_id: int, path, *, progress_callback=None, cancel_checker=None, client_attachment_id: str | None = None) -> dict[str, Any]:
+        try:
+            return self.official_proposal_storage.chat_upload_attachment(
+                message_id,
+                path,
+                progress_callback=progress_callback,
+                cancel_checker=cancel_checker,
+                client_attachment_id=client_attachment_id,
+            )
+        except Exception as exc:
+            raise self._api_app_error(exc) from exc
+
+    def chat_attachment(self, attachment_id: int) -> dict[str, Any]:
+        try:
+            return self.official_proposal_storage.chat_attachment(attachment_id)
+        except Exception as exc:
+            raise self._api_app_error(exc) from exc
+
+    def chat_download_attachment(self, attachment_id: int) -> bytes | None:
+        try:
+            return self.official_proposal_storage.chat_download_attachment(attachment_id)
+        except Exception as exc:
+            raise self._api_app_error(exc) from exc
+
+    def chat_delete_attachment(self, attachment_id: int, reason: str) -> dict[str, Any]:
+        try:
+            return self.official_proposal_storage.chat_delete_attachment(attachment_id, reason)
+        except Exception as exc:
+            raise self._api_app_error(exc) from exc
+
     def chat_proposal_timeline(self, proposal_id: int, **filters) -> dict[str, Any]:
         try:
             return self.official_proposal_storage.chat_proposal_timeline(proposal_id, **filters)
+        except Exception as exc:
+            raise self._api_app_error(exc) from exc
+
+    def chat_shared_content(self, conversation_id: int, **filters) -> dict[str, Any]:
+        try:
+            return self.official_proposal_storage.chat_shared_content(conversation_id, **filters)
         except Exception as exc:
             raise self._api_app_error(exc) from exc
 

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import unittest
+import tempfile
 from datetime import datetime, timedelta
+from pathlib import Path
 from unittest.mock import MagicMock
 
 from app.integrations.api.client import ApiResponse
@@ -208,6 +210,39 @@ class ApiProposalStorageTests(unittest.TestCase):
         self.assertEqual(client.close_count, 0)
         self.assertEqual(storage.refresh_count, 0)
         self.assertEqual(storage._session.refresh_calls, [False, False])
+
+    def test_chat_upload_attachment_passes_multipart_through_borrowed_client(self):
+        settings = DesktopApiSettings(enabled=True, base_url="http://127.0.0.1:8000", connect_timeout=1, read_timeout=1)
+        client = _FakePersistentClient()
+        storage = OfficialProposalApiStorage(config_store=_FakeConfigStore(settings), client_factory=lambda _settings: client)
+        storage._persistent_client = client
+        storage._settings_key = (settings.enabled, settings.base_url, settings.connect_timeout, settings.read_timeout)
+        storage._session = _FakeSession("access-token")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "foto.png"
+            path.write_bytes(b"\x89PNG\r\n\x1a\n")
+
+            result = storage.chat_upload_attachment(44, path, client_attachment_id="local-123")
+
+        self.assertEqual(result["id"], 77)
+        request = client.requests[-1]
+        self.assertEqual(request["method"], "POST")
+        self.assertEqual(request["path"], "/api/v1/chat/messages/44/attachments")
+        self.assertIn("file", request["files"])
+        self.assertEqual(request["data"], {"client_attachment_id": "local-123"})
+
+    def test_chat_download_attachment_uses_borrowed_get_bytes(self):
+        settings = DesktopApiSettings(enabled=True, base_url="http://127.0.0.1:8000", connect_timeout=1, read_timeout=1)
+        client = _FakePersistentClient()
+        storage = OfficialProposalApiStorage(config_store=_FakeConfigStore(settings), client_factory=lambda _settings: client)
+        storage._persistent_client = client
+        storage._settings_key = (settings.enabled, settings.base_url, settings.connect_timeout, settings.read_timeout)
+        storage._session = _FakeSession("access-token")
+
+        data = storage.chat_download_attachment(77)
+
+        self.assertEqual(data, b"imagem")
+        self.assertEqual(client.bytes_requests[-1], {"path": "/api/v1/chat/attachments/77/content", "access_token": "access-token", "accept": "*/*"})
 
     def test_create_payload_uses_official_contract_and_omits_financial_fields(self):
         data = {
@@ -524,9 +559,29 @@ class _FakePersistentClient:
     def __init__(self):
         self.request_count = 0
         self.close_count = 0
+        self.requests: list[dict] = []
+        self.bytes_requests: list[dict] = []
 
-    def request(self, method: str, path: str, *, json_payload=None, access_token=None, retries: int = 0):
+    def request(self, method: str, path: str, *, json_payload=None, access_token=None, files=None, data=None, retries: int = 0):
         self.request_count += 1
+        self.requests.append(
+            {
+                "method": method,
+                "path": path,
+                "json_payload": json_payload,
+                "access_token": access_token,
+                "files": files,
+                "data": data,
+                "retries": retries,
+            }
+        )
+        if path.endswith("/attachments"):
+            return ApiResponse(
+                status_code=201,
+                data={"id": 77, "message_id": 44, "original_filename": "foto.png"},
+                request_id=f"REQ-{self.request_count}",
+                duration_ms=1,
+            )
         return ApiResponse(
             status_code=200,
             data={"items": [], "total": 0, "limit": 10, "offset": 0},
@@ -536,6 +591,10 @@ class _FakePersistentClient:
 
     def close(self) -> None:
         self.close_count += 1
+
+    def get_bytes(self, path: str, *, access_token: str | None = None, accept: str = "*/*"):
+        self.bytes_requests.append({"path": path, "access_token": access_token, "accept": accept})
+        return b"imagem"
 
 
 if __name__ == "__main__":

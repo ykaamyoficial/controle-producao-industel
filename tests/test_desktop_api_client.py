@@ -62,6 +62,51 @@ class DesktopApiClientTests(unittest.TestCase):
         self.assertEqual(response.request_id, "server-id")
         client.close()
 
+    def test_download_to_file_streams_with_progress_and_atomic_content(self):
+        payload = b"conteudo-do-arquivo-de-teste" * 100
+        client = DesktopApiClient(
+            settings(),
+            transport=httpx.MockTransport(lambda _request: httpx.Response(200, content=payload, headers={"content-length": str(len(payload))})),
+        )
+        progress_calls = []
+        with tempfile.TemporaryDirectory() as tmp:
+            destination = Path(tmp) / "arquivo.bin"
+            found = client.download_to_file(
+                "/api/v1/chat/attachments/1/content",
+                destination,
+                progress_callback=lambda sent, total: progress_calls.append((sent, total)),
+            )
+            self.assertTrue(found)
+            self.assertEqual(destination.read_bytes(), payload)
+            self.assertTrue(progress_calls)
+            self.assertEqual(progress_calls[-1][0], len(payload))
+            self.assertTrue(all(total == len(payload) for _sent, total in progress_calls))
+        client.close()
+
+    def test_download_to_file_returns_false_on_404(self):
+        client = DesktopApiClient(settings(), transport=httpx.MockTransport(lambda _request: httpx.Response(404)))
+        with tempfile.TemporaryDirectory() as tmp:
+            destination = Path(tmp) / "arquivo.bin"
+            found = client.download_to_file("/api/v1/chat/attachments/1/content", destination)
+            self.assertFalse(found)
+        client.close()
+
+    def test_download_to_file_cancel_checker_interrupts_stream(self):
+        payload = b"x" * 1000
+        client = DesktopApiClient(
+            settings(),
+            transport=httpx.MockTransport(lambda _request: httpx.Response(200, content=payload, headers={"content-length": str(len(payload))})),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            destination = Path(tmp) / "arquivo.bin"
+            with self.assertRaises(RuntimeError):
+                client.download_to_file(
+                    "/api/v1/chat/attachments/1/content",
+                    destination,
+                    cancel_checker=lambda: True,
+                )
+        client.close()
+
     def test_error_mapping(self):
         cases = [
             (401, "TOKEN_EXPIRED", ApiSessionExpiredError),
@@ -114,6 +159,8 @@ class DesktopApiClientTests(unittest.TestCase):
     def test_validation_error_and_server_error_are_mapped(self):
         cases = [
             (400, "PASSWORD_POLICY_VIOLATION", ApiValidationError),
+            (413, "CHAT_ATTACHMENT_TOO_LARGE", ApiValidationError),
+            (415, "CHAT_ATTACHMENT_TYPE_NOT_ALLOWED", ApiValidationError),
             (422, "VALIDATION_ERROR", ApiValidationError),
             (500, "INTERNAL_ERROR", ApiUnexpectedResponseError),
         ]

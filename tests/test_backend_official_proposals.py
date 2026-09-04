@@ -10,6 +10,7 @@ class FakeOfficialProposalStorage:
     def __init__(self):
         self.calls = []
         self.should_fail = False
+        self.fiscal_batch_error = None
         self.production_status = "NAO_INICIADO"
         self.expedition_status = "EM_SEPARACAO"
 
@@ -256,6 +257,12 @@ class FakeOfficialProposalStorage:
     def register_fiscal_emission(self, fiscal_record_id, emissions, numero_controle="", observacao=""):
         self.calls.append(("register_fiscal_emission", fiscal_record_id, emissions, numero_controle, observacao))
         return 6101
+
+    def register_fiscal_batch(self, draft, operation_id=None):
+        self.calls.append(("register_fiscal_batch", draft, operation_id))
+        if self.fiscal_batch_error is not None:
+            raise self.fiscal_batch_error
+        return {"operation_id": operation_id or "op-1", "status": "confirmed", "proposals": [{"fiscal_record_id": row.get("proposal_id"), "emission_id": 9001} for row in draft]}
 
     def mark_fiscal_invoice_withdrawn(self, fiscal_record_id, observacao=""):
         self.calls.append(("mark_fiscal_invoice_withdrawn", fiscal_record_id, observacao))
@@ -811,6 +818,43 @@ class BackendOfficialProposalTests(unittest.TestCase):
             service.save_process({"proposta": "CP00010"})
 
         self.assertIn("servidor esta indisponivel", str(ctx.exception))
+
+    def test_register_fiscal_batch_delegates_to_official_storage(self):
+        service, storage = official_service()
+        draft = [{"proposal_id": 60, "invoice_number": "NF-1", "selection_type": "TOTAL", "items": [{"item_id": 6001}]}]
+
+        result = service.register_fiscal_batch(draft, operation_id="op-123")
+
+        self.assertEqual(result["status"], "confirmed")
+        self.assertIn(("register_fiscal_batch", draft, "op-123"), storage.calls)
+
+    def test_register_fiscal_batch_preserves_backend_error_code(self):
+        """Regression: a real API error_code must survive the AppError wrapping.
+
+        Before the fix, BackendService.register_fiscal_batch (and the shared
+        `_api_app_error` helper it uses) discarded `error_code`/`technical_message`
+        from the underlying ApiClientError, so the fiscal batch confirmation
+        dialog could never map the failure to a useful message and always fell
+        back to the generic "Nao foi possivel concluir a emissao fiscal.",
+        regardless of what actually failed on the server.
+        """
+        service, storage = official_service()
+        storage.fiscal_batch_error = ApiBusinessError(
+            "FISCAL_ITEM_INVALID", "Um item fiscal ficou indisponivel para esta proposta.", status_code=409, request_id="req-1"
+        )
+
+        with self.assertRaises(AppError) as ctx:
+            service.register_fiscal_batch([{"proposal_id": 60, "invoice_number": "NF-1", "items": []}])
+
+        self.assertEqual(ctx.exception.error_code, "FISCAL_ITEM_INVALID")
+        self.assertIn("indisponivel", str(ctx.exception))
+
+    def test_register_fiscal_batch_requires_permission(self):
+        service, _storage = official_service()
+        service.can_edit = lambda _area: False
+
+        with self.assertRaisesRegex(Exception, "emissao fiscal"):
+            service.register_fiscal_batch([{"proposal_id": 60, "invoice_number": "NF-1", "items": []}])
 
 
 class DesktopApiErrorContractTests(unittest.TestCase):

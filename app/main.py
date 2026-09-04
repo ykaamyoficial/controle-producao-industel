@@ -77,12 +77,36 @@ def run_startup_update_check(
     return True, False
 
 
-def run_startup_bootstrap(parent=None, *, dialog_factory=None) -> bool:
+def run_startup_bootstrap(parent=None, *, dialog_factory=None, bootstrap_runner=None) -> bool:
     """Fase 3 - Primeiro Acesso Automatico: garante que existe um API_BASE_URL
     valido e alcancavel antes de qualquer outra verificacao de startup (que
     ja pressupoe uma API respondendo). Retorna False quando o usuario opta
     por sair sem configurar o servidor -- o chamador nao deve prosseguir.
+
+    Tenta a conexao silenciosamente primeiro (sem abrir nenhuma janela): no
+    caminho feliz -- configuracao ja persistida e servidor respondendo, que e
+    o caso em praticamente toda abertura do app -- nao ha nenhum dialogo
+    visivel nem atraso extra de UI. So constroi o FirstAccessDialog quando a
+    tentativa silenciosa falha de fato, para o usuario poder agir.
     """
+    from app.services.bootstrap_service import BootstrapState
+
+    if bootstrap_runner is None:
+        from app.integrations.api.config import DesktopApiConfigStore
+        from app.services.bootstrap_service import run_bootstrap
+
+        def bootstrap_runner():
+            return run_bootstrap(config_store=DesktopApiConfigStore())
+
+    try:
+        result = bootstrap_runner()
+    except Exception:
+        log.exception("Falha inesperada na tentativa silenciosa de bootstrap")
+        result = None
+
+    if result is not None and result.state == BootstrapState.READY_FOR_LOGIN:
+        return True
+
     if dialog_factory is None:
         from app.ui.first_access_dialog import FirstAccessDialog
 
@@ -135,16 +159,38 @@ def run_startup_compatibility_check(
         finally:
             client.close()
 
-    if dialog_factory is None:
-        from app.ui.compatibility_gate_dialog import CompatibilityGateDialog
+    # Tenta a checagem silenciosamente primeiro -- sem abrir nenhum dialogo.
+    # No caminho feliz (COMPATIBLE/UPDATE_AVAILABLE/UPDATE_RECOMMENDED, que
+    # nunca bloqueiam) o app segue direto pro login sem nenhuma janela extra
+    # piscando na tela. So constroi o CompatibilityGateDialog (com retry
+    # interativo) quando o resultado realmente exige acao do usuario.
+    try:
+        check_result = perform_check()
+    except Exception:
+        log.exception("Falha inesperada na tentativa silenciosa de verificacao de compatibilidade")
+        check_result = None
 
-        dialog_factory = CompatibilityGateDialog
+    silent_ok = check_result is not None and check_result.state not in {
+        CompatibilityStatus.UPDATE_REQUIRED,
+        CompatibilityStatus.INCOMPATIBLE,
+        CompatibilityStatus.MAINTENANCE,
+        CompatibilityStatus.CHECK_FAILED,
+        CompatibilityStatus.SERVER_UPDATE_REQUIRED,
+    }
 
-    dialog = dialog_factory(perform_check, parent)
-    dialog.exec()
+    if silent_ok:
+        proceed = True
+    else:
+        if dialog_factory is None:
+            from app.ui.compatibility_gate_dialog import CompatibilityGateDialog
 
-    check_result = getattr(dialog, "check_result", None)
-    proceed = bool(getattr(dialog, "proceed", False))
+            dialog_factory = CompatibilityGateDialog
+
+        dialog = dialog_factory(perform_check, parent)
+        dialog.exec()
+
+        check_result = getattr(dialog, "check_result", None)
+        proceed = bool(getattr(dialog, "proceed", False))
 
     if not proceed and check_result is not None and check_result.state == CompatibilityStatus.MAINTENANCE:
         # Fase 14, Secao 23: tela dedicada de manutencao (com polling

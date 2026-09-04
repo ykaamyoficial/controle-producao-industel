@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QEvent, Qt
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -66,6 +66,7 @@ class ApiDiagnosticDialog(QDialog):
         self._diagnostic_result: DiagnosticResult | None = None
         self._diagnostic_running = False
         self._diagnostic_thread = None
+        self._closing = False
         self._build()
         self._load()
         style_dialog_from_parent(self, parent)
@@ -209,7 +210,7 @@ class ApiDiagnosticDialog(QDialog):
         self.diag_server_label.setText(f"Servidor configurado: {server_label}")
 
     def run_diagnostic(self):
-        if self._diagnostic_running:
+        if self._closing or self._diagnostic_running:
             return
         self._diagnostic_running = True
         self.diag_run_button.setEnabled(False)
@@ -224,6 +225,8 @@ class ApiDiagnosticDialog(QDialog):
         )
 
     def _on_diagnostic_result(self, result: DiagnosticResult) -> None:
+        if self._closing:
+            return
         self._diagnostic_running = False
         self.diag_run_button.setEnabled(True)
         self.diag_copy_button.setEnabled(True)
@@ -246,6 +249,8 @@ class ApiDiagnosticDialog(QDialog):
         self._append(f"Diagnostico executado: {result.overall_status.value} | {result.user_message}")
 
     def _on_diagnostic_error(self, exc: Exception) -> None:
+        if self._closing:
+            return
         self._diagnostic_running = False
         self.diag_run_button.setEnabled(True)
         self.diag_status_label.setText("Status geral: falha ao executar diagnostico")
@@ -370,12 +375,16 @@ class ApiDiagnosticDialog(QDialog):
         )
 
     def _run_api_task(self, label: str, operation):
+        if self._closing:
+            return
         for button in (self.health_btn, self.compat_btn, self.login_btn, self.refresh_btn, self.logout_btn, self.logout_all_btn):
             button.setEnabled(False)
         self._append(f"{label} iniciado...")
         self._run_background(operation, self._show_result, self._show_error)
 
     def _show_result(self, result):
+        if self._closing:
+            return
         self._set_buttons_enabled(True)
         self.password.clear()
         self.settings = self.store.load_settings()
@@ -383,6 +392,8 @@ class ApiDiagnosticDialog(QDialog):
         self._append(str(result))
 
     def _show_error(self, exc):
+        if self._closing:
+            return
         self._set_buttons_enabled(True)
         self.password.clear()
         if isinstance(exc, ApiClientError):
@@ -402,9 +413,38 @@ class ApiDiagnosticDialog(QDialog):
         self.output.appendPlainText(f"{when} | {message}")
 
     def _run_background(self, operation, on_success, on_error):
+        if self._closing:
+            return
         thread = start_worker(self, operation, on_success, on_error)
         self._worker_threads.append(thread)
         thread.finished.connect(lambda target=thread: self._worker_threads.remove(target) if target in self._worker_threads else None)
+
+    def cleanup(self) -> None:
+        if self._closing:
+            return
+        self._closing = True
+        self._diagnostic_running = False
+        threads = list(self._worker_threads)
+        if self._diagnostic_thread is not None:
+            threads.append(self._diagnostic_thread)
+        self._worker_threads.clear()
+        self._diagnostic_thread = None
+        for thread in threads:
+            try:
+                if thread.isRunning():
+                    thread.quit()
+                    thread.wait(3000)
+            except RuntimeError:
+                pass
+
+    def closeEvent(self, event):
+        self.cleanup()
+        super().closeEvent(event)
+
+    def event(self, event):
+        if event.type() == QEvent.Type.DeferredDelete:
+            self.cleanup()
+        return super().event(event)
 
 
 class _api_client:
