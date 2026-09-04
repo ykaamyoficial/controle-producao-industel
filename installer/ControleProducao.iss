@@ -1,5 +1,5 @@
 #define MyAppName "Controle de Producao Industel"
-#define MyAppVersion "2.6.1"
+#define MyAppVersion "2.6.2"
 #define MyAppPublisher "Industel"
 #define MyAppExeName "ControleProducao.exe"
 #define MyAppDir "Industel\Controle de Producao"
@@ -14,7 +14,7 @@ DefaultDirName={autopf}\{#MyAppDir}
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 OutputDir=..\release
-OutputBaseFilename=ControleProducaoSetup-2.6.1
+OutputBaseFilename=ControleProducaoSetup-2.6.2
 SetupIconFile=..\app\assets\images\Logo_Industel_Icone.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 Compression=lzma
@@ -36,6 +36,12 @@ Name: "{commonappdata}\{#MyDataDir}\backups"; Permissions: users-modify
 
 [Files]
 Source: "..\dist\ControleProducao\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+; Updater.exe precisa ficar no MESMO diretorio que ControleProducao.exe --
+; app/services/update_coordinator.py::_updater_launch_command() resolve o
+; caminho como "exe_dir / Updater.exe" quando empacotado. Sem esta linha o
+; autoupdate falha com WinError 2 (arquivo nao encontrado) ao tentar lancar
+; o Updater (bug real encontrado na primeira atualizacao 2.6.0 -> 2.6.1).
+Source: "..\dist\Updater\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
