@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 APP_NAME = "Controle de Producao Industel"
-APP_VERSION = "2.6.0"
+APP_VERSION = "2.6.1"
 APP_BUILD = "2026.09.04"
 APP_PUBLISHER = "Industel"
 APP_CHANNEL = "stable"
@@ -18,4 +18,4 @@ APP_API_CONTRACT_VERSION = "v1"
 # contrato "v1", mas nao tem uma correcao/campo do qual este build depende.
 # So sobe quando o Desktop passa a depender de verdade de um comportamento
 # novo da API -- nunca acompanha APP_VERSION automaticamente.
-MINIMUM_API_VERSION = "0.8.0"
+MINIMUM_API_VERSION = "0.8.1"
