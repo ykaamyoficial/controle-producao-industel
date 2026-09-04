@@ -7,7 +7,7 @@ from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-API_VERSION = "0.8.0"
+API_VERSION = "0.8.1"
 API_STAGE = "official-fiscal"
 API_CONTRACT_VERSION = "v1"
 SERVICE_NAME = "controle-producao-api"
