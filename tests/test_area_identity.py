@@ -10,6 +10,7 @@ from PySide6.QtWidgets import QApplication, QFrame, QLabel
 from app.services.backend_adapter import OFFICIAL_COLOR_PALETTES
 from app.ui.components.area_identity import (
     area_subtitle,
+    refresh_area_theme,
     style_area_header,
     style_area_title,
 )
@@ -68,6 +69,46 @@ class AreaIdentityTests(unittest.TestCase):
         self.assertEqual(tabs.tabBar().property("areaKey"), "GALVANIZACAO")
         self.assertEqual(tabs.tabBar().property("areaAccent"), "#7c3aed")
         self.assertIn("#7c3aed", tabs.tabBar().styleSheet())
+
+
+    def test_refresh_area_theme_restyles_header_tabs_and_title_on_theme_toggle(self):
+        from PySide6.QtWidgets import QLabel, QTabWidget, QVBoxLayout, QWidget
+
+        light = OFFICIAL_COLOR_PALETTES["claro"]
+        dark = OFFICIAL_COLOR_PALETTES["escuro"]
+
+        page = QWidget()
+        layout = QVBoxLayout(page)
+
+        header = QFrame()
+        header_layout = QVBoxLayout(header)
+        configure_operational_header(header, header_layout, area="GALVANIZACAO", palette=light)
+        layout.addWidget(header)
+
+        title = QLabel("Itens de galvanizacao")
+        title.setObjectName("FilterTitle")
+        style_area_title(title, "GALVANIZACAO", light)
+        header_layout.addWidget(title)
+
+        tabs = QTabWidget()
+        configure_operational_tabs(tabs, area="GALVANIZACAO", palette=light)
+        layout.addWidget(tabs)
+
+        light_bg = light["bg"]
+        dark_bg = dark["bg"]
+        self.assertIn(light_bg, header.styleSheet())
+        self.assertIn(light_bg, tabs.tabBar().styleSheet())
+
+        # Simulate MainWindow.apply_theme() toggling to dark without rebuilding
+        # the page (widgets constructed with the light palette must not keep
+        # stale light-theme colors baked into their stylesheet).
+        refresh_area_theme(page, dark)
+
+        self.assertNotIn(light_bg, header.styleSheet())
+        self.assertIn(dark_bg, header.styleSheet())
+        self.assertNotIn(light_bg, tabs.tabBar().styleSheet())
+        self.assertIn(dark_bg, tabs.tabBar().styleSheet())
+        self.assertIn(area_color("GALVANIZACAO", dark), title.styleSheet())
 
 
 if __name__ == "__main__":

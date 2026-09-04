@@ -1,10 +1,30 @@
 from __future__ import annotations
 
+import colorsys
+
 from app.services.backend_adapter import legacy
 
 
 def radius(value: int = 10) -> str:
     return f"border-radius: {value}px;"
+
+
+def _darken(hex_color: str, amount: float) -> str:
+    """Reduz a luminosidade (HSL) de uma cor hex em `amount` (0-1)."""
+    hex_color = hex_color.lstrip("#")
+    r, g, b = (int(hex_color[i:i + 2], 16) / 255 for i in (0, 2, 4))
+    h, l, s = colorsys.rgb_to_hls(r, g, b)
+    l = max(0.0, l - amount)
+    r2, g2, b2 = colorsys.hls_to_rgb(h, l, s)
+    return "#%02x%02x%02x" % tuple(max(0, min(255, round(c * 255))) for c in (r2, g2, b2))
+
+
+def chrome_bg_color(palette: dict) -> str:
+    """Tom mais escuro que {bg}, usado pela barra superior + sidebar pra ler
+    como um "chrome" separado da tela principal. Exposta separada do
+    app_stylesheet pra quem precisa pintar a mesma cor fora de QSS (ex.:
+    o recorte arredondado do canto do MainContent em main_window.py)."""
+    return _darken(palette["bg"], 0.11)
 
 
 def app_stylesheet(palette: dict) -> str:
@@ -18,6 +38,7 @@ def app_stylesheet(palette: dict) -> str:
     accent_hover = palette["accent_hover"]
     accent_text = palette["accent_text"]
     danger = palette["danger"]
+    chrome_bg = chrome_bg_color(palette)
 
     return f"""
     * {{
@@ -46,8 +67,12 @@ def app_stylesheet(palette: dict) -> str:
     QWidget#DashboardContent {{
         background: {bg};
     }}
+    QWidget#AppBody {{
+        background: {chrome_bg};
+    }}
     QWidget#MainContent {{
         background: {bg};
+        border-top: 1px solid {border};
     }}
     QWidget#FiscalPage, QWidget#FiscalTabPage, QWidget#FiscalTabContent {{
         background: {bg};
@@ -117,15 +142,15 @@ def app_stylesheet(palette: dict) -> str:
         background: {bg};
         border: 0;
         border-bottom: 1px solid {border};
-        min-height: 44px;
+        min-height: 28px;
     }}
     QTabBar#OperationalTabBar::tab {{
         background: {bg};
         color: {muted};
         border: 0;
         border-radius: 0;
-        border-bottom: 3px solid transparent;
-        padding: 12px 18px 9px 18px;
+        border-bottom: 2px solid transparent;
+        padding: 5px 18px 4px 18px;
         margin: 0;
         font-weight: 600;
     }}
@@ -133,25 +158,25 @@ def app_stylesheet(palette: dict) -> str:
         background: {bg};
         color: {text};
         border: 0;
-        border-bottom: 3px solid {accent};
+        border-bottom: 2px solid {accent};
         font-weight: 800;
     }}
     QTabBar#OperationalTabBar::tab:hover:!selected {{
         background: {surface_alt};
         color: {text};
-        border-bottom: 3px solid {border};
+        border-bottom: 2px solid {border};
     }}
     QTabBar#OperationalTabBar::tab:disabled {{
         background: {bg};
         color: {muted};
-        border-bottom: 3px solid transparent;
+        border-bottom: 2px solid transparent;
     }}
     QTabBar#OperationalTabBar:focus {{
         border-bottom: 1px solid {accent};
     }}
     QFrame#Sidebar {{
-        background: {surface};
-        border-right: 1px solid {border};
+        background: {chrome_bg};
+        border: 0;
     }}
     QLabel#AppTitle {{
         font-size: 12px;
@@ -360,6 +385,26 @@ def app_stylesheet(palette: dict) -> str:
     }}
     QFrame#FilterBar {{
         padding: 2px;
+    }}
+    QFrame#ChatCenterColumn {{
+        background: {surface};
+        border: 0;
+        border-radius: 0;
+    }}
+    QFrame#ChatHeaderCard {{
+        background: {surface};
+        border: 0;
+        border-bottom: 1px solid {border};
+        border-radius: 0;
+    }}
+    QScrollArea#ChatScrollArea, QScrollArea#ChatScrollArea > QWidget,
+    QScrollArea#ChatScrollArea > QWidget > QWidget {{
+        background: {bg};
+        border: 0;
+        border-radius: 0;
+    }}
+    QWidget#ComposeBarWrapper {{
+        background: transparent;
     }}
     QSplitter::handle {{
         background: {border};
@@ -613,9 +658,8 @@ def app_stylesheet(palette: dict) -> str:
         font-weight: 600;
     }}
     QFrame#TitleBar {{
-        background: {surface};
+        background: {chrome_bg};
         border: 0;
-        border-bottom: 1px solid {border};
     }}
     QLabel#TitleBarAppName {{
         font-size: 11px;

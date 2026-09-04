@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from PySide6.QtCore import QEvent, QObject, QThread, Signal, QTimer
+from PySide6.QtCore import QEvent, QObject, Qt, QThread, Signal, QTimer
+from PySide6.QtGui import QColor, QPainter, QPainterPath
 from PySide6.QtWidgets import QApplication, QFrame, QHBoxLayout, QLabel, QMainWindow, QMessageBox, QStackedWidget, QVBoxLayout, QWidget
 
 from app.services.backend_adapter import BackendService
@@ -8,8 +9,9 @@ from app.services.session_sync_service import SessionSyncService
 from app.ui.animations import animate_width, fade_in
 from app.ui.app_icon import app_icon
 from app.ui.background_worker import start_worker
-from app.ui.chat_center_page import ChatCenterPage
+from app.ui.chat_center_page import ChatCenterDialog
 from app.ui.chat_realtime import ChatRealtimeClient
+from app.ui.components.area_identity import refresh_area_theme
 from app.ui.components.floating_chat_button import FloatingChatButton
 from app.ui.components.login_summary_banner import LoginSummaryBanner
 from app.ui.components.native_frameless import FramelessHitTestMixin
@@ -23,18 +25,56 @@ from app.ui.login_dialog import LoginDialog
 from app.ui.operational_reports_page import OperationalReportsPage
 from app.ui.process_page import ProcessPage
 from app.ui.production_items_page import ProductionAreaPage
-from app.ui.proposal_chat_dialog import ProposalChatDialog
 from app.ui.galvanization_items_page import GalvanizationAreaPage
 from app.ui.settings_dialog import SettingsDialog
 from app.ui.sidebar import Sidebar
 from app.ui.icons import icon_cache
-from app.ui.styles import app_stylesheet
+from app.ui.styles import app_stylesheet, chrome_bg_color
 from app.version import APP_NAME, APP_VERSION
 from app.services.update_distribution_client import check_for_updates
 from app.services.app_logging import get_logger
 from app.ui.update_dialog import UpdateDialog
 
 log = get_logger("main_window")
+
+
+class _ContentCornerNotch(QWidget):
+    """Recorte arredondado no canto superior esquerdo do MainContent, sem
+    reservar margem nenhuma pro conteudo (o usuario nao quis gap nenhum).
+
+    QSS border-radius sozinho nao aparece ali porque a pagina ativa cobre o
+    canto inteiro sem margem. Este widget fica por cima de tudo, mas pinta
+    SO a meia-lua fora do arco (cor do chrome) - nunca preenche o interior
+    do arco, que fica transparente e deixa a pagina real por baixo aparecer
+    sem alteracao. Assim nao importa se algum texto/icone da pagina cai
+    dentro do quadrado RADIUSxRADIUS: so o pixel morto fora do arco vira
+    chrome, o resto continua exatamente como a pagina desenhou.
+    """
+
+    RADIUS = 10
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(self.RADIUS, self.RADIUS)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self.setAttribute(Qt.WA_NoSystemBackground, True)
+        self._chrome_color = QColor("#000000")
+
+    def set_colors(self, chrome_hex: str):
+        self._chrome_color = QColor(chrome_hex)
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        square = QPainterPath()
+        square.addRect(0, 0, self.RADIUS, self.RADIUS)
+        d = self.RADIUS * 2
+        arc = QPainterPath()
+        arc.addRoundedRect(0, 0, d, d, self.RADIUS, self.RADIUS)
+        crescent = square.subtracted(arc)
+        painter.fillPath(crescent, self._chrome_color)
+
 
 class SimplePage(QWidget):
     def __init__(self, title: str, subtitle: str, parent=None):
@@ -115,7 +155,7 @@ class MainWindow(FramelessHitTestMixin, QMainWindow):
 
         has_chats = self._can_view("chats", "CHATS")
         self.title_bar = TitleBar(self.service, on_open_conversation=self._open_conversation_from_notification)
-        self.title_bar.chat_requested.connect(lambda: self.select_page("CHATS"))
+        self.title_bar.chat_requested.connect(self.open_chat_center)
         self.title_bar.theme_toggle_requested.connect(self.toggle_theme)
         self.title_bar.settings_requested.connect(self.open_settings)
         self.title_bar.logout_callback = self._logout
@@ -130,6 +170,8 @@ class MainWindow(FramelessHitTestMixin, QMainWindow):
         self.pending_btn = self.title_bar.pending_btn if has_chats else None
 
         body = QWidget()
+        body.setObjectName("AppBody")
+        body.setAttribute(Qt.WA_StyledBackground, True)
         main = QHBoxLayout(body)
         main.setContentsMargins(0, 0, 0, 0)
         main.setSpacing(0)
@@ -142,10 +184,15 @@ class MainWindow(FramelessHitTestMixin, QMainWindow):
 
         content = QWidget()
         content.setObjectName("MainContent")
+        content.setAttribute(Qt.WA_StyledBackground, True)
         self.content_layout = QVBoxLayout(content)
         self.content_layout.setContentsMargins(0, 0, 0, 0)
         self.content_layout.setSpacing(0)
         main.addWidget(content, 1)
+
+        self._content_corner_notch = _ContentCornerNotch(content)
+        self._content_corner_notch.move(0, 0)
+        self._update_corner_notch_colors()
 
         self.session_policy_banner = QLabel()
         self.session_policy_banner.setObjectName("SessionPolicyBanner")
@@ -162,18 +209,25 @@ class MainWindow(FramelessHitTestMixin, QMainWindow):
             QTimer.singleShot(1500, self._start_background_update_check)
             self._start_session_policy_timer()
 
+        # Precisa ser raised por ultimo: qualquer widget adicionado ao
+        # content_layout depois dele (session banner, stack com as paginas)
+        # nasce por cima por padrao e cobriria o recorte do canto de novo.
+        self._content_corner_notch.raise_()
+
         self.floating_chat_button = None
         if self._can_view("chats", "CHATS"):
             self.floating_chat_button = FloatingChatButton(self.service, parent=root)
-            self.floating_chat_button.clicked.connect(lambda: self.select_page("CHATS"))
+            self.floating_chat_button.clicked.connect(self.open_chat_center)
             self.floating_chat_button.raise_()
             self._reposition_floating_button()
 
+        self._chat_center_dialog = None
         self.chat_realtime = None
         self.session_sync = None
         if self._can_view("chats", "CHATS"):
             self.chat_realtime = ChatRealtimeClient(self.service, parent=self)
             self.chat_realtime.conversation_updated.connect(self._on_conversation_updated)
+            self.chat_realtime.conversation_event.connect(self._on_conversation_event)
             self.chat_realtime.read_state_updated.connect(self._poll_chat_unread)
             self.chat_realtime.connection_changed.connect(self._on_realtime_connection_changed)
             self.chat_realtime.notification_event.connect(self._on_notification_event)
@@ -201,7 +255,8 @@ class MainWindow(FramelessHitTestMixin, QMainWindow):
             self._poll_chat_unread()
 
         if self._update_available_notice and not self._update_available_notice_shown:
-            QTimer.singleShot(500, self._show_update_available_notice)
+            self._update_available_notice_shown = True
+            log.info("Atualizacao recomendada disponivel | detalhe=%s", self._update_available_notice)
 
     
 
@@ -307,10 +362,6 @@ class MainWindow(FramelessHitTestMixin, QMainWindow):
             self.pages["DASHBOARD EXECUTIVO"] = ExecutiveDashboardPage(self.service)
             self.stack.addWidget(self.pages["DASHBOARD EXECUTIVO"])
 
-        if self._can_view("chats", "CHATS"):
-            self.pages["CHATS"] = ChatCenterPage(self.service)
-            self.stack.addWidget(self.pages["CHATS"])
-
         for area in self.service.visible_areas():
             if area == "PRODUCAO":
                 self.pages[area] = ProductionAreaPage(self.service)
@@ -390,6 +441,22 @@ class MainWindow(FramelessHitTestMixin, QMainWindow):
             page.refresh()
         self._page_animation = fade_in(page)
 
+    def open_chat_center(self, *, proposal_id=None, conversation_id=None, message_id=None):
+        if not self._can_view("chats", "CHATS"):
+            return
+        dialog = ChatCenterDialog(
+            self.service,
+            self,
+            proposal_id=proposal_id,
+            conversation_id=conversation_id,
+            message_id=message_id,
+        )
+        self._chat_center_dialog = dialog
+        try:
+            dialog.exec()
+        finally:
+            self._chat_center_dialog = None
+
     def open_settings(self):
         if not self._can_view("settings", "CONFIGURACOES"):
             return
@@ -413,6 +480,10 @@ class MainWindow(FramelessHitTestMixin, QMainWindow):
         if hasattr(page, "refresh"):
             page.refresh()
 
+    def _update_corner_notch_colors(self):
+        palette = self.service.palette
+        self._content_corner_notch.set_colors(chrome_bg_color(palette))
+
     def apply_theme(self):
         icon_cache.clear()
         self.setStyleSheet(app_stylesheet(self.service.palette))
@@ -421,9 +492,11 @@ class MainWindow(FramelessHitTestMixin, QMainWindow):
         self.sidebar.apply_palette(self.service.palette)
         self.title_bar.apply_palette(self.service.palette)
         self.title_bar.set_theme_icon(getattr(self.service, "palette_name", "claro") != "claro")
+        self._update_corner_notch_colors()
         for page in self.pages.values():
             page.style().unpolish(page)
             page.style().polish(page)
+            refresh_area_theme(page, self.service.palette)
         if current and hasattr(current, "refresh"):
             current.refresh()
         if current:
@@ -507,17 +580,14 @@ class MainWindow(FramelessHitTestMixin, QMainWindow):
             self.toast_manager.handle_notifications(notifications or [])
 
     def _current_open_conversation_id(self):
-        chats_page = self.pages.get("CHATS")
-        if chats_page is None or self.stack.currentWidget() is not chats_page:
+        dialog = self._chat_center_dialog
+        if dialog is None:
             return None
-        panel = getattr(chats_page, "panel", None)
+        panel = getattr(dialog.page, "panel", None)
         return getattr(panel, "conversation_id", None) if panel is not None else None
 
     def _open_conversation_from_notification(self, proposal_id, conversation_id, message_id):
-        dialog = ProposalChatDialog(self.service, proposal_id=proposal_id, conversation_id=conversation_id, parent=self)
-        if message_id:
-            dialog.panel.focus_message(message_id)
-        dialog.exec()
+        self.open_chat_center(proposal_id=proposal_id, conversation_id=conversation_id, message_id=message_id)
 
     def _on_realtime_connection_changed(self, connected: bool):
         # ETAPA 8: primeira conexao apos o login ja e coberta pelo sync
@@ -538,18 +608,14 @@ class MainWindow(FramelessHitTestMixin, QMainWindow):
 
     def _on_conversation_updated(self, conversation_id: int):
         self._poll_chat_unread()
-        chats_page = self.pages.get("CHATS")
-        if chats_page is not None and self.stack.currentWidget() is chats_page and hasattr(chats_page, "on_conversation_updated"):
-            chats_page.on_conversation_updated(conversation_id)
-        # so atualiza a conversa ao vivo se a pagina "Chats" for a que esta
-        # REALMENTE visivel agora (reaproveita a mesma checagem usada pro
-        # toast manager) — comparar so o conversation_id guardado no painel
-        # nao bastava: ele fica obsoleto se o usuario trocou de pagina.
-        if self._current_open_conversation_id() == conversation_id:
-            chats_page = self.pages.get("CHATS")
-            panel = getattr(chats_page, "panel", None)
-            if panel is not None:
-                panel.refresh()
+        dialog = self._chat_center_dialog
+        if dialog is not None:
+            dialog.page.on_conversation_updated(conversation_id)
+
+    def _on_conversation_event(self, event_type: str, data: dict):
+        dialog = self._chat_center_dialog
+        if dialog is not None and hasattr(dialog.page, "on_conversation_event"):
+            dialog.page.on_conversation_event(event_type, data)
 
     def _on_notification_event(self, event_type: str, data: dict):
         # ETAPA 10: badge do sino reconcilia pelo mesmo SessionSyncService
@@ -573,21 +639,6 @@ class MainWindow(FramelessHitTestMixin, QMainWindow):
             self._login_summary_shown = True
             self._show_login_summary(summary)
 
-    def _show_update_available_notice(self):
-        # Fase 03: aviso nao bloqueante de UPDATE_AVAILABLE, exibido uma unica vez por sessao
-        # (a verificacao de compatibilidade ja rodou antes do login; aqui so apresentamos o
-        # resultado). Nao baixa nem instala nada -- apenas informa.
-        if self._update_available_notice_shown or not self._update_available_notice:
-            return
-        self._update_available_notice_shown = True
-        box = QMessageBox(self)
-        box.setIcon(QMessageBox.Information)
-        box.setWindowTitle("Nova versao disponivel")
-        box.setText(self._update_available_notice)
-        ok_button = box.addButton("Continuar", QMessageBox.AcceptRole)
-        box.setDefaultButton(ok_button)
-        box.exec()
-
     def _show_login_summary(self, summary: dict):
         # so a primeira leitura pos-login (ETAPA 6) — puramente informativo,
         # nunca chama mark-read/resolve, so apresenta numeros que os badges
@@ -600,8 +651,8 @@ class MainWindow(FramelessHitTestMixin, QMainWindow):
         user = self.service.user or {}
         display_name = user.get("display_name") or user.get("username") or ""
         banner = LoginSummaryBanner(self.service, display_name, unread_messages, unread_mentions, open_action_required, parent=self)
-        banner.view_messages_requested.connect(lambda: self.select_page("CHATS"))
-        banner.view_pending_requested.connect(lambda: self.select_page("CHATS"))
+        banner.view_messages_requested.connect(self.open_chat_center)
+        banner.view_pending_requested.connect(self.open_chat_center)
         self.content_layout.insertWidget(0, banner)
 
     def closeEvent(self, event):

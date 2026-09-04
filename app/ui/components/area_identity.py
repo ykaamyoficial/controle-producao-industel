@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PySide6.QtWidgets import QLabel, QWidget
+from PySide6.QtWidgets import QFrame, QLabel, QTabBar, QWidget
 
 from app.ui.components.operational_layout import OPERATIONAL_AREA_ACCENT_WIDTH
 from app.ui.styles import area_color
@@ -59,3 +59,32 @@ def style_area_title(label: QLabel, area: str | None, palette: dict) -> QLabel:
 
 def area_soft_background(area: str | None, palette: dict, alpha: int = 34) -> str:
     return with_alpha(area_color(area or "", palette), alpha)
+
+
+def refresh_area_theme(root: QWidget, palette: dict) -> None:
+    """Re-apply theme-dependent stylesheets baked in at construction time.
+
+    ``configure_operational_header``/``configure_operational_tabs``/``style_area_title``
+    set an explicit ``setStyleSheet`` on their widgets using the palette that was
+    current when the page was built. Toggling the theme later (see
+    ``MainWindow.apply_theme``) only unpolishes/polishes widgets, which has no
+    effect on those explicit stylesheets, so they stay stuck on the old
+    (often light) colors. Walk the page tree and reapply them with the given
+    palette.
+    """
+    from app.ui.components.top_tabs import style_operational_tab_bar
+
+    for frame in root.findChildren(QFrame, "OperationalHeader"):
+        area = frame.property("areaKey")
+        if area:
+            style_area_header(frame, area, palette)
+
+    for tab_bar in root.findChildren(QTabBar, "OperationalTabBar"):
+        area = tab_bar.property("areaKey")
+        if area:
+            style_operational_tab_bar(tab_bar, area, palette)
+
+    for label in root.findChildren(QLabel, "FilterTitle"):
+        area = label.property("areaKey")
+        if area:
+            style_area_title(label, area, palette)
