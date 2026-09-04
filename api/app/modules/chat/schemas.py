@@ -30,6 +30,7 @@ class ConversationList(BaseModel):
 
 class MessageCreate(BaseModel):
     body: str = Field(min_length=1, max_length=4000)
+    client_message_id: str | None = Field(default=None, min_length=1, max_length=64)
     message_type: str = Field(default="MENSAGEM", pattern=r"^(MENSAGEM|PERGUNTA|NOTA_INTERNA)$")
     mentioned_user_id: int | None = None
     reply_to_message_id: int | None = None
@@ -38,9 +39,52 @@ class MessageCreate(BaseModel):
     is_important: bool = False
 
 
+class ChatAttachmentMetadata(BaseModel):
+    original_filename: str = Field(min_length=1, max_length=255)
+    stored_filename: str = Field(min_length=1, max_length=120)
+    mime_type: str = Field(min_length=1, max_length=120)
+    file_extension: str = Field(min_length=1, max_length=20)
+    file_size: int = Field(ge=0)
+    storage_path: str = Field(min_length=1, max_length=500)
+    sha256: str = Field(min_length=64, max_length=64)
+    thumbnail_path: str | None = Field(default=None, max_length=500)
+
+
+class ChatAttachmentRead(ChatAttachmentMetadata):
+    id: int
+    message_id: int
+    uploaded_by: int | None = None
+    created_at: datetime
+    deleted_at: datetime | None = None
+    deleted_by: int | None = None
+
+
+class ChatAttachmentOut(BaseModel):
+    id: int
+    message_id: int
+    client_attachment_id: str | None = None
+    original_filename: str
+    mime_type: str
+    category: str
+    file_size: int
+    sha256: str
+    uploaded_by: int | None = None
+    created_at: datetime
+    thumbnail_available: bool = False
+    deleted_at: datetime | None = None
+    deleted_by: int | None = None
+    delete_reason: str | None = None
+    purged_at: datetime | None = None
+
+
+class AttachmentDeleteRequest(BaseModel):
+    reason: str = Field(min_length=3, max_length=500)
+
+
 class MessageOut(BaseModel):
     id: int
     conversation_id: int
+    client_message_id: str | None = None
     author_user_id: int | None = None
     author_name: str | None = None
     author_avatar_available: bool = False
@@ -58,6 +102,7 @@ class MessageOut(BaseModel):
     is_important: bool = False
     created_at: datetime
     seen_by_count: int = 0
+    attachments: list[ChatAttachmentOut] = Field(default_factory=list)
 
 
 class MessageList(BaseModel):
@@ -70,6 +115,7 @@ class TimelineEntry(BaseModel):
     id: int
     source: str
     entry_kind: str
+    client_message_id: str | None = None
     author_user_id: int | None = None
     author_name: str | None = None
     author_avatar_available: bool = False
@@ -86,11 +132,34 @@ class TimelineEntry(BaseModel):
     is_important: bool = False
     created_at: datetime
     seen_by_count: int = 0
+    attachments: list[ChatAttachmentOut] = Field(default_factory=list)
 
 
 class TimelineList(BaseModel):
     conversation_id: int
     items: list[TimelineEntry]
+    has_more: bool = False
+
+
+class SharedContentItem(BaseModel):
+    """Fase 7 - item da area "Midia e arquivos": nunca duplica o anexo/mensagem,
+    apenas referencia message_id/attachment_id para reutilizar a infraestrutura
+    de download e o "ir para mensagem" ja existentes."""
+
+    kind: str
+    message_id: int
+    attachment_id: int | None = None
+    name: str
+    mime_type: str | None = None
+    size: int | None = None
+    sha256: str | None = None
+    created_at: datetime
+    sender_name: str | None = None
+    snippet: str | None = None
+
+
+class SharedContentList(BaseModel):
+    items: list[SharedContentItem]
     has_more: bool = False
 
 

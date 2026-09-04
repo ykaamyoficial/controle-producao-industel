@@ -3,6 +3,7 @@ from __future__ import annotations
 import time
 import unittest
 
+from PySide6.QtCore import QThread
 from PySide6.QtWidgets import QApplication, QFrame
 
 from app.services.backend_adapter import OFFICIAL_COLOR_PALETTES
@@ -64,10 +65,31 @@ class NotificationCenterPanelTests(unittest.TestCase):
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
 
+    def setUp(self):
+        self._panels: list[NotificationCenterPanel] = []
+
+    def tearDown(self):
+        # NotificationCenterPanel.refresh()/_load_more() spinam QThread reais
+        # (start_worker, app/ui/background_worker.py) parented ao painel. Se o
+        # painel for coletado (fim do teste, variavel local `panel` fora de
+        # escopo) antes da QThread realmente terminar, o Qt destroi uma
+        # QThread "em execucao" -- isso e undefined behavior no C++ do Qt e
+        # pode segfaultar o processo inteiro, em QUALQUER teste rodando depois
+        # (o crash nao aponta pro teste culpado). Mesmo padrao ja usado em
+        # tests/test_background_stability.py: quit()+wait() explicito antes
+        # do teste liberar o objeto.
+        for panel in self._panels:
+            for thread in panel.findChildren(QThread):
+                thread.quit()
+                thread.wait(2000)
+            self.app.processEvents()
+        self._panels.clear()
+
     def _build_panel(self, notifications, on_open_conversation=None) -> NotificationCenterPanel:
         service = FakeService()
         service.notifications = notifications
         panel = NotificationCenterPanel(service, on_open_conversation=on_open_conversation)
+        self._panels.append(panel)
         self._pump_until(panel, expected_calls=1)
         return panel
 
@@ -95,19 +117,12 @@ class NotificationCenterPanelTests(unittest.TestCase):
                 count += 1
         return count
 
-    def test_all_filter_shows_every_notification_and_requests_no_status(self):
-        panel = self._build_panel([_notification(1), _notification(2, read_at="2026-08-06T15:00:00Z")])
-        self.assertEqual(self._visible_row_count(panel), 2)
-        self.assertIsNone(panel.service.last_status)
-
-    def test_unread_filter_is_applied_server_side(self):
-        # ETAPA 10: filtro nao e mais aplicado em Python sobre a lista ja
-        # carregada -- o painel manda status=unread pro backend de verdade
+    def test_only_unread_requested_by_default(self):
+        # O painel so mostra nao lidas -- nao ha mais filtro "Todas": o
+        # primeiro refresh ja manda status=unread pro backend de verdade
         # (o FakeService simula o backend filtrando, exatamente como o
         # servico real faz).
         panel = self._build_panel([_notification(1)])
-        panel._set_filter("unread")
-        self._pump_until(panel, expected_calls=2)
         self.assertEqual(panel.service.last_status, "unread")
 
     def test_open_invokes_callback_and_marks_read_after(self):

@@ -1,15 +1,19 @@
 from __future__ import annotations
 
 import logging
+import re
 import uuid
-from datetime import datetime
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+from pathlib import Path
 
 from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import aliased
+from sqlalchemy.orm import aliased, selectinload
 
 from api.app.core import error_codes
+from api.app.core.config import get_settings
 from api.app.core.exceptions import ApiError, PermissionDeniedError
 from api.app.modules.auth import repository as auth_repository
 from api.app.modules.auth.dependencies import user_has_permission
@@ -17,9 +21,20 @@ from api.app.modules.auth.models import User
 from api.app.modules.auth.permissions import CHAT_ADMIN, CHAT_SEND, CHAT_VIEW, CHAT_VIEW_FINALIZED
 from api.app.modules.auth.service import effective_permissions
 from api.app.modules.auth.tokens import utcnow
-from api.app.modules.chat.models import ChatConversation, ChatMessage, ChatMessageRead, ChatNotification
+from api.app.modules.chat.attachment_storage import (
+    ALLOWED_EXTENSIONS_BY_CATEGORY,
+    AttachmentValidationError,
+    ChatAttachmentCategory,
+    ChatAttachmentStorage,
+    classify_extension,
+    content_disposition_attachment,
+    sanitize_original_filename,
+    write_upload_to_temp,
+)
+from api.app.modules.chat.models import ChatAttachment, ChatConversation, ChatMessage, ChatMessageRead, ChatNotification
 from api.app.modules.chat.ws_manager import manager as ws_manager
 from api.app.modules.chat.schemas import (
+    ChatAttachmentOut,
     ConversationOut,
     ConversationList,
     ConversationReadState,
@@ -31,6 +46,8 @@ from api.app.modules.chat.schemas import (
     MessageOut,
     NotificationList,
     NotificationOut,
+    SharedContentItem,
+    SharedContentList,
     TimelineEntry,
     TimelineList,
     UnreadSummary,
@@ -40,6 +57,7 @@ from api.app.modules.proposals.models import Proposal
 
 
 logger = logging.getLogger(__name__)
+attachment_logger = logging.getLogger("api.chat.attachments")
 
 
 GENERAL_CHAT_KIND = "GERAL"
@@ -55,6 +73,22 @@ NOTIFICATION_PRIORITIES = {
     "PERGUNTA_RESPONDIDA": "atencao",
     "PERGUNTA_ATRASADA": "atrasada",
 }
+
+
+@dataclass(frozen=True)
+class AttachmentContent:
+    path: Path
+    filename: str
+    mime_type: str
+    headers: dict[str, str]
+
+
+@dataclass(frozen=True)
+class AttachmentIntegrityIssue:
+    status: str
+    attachment_id: int | None = None
+    storage_path: str | None = None
+    detail: str | None = None
 
 
 async def get_or_create_general_chat(session: AsyncSession) -> ChatConversation:
@@ -130,12 +164,37 @@ def _effective_question_status(raw_status: str | None, due_at: datetime | None, 
     return "ATRASADA" if due_at < reference else raw_status
 
 
+def _attachment_out(attachment: ChatAttachment) -> ChatAttachmentOut:
+    return ChatAttachmentOut(
+        id=attachment.id,
+        message_id=attachment.message_id,
+        client_attachment_id=attachment.client_attachment_id,
+        original_filename=attachment.original_filename,
+        mime_type=attachment.mime_type,
+        category=classify_extension(attachment.file_extension).value,
+        file_size=attachment.file_size,
+        sha256=attachment.sha256,
+        uploaded_by=attachment.uploaded_by,
+        created_at=attachment.created_at,
+        thumbnail_available=bool(attachment.thumbnail_path),
+        deleted_at=attachment.deleted_at,
+        deleted_by=attachment.deleted_by,
+        delete_reason=attachment.delete_reason,
+        purged_at=attachment.purged_at,
+    )
+
+
+def _message_attachments(message: ChatMessage) -> list[ChatAttachmentOut]:
+    return [_attachment_out(attachment) for attachment in getattr(message, "attachments", [])]
+
+
 def _message_out(message: ChatMessage, users_by_id: dict[int, User], seen_by_count: int = 0) -> MessageOut:
     author = users_by_id.get(message.author_user_id) if message.author_user_id else None
     mentioned = users_by_id.get(message.mentioned_user_id) if message.mentioned_user_id else None
     return MessageOut(
         id=message.id,
         conversation_id=message.conversation_id,
+        client_message_id=message.client_message_id,
         author_user_id=message.author_user_id,
         author_name=author.display_name if author else None,
         author_avatar_available=bool(author and author.avatar_bytes),
@@ -153,6 +212,7 @@ def _message_out(message: ChatMessage, users_by_id: dict[int, User], seen_by_cou
         is_important=message.is_important,
         created_at=message.created_at,
         seen_by_count=seen_by_count,
+        attachments=_message_attachments(message),
     )
 
 
@@ -197,12 +257,14 @@ async def _create_message(
     area: str | None = None,
     due_at: datetime | None = None,
     is_important: bool = False,
+    client_message_id: str | None = None,
 ) -> tuple[ChatMessage, set[int]]:
     message = ChatMessage(
         conversation_id=conversation.id,
         author_user_id=actor.id,
         message_type=message_type,
         body=body,
+        client_message_id=client_message_id,
         mentioned_user_id=mentioned_user_id,
         question_status="AGUARDANDO_RESPOSTA" if message_type == "PERGUNTA" else None,
         answered_message_id=answered_message_id,
@@ -360,6 +422,20 @@ async def post_message(session: AsyncSession, conversation_id: int, actor: User,
     if payload.message_type == "PERGUNTA" and not payload.mentioned_user_id:
         raise ApiError(error_codes.CHAT_MENTION_REQUIRED, "Selecione o destinatario da pergunta.", status_code=422)
 
+    client_message_id = payload.client_message_id.strip() if payload.client_message_id else None
+    if client_message_id:
+        existing = (
+            await session.execute(
+                select(ChatMessage)
+                .options(selectinload(ChatMessage.attachments))
+                .where(ChatMessage.conversation_id == conversation.id, ChatMessage.client_message_id == client_message_id)
+            )
+        ).scalars().first()
+        if existing is not None:
+            users_by_id = await _users_by_id(session, {existing.author_user_id, existing.mentioned_user_id})
+            seen_by_message = await _seen_counts(session, [existing])
+            return _message_out(existing, users_by_id, seen_by_message.get(existing.id, 0))
+
     mentioned_user_id: int | None = payload.mentioned_user_id
     if mentioned_user_id:
         mentioned_user = await session.get(User, mentioned_user_id)
@@ -387,6 +463,7 @@ async def post_message(session: AsyncSession, conversation_id: int, actor: User,
         area=payload.area if payload.message_type == "NOTA_INTERNA" else None,
         due_at=payload.due_at,
         is_important=payload.is_important,
+        client_message_id=client_message_id,
     )
     await session.commit()
     await session.refresh(message)
@@ -399,6 +476,7 @@ async def post_message(session: AsyncSession, conversation_id: int, actor: User,
         {
             "conversation_id": conversation.id,
             "message_id": message.id,
+            "client_message_id": message.client_message_id,
             "proposal_id": conversation.proposal_id,
             "sender_user_id": message.author_user_id,
         },
@@ -662,6 +740,7 @@ async def list_messages(session: AsyncSession, conversation_id: int, actor: User
     rows = (
         await session.execute(
             select(ChatMessage)
+            .options(selectinload(ChatMessage.attachments))
             .where(ChatMessage.conversation_id == conversation.id)
             # ETAPA 9: id como desempate -- created_at sozinho nao e garantia
             # de ordem deterministica sob mensagens com timestamp igual/muito
@@ -685,6 +764,472 @@ async def list_messages(session: AsyncSession, conversation_id: int, actor: User
     )
 
 
+_URL_PATTERN = re.compile(r"https?://[^\s<>\"']+")
+_MEDIA_EXTENSIONS = {ext for cat in (ChatAttachmentCategory.IMAGE, ChatAttachmentCategory.VIDEO) for ext in ALLOWED_EXTENSIONS_BY_CATEGORY[cat]}
+
+
+def extract_links(body: str) -> list[str]:
+    """So http(s):// (nada de esquemas exoticos) -- evita tratar texto quebrado
+    como URL e nunca interpreta/renderiza o HTML da mensagem."""
+    if not body:
+        return []
+    return _URL_PATTERN.findall(body)
+
+
+async def _list_shared_links(session: AsyncSession, conversation: ChatConversation, search: str, limit: int, offset: int) -> SharedContentList:
+    rows = (
+        await session.execute(
+            select(ChatMessage)
+            .where(ChatMessage.conversation_id == conversation.id, ChatMessage.body.ilike("%http%"))
+            .order_by(ChatMessage.created_at.desc(), ChatMessage.id.desc())
+        )
+    ).scalars().all()
+
+    all_items: list[tuple[ChatMessage, str]] = []
+    for message in rows:
+        for url in extract_links(message.body):
+            if search and search.lower() not in url.lower() and search.lower() not in (message.body or "").lower():
+                continue
+            all_items.append((message, url))
+
+    page = all_items[offset : offset + limit + 1]
+    has_more = len(page) > limit
+    page = page[:limit]
+
+    ids: set[int | None] = {message.author_user_id for message, _url in page}
+    users_by_id = await _users_by_id(session, ids)
+
+    items = [
+        SharedContentItem(
+            kind="link",
+            message_id=message.id,
+            attachment_id=None,
+            name=url,
+            created_at=message.created_at,
+            sender_name=users_by_id[message.author_user_id].display_name if message.author_user_id in users_by_id else None,
+            snippet=(message.body or "")[:240],
+        )
+        for message, url in page
+    ]
+    return SharedContentList(items=items, has_more=has_more)
+
+
+async def list_shared_content(
+    session: AsyncSession,
+    conversation_id: int,
+    actor: User,
+    *,
+    kind: str,
+    q: str | None = None,
+    limit: int = 40,
+    offset: int = 0,
+) -> SharedContentList:
+    """Fase 7 - "Midia e arquivos": deriva midia/documentos/links do historico
+    real da conversa. NAO duplica anexos/mensagens -- so referencia
+    message_id/attachment_id, reutilizados pelo download (Fase 5) e pelo
+    "ir para mensagem" ja existente no desktop."""
+    if kind not in {"media", "document", "link"}:
+        raise ApiError(error_codes.VALIDATION_ERROR, "Filtro invalido.", status_code=422)
+    conversation = await get_conversation(session, conversation_id)
+    _ensure_can_view_conversation(actor, conversation)
+    search = (q or "").strip()
+
+    if kind == "link":
+        return await _list_shared_links(session, conversation, search, limit, offset)
+
+    media_condition = or_(
+        func.lower(ChatAttachment.mime_type).like("image/%"),
+        func.lower(ChatAttachment.mime_type).like("video/%"),
+        func.lower(ChatAttachment.file_extension).in_(_MEDIA_EXTENSIONS),
+    )
+    query = (
+        select(ChatAttachment, ChatMessage)
+        .join(ChatMessage, ChatAttachment.message_id == ChatMessage.id)
+        .where(ChatMessage.conversation_id == conversation.id, ChatAttachment.deleted_at.is_(None))
+    )
+    query = query.where(media_condition) if kind == "media" else query.where(~media_condition)
+    if search:
+        query = query.where(ChatAttachment.original_filename.ilike(f"%{search}%"))
+    query = query.order_by(ChatAttachment.created_at.desc(), ChatAttachment.id.desc()).offset(offset).limit(limit + 1)
+    rows = (await session.execute(query)).all()
+    has_more = len(rows) > limit
+    rows = rows[:limit]
+
+    ids: set[int | None] = {message.author_user_id for _attachment, message in rows}
+    users_by_id = await _users_by_id(session, ids)
+
+    items = []
+    for attachment, message in rows:
+        is_video = str(attachment.mime_type or "").lower().startswith("video/") or classify_extension(attachment.file_extension) == ChatAttachmentCategory.VIDEO
+        item_kind = "video" if is_video else ("image" if kind == "media" else "document")
+        sender = users_by_id.get(message.author_user_id)
+        items.append(
+            SharedContentItem(
+                kind=item_kind,
+                message_id=message.id,
+                attachment_id=attachment.id,
+                name=attachment.original_filename,
+                mime_type=attachment.mime_type,
+                size=attachment.file_size,
+                sha256=attachment.sha256,
+                created_at=attachment.created_at,
+                sender_name=sender.display_name if sender else None,
+            )
+        )
+    return SharedContentList(items=items, has_more=has_more)
+
+
+async def upload_attachment(
+    session: AsyncSession,
+    message_id: int,
+    actor: User,
+    upload_file,
+    storage: ChatAttachmentStorage | None = None,
+    client_attachment_id: str | None = None,
+) -> ChatAttachmentOut:
+    if not user_has_permission(actor, CHAT_VIEW):
+        raise PermissionDeniedError("Seu usuario nao pode acessar esta conversa.")
+    storage = storage or ChatAttachmentStorage()
+    message = await session.get(ChatMessage, message_id, options=[selectinload(ChatMessage.conversation)])
+    if message is None:
+        raise ApiError(error_codes.CHAT_MESSAGE_NOT_FOUND, "Mensagem nao encontrada.", status_code=404)
+    conversation = message.conversation or await get_conversation(session, message.conversation_id)
+    _ensure_can_view_conversation(actor, conversation)
+    if conversation.status == "FINALIZADA":
+        raise ApiError(error_codes.CHAT_CONVERSATION_FINALIZED, "Esta conversa esta finalizada e nao aceita anexos.", status_code=409)
+    settings = get_settings()
+    active_attachment_rows = (
+        await session.execute(
+            select(ChatAttachment.file_size).where(ChatAttachment.message_id == message.id, ChatAttachment.deleted_at.is_(None))
+        )
+    ).scalars().all()
+    if len(active_attachment_rows) >= settings.chat_max_attachments_per_message:
+        raise ApiError(error_codes.CHAT_ATTACHMENT_LIMIT_EXCEEDED, "Limite de anexos por mensagem atingido.", status_code=413)
+    client_attachment_id = client_attachment_id.strip() if client_attachment_id else None
+    if client_attachment_id:
+        existing = (
+            await session.execute(
+                select(ChatAttachment)
+                .where(ChatAttachment.message_id == message.id, ChatAttachment.client_attachment_id == client_attachment_id)
+            )
+        ).scalars().first()
+        if existing is not None and existing.deleted_at is None:
+            return _attachment_out(existing)
+        if existing is not None and existing.deleted_at is not None:
+            raise ApiError(error_codes.CHAT_ATTACHMENT_NOT_FOUND, "Anexo ja removido.", status_code=410)
+
+    original_filename = sanitize_original_filename(getattr(upload_file, "filename", "") or "arquivo")
+    first_chunk = await upload_file.read(1024 * 1024)
+    if not first_chunk:
+        raise ApiError(error_codes.CHAT_MESSAGE_INVALID, "Arquivo vazio nao pode ser anexado.", status_code=422)
+
+    temp_path: Path | None = None
+    final_path: Path | None = None
+    attachment: ChatAttachment | None = None
+    result: ChatAttachmentOut | None = None
+    try:
+        storage.ensure_min_free_space()
+        type_info = storage.validate_type(original_filename, getattr(upload_file, "content_type", None), first_chunk)
+        temp_path, file_size, digest = await write_upload_to_temp(upload_file, storage, type_info, first_chunk)
+        total_after_upload = sum(int(size or 0) for size in active_attachment_rows) + file_size
+        if total_after_upload > settings.chat_max_total_attachment_mb * 1024 * 1024:
+            raise AttachmentValidationError("Limite total de anexos por mensagem excedido.")
+        stored_filename = storage.generate_storage_name(original_filename)
+        relative_path, final_path = storage.prepare_final_path(stored_filename)
+        storage.move_temp_to_final(temp_path, final_path)
+        temp_path = None
+
+        attachment = ChatAttachment(
+            message_id=message.id,
+            original_filename=original_filename,
+            stored_filename=stored_filename,
+            mime_type=type_info.mime_type,
+            file_extension=type_info.extension,
+            file_size=file_size,
+            storage_path=relative_path,
+            sha256=digest,
+            client_attachment_id=client_attachment_id,
+            uploaded_by=actor.id,
+        )
+        session.add(attachment)
+        await auth_repository.create_security_event(
+            session,
+            "CHAT_ATTACHMENT_UPLOAD",
+            actor_user_id=actor.id,
+            details={
+                "message_id": message.id,
+                "conversation_id": conversation.id,
+                "file_size": file_size,
+                "mime_type": type_info.mime_type,
+                "sha256": digest,
+            },
+        )
+        await session.commit()
+        await session.refresh(attachment)
+        attachment_logger.info(
+            "chat_attachment_uploaded attachment_id=%s message_id=%s user_id=%s file_size=%s mime_type=%s sha256=%s",
+            attachment.id,
+            message.id,
+            actor.id,
+            file_size,
+            type_info.mime_type,
+            digest,
+        )
+        result = _attachment_out(attachment)
+    except AttachmentValidationError as exc:
+        await session.rollback()
+        storage.remove_file(temp_path)
+        storage.remove_file(final_path)
+        text = str(exc).lower()
+        if "limite" in text:
+            raise ApiError(error_codes.CHAT_ATTACHMENT_TOO_LARGE, "Arquivo acima do limite permitido.", status_code=413) from exc
+        raise ApiError(error_codes.CHAT_ATTACHMENT_TYPE_NOT_ALLOWED, "Tipo de arquivo nao permitido.", status_code=415) from exc
+    except OSError as exc:
+        await session.rollback()
+        storage.remove_file(temp_path)
+        storage.remove_file(final_path)
+        attachment_logger.exception("chat_attachment_storage_failed message_id=%s user_id=%s", message_id, actor.id)
+        raise ApiError(error_codes.CHAT_ATTACHMENT_STORAGE_ERROR, "Nao foi possivel armazenar o anexo.", status_code=507) from exc
+    except Exception:
+        await session.rollback()
+        storage.remove_file(temp_path)
+        storage.remove_file(final_path)
+        attachment_logger.exception("chat_attachment_upload_failed message_id=%s user_id=%s", message_id, actor.id)
+        raise
+    assert attachment is not None and result is not None
+    await _publish_conversation_event(
+        session,
+        conversation,
+        set(),
+        actor,
+        "attachment.created",
+        {
+            "conversation_id": conversation.id,
+            "message_id": message.id,
+            "client_message_id": message.client_message_id,
+            "attachment": result.model_dump(mode="json"),
+        },
+    )
+    return result
+
+
+async def _get_attachment_for_actor(session: AsyncSession, attachment_id: int, actor: User, *, include_deleted: bool = False) -> ChatAttachment:
+    attachment = (
+        await session.execute(
+            select(ChatAttachment)
+            .options(selectinload(ChatAttachment.message).selectinload(ChatMessage.conversation))
+            .where(ChatAttachment.id == attachment_id)
+        )
+    ).scalars().first()
+    if attachment is None:
+        raise ApiError(error_codes.CHAT_ATTACHMENT_NOT_FOUND, "Anexo nao encontrado.", status_code=404)
+    conversation = attachment.message.conversation if attachment.message else None
+    if conversation is None:
+        raise ApiError(error_codes.CHAT_ATTACHMENT_NOT_FOUND, "Anexo nao encontrado.", status_code=404)
+    _ensure_can_view_conversation(actor, conversation)
+    if attachment.deleted_at is not None and not include_deleted:
+        raise ApiError(error_codes.CHAT_ATTACHMENT_NOT_FOUND, "Anexo nao esta mais disponivel.", status_code=410)
+    return attachment
+
+
+async def get_attachment_metadata(session: AsyncSession, attachment_id: int, actor: User) -> ChatAttachmentOut:
+    attachment = await _get_attachment_for_actor(session, attachment_id, actor)
+    return _attachment_out(attachment)
+
+
+def _ensure_can_delete_attachment(actor: User, attachment: ChatAttachment) -> None:
+    message = attachment.message
+    if actor.is_superuser or user_has_permission(actor, CHAT_ADMIN):
+        return
+    if attachment.uploaded_by is not None and attachment.uploaded_by == actor.id:
+        return
+    if message is not None and message.author_user_id is not None and message.author_user_id == actor.id:
+        return
+    raise ApiError(error_codes.PERMISSION_DENIED, "Usuario nao possui permissao para remover este anexo.", status_code=403)
+
+
+async def delete_attachment(session: AsyncSession, attachment_id: int, actor: User, reason: str) -> ChatAttachmentOut:
+    attachment = await _get_attachment_for_actor(session, attachment_id, actor, include_deleted=True)
+    if attachment.deleted_at is not None:
+        return _attachment_out(attachment)
+    _ensure_can_delete_attachment(actor, attachment)
+    message = attachment.message
+    conversation = message.conversation if message else None
+    if conversation is None:
+        raise ApiError(error_codes.CHAT_ATTACHMENT_NOT_FOUND, "Anexo nao encontrado.", status_code=404)
+    reason = str(reason or "").strip()
+    if len(reason) < 3:
+        raise ApiError(error_codes.CHAT_MESSAGE_INVALID, "Informe uma justificativa para remover o anexo.", status_code=422)
+    attachment.deleted_at = utcnow()
+    attachment.deleted_by = actor.id
+    attachment.delete_reason = reason[:500]
+    await auth_repository.create_security_event(
+        session,
+        "CHAT_ATTACHMENT_DELETED",
+        actor_user_id=actor.id,
+        details={
+            "attachment_id": attachment.id,
+            "message_id": attachment.message_id,
+            "conversation_id": conversation.id,
+            "file_size": attachment.file_size,
+            "sha256": attachment.sha256,
+            "reason": attachment.delete_reason,
+        },
+    )
+    await session.commit()
+    await session.refresh(attachment)
+    result = _attachment_out(attachment)
+    await _publish_conversation_event(
+        session,
+        conversation,
+        set(),
+        actor,
+        "attachment.deleted",
+        {"conversation_id": conversation.id, "message_id": attachment.message_id, "attachment": result.model_dump(mode="json")},
+    )
+    return result
+
+
+async def purge_deleted_attachments(session: AsyncSession, actor: User, storage: ChatAttachmentStorage | None = None, *, now: datetime | None = None) -> int:
+    if not (actor.is_superuser or user_has_permission(actor, CHAT_ADMIN)):
+        raise ApiError(error_codes.PERMISSION_DENIED, "Usuario nao possui permissao para expurgar anexos.", status_code=403)
+    storage = storage or ChatAttachmentStorage()
+    settings = get_settings()
+    cutoff = (now or utcnow()) - timedelta(days=settings.chat_attachment_deleted_retention_days)
+    attachments = (
+        await session.execute(
+            select(ChatAttachment).where(
+                ChatAttachment.deleted_at.is_not(None),
+                ChatAttachment.purged_at.is_(None),
+                ChatAttachment.deleted_at < cutoff,
+            )
+        )
+    ).scalars().all()
+    purged = 0
+    for attachment in attachments:
+        try:
+            path = storage.resolve_path(attachment.storage_path)
+        except ValueError:
+            path = None
+        if path is not None:
+            ChatAttachmentStorage.remove_file(path)
+        attachment.purged_at = now or utcnow()
+        await auth_repository.create_security_event(
+            session,
+            "CHAT_ATTACHMENT_PURGED",
+            actor_user_id=actor.id,
+            details={
+                "attachment_id": attachment.id,
+                "message_id": attachment.message_id,
+                "storage_path": attachment.storage_path,
+                "sha256": attachment.sha256,
+                "deleted_at": attachment.deleted_at.isoformat() if attachment.deleted_at else None,
+                "deleted_by": attachment.deleted_by,
+                "purged_at": attachment.purged_at.isoformat() if attachment.purged_at else None,
+            },
+        )
+        purged += 1
+    if purged:
+        await session.commit()
+    return purged
+
+
+async def attachment_integrity_report(
+    session: AsyncSession,
+    actor: User,
+    storage: ChatAttachmentStorage | None = None,
+    *,
+    include_orphans: bool = True,
+    orphan_grace_hours: int = 24,
+) -> list[AttachmentIntegrityIssue]:
+    if not (actor.is_superuser or user_has_permission(actor, CHAT_ADMIN)):
+        raise ApiError(error_codes.PERMISSION_DENIED, "Usuario nao possui permissao para diagnosticar anexos.", status_code=403)
+    storage = storage or ChatAttachmentStorage()
+    attachments = (await session.execute(select(ChatAttachment))).scalars().all()
+    known_paths = {attachment.storage_path for attachment in attachments}
+    issues: list[AttachmentIntegrityIssue] = []
+    for attachment in attachments:
+        if attachment.purged_at is not None:
+            continue
+        try:
+            path = storage.resolve_path(attachment.storage_path)
+        except ValueError:
+            issues.append(AttachmentIntegrityIssue("INVALID_PATH", attachment.id, attachment.storage_path))
+            continue
+        if not path.exists() or not path.is_file():
+            issues.append(AttachmentIntegrityIssue("MISSING_FILE", attachment.id, attachment.storage_path))
+            continue
+        if attachment.deleted_at is None:
+            try:
+                digest = storage.sha256_file(path)
+            except OSError as exc:
+                issues.append(AttachmentIntegrityIssue("MISSING_FILE", attachment.id, attachment.storage_path, str(exc)))
+                continue
+            if digest != attachment.sha256:
+                issues.append(AttachmentIntegrityIssue("HASH_MISMATCH", attachment.id, attachment.storage_path, digest))
+    if include_orphans:
+        root = storage.root / "chat"
+        cutoff = (utcnow() - timedelta(hours=max(1, orphan_grace_hours))).timestamp()
+        if root.exists():
+            for path in root.rglob("*"):
+                if not path.is_file() or ".tmp" in path.parts:
+                    continue
+                try:
+                    relative = path.relative_to(storage.root).as_posix()
+                    mtime = path.stat().st_mtime
+                except OSError:
+                    continue
+                if relative not in known_paths and mtime < cutoff:
+                    issues.append(AttachmentIntegrityIssue("ORPHAN_FILE", None, relative))
+    return issues
+
+
+async def get_attachment_content(session: AsyncSession, attachment_id: int, actor: User, storage: ChatAttachmentStorage | None = None) -> AttachmentContent:
+    storage = storage or ChatAttachmentStorage()
+    attachment = await _get_attachment_for_actor(session, attachment_id, actor)
+    try:
+        path = storage.resolve_path(attachment.storage_path)
+    except ValueError as exc:
+        raise ApiError(error_codes.CHAT_ATTACHMENT_STORAGE_ERROR, "Caminho interno do anexo esta invalido.", status_code=500) from exc
+    if not path.exists() or not path.is_file():
+        attachment_logger.error("chat_attachment_file_missing attachment_id=%s path=%s", attachment_id, attachment.storage_path)
+        await auth_repository.create_security_event(
+            session,
+            "CHAT_ATTACHMENT_FILE_MISSING",
+            actor_user_id=actor.id,
+            details={"attachment_id": attachment.id, "message_id": attachment.message_id, "storage_path": attachment.storage_path},
+        )
+        await session.commit()
+        raise ApiError(error_codes.CHAT_ATTACHMENT_STORAGE_ERROR, "Arquivo do anexo nao esta disponivel.", status_code=500)
+    try:
+        digest = storage.sha256_file(path)
+    except OSError as exc:
+        raise ApiError(error_codes.CHAT_ATTACHMENT_STORAGE_ERROR, "Arquivo do anexo nao esta disponivel.", status_code=500) from exc
+    if digest != attachment.sha256:
+        attachment_logger.critical("chat_attachment_hash_mismatch attachment_id=%s expected=%s actual=%s", attachment.id, attachment.sha256, digest)
+        await auth_repository.create_security_event(
+            session,
+            "CHAT_ATTACHMENT_HASH_MISMATCH",
+            actor_user_id=actor.id,
+            details={"attachment_id": attachment.id, "message_id": attachment.message_id, "expected_sha256": attachment.sha256, "actual_sha256": digest},
+        )
+        await session.commit()
+        raise ApiError(error_codes.CHAT_ATTACHMENT_INTEGRITY_ERROR, "Integridade do anexo nao confere.", status_code=409)
+    await auth_repository.create_security_event(
+        session,
+        "CHAT_ATTACHMENT_DOWNLOAD",
+        actor_user_id=actor.id,
+        details={"attachment_id": attachment.id, "message_id": attachment.message_id, "file_size": attachment.file_size, "sha256": attachment.sha256},
+    )
+    await session.commit()
+    headers = {
+        "Cache-Control": "private",
+        "ETag": f'"{attachment.sha256}"',
+        "Content-Disposition": content_disposition_attachment(attachment.original_filename),
+    }
+    return AttachmentContent(path=path, filename=attachment.original_filename, mime_type=attachment.mime_type, headers=headers)
+
+
 async def get_proposal_timeline(
     session: AsyncSession, proposal_id: int, actor: User, *, before: datetime | None = None, limit: int = 200
 ) -> TimelineList:
@@ -701,6 +1246,7 @@ async def get_proposal_timeline(
             (
                 await session.execute(
                     select(ChatMessage)
+                    .options(selectinload(ChatMessage.attachments))
                     .where(ChatMessage.conversation_id == conversation.id)
                     # ETAPA 9: id como desempate, mesma razao de list_messages.
                     .order_by(ChatMessage.created_at.desc(), ChatMessage.id.desc())
@@ -743,6 +1289,7 @@ async def get_proposal_timeline(
                     is_important=message.is_important,
                     created_at=message.created_at,
                     seen_by_count=seen_by_message.get(message.id, 0),
+                    attachments=_message_attachments(message),
                 )
             )
         except Exception:

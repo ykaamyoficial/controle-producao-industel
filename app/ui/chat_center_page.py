@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from PySide6.QtCore import QSize, Qt, QTimer
+from PySide6.QtCore import QEvent, QSize, Qt, QTimer
 from PySide6.QtWidgets import (
+    QDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -20,6 +21,7 @@ from app.ui.animations import fade_in
 from app.ui.background_worker import start_worker
 from app.ui.components.modern_button import ModernButton
 from app.ui.components.toast_notification import ToastNotification
+from app.ui.dialog_utils import apply_large_dialog_geometry, style_dialog_from_parent
 from app.ui.resilience import show_operation_error
 from app.ui.proposal_chat_dialog import ChatConversationPanel
 from app.ui.styles import status_color
@@ -50,13 +52,15 @@ class ChatCenterPage(QWidget):
     selecionada ao centro (ChatConversationPanel embutido, com seu proprio
     painel lateral recolhivel de detalhes da proposta)."""
 
-    def __init__(self, service, parent=None):
+    def __init__(self, service, parent=None, proposal_id=None, conversation_id=None, message_id=None):
         super().__init__(parent)
         self.service = service
         self._refresh_thread = None
         self._refresh_in_flight = False
         self._refresh_pending = False
         self._targeted_thread = None
+        self._closing = False
+        self._worker_threads = []
         self._search_timer = QTimer(self)
         self._search_timer.setSingleShot(True)
         self._search_timer.setInterval(350)
@@ -65,7 +69,17 @@ class ChatCenterPage(QWidget):
         self.conversations: list[dict] = []
         self.selected_conversation: dict | None = None
         self.panel: ChatConversationPanel | None = None
+        # Alvo pedido na abertura (notificacao, "Ver mensagens", icone de
+        # chat na linha da proposta) - abre direto nessa conversa em vez da
+        # tela vazia "selecione uma conversa", e some assim que a lista
+        # carrega e consegue selecionar o card correspondente sozinha.
+        self._pending_target_proposal_id = proposal_id
+        self._pending_target_conversation_id = conversation_id
         self._build()
+        if proposal_id is not None or conversation_id is not None:
+            self._show_panel(proposal_id=proposal_id, conversation_id=conversation_id)
+            if message_id:
+                self.panel.focus_message(message_id)
         self.refresh()
 
     def _build(self):
@@ -141,9 +155,17 @@ class ChatCenterPage(QWidget):
 
     def _build_center_column(self) -> QFrame:
         self.center_container = QFrame()
-        self.center_container.setObjectName("Panel")
+        # Nao usa "Panel" (borda + cantos arredondados) de proposito: com a
+        # margem zerada, um card arredondado ali vazaria por baixo do
+        # cabecalho reto da conversa. A unica divisoria agora e o
+        # border-bottom do proprio QFrame#ChatHeaderCard.
+        self.center_container.setObjectName("ChatCenterColumn")
         self.center_layout = QVBoxLayout(self.center_container)
-        self.center_layout.setContentsMargins(12, 12, 12, 12)
+        # Sem margem: o cabecalho da conversa (QFrame#ChatHeaderCard) e a
+        # unica divisoria, o resto preenche a coluna inteira edge-to-edge -
+        # ver ChatConversationPanel._build() em proposal_chat_dialog.py.
+        self.center_layout.setContentsMargins(0, 0, 0, 0)
+        self.center_layout.setSpacing(0)
         self.empty_center_label = QLabel("Selecione uma conversa a esquerda para comecar.")
         self.empty_center_label.setAlignment(Qt.AlignCenter)
         self.empty_center_label.setObjectName("Caption")
@@ -160,6 +182,8 @@ class ChatCenterPage(QWidget):
         self.refresh()
 
     def refresh(self):
+        if self._closing:
+            return
         if self._refresh_in_flight:
             self._refresh_pending = True
             return
@@ -168,8 +192,7 @@ class ChatCenterPage(QWidget):
         status = self._status_filter
         other_status = "FINALIZADA" if status == "ATIVA" else "ATIVA"
         search = self.search.text().strip()
-        self._refresh_thread = start_worker(
-            self,
+        self._refresh_thread = self._run_background(
             lambda: self._fetch(status, other_status, search),
             self._refresh_success,
             self._refresh_error,
@@ -187,6 +210,9 @@ class ChatCenterPage(QWidget):
         return active, other
 
     def _refresh_success(self, result: tuple[list[dict], int]):
+        if self._closing:
+            self._refresh_in_flight = False
+            return
         conversations, other_count = result
         if self._status_filter == "ATIVA":
             self.active_tab_btn.setText(f"Ativas ({len(conversations)})")
@@ -199,6 +225,8 @@ class ChatCenterPage(QWidget):
         self.conversations = conversations
         self.conversation_list.clear()
         selected_id = self.selected_conversation.get("id") if self.selected_conversation else None
+        target_conversation_id = self._pending_target_conversation_id
+        target_proposal_id = self._pending_target_proposal_id
         selected_item = None
         for conversation in conversations:
             item = QListWidgetItem()
@@ -211,11 +239,19 @@ class ChatCenterPage(QWidget):
             self.conversation_list.setItemWidget(item, card)
             if selected_id is not None and conversation.get("id") == selected_id:
                 selected_item = item
+            elif selected_id is None and (
+                (target_conversation_id is not None and conversation.get("id") == target_conversation_id)
+                or (target_proposal_id is not None and conversation.get("proposal_id") == target_proposal_id)
+            ):
+                selected_item = item
+                self.selected_conversation = conversation
         if selected_item is not None:
             self.conversation_list.setCurrentItem(selected_item)
+        self._pending_target_conversation_id = None
+        self._pending_target_proposal_id = None
         self._set_loading(False)
         self._refresh_in_flight = False
-        if self._refresh_pending:
+        if self._refresh_pending and not self._closing:
             self._refresh_pending = False
             QTimer.singleShot(0, self.refresh)
 
@@ -250,10 +286,13 @@ class ChatCenterPage(QWidget):
             preview.setText(preview.fontMetrics().elidedText(preview.text(), Qt.ElideRight, max(130, width - 46)))
 
     def _refresh_error(self, exc):
+        if self._closing:
+            self._refresh_in_flight = False
+            return
         self._set_loading(False)
         self._refresh_in_flight = False
         show_operation_error(self, exc, self.refresh, title="Chat")
-        if self._refresh_pending:
+        if self._refresh_pending and not self._closing:
             self._refresh_pending = False
             QTimer.singleShot(0, self.refresh)
 
@@ -367,23 +406,36 @@ class ChatCenterPage(QWidget):
             return
 
     def _open_conversation(self, conversation: dict):
+        if conversation.get("kind") == "GERAL":
+            self._show_panel(conversation_id=conversation["id"])
+        else:
+            self._show_panel(proposal_id=conversation.get("proposal_id"))
+
+    def _show_panel(self, *, proposal_id=None, conversation_id=None) -> ChatConversationPanel:
         while self.center_layout.count():
             child = self.center_layout.takeAt(0)
             widget = child.widget()
             if widget:
+                cleanup = getattr(widget, "cleanup", None)
+                if callable(cleanup):
+                    cleanup()
                 widget.deleteLater()
-        if conversation.get("kind") == "GERAL":
-            self.panel = ChatConversationPanel(self.service, conversation_id=conversation["id"], parent=self.center_container)
-        else:
-            self.panel = ChatConversationPanel(self.service, proposal_id=conversation.get("proposal_id"), parent=self.center_container)
+        self.panel = ChatConversationPanel(self.service, proposal_id=proposal_id, conversation_id=conversation_id, parent=self.center_container)
         self.center_layout.addWidget(self.panel, 1)
         self._panel_fade = fade_in(self.panel, duration=220)
+        return self.panel
 
     def on_conversation_updated(self, conversation_id: int) -> None:
-        """Atualiza somente o card alterado; refresh completo fica reservado
-        para uma conversa nova ou para mudança de status/aba."""
+        """Atualiza o card na lista lateral e, se essa conversa e a que esta
+        aberta no momento, tambem o conteudo — sem isso, quem esta com a
+        conversa aberta so via a mensagem nova saindo e voltando (ver
+        ETAPA realtime: o evento chegava, mas so o card era atualizado)."""
         if not conversation_id:
             return
+        if self._closing:
+            return
+        if self.panel is not None and self.panel.conversation_id == conversation_id:
+            self.panel.refresh()
         index = next((i for i, row in enumerate(self.conversations) if int(row.get("id") or 0) == conversation_id), None)
         if index is None:
             self.refresh()
@@ -392,13 +444,18 @@ class ChatCenterPage(QWidget):
         status = current.get("status") or self._status_filter
         if self._targeted_thread is not None and self._targeted_thread.isRunning():
             return
-        self._targeted_thread = start_worker(
-            self,
+        self._targeted_thread = self._run_background(
             lambda: (self.service.chat_conversations_page({"status": status, "conversation_id": conversation_id, "limit": 1}).get("items") or []),
             lambda rows: self._apply_targeted_conversation(conversation_id, rows),
             lambda _exc: None,
             operation_name="chat_center_page.update_conversation",
         )
+
+    def on_conversation_event(self, event_type: str, data: dict) -> None:
+        conversation_id = data.get("conversation_id") if isinstance(data, dict) else None
+        if self.panel is None or self.panel.conversation_id != conversation_id:
+            return
+        self.panel.apply_realtime_event(event_type, data)
 
     def _apply_targeted_conversation(self, conversation_id: int, rows: list[dict]) -> None:
         updated = next((row for row in rows if int(row.get("id") or 0) == conversation_id), None)
@@ -420,3 +477,70 @@ class ChatCenterPage(QWidget):
         self.conversation_list.setItemWidget(item, card)
         if self.selected_conversation and int(self.selected_conversation.get("id") or 0) == conversation_id:
             self.selected_conversation = updated
+
+    def _run_background(self, operation, on_success, on_error, *, operation_name: str):
+        if self._closing:
+            return None
+        thread = start_worker(self, operation, on_success, on_error, operation_name=operation_name)
+        self._worker_threads.append(thread)
+        thread.finished.connect(lambda target=thread: self._worker_threads.remove(target) if target in self._worker_threads else None)
+        return thread
+
+    def cleanup(self):
+        if self._closing:
+            return
+        self._closing = True
+        self._search_timer.stop()
+        if self.panel is not None:
+            self.panel.cleanup()
+        threads = list(self._worker_threads)
+        for thread in (self._refresh_thread, self._targeted_thread):
+            if thread is not None and thread not in threads:
+                threads.append(thread)
+        self._worker_threads.clear()
+        self._refresh_thread = None
+        self._targeted_thread = None
+        for thread in threads:
+            try:
+                if thread.isRunning():
+                    thread.quit()
+                    thread.wait(2000)
+            except RuntimeError:
+                pass
+
+    def closeEvent(self, event):
+        self.cleanup()
+        super().closeEvent(event)
+
+    def event(self, event):
+        if event.type() == QEvent.DeferredDelete:
+            self.cleanup()
+        return super().event(event)
+
+
+class ChatCenterDialog(QDialog):
+    """Casca modal em cima de ChatCenterPage — unico ponto de entrada pra
+    abrir uma conversa no app: botao de chat, notificacao, "Ver mensagens"
+    do banner e o icone de chat na linha da proposta todos abrem esta
+    mesma tela (lista de conversas + timeline), so variando qual conversa
+    ja vem selecionada via proposal_id/conversation_id/message_id."""
+
+    def __init__(self, service, parent=None, proposal_id=None, conversation_id=None, message_id=None):
+        super().__init__(parent)
+        self.service = service
+        apply_large_dialog_geometry(self, parent, width_ratio=0.94, height_ratio=0.94, minimum_width=1180, minimum_height=690)
+        style_dialog_from_parent(self, parent)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+        self.page = ChatCenterPage(
+            service,
+            parent=self,
+            proposal_id=proposal_id,
+            conversation_id=conversation_id,
+            message_id=message_id,
+        )
+        root.addWidget(self.page, 1)
+
+        self.setWindowTitle("Chats")

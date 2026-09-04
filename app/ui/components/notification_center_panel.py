@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QEvent, Qt
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QScrollArea, QVBoxLayout, QWidget
 
 from app.ui.background_worker import start_worker
@@ -12,11 +12,9 @@ from app.ui.icons import make_icon
 
 PAGE_SIZE = 30
 SCROLL_TOP_THRESHOLD_PX = 4
-
-FILTERS = [
-    (None, "Todas"),
-    ("unread", "Nao lidas"),
-]
+PANEL_WIDTH = 480
+PANEL_MIN_HEIGHT = 420
+PANEL_MAX_HEIGHT = 680
 
 _TYPE_ICON = {
     "MENCAO": "at",
@@ -94,43 +92,55 @@ class NotificationCenterPanel(QFrame):
         self.service = service
         self._on_open_conversation = on_open_conversation
         self.notifications: list[dict] = []
-        self._status_filter: str | None = None
-        self._filter_buttons: dict[str | None, ModernButton] = {}
+        # So mostra nao lidas - uma vez marcada como lida (ao abrir), some
+        # daqui sozinha no proximo refresh, sem precisar de filtro manual.
+        self._status_filter: str | None = "unread"
         self._has_more = False
         self._loading_more = False
-        self.setObjectName("Panel")
-        self.setFixedWidth(420)
-        self.setMaximumHeight(560)
+        self._closing = False
+        self._refresh_thread = None
+        self._load_more_thread = None
+        self._worker_threads = []
+        self.setObjectName("NotificationCenterPanel")
+        self._apply_panel_style()
+        self.setFixedWidth(PANEL_WIDTH)
+        self.setMinimumHeight(PANEL_MIN_HEIGHT)
+        self.setMaximumHeight(PANEL_MAX_HEIGHT)
         self._build()
         self.refresh()
 
+    def _apply_panel_style(self):
+        palette = self.service.palette
+        background = palette.get("surface", "#ffffff")
+        border = palette.get("border", "#cbd5e1")
+        self.setStyleSheet(
+            "QFrame#NotificationCenterPanel {"
+            f"background: {background};"
+            f"border: 1px solid {border};"
+            "border-radius: 16px;"
+            "}"
+            "QScrollArea#NotificationScrollArea, QScrollArea#NotificationScrollArea > QWidget, "
+            "QScrollArea#NotificationScrollArea > QWidget > QWidget {"
+            "background: transparent;"
+            "border: 0;"
+            "border-radius: 0;"
+            "}"
+        )
+
     def _build(self):
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setContentsMargins(16, 14, 16, 14)
         layout.setSpacing(8)
 
         header = QHBoxLayout()
-        title = QLabel("Notificacoes")
-        title.setStyleSheet("font-size: 14px; font-weight: 800;")
+        title = QLabel("Notificacoes nao lidas")
+        title.setStyleSheet("font-size: 15px; font-weight: 800;")
         header.addWidget(title)
         header.addStretch()
         mark_all_btn = ModernButton("Marcar todas como lidas", "status")
         mark_all_btn.clicked.connect(self._mark_all_read)
         header.addWidget(mark_all_btn)
         layout.addLayout(header)
-
-        filter_row = QHBoxLayout()
-        filter_row.setSpacing(4)
-        for value, label in FILTERS:
-            button = ModernButton(label, accent=(value is None))
-            button.setObjectName("AccentButton" if value is None else "GhostButton")
-            button.setStyleSheet("padding: 3px 10px; font-size: 11px;")
-            button.setMinimumHeight(24)
-            button.clicked.connect(lambda _checked=False, v=value: self._set_filter(v))
-            self._filter_buttons[value] = button
-            filter_row.addWidget(button)
-        filter_row.addStretch()
-        layout.addLayout(filter_row)
 
         self.loading_label = QLabel("Carregando...")
         self.loading_label.setObjectName("Caption")
@@ -148,6 +158,7 @@ class NotificationCenterPanel(QFrame):
         layout.addWidget(self.error_state)
 
         self.scroll = QScrollArea()
+        self.scroll.setObjectName("NotificationScrollArea")
         self.scroll.setWidgetResizable(True)
         self.scroll.setFrameShape(QFrame.NoFrame)
         self.list_widget = QWidget()
@@ -177,34 +188,25 @@ class NotificationCenterPanel(QFrame):
         col.addLayout(retry_row)
         return container
 
-    # -- filtro -----------------------------------------------------
-
-    def _set_filter(self, value: str | None):
-        if value == self._status_filter:
-            return
-        self._status_filter = value
-        for key, button in self._filter_buttons.items():
-            button.setObjectName("AccentButton" if key == value else "GhostButton")
-            button.style().unpolish(button)
-            button.style().polish(button)
-        self.refresh()
-
     # -- carregamento -------------------------------------------------
 
     def refresh(self):
         """Recarrega a primeira pagina do zero — NAO marca nada como lido,
         so consulta (ETAPA 10: abrir/listar a Central e sempre read-only)."""
+        if self._closing:
+            return
         self.new_items_banner.setVisible(False)
         self.error_state.setVisible(False)
         self.loading_label.setVisible(True)
-        self._refresh_thread = start_worker(
-            self,
+        self._refresh_thread = self._run_background(
             lambda: self.service.chat_notifications_page(status=self._status_filter, limit=PAGE_SIZE, offset=0),
             self._refresh_success,
             self._refresh_error,
         )
 
     def _refresh_success(self, payload: dict):
+        if self._closing:
+            return
         self.notifications = list(payload.get("items") or [])
         self._has_more = bool(payload.get("has_more"))
         self.loading_label.setVisible(False)
@@ -212,6 +214,8 @@ class NotificationCenterPanel(QFrame):
         self._render()
 
     def _refresh_error(self, _exc):
+        if self._closing:
+            return
         self.loading_label.setVisible(False)
         if not self.notifications:
             self.error_state.setVisible(True)
@@ -220,25 +224,28 @@ class NotificationCenterPanel(QFrame):
             self.new_items_banner.setVisible(True)
 
     def _load_more(self):
-        if self._loading_more or not self._has_more:
+        if self._closing or self._loading_more or not self._has_more:
             return
         self._loading_more = True
         self._load_more_btn.setEnabled(False)
         self._load_more_btn.setText("Carregando...")
-        start_worker(
-            self,
+        self._load_more_thread = self._run_background(
             lambda: self.service.chat_notifications_page(status=self._status_filter, limit=PAGE_SIZE, offset=len(self.notifications)),
             self._load_more_success,
             self._load_more_error,
         )
 
     def _load_more_success(self, payload: dict):
+        if self._closing:
+            return
         self._loading_more = False
         self.notifications.extend(payload.get("items") or [])
         self._has_more = bool(payload.get("has_more"))
         self._render()
 
     def _load_more_error(self, _exc):
+        if self._closing:
+            return
         self._loading_more = False
         self._load_more_btn.setEnabled(True)
         self._load_more_btn.setText("Carregar mais")
@@ -253,6 +260,8 @@ class NotificationCenterPanel(QFrame):
         abaixo, NAO puxa o scroll pra cima sozinho (pedido explicito da
         spec) — so mostra um aviso discreto."""
         if event_type not in ("notification.created", "notification.read", "notification.read_all"):
+            return
+        if self._closing:
             return
         if self._is_scrolled_to_top():
             self.refresh()
@@ -281,8 +290,7 @@ class NotificationCenterPanel(QFrame):
                 widget.deleteLater()
 
         if not self.notifications:
-            empty_text = "Nenhuma notificacao nao lida." if self._status_filter == "unread" else "Nenhuma notificacao."
-            empty = QLabel(empty_text)
+            empty = QLabel("Nenhuma notificacao nao lida.")
             empty.setObjectName("Caption")
             self.list_layout.insertWidget(0, empty)
             return
@@ -400,3 +408,39 @@ class NotificationCenterPanel(QFrame):
             self.new_items_banner.setVisible(True)
             return
         self.refresh()
+
+    def _run_background(self, operation, on_success, on_error):
+        if self._closing:
+            return None
+        thread = start_worker(self, operation, on_success, on_error)
+        self._worker_threads.append(thread)
+        thread.finished.connect(lambda target=thread: self._worker_threads.remove(target) if target in self._worker_threads else None)
+        return thread
+
+    def cleanup(self):
+        if self._closing:
+            return
+        self._closing = True
+        threads = list(self._worker_threads)
+        for thread in (self._refresh_thread, self._load_more_thread):
+            if thread is not None and thread not in threads:
+                threads.append(thread)
+        self._worker_threads.clear()
+        self._refresh_thread = None
+        self._load_more_thread = None
+        for thread in threads:
+            try:
+                if thread.isRunning():
+                    thread.quit()
+                    thread.wait(2000)
+            except RuntimeError:
+                pass
+
+    def closeEvent(self, event):
+        self.cleanup()
+        super().closeEvent(event)
+
+    def event(self, event):
+        if event.type() == QEvent.DeferredDelete:
+            self.cleanup()
+        return super().event(event)

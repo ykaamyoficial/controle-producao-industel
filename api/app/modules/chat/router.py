@@ -4,7 +4,8 @@ import asyncio
 import time
 from datetime import datetime
 
-from fastapi import APIRouter, Body, Depends, Query, WebSocket, WebSocketDisconnect, status
+from fastapi import APIRouter, Body, Depends, File, Form, Query, UploadFile, WebSocket, WebSocketDisconnect, status
+from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.app.core.exceptions import PermissionDeniedError
@@ -15,7 +16,9 @@ from api.app.modules.auth.permissions import CHAT_SEND, CHAT_VIEW
 from api.app.modules.chat import service
 from api.app.modules.chat.ws_manager import manager as ws_manager
 from api.app.modules.chat.schemas import (
+    AttachmentDeleteRequest,
     CancelQuestionRequest,
+    ChatAttachmentOut,
     ConversationList,
     ConversationReadState,
     MarkReadRequest,
@@ -25,6 +28,7 @@ from api.app.modules.chat.schemas import (
     MessageOut,
     NotificationList,
     ReassignQuestionRequest,
+    SharedContentList,
     TimelineList,
     UnreadSummary,
 )
@@ -67,6 +71,19 @@ async def list_messages(
     return await service.list_messages(session, conversation_id, actor, limit=limit, offset=offset)
 
 
+@router.get("/chat/conversations/{conversation_id}/shared-content", response_model=SharedContentList)
+async def list_shared_content(
+    conversation_id: int,
+    kind: str = Query(..., pattern="^(media|document|link)$"),
+    q: str | None = Query(default=None, max_length=200),
+    limit: int = Query(40, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    session: AsyncSession = Depends(get_db_session),
+    actor: User = Depends(require_permission(CHAT_VIEW)),
+):
+    return await service.list_shared_content(session, conversation_id, actor, kind=kind, q=q, limit=limit, offset=offset)
+
+
 @router.post("/chat/conversations/{conversation_id}/messages", response_model=MessageOut, status_code=status.HTTP_201_CREATED)
 async def post_message(
     conversation_id: int,
@@ -94,6 +111,46 @@ async def mark_question_viewed(
     actor: User = Depends(require_permission(CHAT_VIEW)),
 ):
     return await service.mark_question_viewed(session, message_id, actor)
+
+
+@router.post("/chat/messages/{message_id}/attachments", response_model=ChatAttachmentOut, status_code=status.HTTP_201_CREATED)
+async def upload_message_attachment(
+    message_id: int,
+    file: UploadFile = File(...),
+    client_attachment_id: str | None = Form(default=None, min_length=1, max_length=64),
+    session: AsyncSession = Depends(get_db_session),
+    actor: User = Depends(require_permission(CHAT_SEND)),
+):
+    return await service.upload_attachment(session, message_id, actor, file, client_attachment_id=client_attachment_id)
+
+
+@router.get("/chat/attachments/{attachment_id}", response_model=ChatAttachmentOut)
+async def get_attachment_metadata(
+    attachment_id: int,
+    session: AsyncSession = Depends(get_db_session),
+    actor: User = Depends(require_permission(CHAT_VIEW)),
+):
+    return await service.get_attachment_metadata(session, attachment_id, actor)
+
+
+@router.get("/chat/attachments/{attachment_id}/content")
+async def download_attachment(
+    attachment_id: int,
+    session: AsyncSession = Depends(get_db_session),
+    actor: User = Depends(require_permission(CHAT_VIEW)),
+) -> FileResponse:
+    content = await service.get_attachment_content(session, attachment_id, actor)
+    return FileResponse(path=content.path, filename=content.filename, media_type=content.mime_type, headers=content.headers)
+
+
+@router.delete("/chat/attachments/{attachment_id}", response_model=ChatAttachmentOut)
+async def delete_attachment(
+    attachment_id: int,
+    payload: AttachmentDeleteRequest,
+    session: AsyncSession = Depends(get_db_session),
+    actor: User = Depends(require_permission(CHAT_SEND)),
+):
+    return await service.delete_attachment(session, attachment_id, actor, payload.reason)
 
 
 @router.post("/chat/messages/{message_id}/cancel", response_model=MessageOut)

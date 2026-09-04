@@ -1,25 +1,34 @@
 from __future__ import annotations
 
+import tempfile
 from datetime import datetime
+from pathlib import Path
 
 from app.ui.components.avatar import make_avatar_label
 
 from PySide6.QtCore import QDateTime, QEasingCurve, QParallelAnimationGroup, QPropertyAnimation, QSize, Qt, Signal
-from PySide6.QtGui import QAction, QFontMetrics, QIcon, QTextCursor
+from PySide6.QtGui import QFontMetrics, QIcon, QPixmap, QTextCursor, QTextOption
 from PySide6.QtWidgets import (
     QCheckBox,
     QDateTimeEdit,
+    QFileDialog,
     QFrame,
     QGridLayout,
     QHBoxLayout,
     QLabel,
-    QMenu,
     QPushButton,
     QTextEdit,
     QVBoxLayout,
 )
 
 from app.ui.icons import make_icon
+from app.ui.components.chat_pending_attachments import (
+    AttachmentState,
+    AttachmentsQueueWidget,
+    MAX_ATTACHMENTS_PER_MESSAGE,
+    PendingChatAttachment,
+    validate_local_attachment,
+)
 
 
 COMMON_EMOJI = [
@@ -49,6 +58,8 @@ class _ComposeTextEdit(QTextEdit):
     navigate_mention = Signal(int)
     confirm_mention = Signal()
     cancel_mention = Signal()
+    image_paste_requested = Signal(object)
+    file_paste_requested = Signal(list)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -69,6 +80,20 @@ class _ComposeTextEdit(QTextEdit):
             self.send_requested.emit()
             return
         super().keyPressEvent(event)
+
+    def insertFromMimeData(self, source) -> None:
+        if source.hasText():
+            super().insertFromMimeData(source)
+            return
+        if source.hasImage():
+            self.image_paste_requested.emit(source.imageData())
+            return
+        if source.hasUrls():
+            paths = [url.toLocalFile() for url in source.urls() if url.isLocalFile()]
+            if paths:
+                self.file_paste_requested.emit(paths)
+                return
+        super().insertFromMimeData(source)
 
     def _detect_mention_query(self):
         cursor = self.textCursor()
@@ -212,6 +237,9 @@ class MentionComposeBar(QFrame):
     send_requested = Signal()
     action_unavailable = Signal(str)
     internal_note_requested = Signal()
+    height_changed = Signal()
+    attachment_warning = Signal(str)
+    attachment_cancel_requested = Signal(str)
 
     def __init__(self, service, parent=None):
         super().__init__(parent)
@@ -220,15 +248,21 @@ class MentionComposeBar(QFrame):
         self._last_mentioned_name: str | None = None
         self._mentionable_users: list[dict] = []
         self._reply_to_message_id: int | None = None
+        self._pending_attachments: list[PendingChatAttachment] = []
+        self._sending = False
+        self._drag_active = False
+        self._base_style = ""
         self._build()
 
     def _build(self):
         palette = self.service.palette
         self.setObjectName("ComposeBar")
-        self.setStyleSheet(
+        self.setAcceptDrops(True)
+        self._base_style = (
             f"QFrame#ComposeBar {{ background: {palette.get('surface', '#ffffff')}; "
             f"border: 1px solid {palette.get('border', '#cbd5e1')}; border-radius: 10px; }}"
         )
+        self.setStyleSheet(self._base_style)
         outer = QVBoxLayout(self)
         outer.setContentsMargins(8, 6, 8, 6)
         outer.setSpacing(2)
@@ -244,6 +278,7 @@ class MentionComposeBar(QFrame):
         reply_layout.setSpacing(6)
         self._reply_preview_label = QLabel()
         self._reply_preview_label.setWordWrap(True)
+        self._reply_preview_label.setMinimumHeight(QFontMetrics(self.font()).lineSpacing() * 2)
         self._reply_preview_label.setStyleSheet("font-size: 11px;")
         reply_layout.addWidget(self._reply_preview_label, 1)
         cancel_reply_btn = QPushButton("x")
@@ -255,6 +290,13 @@ class MentionComposeBar(QFrame):
         self._reply_preview.setVisible(False)
         outer.addWidget(self._reply_preview)
 
+        self.attachments_queue = AttachmentsQueueWidget(palette)
+        self.attachments_queue.remove_requested.connect(self.remove_attachment)
+        self.attachments_queue.retry_requested.connect(lambda local_id: self.attachment_warning.emit("O reenvio sera feito ao clicar em Enviar novamente."))
+        self.attachments_queue.cancel_requested.connect(self.cancel_attachment)
+        self.attachments_queue.changed.connect(self.height_changed.emit)
+        outer.addWidget(self.attachments_queue)
+
         row = QHBoxLayout()
         row.setSpacing(4)
 
@@ -264,21 +306,15 @@ class MentionComposeBar(QFrame):
         self.attach_btn.setIconSize(QSize(20, 20))
         self.attach_btn.setFixedSize(36, 36)
         self.attach_btn.setCursor(Qt.PointingHandCursor)
-        self.attach_btn.setToolTip("Anexar ou registrar nota interna")
-        attach_menu = QMenu(self.attach_btn)
-        attach_file_action = QAction("Anexar arquivo", attach_menu)
-        attach_file_action.triggered.connect(lambda: self.action_unavailable.emit("attach"))
-        attach_menu.addAction(attach_file_action)
-        attach_image_action = QAction("Anexar imagem", attach_menu)
-        attach_image_action.triggered.connect(lambda: self.action_unavailable.emit("attach"))
-        attach_menu.addAction(attach_image_action)
-        attach_menu.addSeparator()
-        internal_note_action = QAction("Registrar nota interna", attach_menu)
-        internal_note_action.triggered.connect(self.internal_note_requested.emit)
-        attach_menu.addAction(internal_note_action)
-        self.attach_btn.setMenu(attach_menu)
+        self.attach_btn.setToolTip("Anexar arquivo")
+        self.attach_btn.clicked.connect(self.open_attachment_dialog)
         row.addWidget(self.attach_btn)
         row.setAlignment(self.attach_btn, Qt.AlignBottom)
+
+        self.note_btn = self._icon_button("doc", "Registrar nota interna")
+        self.note_btn.clicked.connect(self.internal_note_requested.emit)
+        row.addWidget(self.note_btn)
+        row.setAlignment(self.note_btn, Qt.AlignBottom)
 
         self.emoji_btn = self._icon_button("emoji", "Emojis")
         self.emoji_btn.clicked.connect(self._open_emoji_popup)
@@ -295,10 +331,15 @@ class MentionComposeBar(QFrame):
         self.text_edit.setStyleSheet("QTextEdit#ComposeTextEdit { border: none; background: transparent; }")
         self.text_edit.setPlaceholderText("Digite uma mensagem ou utilize @ para mencionar alguem...")
         self.text_edit.setAcceptRichText(False)
+        self.text_edit.setLineWrapMode(QTextEdit.WidgetWidth)
+        self.text_edit.setWordWrapMode(QTextOption.WrapAtWordBoundaryOrAnywhere)
+        self.text_edit.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._line_height = QFontMetrics(self.text_edit.font()).lineSpacing()
         self._height_animation: QParallelAnimationGroup | None = None
         self.text_edit.textChanged.connect(self._on_text_changed)
         self.text_edit.send_requested.connect(self.send_requested.emit)
+        self.text_edit.image_paste_requested.connect(self.add_clipboard_image)
+        self.text_edit.file_paste_requested.connect(self.add_attachment_paths)
         self.text_edit.mention_query_changed.connect(self._on_mention_query_changed)
         self.text_edit.navigate_mention.connect(lambda delta: self._mention_popup.move_selection(delta))
         self.text_edit.confirm_mention.connect(lambda: self._mention_popup.confirm_selection())
@@ -367,6 +408,58 @@ class MentionComposeBar(QFrame):
 
         self._resize_text_edit(animate=False)
 
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._resize_text_edit(animate=False)
+
+    def dragEnterEvent(self, event) -> None:
+        if self._drop_paths(event.mimeData()):
+            event.acceptProposedAction()
+            self._set_drag_active(True)
+            return
+        event.ignore()
+
+    def dragMoveEvent(self, event) -> None:
+        if self._drop_paths(event.mimeData()):
+            event.acceptProposedAction()
+            return
+        event.ignore()
+
+    def dragLeaveEvent(self, event) -> None:
+        self._set_drag_active(False)
+        super().dragLeaveEvent(event)
+
+    def dropEvent(self, event) -> None:
+        self._set_drag_active(False)
+        paths = self._drop_paths(event.mimeData())
+        if not paths:
+            event.ignore()
+            return
+        self.add_attachment_paths(paths)
+        self.text_edit.setFocus()
+        event.acceptProposedAction()
+
+    def _set_drag_active(self, active: bool) -> None:
+        if active == self._drag_active:
+            return
+        self._drag_active = active
+        if active:
+            palette = self.service.palette
+            self.setStyleSheet(
+                f"QFrame#ComposeBar {{ background: {palette.get('surface', '#ffffff')}; "
+                f"border: 2px dashed {palette.get('accent', '#0078d4')}; border-radius: 10px; }}"
+            )
+            self.setToolTip("Solte os arquivos para anexar")
+            return
+        self.setStyleSheet(self._base_style)
+        self.setToolTip("")
+
+    @staticmethod
+    def _drop_paths(mime_data) -> list[str]:
+        if not mime_data or not mime_data.hasUrls():
+            return []
+        return [url.toLocalFile() for url in mime_data.urls() if url.isLocalFile()]
+
     def _icon_button(self, icon_name: str, tooltip: str) -> QPushButton:
         button = QPushButton()
         button.setObjectName("GhostButton")
@@ -383,11 +476,20 @@ class MentionComposeBar(QFrame):
     def _on_text_changed(self):
         self._resize_text_edit()
         self._update_question_checkbox()
-        self.send_btn.setEnabled(bool(self.text_edit.toPlainText().strip()))
+        self._update_send_enabled()
+
+    def _update_send_enabled(self):
+        can_send = bool(self.text_edit.toPlainText().strip()) or bool(self._pending_attachments)
+        self.send_btn.setEnabled(can_send and not self._sending)
 
     def _resize_text_edit(self, animate: bool = True):
+        viewport_width = max(40, self.text_edit.viewport().width())
+        document = self.text_edit.document()
+        if abs(document.textWidth() - viewport_width) > 1:
+            document.setTextWidth(viewport_width)
+
         doc_height = self.text_edit.document().size().height()
-        padding = 10
+        padding = 14
         min_height = self._line_height + padding
         max_height = self._line_height * 6 + padding
         target = int(max(min_height, min(doc_height + padding, max_height)))
@@ -396,9 +498,13 @@ class MentionComposeBar(QFrame):
 
         current = self.text_edit.height()
         if current == target:
+            self.updateGeometry()
+            self.height_changed.emit()
             return
         if not animate:
             self.text_edit.setFixedHeight(target)
+            self.updateGeometry()
+            self.height_changed.emit()
             return
         if self._height_animation is not None:
             self._height_animation.stop()
@@ -407,16 +513,23 @@ class MentionComposeBar(QFrame):
         min_anim.setStartValue(current)
         min_anim.setEndValue(target)
         min_anim.setEasingCurve(QEasingCurve.OutCubic)
+        min_anim.valueChanged.connect(lambda _value: self.height_changed.emit())
         max_anim = QPropertyAnimation(self.text_edit, b"maximumHeight", self.text_edit)
         max_anim.setDuration(160)
         max_anim.setStartValue(current)
         max_anim.setEndValue(target)
         max_anim.setEasingCurve(QEasingCurve.OutCubic)
+        max_anim.valueChanged.connect(lambda _value: self.height_changed.emit())
         group = QParallelAnimationGroup(self.text_edit)
         group.addAnimation(min_anim)
         group.addAnimation(max_anim)
+        group.finished.connect(self._finish_height_change)
         self._height_animation = group
         group.start()
+
+    def _finish_height_change(self):
+        self.updateGeometry()
+        self.height_changed.emit()
 
     def _update_question_checkbox(self):
         text = self.text_edit.toPlainText()
@@ -489,6 +602,122 @@ class MentionComposeBar(QFrame):
     def body(self) -> str:
         return self.text_edit.toPlainText().strip()
 
+    def pending_attachments(self) -> list[PendingChatAttachment]:
+        return list(self._pending_attachments)
+
+    def has_pending_attachments(self) -> bool:
+        return bool(self._pending_attachments)
+
+    def has_sendable_content(self) -> bool:
+        return bool(self.body()) or bool(self._pending_attachments)
+
+    def open_attachment_dialog(self):
+        paths, _selected_filter = QFileDialog.getOpenFileNames(
+            self,
+            "Selecionar anexos",
+            "",
+            "Todos permitidos (*.jpg *.jpeg *.png *.webp *.mp4 *.mov *.avi *.pdf *.doc *.docx *.txt *.xls *.xlsx *.csv *.zip *.7z *.dwg *.dxf);;"
+            "Imagens (*.jpg *.jpeg *.png *.webp);;"
+            "Videos (*.mp4 *.mov *.avi);;"
+            "PDF e documentos (*.pdf *.doc *.docx *.txt);;"
+            "Planilhas (*.xls *.xlsx *.csv);;"
+            "Arquivos CAD (*.dwg *.dxf);;"
+            "Compactados (*.zip *.7z)",
+        )
+        self.add_attachment_paths(paths)
+
+    def add_attachment_paths(self, paths: list[str], *, temporary: bool = False) -> None:
+        if not paths:
+            return
+        existing = {str(item.local_path.resolve()).lower() for item in self._pending_attachments if item.local_path.exists()}
+        added = False
+        for raw_path in paths:
+            if len(self._pending_attachments) >= MAX_ATTACHMENTS_PER_MESSAGE:
+                self.attachment_warning.emit(f"Limite de {MAX_ATTACHMENTS_PER_MESSAGE} anexos por mensagem.")
+                break
+            if Path(raw_path).is_dir():
+                self.attachment_warning.emit("Pastas nao podem ser anexadas diretamente. Compacte a pasta ou selecione os arquivos.")
+                continue
+            validation_error = validate_local_attachment(raw_path)
+            if validation_error:
+                self.attachment_warning.emit(validation_error)
+                continue
+            attachment = PendingChatAttachment.from_path(raw_path, temporary=temporary)
+            key = str(attachment.local_path.resolve()).lower()
+            if key in existing:
+                self.attachment_warning.emit("Este arquivo ja foi adicionado.")
+                continue
+            existing.add(key)
+            self._pending_attachments.append(attachment)
+            added = True
+        if added:
+            self._render_attachments()
+            self.text_edit.setFocus()
+
+    def add_clipboard_image(self, image_data) -> None:
+        image = image_data.toImage() if isinstance(image_data, QPixmap) else image_data
+        if image is None or image.isNull():
+            self.attachment_warning.emit("Nao foi possivel ler a imagem copiada.")
+            return
+        temp_dir = Path(tempfile.gettempdir()) / "industel_chat_clipboard"
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S_%f")[:-3]
+        path = temp_dir / f"captura_{stamp}.png"
+        if not image.save(str(path), "PNG"):
+            self.attachment_warning.emit("Nao foi possivel preparar a imagem copiada.")
+            return
+        self.add_attachment_paths([str(path)], temporary=True)
+
+    def remove_attachment(self, local_id: str) -> None:
+        removed = [item for item in self._pending_attachments if item.local_id == local_id]
+        self._pending_attachments = [item for item in self._pending_attachments if item.local_id != local_id]
+        for item in removed:
+            self._cleanup_temporary_attachment(item)
+        self._render_attachments()
+
+    def cancel_attachment(self, local_id: str) -> None:
+        self.attachment_cancel_requested.emit(local_id)
+        for item in self._pending_attachments:
+            if item.local_id == local_id:
+                item.state = AttachmentState.CANCELLED
+                item.error = "Cancelado"
+                self.attachments_queue.refresh_attachment(local_id)
+                break
+
+    def clear_attachments(self) -> None:
+        for item in self._pending_attachments:
+            self._cleanup_temporary_attachment(item)
+        self._pending_attachments.clear()
+        self._render_attachments()
+
+    @staticmethod
+    def _cleanup_temporary_attachment(attachment: PendingChatAttachment) -> None:
+        if not attachment.temporary:
+            return
+        try:
+            temp_dir = (Path(tempfile.gettempdir()) / "industel_chat_clipboard").resolve()
+            local_path = attachment.local_path.resolve()
+            if temp_dir in local_path.parents and local_path.exists():
+                local_path.unlink()
+        except OSError:
+            pass
+
+    def _render_attachments(self) -> None:
+        self.attachments_queue.set_attachments(self._pending_attachments)
+        self._update_send_enabled()
+        self.updateGeometry()
+        self.height_changed.emit()
+
+    def set_sending(self, sending: bool) -> None:
+        self._sending = sending
+        self.attach_btn.setEnabled(not sending)
+        self.note_btn.setEnabled(not sending)
+        self.emoji_btn.setEnabled(not sending)
+        self.mention_btn.setEnabled(not sending)
+        self.mic_btn.setEnabled(not sending)
+        self.text_edit.setEnabled(not sending)
+        self._update_send_enabled()
+
     def message_type(self) -> str:
         return "PERGUNTA" if (self.question_checkbox.isVisible() and self.question_checkbox.isChecked()) else "MENSAGEM"
 
@@ -520,11 +749,15 @@ class MentionComposeBar(QFrame):
             label_snippet = label_snippet[:87] + "..."
         self._reply_preview_label.setText(f"Respondendo a {label_author}: “{label_snippet}”")
         self._reply_preview.setVisible(True)
+        self.updateGeometry()
+        self.height_changed.emit()
         self.text_edit.setFocus()
 
     def clear_reply_preview(self) -> None:
         self._reply_to_message_id = None
         self._reply_preview.setVisible(False)
+        self.updateGeometry()
+        self.height_changed.emit()
 
     def clear(self):
         self.text_edit.clear()
@@ -536,7 +769,9 @@ class MentionComposeBar(QFrame):
         self.due_edit.setDateTime(QDateTime.currentDateTime().addDays(1))
         self._update_due_controls_visibility()
         self.clear_reply_preview()
+        self.clear_attachments()
         self._resize_text_edit()
+        self.set_sending(False)
 
     def focus_with_mention(self, user: dict | None = None):
         self.text_edit.setFocus()

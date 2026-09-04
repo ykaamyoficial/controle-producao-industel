@@ -23,5 +23,8 @@
   "20260814_0021_proposal_partial_hierarchy.py": "f71ae4c46c95161002284aa7484aad696ecbd76ccace722b25784554b3d76fa9",
   "20260814_0022_backfill_legacy_partial_parents.py": "a34c6531b378d89febfb2d9ebbf98dda9f52ad7491ac563f8ffdbde7c2cc44de",
   "20260817_0023_fiscal_operation_id.py": "910943d89aed4a170bc55082d834e5e34679468382645c674bcbfa99d50721f0",
-  "20260817_0024_operational_query_indexes.py": "90edd908a010a3686309583c86580664fd719cb68e9a675e60b9a7c7de57c08b"
+  "20260817_0024_operational_query_indexes.py": "90edd908a010a3686309583c86580664fd719cb68e9a675e60b9a7c7de57c08b",
+  "20260820_0025_chat_attachments_foundation.py": "973d4be61d433f75ec4941b5b6c6a8d8f8baa4491d89248eb281fae96f3d5422",
+  "20260820_0026_chat_attachment_sync_idempotency.py": "691b33a85bee2197fff758016b94c2a1d245302d7f4cca036e2ecd248288ab1e",
+  "20260820_0027_chat_attachment_security_controls.py": "26234dc0161290f2674ed63f6b8e3b5a0869c445f43c4d58cb3d4710c5e39daf"
 }

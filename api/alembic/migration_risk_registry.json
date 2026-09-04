@@ -123,5 +123,20 @@
     "classification": "ADDITIVE",
     "summary": "Cria indices para consultas de listagem/paginacao operacional (proposals, proposal_items, galvanization_load_items, expedition_items, fiscal_records).",
     "justification": "Apenas CREATE INDEX em tabelas ja existentes, sem alterar colunas nem dados. Nenhum consumidor pre-existente e afetado; downgrade remove os mesmos indices de forma simetrica."
+  },
+  "20260820_0025": {
+    "classification": "ADDITIVE",
+    "summary": "Cria a fundacao de anexos do chat com chat_attachments e indices de consulta.",
+    "justification": "Apenas CREATE TABLE de tabela nova e CREATE INDEX sobre a propria tabela nova. Mensagens existentes continuam sem anexos e nao ha alteracao de dados, colunas ou constraints em tabelas existentes."
+  },
+  "20260820_0026": {
+    "classification": "TRANSITIONAL",
+    "summary": "Adiciona chaves idempotentes opcionais para mensagens e anexos do chat.",
+    "justification": "Adiciona somente colunas nullable e UNIQUEs compostas onde NULL permanece permitido. Registros historicos continuam validos; novas chaves permitem retry seguro por client_message_id/client_attachment_id."
+  },
+  "20260820_0027": {
+    "classification": "ADDITIVE",
+    "summary": "Adiciona metadados opcionais de exclusao e purge aos anexos do chat.",
+    "justification": "Apenas ADD COLUMN nullable em chat_attachments. Registros existentes continuam validos e nenhum dado historico e removido."
   }
 }

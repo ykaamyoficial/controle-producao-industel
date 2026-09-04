@@ -22,6 +22,8 @@ SUPPORTED_ENVELOPE_VERSION = 1
 # saber que o tipo e conhecido, pra nunca quebrar num evento novo/futuro.
 KNOWN_EVENT_TYPES = {
     "message.created",
+    "attachment.created",
+    "attachment.deleted",
     "conversation.read",
     "action_required.created",
     "action_required.resolved",
@@ -51,6 +53,7 @@ class ChatRealtimeClient(QObject):
     refresh() em algo que esta na tela."""
 
     conversation_updated = Signal(int)
+    conversation_event = Signal(str, dict)
     read_state_updated = Signal()
     connection_changed = Signal(bool)
     notification_event = Signal(str, dict)
@@ -165,6 +168,7 @@ class ChatRealtimeClient(QObject):
         conversation_id = data.get("conversation_id")
         if isinstance(conversation_id, int):
             self.conversation_updated.emit(conversation_id)
+            self.conversation_event.emit(event_type, data)
 
     def _remember_event_id(self, event_id: str) -> None:
         if len(self._recent_event_ids) == self._recent_event_ids.maxlen:

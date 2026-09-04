@@ -4,9 +4,11 @@ import html
 from datetime import datetime
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QMenu, QToolButton, QVBoxLayout, QWidget
+from PySide6.QtGui import QFont
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QMenu, QSizePolicy, QToolButton, QVBoxLayout, QWidget
 
 from app.ui.components.avatar import make_avatar_label
+from app.ui.components.chat_message_attachments import ChatAttachmentsView
 from app.ui.components.modern_button import ModernButton
 from app.ui.icons import AppIcons, icon_provider, make_icon
 
@@ -21,6 +23,23 @@ def highlight_mentions(text: str, mentionable_names: list[str], accent_color: st
         if token in escaped:
             escaped = escaped.replace(token, f'<span style="color:{accent_color}; font-weight:700;">{token}</span>')
     return escaped
+
+
+def _use_grayscale_antialiasing(label: QLabel) -> None:
+    """Texto claro sobre fundo saturado (bolha propria, azul) sai borrado
+    no ClearType do Windows - o subpixel rendering foi calibrado pra texto
+    escuro sobre fundo claro, o caso oposto (claro sobre escuro) sofre de
+    franjas de cor que o olho le como desfoque. Forcar antialiasing em
+    escala de cinza (que ignora a cor de fundo) resolve sem custo visivel
+    nas bolhas normais (escuro sobre claro), que ja ficam nitidas."""
+    font = label.font()
+    font.setStyleStrategy(QFont.PreferAntialias)
+    label.setFont(font)
+
+
+def _make_label_background_transparent(label: QLabel) -> None:
+    label.setAttribute(Qt.WA_TranslucentBackground, True)
+    label.setAutoFillBackground(False)
 
 
 def _format_clock(value: str | None) -> str:
@@ -73,30 +92,37 @@ class TimelineDaySeparator(QWidget):
             self._label.setText(day_label)
 
 
-class MessageStatusIndicator(QWidget):
-    def __init__(self, entry: dict, text_color: str, parent=None):
+class MessageFooter(QWidget):
+    def __init__(self, entry: dict, text_color: str, *, show_status: bool = True, parent=None):
         super().__init__(parent)
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
 
         time_label = QLabel(_format_clock(entry.get("created_at")))
-        time_label.setStyleSheet(f"font-size: 9px; color: {text_color};")
+        _make_label_background_transparent(time_label)
+        time_label.setStyleSheet(f"font-size: 9px; color: {text_color}; background: transparent;")
+        _use_grayscale_antialiasing(time_label)
         layout.addWidget(time_label)
 
-        seen_by = int(entry.get("seen_by_count") or 0)
-        if seen_by <= 0:
-            icon, tooltip = AppIcons.CHECK, "Entregue"
-        elif seen_by == 1:
-            icon, tooltip = AppIcons.CHECK_DOUBLE, "Lida"
-        else:
-            icon, tooltip = AppIcons.CHECK_DOUBLE, f"Visualizada por {seen_by} usuarios"
-        mark_label = QLabel()
-        mark_icon = icon_provider.get_icon(icon, 12, text_color)
-        if mark_icon is not None:
-            mark_label.setPixmap(mark_icon.pixmap(12, 12))
-        mark_label.setToolTip(tooltip)
-        layout.addWidget(mark_label)
+        if show_status:
+            seen_by = int(entry.get("seen_by_count") or 0)
+            if seen_by <= 0:
+                icon, tooltip = AppIcons.CHECK, "Entregue"
+            elif seen_by == 1:
+                icon, tooltip = AppIcons.CHECK_DOUBLE, "Lida"
+            else:
+                icon, tooltip = AppIcons.CHECK_DOUBLE, f"Visualizada por {seen_by} usuarios"
+            mark_label = QLabel()
+            _make_label_background_transparent(mark_label)
+            mark_icon = icon_provider.get_icon(icon, 12, text_color)
+            if mark_icon is not None:
+                mark_label.setPixmap(mark_icon.pixmap(12, 12))
+            mark_label.setToolTip(tooltip)
+            layout.addWidget(mark_label)
+
+
+MessageStatusIndicator = MessageFooter
 
 
 def entry_fingerprint(entry: dict, grouped: bool) -> tuple:
@@ -105,7 +131,19 @@ def entry_fingerprint(entry: dict, grouped: bool) -> tuple:
     recebido no momento da chamada — nunca lida de volta de um widget ja
     construido — para nao dar falso-negativo caso o dict do entry seja
     mutado in-place em vez de substituido por um novo a cada refresh."""
-    return (entry.get("question_status"), entry.get("seen_by_count"), entry.get("body"), grouped)
+    attachment_sig = tuple(
+        (
+            item.get("id"),
+            item.get("original_filename") or item.get("filename"),
+            item.get("size"),
+            item.get("sha256") or item.get("sha256_hex"),
+            item.get("deleted_at"),
+            item.get("purged_at"),
+        )
+        for item in entry.get("attachments") or []
+        if isinstance(item, dict)
+    )
+    return (entry.get("question_status"), entry.get("seen_by_count"), entry.get("body"), grouped, attachment_sig)
 
 
 class TimelineEntryWidget(QFrame):
@@ -115,6 +153,10 @@ class TimelineEntryWidget(QFrame):
     campo mutavel (status da pergunta, contagem de leitura) mudou."""
 
     reply_requested = Signal(int)
+    attachment_download_requested = Signal(dict)
+    attachment_open_requested = Signal(dict)
+    attachment_preview_requested = Signal(dict)
+    attachment_delete_requested = Signal(dict)
     supports_reply = False
 
     def __init__(self, entry: dict, service, current_user_id, mentionable_names: list[str], grouped: bool = False, parent=None):
@@ -147,8 +189,77 @@ class TimelineEntryWidget(QFrame):
         if chosen is reply_action:
             self.reply_requested.emit(self.entry.get("id"))
 
+    def _add_attachments(self, layout: QVBoxLayout, *, compact: bool = False) -> None:
+        attachments = self.entry.get("attachments") or []
+        if not attachments:
+            return
+        view = ChatAttachmentsView(attachments, self.service.palette, compact=compact, can_delete=self._can_delete_attachment, service=self.service)
+        view.download_requested.connect(self.attachment_download_requested)
+        view.open_requested.connect(self.attachment_open_requested)
+        view.preview_requested.connect(self.attachment_preview_requested)
+        view.delete_requested.connect(self.attachment_delete_requested)
+        layout.addWidget(view)
+        self._attachments_view = view
 
-class CurrentUserMessageWidget(TimelineEntryWidget):
+    def stop_media(self) -> None:
+        """Pausa/libera qualquer video ou audio tocando nesta mensagem."""
+        view = getattr(self, "_attachments_view", None)
+        if view is not None:
+            try:
+                view.stop_media()
+            except RuntimeError:
+                pass
+
+    def _can_delete_attachment(self, attachment: dict) -> bool:
+        if attachment.get("deleted_at"):
+            return False
+        if hasattr(self.service, "can_admin_chat") and self.service.can_admin_chat():
+            return True
+        actor_id = self.current_user_id
+        if actor_id is None:
+            return False
+        return attachment.get("uploaded_by") == actor_id or self.entry.get("author_user_id") == actor_id
+
+
+class MessageBubble(TimelineEntryWidget):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # A bolha deve se moldar ao conteudo (mensagem curta -> bolha curta),
+        # nao esticar ate a largura maxima so porque ha espaco disponivel no
+        # feed. Maximum = nunca cresce alem do sizeHint; set_max_bubble_width
+        # (via setMaximumWidth) continua limitando o teto para textos longos.
+        self.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Preferred)
+
+    def _message_body(self) -> str:
+        body = self.entry.get("body") or ""
+        if body == "[Anexo]" and self.entry.get("attachments"):
+            return ""
+        return body
+
+    def _add_body_label(self, layout: QVBoxLayout, body: str, *, color: str, mention_color: str) -> QLabel:
+        body_label = QLabel()
+        body_label.setTextFormat(Qt.RichText)
+        body_label.setText(highlight_mentions(body, self.mentionable_names, mention_color) if body else "-")
+        body_label.setWordWrap(True)
+        _make_label_background_transparent(body_label)
+        body_label.setStyleSheet(f"font-size: 12px; color: {color}; background: transparent;")
+        _use_grayscale_antialiasing(body_label)
+        layout.addWidget(body_label)
+        return body_label
+
+    def _add_footer(self, layout: QVBoxLayout, *, color: str, align_right: bool, show_status: bool) -> MessageFooter:
+        footer_layout = QHBoxLayout()
+        if align_right:
+            footer_layout.addStretch()
+        footer = MessageFooter(self.entry, color, show_status=show_status)
+        footer_layout.addWidget(footer)
+        if not align_right:
+            footer_layout.addStretch()
+        layout.addLayout(footer_layout)
+        return footer
+
+
+class CurrentUserMessageWidget(MessageBubble):
     supports_reply = True
 
     def _build(self):
@@ -159,51 +270,45 @@ class CurrentUserMessageWidget(TimelineEntryWidget):
         self.setStyleSheet(f"QFrame#BubbleOwn {{ background: {accent}; border-radius: 12px; }}")
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 4 if self.grouped else 8, 12, 6)
+        layout.setContentsMargins(2, 2, 2, 4)
         layout.setSpacing(2)
 
-        body = self.entry.get("body") or ""
-        body_label = QLabel()
-        body_label.setTextFormat(Qt.RichText)
-        body_label.setText(highlight_mentions(body, self.mentionable_names, "#ffffff") if body else "-")
-        body_label.setWordWrap(True)
-        body_label.setStyleSheet(f"font-size: 13px; color: {text_color};")
-        layout.addWidget(body_label)
+        body = self._message_body()
+        has_attachments = bool(self.entry.get("attachments"))
+        self._add_attachments(layout, compact=True)
+        if body or not has_attachments:
+            self._add_body_label(layout, body, color=text_color, mention_color="#ffffff")
 
-        self._footer_layout = QHBoxLayout()
-        self._footer_layout.addStretch()
-        self._status_indicator = MessageStatusIndicator(self.entry, text_color)
-        self._footer_layout.addWidget(self._status_indicator)
-        layout.addLayout(self._footer_layout)
+        self._status_indicator = self._add_footer(layout, color=text_color, align_right=True, show_status=True)
 
     def update_entry(self, entry, grouped=False):
         super().update_entry(entry, grouped)
         text_color = self.service.palette.get("accent_text", "#ffffff")
         old = self._status_indicator
-        self._status_indicator = MessageStatusIndicator(entry, text_color)
-        self._footer_layout.replaceWidget(old, self._status_indicator)
+        self._status_indicator = MessageFooter(entry, text_color, show_status=True)
+        if old.parentWidget() and old.parentWidget().layout():
+            old.parentWidget().layout().replaceWidget(old, self._status_indicator)
         old.deleteLater()
 
 
-class OtherUserMessageWidget(TimelineEntryWidget):
+class OtherUserMessageWidget(MessageBubble):
     supports_reply = True
 
     def _build(self):
         palette = self.service.palette
-        self.setObjectName("BubbleOther")
+        # O avatar fica FORA da bolha (igual grupo do WhatsApp) -- so o
+        # conteudo (nome/midia/rodape) ganha fundo/borda arredondada; `self`
+        # e so um container transparente que posiciona avatar + bolha lado a lado.
+        self.setStyleSheet("background: transparent; border: none;")
         mentions_me = self.current_user_id is not None and self.entry.get("mentioned_user_id") == self.current_user_id
         border = f"1px solid {palette.get('border', '#cbd5e1')}"
         if mentions_me:
             accent = palette.get("accent", "#0078d4")
             border = f"{border}; border-left: 3px solid {accent}"
-            self.setToolTip("Voce foi mencionado nesta mensagem")
-        self.setStyleSheet(
-            f"QFrame#BubbleOther {{ background: {palette.get('surface_alt', '#e2e8f0')}; "
-            f"border: {border}; border-radius: 12px; }}"
-        )
+
         outer = QHBoxLayout(self)
-        outer.setContentsMargins(8, 4 if self.grouped else 6, 10, 4 if self.grouped else 6)
-        outer.setSpacing(8)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(6)
 
         avatar_col = QVBoxLayout()
         if not self.grouped:
@@ -211,36 +316,41 @@ class OtherUserMessageWidget(TimelineEntryWidget):
         avatar_col.addStretch()
         outer.addLayout(avatar_col)
 
-        content_col = QVBoxLayout()
+        bubble = QFrame()
+        bubble.setObjectName("BubbleOther")
+        bubble.setStyleSheet(
+            f"QFrame#BubbleOther {{ background: {palette.get('surface_alt', '#e2e8f0')}; "
+            f"border: {border}; border-radius: 12px; }}"
+        )
+        if mentions_me:
+            bubble.setToolTip("Voce foi mencionado nesta mensagem")
+        outer.addWidget(bubble, 1)
+
+        content_col = QVBoxLayout(bubble)
+        content_col.setContentsMargins(10, 3 if self.grouped else 8, 10, 5)
         content_col.setSpacing(2)
         if not self.grouped:
             header = QHBoxLayout()
             header.setSpacing(6)
             name_label = QLabel(self.entry.get("author_name") or "-")
-            name_label.setStyleSheet("font-weight: 700; font-size: 11px;")
+            _make_label_background_transparent(name_label)
+            name_label.setStyleSheet("font-weight: 700; font-size: 11px; background: transparent;")
             header.addWidget(name_label)
             sector = self.entry.get("author_sector")
             if sector:
                 sector_label = QLabel(sector)
                 sector_label.setObjectName("Caption")
-                sector_label.setStyleSheet("font-size: 10px;")
+                _make_label_background_transparent(sector_label)
+                sector_label.setStyleSheet("font-size: 10px; background: transparent;")
                 header.addWidget(sector_label)
             header.addStretch()
             content_col.addLayout(header)
 
-        body = self.entry.get("body") or ""
-        body_label = QLabel()
-        body_label.setTextFormat(Qt.RichText)
-        body_label.setText(highlight_mentions(body, self.mentionable_names, palette.get("accent", "#0078d4")) if body else "-")
-        body_label.setWordWrap(True)
-        body_label.setStyleSheet("font-size: 13px;")
-        content_col.addWidget(body_label)
-
-        time_label = QLabel(_format_clock(self.entry.get("created_at")))
-        time_label.setStyleSheet(f"font-size: 9px; color: {palette.get('muted', '#94a3b8')};")
-        content_col.addWidget(time_label)
-
-        outer.addLayout(content_col, 1)
+        body = self._message_body()
+        if body:
+            self._add_body_label(content_col, body, color=palette.get("text", "#0f172a"), mention_color=palette.get("accent", "#0078d4"))
+        self._add_attachments(content_col, compact=True)
+        self._footer = self._add_footer(content_col, color=palette.get("muted", "#94a3b8"), align_right=False, show_status=False)
 
 
 class InternalNoteWidget(TimelineEntryWidget):
@@ -290,8 +400,9 @@ class InternalNoteWidget(TimelineEntryWidget):
 
         body_label = QLabel(html.escape(self.entry.get("body") or "-"))
         body_label.setWordWrap(True)
-        body_label.setStyleSheet("font-size: 13px;")
+        body_label.setStyleSheet("font-size: 12px;")
         layout.addWidget(body_label)
+        self._add_attachments(layout)
 
         author = self.entry.get("author_name")
         footer_text = f"Registrado por {author}" if author else "Registrado"
@@ -372,8 +483,9 @@ class DirectedQuestionWidget(TimelineEntryWidget):
         body_label.setTextFormat(Qt.RichText)
         body_label.setText(highlight_mentions(self.entry.get("body") or "-", self.mentionable_names, accent))
         body_label.setWordWrap(True)
-        body_label.setStyleSheet("font-size: 13px;")
+        body_label.setStyleSheet("font-size: 12px;")
         layout.addWidget(body_label)
+        self._add_attachments(layout)
 
         self._due_label = QLabel()
         self._due_label.setObjectName("Caption")
@@ -453,6 +565,10 @@ class ReplyMessageWidget(TimelineEntryWidget):
 
     jump_to_message_requested = Signal(int)
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Preferred)
+
     def _build(self):
         palette = self.service.palette
         accent = palette.get("accent", "#0078d4")
@@ -489,21 +605,24 @@ class ReplyMessageWidget(TimelineEntryWidget):
         quote_layout.setSpacing(0)
         if original is not None:
             quote_author = QLabel(original.get("author_name") or "-")
-            quote_author.setStyleSheet(f"font-weight: 700; font-size: 10px; color: {accent};")
+            _make_label_background_transparent(quote_author)
+            quote_author.setStyleSheet(f"font-weight: 700; font-size: 10px; color: {accent}; background: transparent;")
             quote_layout.addWidget(quote_author)
             snippet = (original.get("body") or "").strip().replace("\n", " ")
             if len(snippet) > 120:
                 snippet = snippet[:117] + "..."
             quote_body = QLabel(html.escape(snippet or "-"))
             quote_body.setWordWrap(True)
-            quote_body.setStyleSheet("font-size: 11px;")
+            _make_label_background_transparent(quote_body)
+            quote_body.setStyleSheet("font-size: 11px; background: transparent;")
             quote_layout.addWidget(quote_body)
             quote.setCursor(Qt.PointingHandCursor)
             quote.mousePressEvent = lambda _event, mid=original_id: self.jump_to_message_requested.emit(mid)
         else:
             unavailable = QLabel("Mensagem original indisponivel.")
             unavailable.setObjectName("Caption")
-            unavailable.setStyleSheet("font-size: 11px; font-style: italic;")
+            _make_label_background_transparent(unavailable)
+            unavailable.setStyleSheet("font-size: 11px; font-style: italic; background: transparent;")
             quote_layout.addWidget(unavailable)
         card_layout.addWidget(quote)
 
@@ -511,11 +630,13 @@ class ReplyMessageWidget(TimelineEntryWidget):
         header.setSpacing(6)
         author = self.entry.get("author_name") or "-"
         name_label = QLabel(author)
-        name_label.setStyleSheet("font-weight: 700; font-size: 11px;")
+        _make_label_background_transparent(name_label)
+        name_label.setStyleSheet("font-weight: 700; font-size: 11px; background: transparent;")
         header.addWidget(name_label)
         header.addStretch()
         time_label = QLabel(_format_clock(self.entry.get("created_at")))
-        time_label.setStyleSheet(f"font-size: 9px; color: {palette.get('muted', '#94a3b8')};")
+        _make_label_background_transparent(time_label)
+        time_label.setStyleSheet(f"font-size: 9px; color: {palette.get('muted', '#94a3b8')}; background: transparent;")
         header.addWidget(time_label)
         card_layout.addLayout(header)
 
@@ -523,8 +644,10 @@ class ReplyMessageWidget(TimelineEntryWidget):
         body_label.setTextFormat(Qt.RichText)
         body_label.setText(highlight_mentions(self.entry.get("body") or "-", self.mentionable_names, accent))
         body_label.setWordWrap(True)
-        body_label.setStyleSheet("font-size: 13px;")
+        _make_label_background_transparent(body_label)
+        body_label.setStyleSheet("font-size: 12px; background: transparent;")
         card_layout.addWidget(body_label)
+        self._add_attachments(card_layout)
 
         if original is not None and original.get("entry_kind") == "PERGUNTA":
             success = palette.get("success", "#16a34a")

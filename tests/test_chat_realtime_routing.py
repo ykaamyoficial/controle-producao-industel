@@ -48,3 +48,28 @@ def test_message_created_still_refreshes_matching_timeline():
 
     assert timeline_updates == [12]
     assert read_updates == []
+
+
+def test_attachment_created_refreshes_and_exposes_payload():
+    app = QApplication.instance() or QApplication([])
+    client = ChatRealtimeClient(_Service())
+    timeline_updates: list[int] = []
+    events: list[tuple[str, dict]] = []
+    client.conversation_updated.connect(timeline_updates.append)
+    client.conversation_event.connect(lambda event_type, data: events.append((event_type, data)))
+
+    client._on_text_message(_event("attachment.created", conversation_id=12))
+
+    assert timeline_updates == [12]
+    assert events == [("attachment.created", {"conversation_id": 12, "last_read_message_id": 42})]
+
+
+def test_attachment_deleted_refreshes_and_exposes_payload():
+    app = QApplication.instance() or QApplication([])
+    client = ChatRealtimeClient(_Service())
+    events: list[tuple[str, dict]] = []
+    client.conversation_event.connect(lambda event_type, data: events.append((event_type, data)))
+
+    client._on_text_message(_event("attachment.deleted", conversation_id=12))
+
+    assert events == [("attachment.deleted", {"conversation_id": 12, "last_read_message_id": 42})]
