@@ -76,6 +76,21 @@ services:
       NOMUS_ENCRYPTION_KEY: ${NOMUS_ENCRYPTION_KEY:?defina NOMUS_ENCRYPTION_KEY}
       BACKUP_DIR: ${BACKUP_DIR:-/var/backups/controle-producao}
       UPDATE_REPOSITORY_DIR: ${UPDATE_REPOSITORY_DIR:-/var/lib/controle-producao/updates}
+      # Notificacoes multicanal (Fase 11) -- canal de e-mail. Desligado por
+      # padrao; o worker so sobe com NOTIFICATIONS_EMAIL_ENABLED=true E
+      # SMTP_HOST/SMTP_FROM preenchidos. Sem isso as demais notificacoes
+      # (sino, bandeja) seguem funcionando normalmente.
+      NOTIFICATIONS_EMAIL_ENABLED: ${NOTIFICATIONS_EMAIL_ENABLED:-false}
+      NOTIFICATIONS_DIGEST_HOUR: ${NOTIFICATIONS_DIGEST_HOUR:-7}
+      NOTIFICATIONS_DELIVERY_INTERVAL_SECONDS: ${NOTIFICATIONS_DELIVERY_INTERVAL_SECONDS:-45}
+      NOTIFICATIONS_EMAIL_MAX_ATTEMPTS: ${NOTIFICATIONS_EMAIL_MAX_ATTEMPTS:-5}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      SMTP_STARTTLS: ${SMTP_STARTTLS:-true}
+      SMTP_TIMEOUT_SECONDS: ${SMTP_TIMEOUT_SECONDS:-20}
     # Publicado em todas as interfaces do host (Fase 1 - Servidor e Endereco
     # Oficial da API): o servidor fisico precisa aceitar conexoes de outros
     # computadores da rede local, nao somente da propria maquina. O acesso
