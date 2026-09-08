@@ -28,7 +28,6 @@ desktop.ini
 *.log
 logs/
 backups/
-backup/
 deployments/
 *.bak
 *.backup
