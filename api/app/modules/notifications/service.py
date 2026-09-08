@@ -76,8 +76,9 @@ async def emit(
 
     - grava uma `Notification` por usuario-destino (idempotente por
       (user_id, dedup_key) via ON CONFLICT DO NOTHING);
-    - registra as `NotificationDelivery` por canal conforme o default da
-      categoria (Fase 2 troca isso por `NotificationPreference`);
+    - registra as `NotificationDelivery` por canal conforme a
+      `NotificationPreference` do usuario (ou o default da categoria) e o
+      horario de silencio (`_delivery_plan`);
     - NAO faz commit e NAO publica o evento WebSocket — quem chama deve
       chamar `session.commit()` e, depois, `publish_created(...)` com os
       ids retornados (mesma regra do chat: nunca empurrar algo que ainda
@@ -395,8 +396,8 @@ def _settings_out(row: NotificationUserSettings | None) -> NotificationUserSetti
     if row is None:
         return NotificationUserSettingsOut(quiet_start=None, quiet_end=None, quiet_channels=["tray", "email"])
     return NotificationUserSettingsOut(
-        quiet_start=row.quiet_start.isoformat() if row.quiet_start else None,
-        quiet_end=row.quiet_end.isoformat() if row.quiet_end else None,
+        quiet_start=row.quiet_start.strftime("%H:%M") if row.quiet_start else None,
+        quiet_end=row.quiet_end.strftime("%H:%M") if row.quiet_end else None,
         quiet_channels=list(row.quiet_channels or []),
     )
 

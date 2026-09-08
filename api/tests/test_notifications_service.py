@@ -164,7 +164,7 @@ class NotificationsServiceTests(unittest.TestCase):
                 user = await self._make_user(session, "notif_sev")
                 await session.commit()
                 await notifications_service.emit(
-                    session, user_ids=[user.id], category="CHAT_MENSAGEM", severity="info",
+                    session, user_ids=[user.id], category="PROPOSTA_STATUS", severity="info",
                     title="mensagem", dedup_key="k-info",
                 )
                 await notifications_service.emit(
@@ -294,8 +294,8 @@ class NotificationsServiceTests(unittest.TestCase):
                     title="Importacao falhou", dedup_key="d:1",
                 )
                 await notifications_service.emit(
-                    session, user_ids=[user.id], category="CHAT_MENSAGEM", severity="info",
-                    title="nova mensagem", dedup_key="d:2",
+                    session, user_ids=[user.id], category="PROPOSTA_STATUS", severity="info",
+                    title="mudou de status", dedup_key="d:2",
                 )
                 await session.commit()
 

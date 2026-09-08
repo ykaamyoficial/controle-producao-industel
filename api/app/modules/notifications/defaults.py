@@ -34,19 +34,22 @@ class CategoryDefault:
 CATEGORY_DEFAULTS: dict[str, CategoryDefault] = {
     c.code: c
     for c in [
+        # Ruido de chat: nunca por e-mail por padrao (in_app + bandeja so).
         CategoryDefault("CHAT_MENSAGEM", "Chat — mensagens", default_severity="info", default_min_severity_email="critica"),
         CategoryDefault("CHAT_MENCAO", "Chat — mencoes"),
         CategoryDefault("CHAT_RESPOSTA", "Chat — respostas"),
-        CategoryDefault("CHAT_PERGUNTA", "Chat — perguntas atribuidas a voce", default_severity="alta", default_min_severity_email="alta"),
-        CategoryDefault("CHAT_PERGUNTA_ATRASADA", "Chat — perguntas atrasadas", default_severity="critica", default_min_severity_email="alta"),
         CategoryDefault("CHAT_NOTA", "Chat — notas internas"),
-        CategoryDefault("PROPOSTA_STATUS", "Propostas — mudanca de status"),
-        CategoryDefault("PRODUCAO_LOTE", "Producao — lotes"),
-        CategoryDefault("GALVANIZACAO_LOTE", "Galvanizacao — lotes"),
-        CategoryDefault("ALMOXARIFADO", "Almoxarifado — pendencias"),
-        CategoryDefault("NOMUS_IMPORTACAO", "Nomus — resultado de importacao", default_min_severity_email="alta"),
-        CategoryDefault("EXPEDICAO", "Expedicao — entregas"),
-        CategoryDefault("SISTEMA", "Sistema — avisos gerais", default_severity="alta"),
+        # Pendencia real atribuida a voce: e-mail ligado por padrao.
+        CategoryDefault("CHAT_PERGUNTA", "Chat — perguntas atribuidas a voce", default_channels=("in_app", "tray", "email"), default_severity="alta", default_min_severity_email="alta"),
+        CategoryDefault("CHAT_PERGUNTA_ATRASADA", "Chat — perguntas atrasadas", default_channels=("in_app", "tray", "email"), default_severity="critica", default_min_severity_email="alta"),
+        # Eventos de negocio: e-mail ligado por padrao, so severidade alta/critica dispara na hora.
+        CategoryDefault("PROPOSTA_STATUS", "Propostas — mudanca de status", default_channels=("in_app", "tray", "email")),
+        CategoryDefault("PRODUCAO_LOTE", "Producao — lotes", default_channels=("in_app", "tray", "email")),
+        CategoryDefault("GALVANIZACAO_LOTE", "Galvanizacao — lotes", default_channels=("in_app", "tray", "email")),
+        CategoryDefault("ALMOXARIFADO", "Almoxarifado — pendencias", default_channels=("in_app", "tray", "email")),
+        CategoryDefault("NOMUS_IMPORTACAO", "Nomus — resultado de importacao", default_channels=("in_app", "tray", "email"), default_min_severity_email="alta"),
+        CategoryDefault("EXPEDICAO", "Expedicao — entregas", default_channels=("in_app", "tray", "email")),
+        CategoryDefault("SISTEMA", "Sistema — avisos gerais", default_channels=("in_app", "tray", "email"), default_severity="alta"),
     ]
 }
 
