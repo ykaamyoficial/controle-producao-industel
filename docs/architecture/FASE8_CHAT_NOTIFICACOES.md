@@ -28,3 +28,12 @@ Manter o Chat fluido quando o usuário troca de tela, recebe mensagens ou abre u
 - `python -m compileall -q app api/app`
 - `python -m pytest -q tests/test_chat_realtime_routing.py tests/test_session_sync_service.py tests/test_chat_timeline_layout.py`
 
+## Atualização (Fase 11)
+
+A partir da Fase 11 (`FASE11_NOTIFICACOES_MULTICANAL.md`), o chat deixou de ser o único
+produtor de notificação: `_insert_notification` continua escrevendo em `chat_notifications`,
+mas também **espelha** cada aviso para a camada genérica `api/app/modules/notifications/`
+(tabela `notifications`), ao lado dos eventos de negócio. A Central de Notificações do Desktop
+e o agente de bandeja passaram a ler `/api/v1/notifications`; o sino do chat e o
+`unread_summary` deste módulo continuam funcionando como descrito acima.
+
