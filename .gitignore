@@ -68,3 +68,6 @@ release/
 exports/
 relatorios_gerados/
 reports/
+
+# Rascunhos/artefatos de sessao (screenshots, PDFs de referencia)
+/tmp/
