@@ -33,6 +33,7 @@ CHAT_VIEW = "chat.view"
 CHAT_SEND = "chat.send"
 CHAT_VIEW_FINALIZED = "chat.view_finalized"
 CHAT_ADMIN = "chat.admin"
+NOTIFICATIONS_VIEW = "notifications.view"
 UPDATES_MANAGE = "updates.manage"
 SYSTEM_MAINTENANCE_MANAGE = "system.maintenance_manage"
 
@@ -73,6 +74,7 @@ OFFICIAL_PERMISSIONS = [
     (CHAT_SEND, "Enviar mensagens no chat", "chat"),
     (CHAT_VIEW_FINALIZED, "Visualizar conversas finalizadas", "chat"),
     (CHAT_ADMIN, "Administrar modulo de chat", "chat"),
+    (NOTIFICATIONS_VIEW, "Visualizar a central de notificacoes", "notifications"),
     (UPDATES_MANAGE, "Administrar releases de atualizacao do Desktop", "updates"),
     (SYSTEM_MAINTENANCE_MANAGE, "Administrar o Maintenance Mode do servidor", "system"),
 ]

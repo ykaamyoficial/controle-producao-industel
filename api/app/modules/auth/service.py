@@ -22,6 +22,7 @@ def public_user(user: User) -> UserOut:
         id=user.id,
         username=user.username,
         display_name=user.display_name,
+        email=user.email,
         active=user.active,
         is_superuser=user.is_superuser,
         password_must_change=bool(user.password_must_change),

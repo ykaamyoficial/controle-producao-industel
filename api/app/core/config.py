@@ -7,11 +7,11 @@ from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-API_VERSION = "0.8.1"
+API_VERSION = "0.9.0"
 API_STAGE = "official-fiscal"
 API_CONTRACT_VERSION = "v1"
 SERVICE_NAME = "controle-producao-api"
-EXPECTED_DATABASE_REVISION = "20260904_0030"
+EXPECTED_DATABASE_REVISION = "20260908_0033"
 # Revisao mais antiga que este server_version ainda consegue operar (Fase 04, Secao 19).
 # Hoje e igual a EXPECTED_DATABASE_REVISION porque esta release depende da
 # hierarquia mae/filhas e nao possui tolerancia retroativa deliberada -- sera
@@ -20,9 +20,9 @@ EXPECTED_DATABASE_REVISION = "20260904_0030"
 # o servidor comprovadamente sabe operar antes E depois de aplicada.
 MINIMUM_DATABASE_REVISION = EXPECTED_DATABASE_REVISION
 MINIMUM_DESKTOP_VERSION = "2.5.2"
-RECOMMENDED_DESKTOP_VERSION = "2.5.2"
+RECOMMENDED_DESKTOP_VERSION = "2.7.0"
 MAXIMUM_DESKTOP_VERSION: str | None = None
-SUPPORTED_FEATURES = ["auth", "auth_me", "permissions_read", "refresh", "logout", "proposals_read", "proposal_items_read", "proposals_write", "proposal_items_write", "production_official", "galvanization_official", "expedition_official", "compensated_remanagement", "fiscal_official"]
+SUPPORTED_FEATURES = ["auth", "auth_me", "permissions_read", "refresh", "logout", "proposals_read", "proposal_items_read", "proposals_write", "proposal_items_write", "production_official", "galvanization_official", "expedition_official", "compensated_remanagement", "fiscal_official", "notifications_multichannel"]
 
 
 class Settings(BaseSettings):
@@ -137,6 +137,22 @@ class Settings(BaseSettings):
     proposal_attachment_max_video_mb: int = Field(default=100, ge=1, alias="PROPOSAL_ATTACHMENT_MAX_VIDEO_MB")
     proposal_attachment_max_per_proposal: int = Field(default=30, ge=1, alias="PROPOSAL_ATTACHMENT_MAX_PER_PROPOSAL")
 
+    # Notificacoes multicanal (Fase 10) -- ver api/app/modules/notifications/.
+    # O canal e-mail so e ativado quando NOTIFICATIONS_EMAIL_ENABLED=true E
+    # SMTP_HOST esta preenchido; sem isso o worker de entrega/digest nem sobe
+    # (as NotificationDelivery de e-mail ficam registradas, mas nao sao enviadas).
+    notifications_email_enabled: bool = Field(default=False, alias="NOTIFICATIONS_EMAIL_ENABLED")
+    notifications_delivery_interval_seconds: float = Field(default=45.0, ge=5, alias="NOTIFICATIONS_DELIVERY_INTERVAL_SECONDS")
+    notifications_digest_hour: int = Field(default=7, ge=0, le=23, alias="NOTIFICATIONS_DIGEST_HOUR")
+    notifications_email_max_attempts: int = Field(default=5, ge=1, alias="NOTIFICATIONS_EMAIL_MAX_ATTEMPTS")
+    smtp_host: str = Field(default="", alias="SMTP_HOST")
+    smtp_port: int = Field(default=587, ge=1, le=65535, alias="SMTP_PORT")
+    smtp_user: str = Field(default="", alias="SMTP_USER")
+    smtp_password: str = Field(default="", alias="SMTP_PASSWORD")
+    smtp_from: str = Field(default="", alias="SMTP_FROM")
+    smtp_starttls: bool = Field(default=True, alias="SMTP_STARTTLS")
+    smtp_timeout_seconds: float = Field(default=20.0, ge=1, alias="SMTP_TIMEOUT_SECONDS")
+
     model_config = SettingsConfigDict(
         env_file=str(Path(__file__).resolve().parents[2] / ".env"),
         env_file_encoding="utf-8",
@@ -164,6 +180,10 @@ class Settings(BaseSettings):
     @property
     def nomus_encryption_ready(self) -> bool:
         return bool(self.nomus_encryption_key)
+
+    @property
+    def notifications_email_ready(self) -> bool:
+        return bool(self.notifications_email_enabled and self.smtp_host and self.smtp_from)
 
 
 @lru_cache

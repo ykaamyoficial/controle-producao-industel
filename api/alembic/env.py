@@ -13,6 +13,7 @@ from api.app.audit import db_models as audit_db_models  # noqa: F401
 from api.app.channels import db_models as channels_db_models  # noqa: F401
 from api.app.modules.auth import models as auth_models  # noqa: F401
 from api.app.modules.product_catalog import models as product_catalog_models  # noqa: F401
+from api.app.modules.notifications import models as notifications_models  # noqa: F401
 from api.app.modules.proposal_attachments import models as proposal_attachment_models  # noqa: F401
 from api.app.modules.proposals import models as proposal_models  # noqa: F401
 from api.app.modules.system import models as system_models  # noqa: F401

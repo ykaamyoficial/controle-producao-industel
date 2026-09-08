@@ -8,6 +8,7 @@ from api.app.modules.auth.schemas import UserOut
 class UserCreate(BaseModel):
     username: str = Field(min_length=1, max_length=80)
     display_name: str = Field(min_length=1, max_length=160)
+    email: str | None = Field(default=None, max_length=200)
     password: str = Field(min_length=1, max_length=256)
     active: bool = True
     is_superuser: bool = False
@@ -18,6 +19,7 @@ class UserCreate(BaseModel):
 class UserUpdate(BaseModel):
     username: str | None = Field(default=None, min_length=1, max_length=80)
     display_name: str | None = Field(default=None, min_length=1, max_length=160)
+    email: str | None = Field(default=None, max_length=200)
     active: bool | None = None
     is_superuser: bool | None = None
     role_ids: list[int] | None = None
@@ -32,6 +34,7 @@ class PasswordReset(BaseModel):
 class MeUpdate(BaseModel):
     username: str | None = Field(default=None, min_length=1, max_length=80)
     display_name: str | None = Field(default=None, min_length=1, max_length=160)
+    email: str | None = Field(default=None, max_length=200)
 
 
 class ChangePassword(BaseModel):

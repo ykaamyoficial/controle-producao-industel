@@ -22,11 +22,23 @@ from api.app.modules.users.schemas import ChangePassword, MeUpdate, SyncSummary,
 USERS_SYNC_LOCK_ID = 202607200006
 
 
+def _normalize_email(value: str | None) -> str | None:
+    """E-mail e opcional e usado apenas para o canal de notificacao por
+    e-mail (Fase 3). Sem validacao rigida aqui de proposito — string vazia
+    vira NULL, o resto e normalizado em minusculas."""
+    if value is None:
+        return None
+    cleaned = value.strip().lower()
+    return cleaned or None
+
+
 async def update_me(session: AsyncSession, actor: User, payload: MeUpdate) -> User:
     if payload.username is not None:
         actor.username = repository.normalize_username(payload.username)
     if payload.display_name is not None:
         actor.display_name = payload.display_name.strip()
+    if payload.email is not None:
+        actor.email = _normalize_email(payload.email)
     actor.updated_by = actor.id
     await repository.create_security_event(session, "PROFILE_UPDATED", actor_user_id=actor.id, target_user_id=actor.id)
     try:
@@ -100,6 +112,7 @@ async def create_user(session: AsyncSession, payload: UserCreate, actor: User) -
     user = User(
         username=repository.normalize_username(payload.username),
         display_name=payload.display_name.strip(),
+        email=_normalize_email(payload.email),
         password_hash=hash_password(payload.password),
         active=payload.active,
         is_superuser=payload.is_superuser,
@@ -131,6 +144,8 @@ async def update_user(session: AsyncSession, user_id: int, payload: UserUpdate, 
         user.username = repository.normalize_username(payload.username)
     if payload.display_name is not None:
         user.display_name = payload.display_name.strip()
+    if payload.email is not None:
+        user.email = _normalize_email(payload.email)
     target_superuser = user.is_superuser if payload.is_superuser is None else payload.is_superuser
     if payload.active is not None:
         await _validate_last_admin(session, user, payload.active, target_superuser)

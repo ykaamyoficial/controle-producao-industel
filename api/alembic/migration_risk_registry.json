@@ -153,5 +153,20 @@
     "classification": "TRANSITIONAL",
     "summary": "Adiciona coluna nullable legacy_id (+ UNIQUE) em users, galvanization_loads, fiscal_records e fiscal_invoices, e source_hash em users, para permitir sincronizacao idempotente do banco SQLite legado, no mesmo padrao ja usado em proposals/proposal_items.",
     "justification": "ADD COLUMN nullable sem default obrigatorio seguido de CREATE UNIQUE CONSTRAINT sobre a coluna nova em cada tabela -- classificado TRANSITIONAL (nao ADDITIVE puro) porque adiciona uma UNIQUE constraint, mesmo padrao ja aprovado em uq_proposals_legacy_id/uq_proposal_items_legacy_id (20260720_0003). Postgres permite multiplos NULL em coluna UNIQUE, entao nenhum registro existente (todos com legacy_id NULL) pode violar a constraint na propria migration. Nenhuma coluna, linha ou constraint existente e alterada ou removida."
+  },
+  "20260908_0031": {
+    "classification": "TRANSITIONAL",
+    "summary": "Cria a camada generica de notificacoes (tabelas novas notifications e notification_deliveries, com FKs e UNIQUE constraints), semeia a permissao notifications.view e a vincula a role admin.",
+    "justification": "Somente CREATE TABLE de duas tabelas novas + CREATE INDEX + INSERT ... ON CONFLICT DO NOTHING de uma permissao nova e do vinculo com a role admin (mesmo padrao aprovado em 20260720_0004). Classificado TRANSITIONAL (nao ADDITIVE puro) apenas porque o scanner sinaliza as FKs/UNIQUE constraints das tabelas novas; nenhuma tabela, coluna, linha ou constraint pre-existente e alterada ou removida, e o downgrade e completo. chat_notifications permanece intacto: nesta fase o modulo chat apenas espelha para a camada nova, sem parar de escrever na tabela antiga."
+  },
+  "20260908_0032": {
+    "classification": "ADDITIVE",
+    "summary": "Cria notification_preferences e notification_user_settings (preferencia de canal por categoria e horario de silencio por usuario).",
+    "justification": "Apenas CREATE TABLE de duas tabelas novas, ambas com PK propria e FK para users com ON DELETE CASCADE. Nenhum consumidor pre-existente depende delas; ausencia de linha ja e tratada no codigo como 'usa o default da categoria'. Nenhuma estrutura existente e alterada."
+  },
+  "20260908_0033": {
+    "classification": "ADDITIVE",
+    "summary": "Adiciona a coluna opcional users.email, usada apenas pelo canal de notificacao por e-mail.",
+    "justification": "ADD COLUMN nullable sem default e sem backfill. Nenhuma constraint nova, nenhum consumidor pre-existente depende da coluna; codigo trata email ausente como 'usuario sem canal de e-mail'."
   }
 }

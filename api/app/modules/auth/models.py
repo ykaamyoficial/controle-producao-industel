@@ -23,6 +23,7 @@ class User(Base, TimestampMixin):
     source_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     username: Mapped[str] = mapped_column(String(80), nullable=False)
     display_name: Mapped[str] = mapped_column(String(160), nullable=False)
+    email: Mapped[str | None] = mapped_column(String(200), nullable=True)
     avatar_bytes: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
     avatar_mime: Mapped[str | None] = mapped_column(String(80), nullable=True)
     password_hash: Mapped[str] = mapped_column(Text, nullable=False)

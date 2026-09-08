@@ -24,6 +24,7 @@ from api.app.modules.health.router import router as health_router
 from api.app.modules.maintenance.router import router as maintenance_admin_router
 from api.app.modules.roles.router import router as roles_router
 from api.app.modules.nomus_integration.router import router as nomus_integration_router
+from api.app.modules.notifications.router import router as notifications_router
 from api.app.modules.proposal_attachments.router import router as proposal_attachments_router
 from api.app.modules.proposal_import.router import router as proposal_import_router
 from api.app.modules.proposals.router import router as proposals_router
@@ -114,6 +115,18 @@ def create_app() -> FastAPI:
 
         drain_task = asyncio.create_task(_periodic_drain())
 
+        # Notificacoes multicanal (Fase 10): worker unico de entrega de e-mail
+        # (urgentes quase em tempo real + digest diario). So sobe quando o
+        # canal esta configurado -- sem SMTP, as NotificationDelivery de
+        # e-mail ficam so registradas.
+        notifications_delivery_task = None
+        if settings.notifications_email_ready:
+            from api.app.modules.notifications.delivery_worker import run_delivery_loop
+
+            notifications_delivery_task = asyncio.create_task(run_delivery_loop())
+        else:
+            logging.getLogger("api.notifications").info("notifications_email_worker_desligado | motivo=sem_smtp_configurado")
+
         yield
 
         drain_task.cancel()
@@ -121,6 +134,12 @@ def create_app() -> FastAPI:
             await drain_task
         except asyncio.CancelledError:
             pass
+        if notifications_delivery_task is not None:
+            notifications_delivery_task.cancel()
+            try:
+                await notifications_delivery_task
+            except asyncio.CancelledError:
+                pass
         await dispose_engine()
         logging.getLogger("api.lifecycle").info("api_stopped service=%s", SERVICE_NAME)
 
@@ -162,6 +181,7 @@ def create_app() -> FastAPI:
     application.include_router(proposals_router, prefix="/api/v1")
     application.include_router(proposal_attachments_router, prefix="/api/v1")
     application.include_router(chat_router, prefix="/api/v1")
+    application.include_router(notifications_router, prefix="/api/v1")
     application.include_router(proposal_import_router, prefix="/api/v1")
     application.include_router(nomus_integration_router, prefix="/api/v1")
     application.include_router(provisioning_router, prefix="/api/v1")

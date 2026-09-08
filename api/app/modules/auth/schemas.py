@@ -36,6 +36,7 @@ class UserOut(BaseModel):
     id: int
     username: str
     display_name: str
+    email: str | None = None
     active: bool
     is_superuser: bool
     password_must_change: bool = False
