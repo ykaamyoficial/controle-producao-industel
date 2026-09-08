@@ -162,6 +162,21 @@ class SettingsPage(QWidget):
             )
             nomus.addWidget(self.nomus_settings, 1)
 
+        notifications = self._add_category(
+            sidebar_layout,
+            "notifications",
+            "Notificacoes",
+            AppIcons.BELL,
+            "Notificacoes",
+            "Escolha por onde cada tipo de aviso chega (no app, bandeja, e-mail) e o horario de silencio.",
+        )
+        self.notification_preferences_widget = None
+        if hasattr(self.service, "notification_preferences"):
+            from app.ui.notification_preferences_widget import NotificationPreferencesWidget
+
+            self.notification_preferences_widget = NotificationPreferencesWidget(self.service, self, auto_load=False)
+            notifications.addWidget(self.notification_preferences_widget, 1)
+
         updates = self._add_category(
             sidebar_layout,
             "updates",
@@ -309,6 +324,8 @@ class SettingsPage(QWidget):
             self.users_management.ensure_loaded()
         if key == "nomus" and self.nomus_settings is not None:
             self.nomus_settings.ensure_loaded()
+        if key == "notifications" and self.notification_preferences_widget is not None:
+            self.notification_preferences_widget.ensure_loaded()
         for category, button in self.category_buttons.items():
             button.setProperty("active", "true" if category == key else "false")
             button.style().unpolish(button)

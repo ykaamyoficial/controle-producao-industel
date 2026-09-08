@@ -1017,6 +1017,56 @@ class BackendService:
         except Exception as exc:
             raise self._api_app_error(exc) from exc
 
+    # -- Camada generica de notificacoes (Fase 10) --------------------------
+
+    def notifications_page(self, *, status: str | None = None, limit: int = 30, offset: int = 0) -> dict[str, Any]:
+        try:
+            return self.official_proposal_storage.notifications_page(status=status, limit=limit or 30, offset=offset or 0)
+        except Exception as exc:
+            raise self._api_app_error(exc) from exc
+
+    def notifications_unread_summary(self) -> dict[str, Any]:
+        try:
+            return self._cached_read("notifications_unread_summary", self.official_proposal_storage.notifications_unread_summary, ttl=1.0)
+        except Exception as exc:
+            raise self._api_app_error(exc) from exc
+
+    def notification_mark_read(self, notification_id: int) -> None:
+        try:
+            self.official_proposal_storage.notification_mark_read(notification_id)
+        except Exception as exc:
+            raise self._api_app_error(exc) from exc
+
+    def notifications_mark_all_read(self) -> None:
+        try:
+            self.official_proposal_storage.notifications_mark_all_read()
+        except Exception as exc:
+            raise self._api_app_error(exc) from exc
+
+    def notification_preferences(self) -> Any:
+        try:
+            return self.official_proposal_storage.notification_preferences()
+        except Exception as exc:
+            raise self._api_app_error(exc) from exc
+
+    def notification_preferences_update(self, items: list[dict[str, Any]]) -> Any:
+        try:
+            return self.official_proposal_storage.notification_preferences_update(items)
+        except Exception as exc:
+            raise self._api_app_error(exc) from exc
+
+    def notification_settings(self) -> dict[str, Any]:
+        try:
+            return self.official_proposal_storage.notification_settings()
+        except Exception as exc:
+            raise self._api_app_error(exc) from exc
+
+    def notification_settings_update(self, payload: dict[str, Any]) -> dict[str, Any]:
+        try:
+            return self.official_proposal_storage.notification_settings_update(payload)
+        except Exception as exc:
+            raise self._api_app_error(exc) from exc
+
     def chat_mark_question_viewed(self, message_id: int) -> dict[str, Any]:
         try:
             return self.official_proposal_storage.chat_mark_question_viewed(message_id)

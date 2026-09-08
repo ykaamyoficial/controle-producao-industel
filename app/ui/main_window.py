@@ -119,6 +119,7 @@ class MainWindow(FramelessHitTestMixin, QMainWindow):
         self._login_summary_shown = False
         self._realtime_ever_connected = False
         self._notification_poll_thread = None
+        self._notifications_summary_thread = None
         self._update_available_notice = update_available_notice
         self._update_available_notice_shown = False
         self.pages: dict[str, QWidget] = {}
@@ -135,7 +136,47 @@ class MainWindow(FramelessHitTestMixin, QMainWindow):
             return False
         self._build()
         self._ensure_notifier_startup_registration()
+        self._consume_pending_deep_link()
         return True
+
+    def _consume_pending_deep_link(self) -> None:
+        """Clique num toast do agente de bandeja com o app fechado: abre o
+        item assim que a janela termina de montar."""
+        try:
+            from app.services.notifier_agent import consume_pending_deep_link
+            from PySide6.QtCore import QTimer
+
+            route = consume_pending_deep_link()
+            if route:
+                QTimer.singleShot(0, lambda: self.open_deep_link(route))
+        except Exception:
+            log.exception("Falha ao consumir deep-link pendente")
+
+    def open_deep_link(self, route: str) -> None:
+        """Dispatcher de rota interna (ex.: 'proposal/123?message=456'). Hoje
+        toda rota conhecida abre a Central de Chats no contexto certo; rotas
+        futuras (producao/<lote>, ...) entram aqui."""
+        route = (route or "").strip()
+        if not route:
+            return
+        path, _, query = route.partition("?")
+        parts = [segment for segment in path.strip("/").split("/") if segment]
+        params = dict(pair.split("=", 1) for pair in query.split("&") if "=" in pair)
+
+        def _as_int(value):
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return None
+
+        message_id = _as_int(params.get("message"))
+        if len(parts) >= 2 and parts[0] == "proposal":
+            self.open_chat_center(proposal_id=_as_int(parts[1]), message_id=message_id)
+        elif len(parts) >= 2 and parts[0] == "chat":
+            self.open_chat_center(conversation_id=_as_int(parts[1]), message_id=message_id)
+        else:
+            log.info("Deep-link sem rota conhecida, abrindo Central de Chats | route=%s", route)
+            self.open_chat_center()
 
     def _ensure_notifier_startup_registration(self) -> None:
         try:
@@ -154,7 +195,11 @@ class MainWindow(FramelessHitTestMixin, QMainWindow):
         root_layout.setSpacing(0)
 
         has_chats = self._can_view("chats", "CHATS")
-        self.title_bar = TitleBar(self.service, on_open_conversation=self._open_conversation_from_notification)
+        self.title_bar = TitleBar(
+            self.service,
+            on_open_conversation=self._open_conversation_from_notification,
+            on_open_deep_link=self.open_deep_link,
+        )
         self.title_bar.chat_requested.connect(self.open_chat_center)
         self.title_bar.theme_toggle_requested.connect(self.toggle_theme)
         self.title_bar.settings_requested.connect(self.open_settings)
@@ -556,15 +601,30 @@ class MainWindow(FramelessHitTestMixin, QMainWindow):
         if self.session_sync is not None:
             self.session_sync.sync("poll")
         if self.notification_bell is not None and hasattr(self.service, "chat_notifications"):
-            if self._notification_poll_thread is not None and self._notification_poll_thread.isRunning():
-                return
-            # o sino conta apenas notificacoes de verdade (mencao/resposta),
-            # independente do contador de mensagens nao lidas do icone de chat.
-            thread = start_worker(
-                self, lambda: self.service.chat_notifications(limit=50), self._apply_notifications_summary, lambda _exc: None
-            )
-            self._notification_poll_thread = thread
-            thread.finished.connect(lambda: self._clear_notification_poll(thread))
+            if self._notification_poll_thread is None or not self._notification_poll_thread.isRunning():
+                # lista curta so pros toasts in-app de notificacao nova, nunca pra contar.
+                thread = start_worker(
+                    self, lambda: self.service.chat_notifications(limit=50), self._apply_notifications_summary, lambda _exc: None
+                )
+                self._notification_poll_thread = thread
+                thread.finished.connect(lambda: self._clear_notification_poll(thread))
+        # Fase 10: o badge do sino vem da camada generica de notificacoes
+        # (total_unread de TODAS as categorias, nao so chat).
+        if self.notification_bell is not None and hasattr(self.service, "notifications_unread_summary"):
+            if self._notifications_summary_thread is None or not self._notifications_summary_thread.isRunning():
+                summary_thread = start_worker(
+                    self, self.service.notifications_unread_summary, self._apply_notifications_unread_summary, lambda _exc: None
+                )
+                self._notifications_summary_thread = summary_thread
+                summary_thread.finished.connect(lambda: self._clear_notifications_summary_thread(summary_thread))
+
+    def _clear_notifications_summary_thread(self, thread) -> None:
+        if self._notifications_summary_thread is thread:
+            self._notifications_summary_thread = None
+
+    def _apply_notifications_unread_summary(self, summary: dict):
+        if self.notification_bell is not None:
+            self.notification_bell.set_unread_count(int((summary or {}).get("total_unread") or 0))
 
     def _clear_notification_poll(self, thread) -> None:
         if self._notification_poll_thread is thread:
@@ -631,8 +691,9 @@ class MainWindow(FramelessHitTestMixin, QMainWindow):
         if self.floating_chat_button is not None:
             self.floating_chat_button.set_unread_count(total)
         self.title_bar.set_chat_unread_count(total)
-        if self.notification_bell is not None:
-            self.notification_bell.set_unread_count(int(summary.get("notification_unread_count") or 0))
+        # Fase 10: o badge do sino agora vem de notifications_unread_summary
+        # (via _apply_notifications_unread_summary) — todas as categorias, nao
+        # so as CHAT_*. Aqui so cuidamos de chat/pendencias.
         if self.pending_btn is not None:
             self.title_bar.set_pending_count(int(summary.get("pending_questions") or 0))
         if not self._login_summary_shown:

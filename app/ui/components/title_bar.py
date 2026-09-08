@@ -37,10 +37,11 @@ class TitleBar(QFrame):
     theme_toggle_requested = Signal()
     settings_requested = Signal()
 
-    def __init__(self, service, parent=None, on_open_conversation=None):
+    def __init__(self, service, parent=None, on_open_conversation=None, on_open_deep_link=None):
         super().__init__(parent)
         self.service = service
         self._on_open_conversation = on_open_conversation
+        self._on_open_deep_link = on_open_deep_link
         self.setObjectName("TitleBar")
         self.setFixedHeight(TOP_BAR_HEIGHT)
         self._interactive_widgets: list[QWidget] = []
@@ -71,7 +72,11 @@ class TitleBar(QFrame):
         self.chat_btn.clicked.connect(self.chat_requested.emit)
         layout.addWidget(self.chat_btn)
 
-        self.notification_bell = NotificationBell(self.service, on_open_conversation=self._on_open_conversation)
+        self.notification_bell = NotificationBell(
+            self.service,
+            on_open_conversation=self._on_open_conversation,
+            on_open_deep_link=self._on_open_deep_link,
+        )
         self.notification_bell.setFixedSize(ACTION_BUTTON_SIZE, ACTION_BUTTON_SIZE)
         self.notification_bell.setAccessibleName("Notificacoes")
         self._register_interactive(self.notification_bell)

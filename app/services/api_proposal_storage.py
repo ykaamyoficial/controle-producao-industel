@@ -20,6 +20,7 @@ from app.integrations.api.exceptions import (
     ApiValidationError,
 )
 from app.integrations.api.chat_client import ChatApiClient
+from app.integrations.api.notifications_client import NotificationsApiClient
 from app.integrations.api.proposals_client import ProposalsApiClient
 from app.integrations.api.session import ExperimentalApiSession
 from app.integrations.api.token_store import ApiTokenStore
@@ -1499,6 +1500,69 @@ class OfficialProposalApiStorage:
         token = self.current_access_token()
         borrowed = _BorrowedApiClient(self, client)
         return borrowed, ChatApiClient(borrowed), token
+
+    def _notifications_client(self) -> tuple[DesktopApiClient, NotificationsApiClient, str]:
+        settings = self._load_enabled_settings()
+        client = self._ensure_client(settings)
+        token = self.current_access_token()
+        borrowed = _BorrowedApiClient(self, client)
+        return borrowed, NotificationsApiClient(borrowed), token
+
+    def notifications_page(self, *, status: str | None = None, limit: int = 30, offset: int = 0) -> dict[str, Any]:
+        client, api, token = self._notifications_client()
+        try:
+            return api.list(token, status=status, limit=limit, offset=offset)
+        finally:
+            client.close()
+
+    def notifications_unread_summary(self) -> dict[str, Any]:
+        client, api, token = self._notifications_client()
+        try:
+            return api.unread_summary(token)
+        finally:
+            client.close()
+
+    def notification_mark_read(self, notification_id: int) -> None:
+        client, api, token = self._notifications_client()
+        try:
+            api.mark_read(token, notification_id)
+        finally:
+            client.close()
+
+    def notifications_mark_all_read(self) -> None:
+        client, api, token = self._notifications_client()
+        try:
+            api.mark_all_read(token)
+        finally:
+            client.close()
+
+    def notification_preferences(self) -> Any:
+        client, api, token = self._notifications_client()
+        try:
+            return api.get_preferences(token)
+        finally:
+            client.close()
+
+    def notification_preferences_update(self, items: list[dict[str, Any]]) -> Any:
+        client, api, token = self._notifications_client()
+        try:
+            return api.put_preferences(token, items)
+        finally:
+            client.close()
+
+    def notification_settings(self) -> dict[str, Any]:
+        client, api, token = self._notifications_client()
+        try:
+            return api.get_settings(token)
+        finally:
+            client.close()
+
+    def notification_settings_update(self, payload: dict[str, Any]) -> dict[str, Any]:
+        client, api, token = self._notifications_client()
+        try:
+            return api.put_settings(token, payload)
+        finally:
+            client.close()
 
     def chat_conversations(self, **filters) -> list[dict[str, Any]]:
         return self.chat_conversations_page(**filters)["items"]

@@ -77,7 +77,7 @@ class SettingsDialogTests(unittest.TestCase):
     def test_only_selected_category_is_current(self):
         service = FakeSettingsService()
         page = SettingsPage(service)
-        self.assertEqual(page.stack.count(), 8)
+        self.assertEqual(page.stack.count(), 9)
         self.assertIs(page.stack.currentWidget(), page.category_pages["appearance"])
         self.assertEqual(service.user_rows_calls, 0)
 

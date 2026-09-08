@@ -14,7 +14,7 @@ class NotificationBell(AppIconButton):
     Balanca (shake) uma vez quando a contagem de nao lidas sobe - nunca em
     todo poll, so quando ha novidade de verdade (PDF secao 10.1)."""
 
-    def __init__(self, service, parent=None, on_open_conversation=None):
+    def __init__(self, service, parent=None, on_open_conversation=None, on_open_deep_link=None):
         super().__init__(
             AppIcons.BELL,
             palette=service.palette,
@@ -24,6 +24,7 @@ class NotificationBell(AppIconButton):
         )
         self.service = service
         self._on_open_conversation = on_open_conversation
+        self._on_open_deep_link = on_open_deep_link
         self.setMinimumHeight(34)
         self._panel: NotificationCenterPanel | None = None
         self._last_count = 0
@@ -55,7 +56,12 @@ class NotificationBell(AppIconButton):
         if self._panel is not None and self._panel.isVisible():
             self._panel.close()
             return
-        panel = NotificationCenterPanel(self.service, parent=self.window(), on_open_conversation=self._on_open_conversation)
+        panel = NotificationCenterPanel(
+            self.service,
+            parent=self.window(),
+            on_open_deep_link=self._on_open_deep_link,
+            on_open_conversation=self._on_open_conversation,
+        )
         point = self.mapToGlobal(self.rect().bottomRight())
         point.setX(point.x() - panel.width())
         panel.move(point)

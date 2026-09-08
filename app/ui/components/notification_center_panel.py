@@ -16,29 +16,31 @@ PANEL_WIDTH = 480
 PANEL_MIN_HEIGHT = 420
 PANEL_MAX_HEIGHT = 680
 
-_TYPE_ICON = {
-    "MENCAO": "at",
-    "RESPOSTA": "chat",
-    "PERGUNTA_ATRIBUIDA": "question",
-    "PERGUNTA_ATRASADA": "question",
-    "PERGUNTA_RESPONDIDA": "question",
-    "NOTA_DIRECIONADA": "doc",
-    "NOTA_IMPORTANTE": "doc",
+# Icone por categoria da camada generica de notificacoes (Fase 10). Chat
+# continua sendo um dos produtores (categorias CHAT_*), ao lado de eventos
+# de negocio (proposta/producao/galvanizacao/expedicao/almoxarifado).
+_CATEGORY_ICON = {
+    "CHAT_MENSAGEM": "chat",
+    "CHAT_MENCAO": "at",
+    "CHAT_RESPOSTA": "chat",
+    "CHAT_PERGUNTA": "question",
+    "CHAT_PERGUNTA_ATRASADA": "question",
+    "CHAT_NOTA": "doc",
+    "PROPOSTA_STATUS": "doc",
+    "PRODUCAO_LOTE": "settings",
+    "GALVANIZACAO_LOTE": "settings",
+    "ALMOXARIFADO": "doc",
+    "NOMUS_IMPORTACAO": "download",
+    "EXPEDICAO": "truck",
+    "SISTEMA": "bell",
 }
 
-_TYPE_VERB = {
-    "MENCAO": "mencionou voce",
-    "RESPOSTA": "respondeu sua mensagem",
-    "PERGUNTA_ATRIBUIDA": "atribuiu uma pergunta a voce",
-    "PERGUNTA_ATRASADA": "pergunta atribuida a voce esta atrasada",
-    "PERGUNTA_RESPONDIDA": "respondeu sua pergunta",
-    "NOTA_DIRECIONADA": "registrou uma nota interna para voce",
-    "NOTA_IMPORTANTE": "registrou uma nota interna importante",
+_SEVERITY_KEY = {
+    "critica": "danger",
+    "alta": "warning",
+    "normal": "accent",
+    "info": "muted",
 }
-
-# Tipos que, se OPEN/RESOLVED/CANCELADA, mostram um chip de status --
-# so pergunta atribuida representa uma pendencia de verdade (ETAPA 5).
-_PENDING_TYPES = {"PERGUNTA_ATRIBUIDA", "PERGUNTA_ATRASADA"}
 
 
 def _format_relative(value: str | None) -> str:
@@ -87,9 +89,12 @@ class NotificationCenterPanel(QFrame):
     a regra "READ != RESOLVED" no service.py (ler uma Notification nunca
     resolve ActionRequired nem avanca last_read_message_id)."""
 
-    def __init__(self, service, parent=None, on_open_conversation=None):
+    def __init__(self, service, parent=None, on_open_deep_link=None, on_open_conversation=None):
         super().__init__(parent, Qt.Popup)
         self.service = service
+        # on_open_deep_link(route:str) e o contrato novo (Fase 10). O param
+        # antigo on_open_conversation ainda e aceito por compatibilidade.
+        self._on_open_deep_link = on_open_deep_link
         self._on_open_conversation = on_open_conversation
         self.notifications: list[dict] = []
         # So mostra nao lidas - uma vez marcada como lida (ao abrir), some
@@ -199,7 +204,7 @@ class NotificationCenterPanel(QFrame):
         self.error_state.setVisible(False)
         self.loading_label.setVisible(True)
         self._refresh_thread = self._run_background(
-            lambda: self.service.chat_notifications_page(status=self._status_filter, limit=PAGE_SIZE, offset=0),
+            lambda: self.service.notifications_page(status=self._status_filter, limit=PAGE_SIZE, offset=0),
             self._refresh_success,
             self._refresh_error,
         )
@@ -230,7 +235,7 @@ class NotificationCenterPanel(QFrame):
         self._load_more_btn.setEnabled(False)
         self._load_more_btn.setText("Carregando...")
         self._load_more_thread = self._run_background(
-            lambda: self.service.chat_notifications_page(status=self._status_filter, limit=PAGE_SIZE, offset=len(self.notifications)),
+            lambda: self.service.notifications_page(status=self._status_filter, limit=PAGE_SIZE, offset=len(self.notifications)),
             self._load_more_success,
             self._load_more_error,
         )
@@ -321,33 +326,19 @@ class NotificationCenterPanel(QFrame):
         layout.setContentsMargins(10, 8, 10, 8)
         layout.setSpacing(3)
 
-        notification_type = notification.get("notification_type")
-        priority = notification.get("priority") or "normal"
+        category = notification.get("category")
+        severity = notification.get("severity") or "normal"
         unread = notification.get("read_at") is None
         palette = self.service.palette
-        colors = {
-            "acao_obrigatoria": palette.get("warning", "#d97706"),
-            "atrasada": palette.get("danger", "#dc2626"),
-            "atencao": palette.get("accent", "#0078d4"),
-        }
-        color = colors.get(priority, palette.get("muted", "#94a3b8")) if unread else palette.get("muted", "#94a3b8")
+        severity_token = _SEVERITY_KEY.get(severity, "accent")
+        color = palette.get(severity_token, palette.get("accent", "#0078d4")) if unread else palette.get("muted", "#94a3b8")
 
         header = QHBoxLayout()
         header.setSpacing(6)
         icon_label = QLabel()
-        icon_label.setPixmap(make_icon(_TYPE_ICON.get(notification_type, "bell"), color, 15).pixmap(15, 15))
+        icon_label.setPixmap(make_icon(_CATEGORY_ICON.get(category, "bell"), color, 15).pixmap(15, 15))
         header.addWidget(icon_label)
-        who = notification.get("author_name") or "Alguem"
-        verb = _TYPE_VERB.get(notification_type, "gerou uma notificacao")
-        proposal_number = notification.get("proposal_number")
-        customer_name = notification.get("customer_name")
-        if proposal_number and customer_name:
-            where = f" em {proposal_number} - {customer_name}"
-        elif proposal_number:
-            where = f" em {proposal_number}"
-        else:
-            where = " no Chat Geral" if notification.get("kind") == "GERAL" else ""
-        title_label = QLabel(f"{who} {verb}{where}")
+        title_label = QLabel(notification.get("title") or "Notificacao")
         title_label.setWordWrap(True)
         title_label.setStyleSheet(f"font-weight: 700; font-size: 12px; color: {color};" if unread else "font-weight: 600; font-size: 12px;")
         header.addWidget(title_label, 1)
@@ -357,52 +348,37 @@ class NotificationCenterPanel(QFrame):
         header.addWidget(time_label)
         layout.addLayout(header)
 
-        body = (notification.get("message_body") or "").strip().replace("\n", " ")
-        if len(body) > 140:
-            body = body[:137] + "..."
+        body = (notification.get("body") or "").strip().replace("\n", " ")
+        if len(body) > 160:
+            body = body[:157] + "..."
         if body:
-            body_label = QLabel(f"“{body}”")
+            body_label = QLabel(body)
             body_label.setWordWrap(True)
             body_label.setStyleSheet("font-size: 11px;")
             layout.addWidget(body_label)
-
-        if notification_type in _PENDING_TYPES:
-            layout.addWidget(self._build_pending_chip(notification))
 
         card.setCursor(Qt.PointingHandCursor)
         card.mousePressEvent = lambda _event, n=notification: self._open(n)
         return card
 
-    def _build_pending_chip(self, notification: dict) -> QLabel:
-        # ETAPA 10: a Notification pode estar READ sem que a pendencia
-        # (question_status, ETAPA 5) tenha sido resolvida — o chip deixa
-        # isso visualmente claro, sem inventar um estado novo aqui: quem
-        # decide "resolvida"/"cancelada" continua sendo o backend, nunca
-        # o clique nesta notificacao.
-        status = notification.get("question_status")
-        text = {"RESPONDIDA": "Resolvida", "CANCELADA": "Cancelada"}.get(status, "Pendente")
-        chip = QLabel(text)
-        chip.setObjectName("Caption")
-        chip.setStyleSheet("font-size: 9px; font-weight: 700; padding: 1px 6px; border-radius: 4px; background: rgba(148,163,184,0.18);")
-        return chip
-
     def _open(self, notification: dict):
-        proposal_id = notification.get("proposal_id")
-        conversation_id = None if proposal_id else notification.get("conversation_id")
-        message_id = notification.get("message_id")
+        route = (notification.get("deep_link") or "").strip()
         notification_id = notification.get("id")
         self.close()
-        if self._on_open_conversation is not None:
-            self._on_open_conversation(proposal_id, conversation_id, message_id)
+        if route and self._on_open_deep_link is not None:
+            self._on_open_deep_link(route)
+        elif self._on_open_conversation is not None:
+            # compatibilidade: sem dispatcher de deep-link, tenta o caminho antigo
+            self._on_open_conversation(notification.get("proposal_id"), notification.get("conversation_id"), notification.get("message_id"))
         if notification_id and notification_id > 0:
             try:
-                self.service.chat_mark_notification_read(notification_id)
+                self.service.notification_mark_read(notification_id)
             except Exception:
                 pass
 
     def _mark_all_read(self):
         try:
-            self.service.chat_mark_all_notifications_read()
+            self.service.notifications_mark_all_read()
         except Exception:
             self.new_items_banner.setText("Nao foi possivel marcar todas como lidas — toque pra tentar de novo")
             self.new_items_banner.setVisible(True)
