@@ -209,6 +209,7 @@ class PostgreSQLIntegrationTests(unittest.TestCase):
                     [
                         "alembic_version",
                         "auth_sessions",
+                        "chat_attachments",
                         "chat_conversations",
                         "chat_message_reads",
                         "chat_messages",
@@ -224,6 +225,10 @@ class PostgreSQLIntegrationTests(unittest.TestCase):
                         "galvanization_load_events",
                         "galvanization_load_items",
                         "galvanization_loads",
+                        "notification_deliveries",
+                        "notification_preferences",
+                        "notification_user_settings",
+                        "notifications",
                         "permissions",
                         "pilot_client_reports",
                         "product_catalog_entries",
