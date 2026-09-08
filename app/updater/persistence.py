@@ -27,6 +27,11 @@ DEFAULT_PROTECTED_PATTERNS: tuple[str, ...] = (
     "*.db",
     "*.sqlite",
     "*.sqlite3",
+    # Desinstalador do Inno Setup: criado no install_dir na primeira
+    # instalacao, NAO faz parte do pacote de atualizacao. Sem preservar,
+    # o swap de diretorio apagaria o "Desinstalar" do Painel de Controle.
+    "unins*.exe",
+    "unins*.dat",
 )
 
 

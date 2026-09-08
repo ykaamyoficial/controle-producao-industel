@@ -25,6 +25,13 @@ class IsProtectedTests(unittest.TestCase):
     def test_unknown_top_level_file_is_not_protected(self):
         self.assertFalse(is_protected("randomfile.dat"))
 
+    def test_inno_uninstaller_is_protected(self):
+        # Criado pelo Inno Setup na primeira instalacao, nunca vem no pacote
+        # de atualizacao -- o swap de diretorio nao pode apaga-lo.
+        self.assertTrue(is_protected("unins000.exe"))
+        self.assertTrue(is_protected("unins000.dat"))
+        self.assertTrue(is_protected("unins001.exe"))
+
 
 class CopyProtectedFilesTests(unittest.TestCase):
     def test_config_and_logs_are_copied_into_staging(self):

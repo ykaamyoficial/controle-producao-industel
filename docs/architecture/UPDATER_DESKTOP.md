@@ -66,9 +66,20 @@ assumir a troca.
 
 - **Empacotamento**: PyInstaller `onedir` (`ControleProducao.spec`), não
   onefile. `APP_EXECUTABLE_NAME = "ControleProducao.exe"` (`app/version.py`).
-- **Instalação**: Inno Setup (`installer/ControleProducao.iss`) instala em
+- **Instalação nova (primeira vez)**: Inno Setup
+  (`installer/ControleProducao.iss`), instala em
   `{autopf}\Industel\Controle de Producao` (requer admin,
   `PrivilegesRequired=admin`).
+- **Atualização assistida**: NÃO usa o `.exe` do Inno. O Updater valida o
+  pacote como **ZIP** (`verify_package`), extrai e faz swap de diretório. O
+  pacote de atualização é gerado por `scripts/build_update_package.py` a
+  partir de `dist/ControleProducao/` + `dist/Updater/` (mesma mesclagem que
+  o `.iss` faz para `{app}`), com um arquivo `VERSION` na raiz →
+  `release/ControleProducao-<versao>-update.zip`. O manifesto (Fase 11)
+  precisa apontar para esse ZIP: `generate_release_manifest.py --artifact
+  <...>-update.zip --content-type application/zip`. Publicar o `.exe` do
+  instalador como pacote de update faz o Updater falhar com
+  `INVALID_PACKAGE -- nao e um pacote ZIP valido` (bug corrigido em 2026-09).
 - **Dados persistentes**: já externalizados de `install_dir` desde a Fase 01
   (`app/services/app_paths.py`) -- config, logs, cache e a pasta `updates/`
   legada vivem em `%ProgramData%\Industel\ControleProducao` (ou
