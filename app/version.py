@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 APP_NAME = "Controle de Producao Industel"
-APP_VERSION = "2.7.0"
+APP_VERSION = "2.7.1"
 APP_BUILD = "2026.09.08"
 APP_PUBLISHER = "Industel"
 APP_CHANNEL = "stable"

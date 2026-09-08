@@ -55,6 +55,8 @@ class UserEditorDialog(QDialog):
         data_layout.setSpacing(10)
         self.nome = QLineEdit()
         self.login = QLineEdit()
+        self.email = QLineEdit()
+        self.email.setPlaceholderText("Para receber notificacoes por e-mail (opcional)")
         self.password = QLineEdit()
         self.password.setEchoMode(QLineEdit.Password)
         self.password.setPlaceholderText("Obrigatoria apenas para novo usuario ou troca de senha")
@@ -65,6 +67,7 @@ class UserEditorDialog(QDialog):
         self.active.setChecked(True)
         data_layout.addRow("Nome *", self.nome)
         data_layout.addRow("Login *", self.login)
+        data_layout.addRow("E-mail", self.email)
         data_layout.addRow("Senha", self.password)
         data_layout.addRow("Perfil", self.profile)
         data_layout.addRow("", self.active)
@@ -149,6 +152,7 @@ class UserEditorDialog(QDialog):
         row = self.service.get_user(user_id)
         self.nome.setText(row.get("nome", ""))
         self.login.setText(row.get("login", ""))
+        self.email.setText(row.get("email", "") or "")
         idx = self.profile.findData(row.get("perfil", "consulta"))
         self.profile.setCurrentIndex(max(0, idx))
         self.active.setChecked(bool(row.get("ativo", 1)))
@@ -167,6 +171,7 @@ class UserEditorDialog(QDialog):
         data = {
             "nome": self.nome.text(),
             "login": self.login.text(),
+            "email": self.email.text().strip(),
             "password": self.password.text(),
             "perfil": self.profile.currentData(),
             "ativo": self.active.isChecked(),

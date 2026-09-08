@@ -25,8 +25,8 @@ class AuthApiClient:
     def me(self, access_token: str) -> ApiUser:
         return ApiUser.from_payload(self.client.get("/api/v1/auth/me", access_token=access_token).data)
 
-    def update_me(self, access_token: str, *, username: str | None = None, display_name: str | None = None) -> ApiUser:
-        payload = {key: value for key, value in {"username": username, "display_name": display_name}.items() if value is not None}
+    def update_me(self, access_token: str, *, username: str | None = None, display_name: str | None = None, email: str | None = None) -> ApiUser:
+        payload = {key: value for key, value in {"username": username, "display_name": display_name, "email": email}.items() if value is not None}
         return ApiUser.from_payload(self.client.patch("/api/v1/users/me", json_payload=payload, access_token=access_token).data)
 
     def change_password(self, access_token: str, current_password: str, new_password: str, confirm_password: str) -> ApiUser:

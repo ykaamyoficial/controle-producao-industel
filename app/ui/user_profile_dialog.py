@@ -36,12 +36,15 @@ class UserProfileDialog(QDialog):
         form = QFormLayout(personal)
         self.display_name = QLineEdit(str(user.get("nome") or ""))
         self.username = QLineEdit(str(user.get("login") or ""))
+        self.email = QLineEdit(str(user.get("email") or ""))
+        self.email.setPlaceholderText("Para receber notificacoes por e-mail (opcional)")
         self.profile = QLineEdit(self.service.user_profile())
         self.profile.setReadOnly(True)
         self.status = QLineEdit("Ativo" if user.get("ativo") else "Inativo")
         self.status.setReadOnly(True)
         form.addRow("Nome completo", self.display_name)
         form.addRow("Nome de usuario", self.username)
+        form.addRow("E-mail", self.email)
         form.addRow("Perfil de acesso", self.profile)
         form.addRow("Status", self.status)
         root.addWidget(personal)
@@ -119,7 +122,7 @@ class UserProfileDialog(QDialog):
 
     def _save(self):
         try:
-            self.service.update_current_user(username=self.username.text().strip(), display_name=self.display_name.text().strip())
+            self.service.update_current_user(username=self.username.text().strip(), display_name=self.display_name.text().strip(), email=self.email.text().strip())
             if any((self.current_password.text(), self.new_password.text(), self.confirm_password.text())):
                 self.service.change_current_password(self.current_password.text(), self.new_password.text(), self.confirm_password.text())
         except Exception as exc:

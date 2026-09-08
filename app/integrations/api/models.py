@@ -20,6 +20,7 @@ class ApiUser:
     display_name: str
     active: bool
     is_superuser: bool
+    email: str | None = None
     password_must_change: bool = False
     roles: list[ApiRole] = field(default_factory=list)
     permissions: list[str] = field(default_factory=list)
@@ -35,6 +36,7 @@ class ApiUser:
             display_name=str(payload["display_name"]),
             active=bool(payload["active"]),
             is_superuser=bool(payload.get("is_superuser", False)),
+            email=(payload.get("email") or None),
             password_must_change=bool(
                 payload.get("password_must_change", False)
             ),    

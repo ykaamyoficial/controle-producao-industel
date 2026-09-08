@@ -1253,6 +1253,7 @@ class OfficialProposalApiStorage:
         try:
             display_name = str(data.get("nome") or "").strip()
             username = str(data.get("login") or "").strip()
+            email = str(data.get("email") or "").strip()
             password = str(data.get("password") or "")
             is_admin = str(data.get("perfil") or "").strip().lower() == "admin"
             active = bool(data.get("ativo", True))
@@ -1261,6 +1262,7 @@ class OfficialProposalApiStorage:
                 payload: dict[str, Any] = {
                     "username": username,
                     "display_name": display_name,
+                    "email": email,
                     "active": active,
                     "is_superuser": is_admin,
                     "permission_codes": permission_codes,
@@ -1276,6 +1278,7 @@ class OfficialProposalApiStorage:
             payload = {
                 "username": username,
                 "display_name": display_name,
+                "email": email,
                 "password": password,
                 "active": active,
                 "is_superuser": is_admin,
@@ -1452,9 +1455,9 @@ class OfficialProposalApiStorage:
             raise OfficialProposalStorageError("Entre na API antes de salvar propostas oficiais.")
         return state.access_token
 
-    def update_current_user(self, *, username: str | None = None, display_name: str | None = None):
+    def update_current_user(self, *, username: str | None = None, display_name: str | None = None, email: str | None = None):
         client = self._ensure_client(self._load_enabled_settings())
-        return AuthApiClient(client).update_me(self.current_access_token(), username=username, display_name=display_name)
+        return AuthApiClient(client).update_me(self.current_access_token(), username=username, display_name=display_name, email=email)
 
     def change_current_password(self, current_password: str, new_password: str, confirm_password: str):
         client = self._ensure_client(self._load_enabled_settings())
@@ -2388,6 +2391,7 @@ def _api_user_to_legacy(row: dict[str, Any]) -> dict[str, Any]:
         "id": row.get("id"),
         "nome": row.get("display_name") or row.get("username") or "",
         "login": row.get("username") or "",
+        "email": row.get("email") or "",
         "perfil": "admin" if is_admin else "usuario",
         "perfil_label": "Administrador" if is_admin else "Usuario API",
         "ativo": 1 if row.get("active") else 0,

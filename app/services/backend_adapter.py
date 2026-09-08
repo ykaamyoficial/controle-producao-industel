@@ -284,8 +284,8 @@ class BackendService:
             return '-'
         return 'Administrador' if legacy.user_can_admin(self.user) else 'Usuario'
 
-    def update_current_user(self, *, username: str | None = None, display_name: str | None = None) -> dict[str, Any]:
-        api_user = self.official_proposal_storage.update_current_user(username=username, display_name=display_name)
+    def update_current_user(self, *, username: str | None = None, display_name: str | None = None, email: str | None = None) -> dict[str, Any]:
+        api_user = self.official_proposal_storage.update_current_user(username=username, display_name=display_name, email=email)
         self._apply_current_api_user(api_user)
         return dict(self.user or {})
 
@@ -320,6 +320,7 @@ class BackendService:
         permissions = set(api_user.permissions or [])
         self.user = {
             'id': api_user.id, 'nome': api_user.display_name, 'login': api_user.username,
+            'email': api_user.email or '',
             'perfil': 'admin' if api_user.is_superuser or '*' in permissions else 'usuario',
             'ativo': 1 if api_user.active else 0, 'areas_acesso': ','.join(legacy.AREAS.keys()),
             'api_permissions': permissions, 'api_superuser': bool(api_user.is_superuser or '*' in permissions),
@@ -1582,6 +1583,7 @@ class BackendService:
     def save_user(self, data: dict[str, Any], user_id: int | None=None):
         nome = (data.get('nome') or '').strip()
         login = (data.get('login') or '').strip()
+        email = (data.get('email') or '').strip()
         password = data.get('password') or ''
         profile = data.get('perfil') or 'consulta'
         ativo = 1 if data.get('ativo', True) else 0
@@ -1594,7 +1596,7 @@ class BackendService:
         if password and (not self._valid_api_password(password)):
             raise legacy.AppError('A senha deve ter pelo menos 4 caracteres e nao pode ser uma sequencia simples.')
         try:
-            self.official_proposal_storage.save_user({'nome': nome, 'login': login, 'password': password, 'perfil': profile, 'ativo': bool(ativo), 'permissions': dict(data.get('permissions') or {})}, user_id)
+            self.official_proposal_storage.save_user({'nome': nome, 'login': login, 'email': email, 'password': password, 'perfil': profile, 'ativo': bool(ativo), 'permissions': dict(data.get('permissions') or {})}, user_id)
             return
         except Exception as exc:
             raise self._api_app_error(exc) from exc
