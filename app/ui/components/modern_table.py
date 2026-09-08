@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from PySide6.QtCore import QSortFilterProxyModel, Qt, Signal
+from PySide6.QtCore import QRectF, QSortFilterProxyModel, Qt, Signal
 from PySide6.QtGui import QBrush, QColor, QPainter, QPen
 from PySide6.QtWidgets import QAbstractItemView, QHeaderView, QStyledItemDelegate, QStyle, QStyleOptionViewItem, QTableView
 
+from app.ui.components.operational_table import configure_operational_table
 from app.ui.styles import area_color, status_color
-from app.ui.icons import make_icon
+from app.ui.icons import IconSize, make_icon, status_icon
 
 
 class ProcessFilterProxy(QSortFilterProxyModel):
@@ -26,15 +27,55 @@ class StatusBadgeDelegate(QStyledItemDelegate):
 
     def paint(self, painter: QPainter, option: QStyleOptionViewItem, index):
         key = index.data(Qt.UserRole + 1)
-        if key == "status_icon":
-            raw = index.data(Qt.UserRole + 2) or "status"
+        batch_background = index.data(Qt.BackgroundRole)
+        if batch_background is not None and not (option.state & QStyle.State_Selected):
+            painter.save()
+            painter.fillRect(option.rect, batch_background)
+            painter.restore()
+        if key == "chat_icon":
+            unread = int(index.data(Qt.UserRole + 2) or 0)
+            has_messages = bool(index.data(Qt.UserRole + 3))
             painter.save()
             if option.state & QStyle.State_Selected:
                 painter.fillRect(option.rect, QColor(self.service.palette["accent"]))
-            icon = make_icon(str(raw), self.service.palette["accent"], 20)
-            pix = icon.pixmap(20, 20)
-            x = option.rect.x() + (option.rect.width() - 20) // 2
-            y = option.rect.y() + (option.rect.height() - 20) // 2
+            if unread > 0:
+                color = self.service.palette.get("danger", "#dc2626")
+            elif has_messages:
+                color = self.service.palette["accent"]
+            else:
+                color = self.service.palette.get("muted", "#94a3b8")
+            icon = make_icon("chat", color, 18)
+            pix = icon.pixmap(18, 18)
+            offset = 6 if unread > 0 else 0
+            x = option.rect.x() + (option.rect.width() - 18) // 2 - offset
+            y = option.rect.y() + (option.rect.height() - 18) // 2
+            painter.setRenderHint(QPainter.Antialiasing)
+            painter.drawPixmap(x, y, pix)
+            if unread > 0:
+                badge_text = str(unread) if unread < 100 else "99+"
+                badge_rect = QRectF(x + 12, y - 2, 20, 14)
+                painter.setPen(Qt.NoPen)
+                painter.setBrush(QBrush(QColor(self.service.palette.get("danger", "#dc2626"))))
+                painter.drawRoundedRect(badge_rect, 7, 7)
+                painter.setPen(QPen(QColor("#ffffff")))
+                font = painter.font()
+                font.setPointSize(max(6, font.pointSize() - 3))
+                font.setBold(True)
+                painter.setFont(font)
+                painter.drawText(badge_rect, Qt.AlignCenter, badge_text)
+            painter.restore()
+            return
+        if key in {"status_icon", "fiscal_action"}:
+            raw = index.data(Qt.UserRole + 2) or "status"
+            area = index.data(Qt.UserRole + 3) or None
+            painter.save()
+            if option.state & QStyle.State_Selected:
+                painter.fillRect(option.rect, QColor(self.service.palette["accent"]))
+            size = int(IconSize.TABLE_STATUS)
+            icon = status_icon(str(raw), area=area, palette=self.service.palette, size=size)
+            pix = icon.pixmap(size, size)
+            x = option.rect.x() + (option.rect.width() - size) // 2
+            y = option.rect.y() + (option.rect.height() - size) // 2
             painter.setRenderHint(QPainter.Antialiasing)
             painter.setPen(Qt.NoPen)
             painter.setBrush(QBrush(QColor(self.service.palette["surface"])))
@@ -69,10 +110,12 @@ class StatusBadgeDelegate(QStyledItemDelegate):
 
 class ModernTable(QTableView):
     status_shortcut_requested = Signal(int)
+    chat_shortcut_requested = Signal(int)
 
     def __init__(self, service, parent=None):
         super().__init__(parent)
         self.service = service
+        configure_operational_table(self)
         self.setAlternatingRowColors(True)
         self.setSortingEnabled(True)
         self.setSelectionBehavior(QAbstractItemView.SelectRows)
@@ -80,14 +123,14 @@ class ModernTable(QTableView):
         self.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.setShowGrid(False)
         self.verticalHeader().setVisible(False)
-        self.verticalHeader().setDefaultSectionSize(30)
-        self.horizontalHeader().setMinimumHeight(28)
-        self.horizontalHeader().setFixedHeight(30)
+        self.verticalHeader().setDefaultSectionSize(28)
+        self.horizontalHeader().setMinimumHeight(26)
+        self.horizontalHeader().setFixedHeight(28)
         self.horizontalHeader().setStretchLastSection(True)
         self.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
         self.setItemDelegate(StatusBadgeDelegate(service, self))
         self.setWordWrap(True)
-        self.setToolTip("Clique no icone da primeira coluna para abrir as acoes da proposta.")
+        self.setToolTip("Clique no icone de status para abrir as acoes da proposta, ou no icone de chat para abrir a conversa.")
         self.setMouseTracking(True)
         self.status_shortcut_enabled = True
 
@@ -100,30 +143,34 @@ class ModernTable(QTableView):
         source = model.sourceModel() if hasattr(model, "sourceModel") else model
         columns = getattr(source, "columns", [])
         widths = {
+            "batch_select": 42,
             "status_icon": 44,
-            "id": 58,
-            "tipo_processo": 92,
-            "cliente": 140,
+            "chat_icon": 44,
+            "fiscal_action": 44,
+            "id": 54,
+            "tipo_processo": 86,
+            "cliente": 150,
             "proposta": 130,
-            "pedido_compra": 120,
-            "obra_site": 170,
-            "peso": 88,
+            "pedido_compra": 112,
+            "obra_site": 190,
+            "peso": 84,
             "progresso_peso": 125,
-            "lote": 90,
-            "carga_galvanizacao": 105,
-            "data_entrada": 110,
-            "prazo_entrega": 110,
-            "data_envio_galv": 120,
-            "data_prevista_retorno_galv": 132,
-            "data_retorno_galv": 122,
+            "lote": 82,
+            "carga_galvanizacao": 96,
+            "data_entrada": 96,
+            "prazo_entrega": 96,
+            "data_envio_galv": 108,
+            "data_prevista_retorno_galv": 124,
+            "data_retorno_galv": 112,
             "almoxarifado_info": 115,
             "necessita_almoxarifado": 115,
             "status_localizacao": 210,
             "localizacao_atual": 175,
-            "status_producao": 220,
-            "status_galvanizacao": 230,
-            "status_expedicao": 220,
-            "status_almoxarifado": 220,
+            "status_producao": 215,
+            "status_producao_item": 150,
+            "status_galvanizacao": 220,
+            "status_expedicao": 215,
+            "status_almoxarifado": 215,
             "status_fiscal": 170,
             "data_entrada_fiscal": 125,
             "data_ultima_emissao": 130,
@@ -161,10 +208,17 @@ class ModernTable(QTableView):
             "cliente_origem": 140,
             "cliente_destino": 140,
             "numero_item": 75,
+            "codigo_produto": 95,
+            "product_code": 95,
+            "descricao": 280,
             "item_descricao": 220,
             "peso_remanejado": 130,
             "proposta_reposicao": 145,
         }
+        has_long_description = any(key in {"descricao", "item_descricao", "observacao"} for key, _label in columns)
+        self.verticalHeader().setSectionResizeMode(
+            QHeaderView.ResizeToContents if has_long_description else QHeaderView.Fixed
+        )
         for index, (key, _label) in enumerate(columns):
             self.setColumnWidth(index, widths.get(key, 120))
 
@@ -179,17 +233,28 @@ class ModernTable(QTableView):
 
     def mousePressEvent(self, event):
         index = self.indexAt(event.position().toPoint())
-        if self.status_shortcut_enabled and index.isValid() and index.column() == 0:
+        if self.status_shortcut_enabled and index.isValid():
             model = self.model()
             source_index = model.mapToSource(index) if hasattr(model, "mapToSource") else index
             process_id = model.sourceModel().process_id_at(source_index.row()) if hasattr(model, "sourceModel") else model.process_id_at(source_index.row())
             if process_id:
-                self.status_shortcut_requested.emit(process_id)
-                return
+                if index.column() == 0:
+                    self.status_shortcut_requested.emit(process_id)
+                    return
+                if source_index.data(Qt.UserRole + 1) == "chat_icon":
+                    self.chat_shortcut_requested.emit(process_id)
+                    return
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
         index = self.indexAt(event.position().toPoint())
-        shortcut_cell = self.status_shortcut_enabled and index.isValid() and index.column() == 0
+        shortcut_cell = False
+        if self.status_shortcut_enabled and index.isValid():
+            if index.column() == 0:
+                shortcut_cell = True
+            else:
+                model = self.model()
+                source_index = model.mapToSource(index) if hasattr(model, "mapToSource") else index
+                shortcut_cell = source_index.data(Qt.UserRole + 1) == "chat_icon"
         self.setCursor(Qt.PointingHandCursor if shortcut_cell else Qt.ArrowCursor)
         super().mouseMoveEvent(event)

@@ -27,10 +27,20 @@ from PySide6.QtWidgets import (
 )
 
 from app.models.operational_report_table_model import OperationalReportTableModel
-from app.services.operational_reports import OperationalReportsService
+from app.ui.components.area_identity import style_area_header, style_area_title
 from app.ui.components.kpi_card import KpiCard
 from app.ui.components.modern_button import ModernButton
 from app.ui.components.modern_table import ModernTable
+from app.ui.components.operational_layout import (
+    OPERATIONAL_ACTION_SPACING,
+    OPERATIONAL_FIELD_HORIZONTAL_SPACING,
+    OPERATIONAL_FIELD_VERTICAL_SPACING,
+    OPERATIONAL_PAGE_MARGINS,
+    OPERATIONAL_SECTION_SPACING,
+)
+from app.ui.components.operational_header import configure_operational_header
+from app.ui.dialog_utils import apply_large_dialog_geometry, style_dialog_from_parent
+from app.ui.table_utils import configure_wrapping_table, item_product_code, resize_rows_to_contents
 
 
 AREA_OPTIONS = [
@@ -53,53 +63,53 @@ TABLE_COLUMNS = {
     "PRODUCAO": [
         ("proposta", "Proposta"),
         ("cliente", "Cliente"),
+        ("status_producao", "Status producao"),
         ("obra_site", "Obra/Site"),
+        ("peso_produzido_atual", "Peso produzido"),
         ("lote", "Lote"),
         ("tipo_processo", "Tipo"),
-        ("status_producao", "Status producao"),
         ("data_final_producao", "Data producao"),
         ("total_itens", "Itens"),
         ("itens_produzidos", "Produzidos"),
         ("peso_total_itens", "Peso total"),
-        ("peso_produzido_atual", "Peso produzido"),
         ("origem_remanejamento", "Origem remanej."),
     ],
     "GALVANIZACAO": [
-        ("carga_id", "Carga"),
-        ("status_carga", "Status carga"),
         ("proposta", "Proposta"),
         ("cliente", "Cliente"),
-        ("obra_site", "Obra/Site"),
-        ("lote", "Lote"),
         ("status_galvanizacao", "Status galv."),
+        ("carga_id", "Carga"),
+        ("status_carga", "Status carga"),
+        ("obra_site", "Obra/Site"),
+        ("peso_enviado", "Peso enviado"),
+        ("lote", "Lote"),
         ("data_envio_galv", "Envio"),
         ("data_prevista_retorno", "Prev. retorno"),
         ("data_retorno", "Retorno"),
-        ("peso_enviado", "Peso enviado"),
         ("peso_retornado", "Peso retornado"),
         ("peso_pendente", "Peso pendente"),
     ],
     "EXPEDICAO": [
         ("proposta", "Proposta"),
         ("cliente", "Cliente"),
+        ("status_expedicao", "Status expedicao"),
         ("obra_site", "Obra/Site"),
+        ("kg_entregue_atual", "Kg entregue"),
         ("lote", "Lote"),
         ("tipo_processo", "Tipo"),
-        ("status_expedicao", "Status expedicao"),
         ("data_retirada", "Retirada"),
         ("total_itens", "Itens"),
         ("itens_entregues", "Entregues"),
         ("itens_pendentes", "Pendentes"),
-        ("kg_entregue_atual", "Kg entregue"),
     ],
     "ALMOXARIFADO": [
         ("proposta", "Proposta"),
         ("cliente", "Cliente"),
+        ("status_almoxarifado", "Status almox."),
         ("obra_site", "Obra/Site"),
         ("lote", "Lote"),
         ("tipo_processo", "Tipo"),
         ("necessita_almoxarifado", "Necessita"),
-        ("status_almoxarifado", "Status almox."),
         ("data_separacao", "Separacao"),
         ("observacoes_almoxarifado", "Observacao"),
     ],
@@ -111,6 +121,7 @@ TABLE_COLUMNS = {
         ("proposta_destino", "Destino"),
         ("cliente_destino", "Cliente destino"),
         ("numero_item", "Item"),
+        ("codigo_produto", "Codigo"),
         ("item_descricao", "Descricao"),
         ("quantidade", "Qtd."),
         ("peso_remanejado", "Peso remanej."),
@@ -126,7 +137,6 @@ class OperationalReportsPage(QWidget):
     def __init__(self, service, parent=None):
         super().__init__(parent)
         self.service = service
-        self.reports = OperationalReportsService(service.conn)
         self.current_report: dict[str, Any] | None = None
         self.model = OperationalReportTableModel(self)
         self._card_widgets: list[KpiCard] = []
@@ -134,18 +144,26 @@ class OperationalReportsPage(QWidget):
 
     def _build(self) -> None:
         root = QVBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(12)
+        root.setContentsMargins(*OPERATIONAL_PAGE_MARGINS)
+        root.setSpacing(OPERATIONAL_SECTION_SPACING)
 
         filters = QFrame()
-        filters.setObjectName("FilterBar")
+        self.filters_header = filters
         fl = QVBoxLayout(filters)
-        fl.setContentsMargins(16, 12, 16, 12)
-        fl.setSpacing(10)
+        configure_operational_header(
+            filters,
+            fl,
+            margins=(16, 12, 16, 10),
+            spacing=8,
+            area="PRODUCAO",
+            palette=self.service.palette,
+        )
 
         header = QHBoxLayout()
         title = QLabel("Relatorios Operacionais")
         title.setObjectName("FilterTitle")
+        self.title_label = title
+        style_area_title(title, "PRODUCAO", self.service.palette)
         subtitle = QLabel("Consultas por area para acompanhar producao, galvanizacao, expedicao, almoxarifado e remanejamentos.")
         subtitle.setObjectName("Caption")
         subtitle.setWordWrap(True)
@@ -188,8 +206,8 @@ class OperationalReportsPage(QWidget):
         self.area.currentIndexChanged.connect(self._sync_report_types)
 
         grid = QGridLayout()
-        grid.setHorizontalSpacing(10)
-        grid.setVerticalSpacing(8)
+        grid.setHorizontalSpacing(OPERATIONAL_FIELD_HORIZONTAL_SPACING)
+        grid.setVerticalSpacing(OPERATIONAL_FIELD_VERTICAL_SPACING)
         self._add_field(grid, 0, 0, "Area", self.area)
         self._add_field(grid, 0, 2, "Tipo de relatorio", self.report_type)
         self._add_field(grid, 0, 4, "Data inicial", self.start)
@@ -204,7 +222,7 @@ class OperationalReportsPage(QWidget):
         fl.addLayout(grid)
 
         actions = QHBoxLayout()
-        actions.setSpacing(8)
+        actions.setSpacing(OPERATIONAL_ACTION_SPACING)
         actions.addStretch()
         actions.addWidget(self.generate_btn)
         actions.addWidget(self.clear_btn)
@@ -251,6 +269,8 @@ class OperationalReportsPage(QWidget):
 
     def _sync_report_types(self) -> None:
         area = self.area.currentData() or "PRODUCAO"
+        style_area_header(self.filters_header, area, self.service.palette)
+        style_area_title(self.title_label, area, self.service.palette)
         self.report_type.clear()
         for label, value in REPORT_TYPES.get(area, []):
             self.report_type.addItem(label, value)
@@ -282,14 +302,7 @@ class OperationalReportsPage(QWidget):
         self.refresh()
 
     def _generate_report(self, area: str, filters: dict[str, str]) -> dict[str, Any]:
-        generators = {
-            "PRODUCAO": self.reports.gerar_relatorio_producao,
-            "GALVANIZACAO": self.reports.gerar_relatorio_galvanizacao,
-            "EXPEDICAO": self.reports.gerar_relatorio_expedicao,
-            "ALMOXARIFADO": self.reports.gerar_relatorio_almoxarifado,
-            "REMANEJAMENTOS": self.reports.gerar_relatorio_remanejamentos,
-        }
-        return generators[area](filters)
+        return self.service.operational_report(area, filters)
 
     def _render_cards(self, cards: list[dict[str, Any]]) -> None:
         while self.cards_layout.count():
@@ -436,6 +449,7 @@ class OperationalReportsPage(QWidget):
             items,
             [
                 ("numero_item", "Item"),
+                ("codigo_produto", "Codigo"),
                 ("descricao", "Descricao"),
                 ("quantidade", "Qtd."),
                 ("peso", "Peso unit."),
@@ -475,6 +489,7 @@ class OperationalReportsPage(QWidget):
                 ("proposta_origem", "Origem"),
                 ("proposta_destino", "Destino"),
                 ("numero_item", "Item"),
+                ("codigo_produto", "Codigo"),
                 ("item_descricao", "Descricao"),
                 ("quantidade", "Qtd."),
                 ("peso_remanejado", "Peso"),
@@ -485,7 +500,7 @@ class OperationalReportsPage(QWidget):
     def _remanagement_rows_for(self, row: dict[str, Any], process_id: int | None) -> list[dict[str, Any]]:
         if self.area.currentData() == "REMANEJAMENTOS" and row.get("remanejamento_id"):
             return [row]
-        report = self.reports.gerar_relatorio_remanejamentos({})
+        report = self.service.operational_report("REMANEJAMENTOS", {})
         rows = report.get("linhas") or []
         if not process_id:
             return rows
@@ -587,7 +602,7 @@ class OperationalRowsDialog(QDialog):
         super().__init__(parent)
         self.service = service
         self.setWindowTitle(title)
-        self.resize(980, 540)
+        apply_large_dialog_geometry(self, parent)
         root = QVBoxLayout(self)
         root.setContentsMargins(16, 16, 16, 16)
         root.setSpacing(10)
@@ -605,20 +620,38 @@ class OperationalRowsDialog(QDialog):
         table.verticalHeader().setVisible(False)
         table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
         table.horizontalHeader().setStretchLastSection(True)
+        description_columns = tuple(
+            index for index, (key, label) in enumerate(columns)
+            if key in {"descricao", "item_descricao", "observacao"} or "Descricao" in label
+        )
+        code_columns = tuple(
+            index for index, (key, label) in enumerate(columns)
+            if "codigo" in key or "Codigo" in label or "Cod." in label
+        )
+        if description_columns:
+            configure_wrapping_table(
+                table,
+                description_columns=description_columns,
+                code_columns=code_columns,
+                min_row_height=42,
+            )
         for row_index, data in enumerate(rows):
             for col_index, (key, _label) in enumerate(columns):
-                value = _display_value(data.get(key))
+                value = item_product_code(data) if "codigo" in key else _display_value(data.get(key))
                 cell = QTableWidgetItem(value)
                 cell.setToolTip(value)
-                cell.setTextAlignment(Qt.AlignVCenter | Qt.AlignLeft)
+                if col_index in description_columns:
+                    cell.setTextAlignment(Qt.AlignTop | Qt.AlignLeft)
+                else:
+                    cell.setTextAlignment(Qt.AlignVCenter | Qt.AlignLeft)
                 table.setItem(row_index, col_index, cell)
+        resize_rows_to_contents(table)
         table.resizeColumnsToContents()
         root.addWidget(table, 1)
         close = ModernButton("Fechar", "clear")
         close.clicked.connect(self.accept)
         root.addWidget(close, 0, Qt.AlignRight)
-        if self.parent() and self.parent().window():
-            self.setStyleSheet(self.parent().window().styleSheet())
+        style_dialog_from_parent(self, parent)
 
 
 class OperationalProcessReadOnlyDialog(QDialog):
@@ -628,10 +661,9 @@ class OperationalProcessReadOnlyDialog(QDialog):
         self.process_id = process_id
         self.process = service.get_process_dict(process_id)
         self.setWindowTitle("Detalhes da proposta")
-        self.resize(1040, 650)
+        apply_large_dialog_geometry(self, parent)
         self._build()
-        if parent and parent.window():
-            self.setStyleSheet(parent.window().styleSheet())
+        style_dialog_from_parent(self, parent)
 
     def _build(self) -> None:
         root = QVBoxLayout(self)
@@ -711,15 +743,17 @@ class OperationalProcessReadOnlyDialog(QDialog):
     def _items_panel(self) -> QFrame:
         items = self.service.proposal_items(self.process_id)
         panel = self._panel(f"Itens da proposta ({len(items)})")
-        table = QTableWidget(len(items), 7)
-        table.setHorizontalHeaderLabels(["Item", "Descricao", "Qtd.", "Peso", "Produzido", "Galvanizado", "Entregue"])
+        table = QTableWidget(len(items), 8)
+        table.setHorizontalHeaderLabels(["Item", "Codigo", "Descricao", "Qtd.", "Peso", "Produzido", "Galvanizado", "Entregue"])
         table.setAlternatingRowColors(True)
         table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         table.verticalHeader().setVisible(False)
-        table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        configure_wrapping_table(table, description_columns=(2,), code_columns=(1,), min_row_height=42)
         for row, item in enumerate(items):
             values = [
                 item.get("numero_item"),
+                item_product_code(item),
                 item.get("descricao"),
                 item.get("quantidade"),
                 f"{float(item.get('peso') or 0):g} kg",
@@ -728,7 +762,10 @@ class OperationalProcessReadOnlyDialog(QDialog):
                 "Sim" if item.get("entregue") else "Nao",
             ]
             for col, value in enumerate(values):
-                table.setItem(row, col, QTableWidgetItem(str(value or "-")))
+                cell = QTableWidgetItem(str(value or "-"))
+                cell.setTextAlignment(Qt.AlignTop | Qt.AlignLeft if col == 2 else Qt.AlignCenter)
+                table.setItem(row, col, cell)
+        resize_rows_to_contents(table)
         panel.layout().addWidget(table)
         return panel
 
@@ -756,10 +793,9 @@ class OperationalLoadReadOnlyDialog(QDialog):
         self.load_id = load_id
         self.load = service.get_galvanization_load_dict(load_id)
         self.setWindowTitle(f"Carga de galvanizacao {load_id}")
-        self.resize(980, 560)
+        apply_large_dialog_geometry(self, parent)
         self._build()
-        if parent and parent.window():
-            self.setStyleSheet(parent.window().styleSheet())
+        style_dialog_from_parent(self, parent)
 
     def _build(self) -> None:
         root = QVBoxLayout(self)

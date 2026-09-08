@@ -25,3 +25,5 @@ def fade_in(widget: QWidget, duration: int = 180) -> QPropertyAnimation:
     animation.finished.connect(lambda: widget.setGraphicsEffect(None))
     animation.start()
     return animation
+
+

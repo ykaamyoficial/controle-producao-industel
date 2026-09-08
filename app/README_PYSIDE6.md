@@ -1,10 +1,10 @@
-# Nova interface PySide6
+# Interface Desktop PySide6
 
-Esta pasta contem a nova frente visual do Controle de Producao Industel.
+Esta pasta contem a frente visual desktop do Controle de Producao Industel.
 
-O sistema antigo em Tkinter foi preservado em `desktop/controle_producao.py`.
-A nova interface usa PySide6 e acessa o mesmo banco SQLite pelo adaptador em
-`app/services/backend_adapter.py`, reaproveitando as regras de negocio atuais.
+A interface usa PySide6 e consome os dados oficiais pela API REST do sistema.
+O banco operacional fica no PostgreSQL do servidor; o desktop nao armazena
+dados operacionais em arquivo e nao executa SQL diretamente.
 
 ## Como abrir
 
@@ -22,11 +22,11 @@ python -m app.main
 
 ## Separacao das versoes
 
-- Versao nova PySide6: `app/`
-- Banco da versao nova: `app/data/controle_producao.db`
-- Configuracao da versao nova: `app/config/controle_producao_config.json`
-- Icones da versao nova: `app/assets/icons/`
-- Nucleo de regras da versao 2.0: `app/services/production_core.py`
+- Interface desktop PySide6: `app/`
+- Configuracao do desktop: `app/config/controle_producao_config.json`
+- Cliente HTTP da API: `app/integrations/api/`
+- Adaptador da aplicacao: `app/services/backend_adapter.py`
+- Icones do desktop: `app/assets/icons/`
 
 ## Estrutura
 
@@ -38,13 +38,13 @@ python -m app.main
 - `app/ui/status_dialog.py`: modal profissional para alterar status.
 - `app/ui/components/`: botoes, cards, tabela, toast e dialogos reutilizaveis.
 - `app/models/`: modelos Qt para tabelas.
-- `app/services/backend_adapter.py`: ponte segura com o backend existente.
+- `app/services/backend_adapter.py`: fachada segura para API/PostgreSQL.
 - `app/ui/styles.py`: tema visual baseado nas paletas ja existentes.
-- `app/data/`: banco e backups da nova versao.
+- `app/data/`: arquivos operacionais do desktop, como updates, logs e diagnosticos.
 - `app/config/`: configuracao isolada da nova versao.
 
 ## Observacao
 
-Esta etapa entrega uma nova camada visual moderna e funcional sem remover o
-sistema antigo. As regras de status, banco SQLite, permissoes e validacoes
-continuam vindo do backend atual.
+O runtime oficial do desktop e API/PostgreSQL. Modulos legados podem permanecer
+temporariamente no repositorio apenas para historico, testes e comparacao durante
+a migracao, mas nao sao a fonte oficial dos dados.

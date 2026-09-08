@@ -28,7 +28,7 @@ desktop.ini
 *.log
 logs/
 backups/
-backup/
+deployments/
 *.bak
 *.backup
 *.tmp
@@ -39,6 +39,7 @@ backup/
 !.env.example
 *.local
 app/config/controle_producao_config.json
+app/data/
 app/data/backups/
 
 # Arquivos gerados
@@ -49,10 +50,14 @@ gerados/
 
 # Conteudo local e versoes arquivadas
 .codex-tools/
+.codex-remote-attachments/
 desktop/
 versoes_antigas/
+modelos Propostas/
+app/assets/Nova pasta/
 
 # Instaladores e pacotes gerados
+release/
 *.exe
 *.msi
 *.zip
@@ -61,3 +66,7 @@ versoes_antigas/
 # Relatorios e exportacoes locais
 exports/
 relatorios_gerados/
+reports/
+
+# Rascunhos/artefatos de sessao (screenshots, PDFs de referencia)
+/tmp/

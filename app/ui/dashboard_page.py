@@ -14,6 +14,7 @@ from app.ui.components.tabela_prazos import TabelaPrazos
 from app.ui.dashboard_details_dialog import DashboardDetailsDialog
 from app.ui.styles import area_color
 from app.ui.components.empty_state import EmptyState
+from app.ui.background_worker import start_worker
 from app.ui.theme_tokens import dashboard_chart_colors, dashboard_tokens
 
 
@@ -28,6 +29,8 @@ class DashboardPage(QWidget):
         self._reflow_timer = QTimer(self)
         self._reflow_timer.setSingleShot(True)
         self._reflow_timer.timeout.connect(self._reflow)
+        self._refresh_thread = None
+        self._refreshing = False
         self._build()
 
     def _build(self):
@@ -50,11 +53,34 @@ class DashboardPage(QWidget):
         root.addWidget(scroll, 1)
 
     def refresh(self):
+        if self._refreshing:
+            return
+        self._refreshing = True
         self.tokens = dashboard_tokens(self.service.palette)
         self.header.set_palette(self.service.palette)
         self._clear_dashboard_widgets()
-        data = self.service.dashboard()
-        charts = self.service.dashboard_charts()
+        self.header.update_content(
+            "Carregando indicadores operacionais...",
+            "Atualizando",
+        )
+        self._refresh_thread = start_worker(
+            self,
+            lambda: {"data": self.service.dashboard(), "charts": self.service.dashboard_charts()},
+            self._refresh_success,
+            self._refresh_error,
+        )
+
+    def _refresh_success(self, payload):
+        self._refreshing = False
+        data = payload.get("data") or {}
+        charts = payload.get("charts") or {}
+        self._render(data, charts)
+
+    def _refresh_error(self, exc):
+        self._refreshing = False
+        self.header.update_content(str(exc), "Falha ao atualizar")
+
+    def _render(self, data: dict, charts: dict):
         self.header.update_content(
             self._focus_text(data),
             "Ultima atualizacao\n" + datetime.now().strftime("%d/%m/%Y  %H:%M"),
@@ -166,8 +192,8 @@ class DashboardPage(QWidget):
             f"QFrame#DashboardPanel {{ background: {self.tokens['surface']}; border: 1px solid {self.tokens['border']}; border-radius: 16px; }}"
         )
         shadow = QGraphicsDropShadowEffect(panel)
-        shadow.setBlurRadius(14)
-        shadow.setOffset(0, 3)
+        shadow.setBlurRadius(20)
+        shadow.setOffset(0, 1)
         shadow.setColor(QColor(self.tokens["shadow"]))
         panel.setGraphicsEffect(shadow)
         layout = QVBoxLayout(panel)

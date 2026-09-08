@@ -1,0 +1,42 @@
+# Fase 5 - HTTPS e Seguranca: unico ponto de terminacao TLS da rede local.
+#
+# CADDY_HOSTNAME precisa ser o hostname interno oficial (o mesmo nome
+# gravado no certificado -- CN/SAN). Nao inventar: usar o valor real
+# definido junto com a estrategia de certificado (CA interna recomendada,
+# ver docs/architecture/FASE5_HTTPS_E_SEGURANCA.md).
+#
+# server.crt/server.key sao montados pelo docker-compose.prod.yml a partir
+# de CADDY_TLS_CERT_PATH/CADDY_TLS_KEY_PATH (fora do repositorio -- nunca
+# versionar chave privada, Secao 5). Caddy usa exatamente esse par, sem
+# tentar emissao automatica via ACME (nao ha dominio publico nesta fase).
+
+{$CADDY_HOSTNAME}:443 {
+	tls /etc/caddy/tls/server.crt /etc/caddy/tls/server.key
+
+	# Upstream interno: alcancavel somente pelo Caddy, via rede Docker do
+	# proprio compose (nome de servico "api", nunca published diretamente
+	# aos desktops apos a Etapa D da migracao -- Secao 12/9).
+	reverse_proxy api:8000 {
+		header_up Host {host}
+		header_up X-Real-IP {remote_host}
+	}
+
+	encode gzip
+
+	# Log de acesso sem corpo/headers sensiveis (Secao 3: "nao registrar
+	# Authorization/Bearer token em access logs"). O formato padrao do
+	# Caddy nao inclui headers de requisicao a menos que explicitamente
+	# configurado -- nao adicionar `header_fields` aqui sem excluir
+	# Authorization/Cookie primeiro.
+	log {
+		output stdout
+		format console
+	}
+}
+
+# Redirect HTTP -> HTTPS (Secao 11: "avaliar redirect somente se a porta 80
+# for mantida"). So ativar publicando a porta 80 no docker-compose.prod.yml
+# (comentada por padrao) e descomentando o bloco abaixo.
+# http://{$CADDY_HOSTNAME} {
+# 	redir https://{host}{uri} permanent
+# }

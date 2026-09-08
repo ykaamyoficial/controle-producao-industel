@@ -1,0 +1,358 @@
+name: Release do servidor
+
+# Fase 09: pipeline de release/producao do backend. Disparado SOMENTE por um
+# evento deliberado e rastreavel (Secao 7) -- nunca em todo push para main:
+#   - push de uma tag "api-vX.Y.Z" (convencao EXCLUSIVA de release do servidor,
+#     deliberadamente distinta das tags historicas do repositorio, que marcam
+#     entregas de produto/Desktop, ex.: v2.3.0-relatorios-operacionais);
+#   - workflow_dispatch manual com a versao explicitada.
+"on":
+  push:
+    tags:
+      - "api-v*.*.*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Versao SemVer a liberar (deve coincidir com API_VERSION), ex: 0.9.0"
+        required: true
+
+# Minimo necessario; write-all nunca e usado (Secao 10). packages:write e
+# concedido apenas ao job que publica a imagem.
+permissions:
+  contents: read
+
+env:
+  IMAGE_REPOSITORY: ghcr.io/${{ github.repository_owner }}/controle-producao-api
+
+jobs:
+  # ---------------------------------------------------------------------
+  # CI x Deploy (Secao 6): validate-tag/test/build/publish nao tocam producao
+  # e nao usam environment/secrets de producao.
+  # ---------------------------------------------------------------------
+
+  validate-tag:
+    name: Validar gatilho de release
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.validate.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Validar tag/versao contra API_VERSION (Secao 7)
+        id: validate
+        run: |
+          set -e
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            python scripts/deployment/validate_tag.py --version "${{ inputs.version }}" | tee validate_output.txt
+          else
+            python scripts/deployment/validate_tag.py --tag "${{ github.ref_name }}" | tee validate_output.txt
+          fi
+          VERSION=$(grep '^version=' validate_output.txt | cut -d= -f2)
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+  test:
+    name: Testes/gates antes do build (Secao 12)
+    needs: validate-tag
+    runs-on: ubuntu-latest
+    env:
+      APP_ENV: test
+      SECRET_KEY: ci-only-disposable-secret-key-not-for-production-use
+      POSTGRES_TEST_DATABASE_URL: postgresql+asyncpg://controle_ci:controle_ci@localhost:5432/controle_producao_test
+      DATABASE_URL: postgresql+asyncpg://controle_ci:controle_ci@localhost:5432/controle_producao_test
+      QT_QPA_PLATFORM: offscreen
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: controle_ci
+          POSTGRES_PASSWORD: controle_ci
+          POSTGRES_DB: controle_producao_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U controle_ci -d controle_producao_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Dependencias de sistema para testes Qt headless
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libegl1 libgl1 libxkbcommon0 libxkbcommon-x11-0 \
+            libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
+            libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xinerama0 \
+            libdbus-1-3 libnss3
+      - name: Instalar dependencias
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+          pip install -r api/requirements-dev.txt
+      - name: Checksums e classificacao de risco de migrations (Fase 04)
+        run: |
+          python scripts/check_migration_checksums.py
+          python scripts/check_migration_safety.py
+      - name: Suite completa
+        run: python -m pytest -q --ignore=tests/test_notification_center_dialog.py
+
+  build-and-publish:
+    name: Build + publish da imagem versionada
+    needs: [validate-tag, test]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image_repository: ${{ steps.repo.outputs.repository }}
+      image_tag: ${{ needs.validate-tag.outputs.version }}
+      image_digest: ${{ steps.digest.outputs.digest }}
+      git_commit_sha: ${{ steps.commit.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Publicar image_repository como output do job
+        id: repo
+        run: echo "repository=${IMAGE_REPOSITORY}" >> "$GITHUB_OUTPUT"
+
+      - name: Resolver commit SHA exato
+        id: commit
+        run: echo "sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Build reproduzivel da imagem (Fase 07)
+        run: |
+          python scripts/build_release_image.py \
+            --registry "$(dirname "$IMAGE_REPOSITORY")" \
+            --repository "$(basename "$IMAGE_REPOSITORY")" \
+            --tag "${{ needs.validate-tag.outputs.version }}"
+
+      - name: Login no GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publicar imagem (tag SemVer + tag sha-<commit>)
+        run: |
+          set -e
+          IMAGE="${IMAGE_REPOSITORY}:${{ needs.validate-tag.outputs.version }}"
+          docker tag "$IMAGE" "${IMAGE_REPOSITORY}:sha-${{ steps.commit.outputs.sha }}"
+          docker push "$IMAGE"
+          docker push "${IMAGE_REPOSITORY}:sha-${{ steps.commit.outputs.sha }}"
+
+      - name: Capturar digest publicado
+        id: digest
+        run: |
+          set -e
+          DIGEST=$(docker image inspect "${IMAGE_REPOSITORY}:${{ needs.validate-tag.outputs.version }}" --format '{{index .RepoDigests 0}}' | cut -d@ -f2)
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+
+  # ---------------------------------------------------------------------
+  # Runner de producao (Secao 14): confirma explicitamente que existe um
+  # runner self-hosted online com os rotulos exigidos ANTES de enfileirar os
+  # jobs de producao, para falhar com mensagem clara em vez de ficar preso
+  # esperando um runner que nunca vai aparecer.
+  # ---------------------------------------------------------------------
+
+  check-production-runner:
+    name: Confirmar runner de producao disponivel
+    needs: build-and-publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Verificar runner self-hosted [production, deploy] online
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set +e
+          RESPONSE=$(gh api "repos/${{ github.repository }}/actions/runners" 2>runner_check_error.txt)
+          STATUS=$?
+          set -e
+          if [ $STATUS -ne 0 ]; then
+            echo "::warning::Nao foi possivel consultar a API de runners (permissao/plano insuficiente para GITHUB_TOKEN). $(cat runner_check_error.txt)"
+            echo "::warning::Prosseguindo sem confirmar o runner de producao -- se ele nao existir, os proximos jobs ficarao presos aguardando; registre um self-hosted runner rotulado 'self-hosted, production, deploy' antes de disparar esta release."
+            exit 0
+          fi
+          ONLINE=$(echo "$RESPONSE" | python -c "
+          import json, sys
+          data = json.load(sys.stdin)
+          runners = data.get('runners', [])
+          for runner in runners:
+              labels = {label['name'] for label in runner.get('labels', [])}
+              if runner.get('status') == 'online' and {'production', 'deploy'}.issubset(labels):
+                  print('yes'); break
+          else:
+              print('no')
+          ")
+          if [ "$ONLINE" != "yes" ]; then
+            echo "::error::Nenhum runner self-hosted online com os rotulos 'production'+'deploy' foi encontrado. Registre o runner de producao antes de liberar esta release."
+            exit 1
+          fi
+          echo "Runner de producao confirmado online."
+
+  # ---------------------------------------------------------------------
+  # PRECHECK -> DEPLOY -> VERIFY -> ROLLBACK (Secoes 15-22): somente no
+  # runner autorizado, dentro do environment "production" e serializados
+  # pelo mesmo grupo de concorrencia (Secao 8/9).
+  # ---------------------------------------------------------------------
+
+  precheck:
+    name: PRECHECK
+    needs: [build-and-publish, check-production-runner]
+    runs-on: [self-hosted, production, deploy]
+    environment: production
+    concurrency:
+      group: production-deploy
+      cancel-in-progress: false
+    outputs:
+      deployment_id: ${{ steps.precheck.outputs.deployment_id }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: PRECHECK (Secao 15)
+        id: precheck
+        run: |
+          set -e
+          python scripts/deployment/precheck.py \
+            --target-version "${{ needs.build-and-publish.outputs.image_tag }}" \
+            --image-repository "${{ needs.build-and-publish.outputs.image_repository }}" \
+            --image-tag "${{ needs.build-and-publish.outputs.image_tag }}" \
+            --image-digest "${{ needs.build-and-publish.outputs.image_digest }}" \
+            --git-commit-sha "${{ needs.build-and-publish.outputs.git_commit_sha }}" \
+            --workflow-run-id "${{ github.run_id }}" \
+            --output deployment-metadata.json | tee precheck_output.txt
+          DEPLOYMENT_ID=$(grep '^deployment_id=' precheck_output.txt | cut -d= -f2)
+          echo "deployment_id=$DEPLOYMENT_ID" >> "$GITHUB_OUTPUT"
+      - name: Publicar artefato de deployment (Secao 13)
+        uses: actions/upload-artifact@v4
+        with:
+          name: deployment-metadata
+          path: deployment-metadata.json
+          retention-days: 90
+
+  deploy:
+    name: DEPLOY (backup -> migration -> troca de container)
+    needs: precheck
+    runs-on: [self-hosted, production, deploy]
+    environment: production
+    concurrency:
+      group: production-deploy
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: deployment-metadata
+      - name: DEPLOY (Secoes 16-19)
+        env:
+          DEPLOY_CONTAINER_ENV_DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
+          DEPLOY_CONTAINER_ENV_SECRET_KEY: ${{ secrets.PROD_SECRET_KEY }}
+          DEPLOY_CONTAINER_ENV_PROVISIONING_SECRET: ${{ secrets.PROD_PROVISIONING_SECRET }}
+          DEPLOY_CONTAINER_ENV_NOMUS_ENCRYPTION_KEY: ${{ secrets.PROD_NOMUS_ENCRYPTION_KEY }}
+          DEPLOY_CONTAINER_ENV_APP_ENV: production
+          DEPLOY_CONTAINER_ENV_OPERATIONAL_COMPANY_CODE: ${{ secrets.PROD_OPERATIONAL_COMPANY_CODE }}
+          DEPLOY_CONTAINER_ENV_OPERATIONAL_COMPANY_NAME: ${{ secrets.PROD_OPERATIONAL_COMPANY_NAME }}
+          DEPLOY_CONTAINER_ENV_OPERATIONAL_ENVIRONMENT_TYPE: production
+          DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
+        run: |
+          python scripts/deployment/run_deploy.py \
+            --metadata deployment-metadata.json \
+            --container-name "${{ vars.PROD_CONTAINER_NAME || 'controle_producao_api' }}" \
+            --network "${{ vars.PROD_DOCKER_NETWORK }}"
+
+  verify:
+    name: VERIFY (readiness + smoke)
+    needs: [precheck, deploy]
+    runs-on: [self-hosted, production, deploy]
+    environment: production
+    concurrency:
+      group: production-deploy
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: deployment-metadata
+      - name: VERIFY (Secoes 20-21)
+        env:
+          DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
+        run: |
+          python scripts/deployment/run_verify.py \
+            --metadata deployment-metadata.json \
+            --container-name "${{ vars.PROD_CONTAINER_NAME || 'controle_producao_api' }}" \
+            --base-url "${{ vars.PROD_HEALTH_BASE_URL || 'http://127.0.0.1:8000' }}"
+
+  rollback:
+    name: ROLLBACK (se VERIFY/DEPLOY falharem)
+    needs: [precheck, deploy, verify]
+    if: ${{ always() && needs.precheck.result == 'success' && (needs.deploy.result == 'failure' || needs.verify.result == 'failure') }}
+    runs-on: [self-hosted, production, deploy]
+    environment: production
+    concurrency:
+      group: production-deploy
+      cancel-in-progress: false
+    outputs:
+      rollback_deployment_id: ${{ steps.rollback.outputs.rollback_deployment_id }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: ROLLBACK (Secao 22, mecanismo oficial da Fase 08)
+        id: rollback
+        env:
+          ROLLBACK_CONTAINER_ENV_DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
+          ROLLBACK_CONTAINER_ENV_SECRET_KEY: ${{ secrets.PROD_SECRET_KEY }}
+          ROLLBACK_CONTAINER_ENV_PROVISIONING_SECRET: ${{ secrets.PROD_PROVISIONING_SECRET }}
+          ROLLBACK_CONTAINER_ENV_NOMUS_ENCRYPTION_KEY: ${{ secrets.PROD_NOMUS_ENCRYPTION_KEY }}
+          ROLLBACK_CONTAINER_ENV_APP_ENV: production
+          ROLLBACK_CONTAINER_ENV_OPERATIONAL_COMPANY_CODE: ${{ secrets.PROD_OPERATIONAL_COMPANY_CODE }}
+          ROLLBACK_CONTAINER_ENV_OPERATIONAL_COMPANY_NAME: ${{ secrets.PROD_OPERATIONAL_COMPANY_NAME }}
+          ROLLBACK_CONTAINER_ENV_OPERATIONAL_ENVIRONMENT_TYPE: production
+          DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
+        run: |
+          set +e
+          python scripts/run_rollback.py \
+            --reason "VERIFY/DEPLOY falhou no workflow ${{ github.run_id }}" \
+            --failed-deployment-id "${{ needs.precheck.outputs.deployment_id }}" \
+            --source github-actions | tee rollback_output.txt
+          STATUS=$?
+          ROLLBACK_ID=$(grep '^deployment_id=' rollback_output.txt | tail -n1 | cut -d= -f2)
+          echo "rollback_deployment_id=$ROLLBACK_ID" >> "$GITHUB_OUTPUT"
+          # Rollback inseguro/impossivel (Secao 22: "NAO improvisar downgrade") e um
+          # resultado VALIDO deste job -- o incidente e reportado no summary, nao
+          # mascarado como sucesso do job nem tratado como bug do workflow.
+          exit 0
+
+  summary:
+    name: Resumo do deployment
+    needs: [precheck, deploy, verify, rollback]
+    if: always()
+    runs-on: [self-hosted, production, deploy]
+    environment: production
+    concurrency:
+      group: production-deploy
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resultado estruturado (Secoes 23/25)
+        run: |
+          python scripts/deployment/summarize.py \
+            --deployment-id "${{ needs.precheck.outputs.deployment_id }}" \
+            --rollback-deployment-id "${{ needs.rollback.outputs.rollback_deployment_id }}" \
+            --output-json deployment-result.json \
+            --output-markdown deployment-result.md
+          cat deployment-result.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Publicar resultado estruturado
+        uses: actions/upload-artifact@v4
+        with:
+          name: deployment-result
+          path: deployment-result.json
+          retention-days: 90

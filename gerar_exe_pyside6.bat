@@ -1,4 +1,9 @@
 @echo off
+rem ATENCAO (Fase 07 - Instalador e Atualizacao): este script gera o build a
+rem partir de "Controle Producao 2.0.spec", que NAO e o spec oficial usado
+rem pelo instalador/Updater (esse e "ControleProducao.spec" -- ver
+rem docs\architecture\UPDATER_DESKTOP.md). Para gerar um instalador oficial,
+rem use "py -m PyInstaller ControleProducao.spec --clean --noconfirm".
 cd /d "%~dp0"
 set "PYTHON_EXE=%LOCALAPPDATA%\Programs\Python\Python311\python.exe"
 set "PYTHON_ARGS="

@@ -1,14 +1,24 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta
+from pathlib import Path
+import re
+
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QAbstractItemView, QApplication, QComboBox, QDialog, QFrame, QGridLayout, QHBoxLayout,
-    QHeaderView, QLineEdit, QLabel, QMessageBox, QScrollArea, QSpinBox,
+    QAbstractItemView, QComboBox, QDialog, QFileDialog, QFrame, QGridLayout, QHBoxLayout,
+    QApplication, QHeaderView, QLineEdit, QLabel, QMessageBox, QScrollArea, QSpinBox,
     QStyledItemDelegate, QTableWidget, QTableWidgetItem, QTextEdit, QVBoxLayout, QWidget,
 )
 
 from app.ui.components.modern_button import ModernButton
+from app.ui.dialog_utils import apply_large_dialog_geometry, style_dialog_from_parent
+from app.ui.item_flow_dialog import FLOW_OPTIONS
+from app.ui.nomus_api_import_dialog import NomusApiImportDialog
+from app.ui.nomus_batch_import_dialog import NomusBatchImportDialog
+from app.ui.nomus_batch_conference_dialog import NomusBatchConferenceDialog
 from app.ui.proposal_import_dialog import ProposalImportDialog
+from app.ui.table_utils import configure_wrapping_table, resize_rows_to_contents
 
 
 class ItemEditorDelegate(QStyledItemDelegate):
@@ -30,21 +40,26 @@ class ProcessFormDialog(QDialog):
         self.process_id = process_id
         self.initial_data = initial_data or {}
         self.import_metadata: dict | None = None
+        self.import_source = "MANUAL"
         self.is_partial = False
         self.items_locked = False
+        self._saving = False
+        self.reason_options = [("", "-")]
         self.setWindowTitle("Proposta")
-        self.setMinimumSize(680, 540)
-        screen = parent.screen() if parent and hasattr(parent, "screen") else QApplication.primaryScreen()
-        available = screen.availableGeometry() if screen else None
-        if available:
-            dialog_width = min(900, max(680, int(available.width() * 0.78)))
-            dialog_height = min(690, max(540, int(available.height() * 0.88)))
-            self.setMaximumHeight(max(540, available.height() - 20))
-            self.resize(dialog_width, dialog_height)
-        else:
-            self.resize(860, 650)
+        apply_large_dialog_geometry(self, parent)
+        style_dialog_from_parent(self, parent)
         self.fields: dict[str, QLineEdit | QTextEdit | QComboBox] = {}
         self._build()
+        if hasattr(self.service, "item_no_production_reasons"):
+            self.reason_options = [("", "-")] + self.service.item_no_production_reasons()
+        else:
+            self.reason_options = [
+                ("", "-"),
+                ("pronta_entrega", "Pronta entrega"),
+                ("comprado_terceiro", "Comprado de terceiro"),
+                ("terceirizado", "Terceirizado"),
+                ("outro", "Outro"),
+            ]
         if process_id:
             self._load(process_id)
         elif self.initial_data:
@@ -70,10 +85,25 @@ class ProcessFormDialog(QDialog):
         heading_row.addWidget(heading)
         heading_row.addStretch()
         if not self.process_id:
-            import_button = ModernButton("Conferir PDF Nomus", "pdf")
-            import_button.setToolTip("Abrir conferencia sem gravar dados no cadastro")
+            import_button = ModernButton("Importar PDF Nomus", "pdf")
+            import_button.setToolTip("Selecionar PDF Nomus e preencher o cadastro para revisao antes de salvar")
             import_button.clicked.connect(self.open_nomus_preview)
             heading_row.addWidget(import_button)
+            api_import_button = ModernButton("Importar do Nomus", "search")
+            api_import_button.setToolTip("Buscar dados operacionais na API Nomus para conferencia")
+            api_import_button.clicked.connect(self.open_nomus_api_preview)
+            api_enabled, api_reason = self._nomus_api_import_available()
+            api_import_button.setEnabled(api_enabled)
+            if api_reason:
+                api_import_button.setToolTip(api_reason)
+            heading_row.addWidget(api_import_button)
+            batch_import_button = ModernButton("Importar lote Nomus", "batch")
+            batch_import_button.setToolTip("Localizar varias propostas do Nomus sem salvar automaticamente")
+            batch_import_button.clicked.connect(self.open_nomus_batch_import)
+            batch_import_button.setEnabled(api_enabled)
+            if api_reason:
+                batch_import_button.setToolTip(api_reason)
+            heading_row.addWidget(batch_import_button)
         caption = QLabel("Preencha os dados gerais e organize os itens que compoem a proposta.")
         caption.setObjectName("Caption")
         self.import_notice = QLabel("")
@@ -90,7 +120,7 @@ class ProcessFormDialog(QDialog):
         grid.setVerticalSpacing(7)
         fields = [
             ("cliente", "Cliente *"), ("proposta", "Proposta *"),
-            ("pedido_compra", "OC/Pedido"), ("obra_site", "Obra/Site"),
+            ("pedido_compra", "PD / Pedido de venda"), ("obra_site", "Obra/Site"),
             ("peso", "Peso total (kg)"), ("lote", "Lote"),
             ("data_entrada", "Entrada"), ("prazo_entrega", "Prazo"),
         ]
@@ -163,18 +193,27 @@ class ProcessFormDialog(QDialog):
         item_actions.addStretch()
         items_panel.layout().addLayout(item_actions)
 
-        self.items_table = QTableWidget(0, 4)
-        self.items_table.setHorizontalHeaderLabels(["Item", "Descricao", "Quantidade", "Peso unit. (kg)"])
+        self.items_table = QTableWidget(0, 9)
+        self.items_table.setHorizontalHeaderLabels([
+            "Item", "Codigo", "Descricao", "Quantidade", "Peso unit. (kg)",
+            "Produzir", "Motivo", "Galvanizar", "Obs. fluxo",
+        ])
         self.items_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        self.items_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
-        self.items_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self.items_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self.items_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
         self.items_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        self.items_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        self.items_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeToContents)
+        self.items_table.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeToContents)
+        self.items_table.horizontalHeader().setSectionResizeMode(7, QHeaderView.ResizeToContents)
+        self.items_table.horizontalHeader().setSectionResizeMode(8, QHeaderView.Stretch)
         self.items_table.verticalHeader().setVisible(False)
         self.items_table.verticalHeader().setDefaultSectionSize(38)
         self.items_table.setItemDelegate(ItemEditorDelegate(self.items_table))
         self.items_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.items_table.setAlternatingRowColors(True)
         self.items_table.setMinimumHeight(230)
+        configure_wrapping_table(self.items_table, description_columns=(2,), code_columns=(1,), min_row_height=48)
         self.items_table.itemChanged.connect(self.update_items_total)
         items_panel.layout().addWidget(self.items_table)
         body.addWidget(items_panel, 1)
@@ -186,13 +225,13 @@ class ProcessFormDialog(QDialog):
         footer.setMaximumHeight(52)
         actions = QHBoxLayout()
         actions.setContentsMargins(12, 8, 12, 8)
-        save = ModernButton("Salvar", "status", accent=True)
+        self.save_button = ModernButton("Salvar", "status", accent=True)
         cancel = ModernButton("Cancelar", "clear")
-        save.clicked.connect(self.save)
+        self.save_button.clicked.connect(self.save)
         cancel.clicked.connect(self.reject)
         actions.addStretch()
         actions.addWidget(cancel)
-        actions.addWidget(save)
+        actions.addWidget(self.save_button)
         footer.setLayout(actions)
         root.addWidget(scroll, 1)
         root.addWidget(footer)
@@ -209,16 +248,91 @@ class ProcessFormDialog(QDialog):
         return frame
 
     def open_nomus_preview(self):
-        dialog = ProposalImportDialog(self)
-        if dialog.exec() == QDialog.Accepted and dialog.prepared_data:
-            self.apply_import_data(dialog.prepared_data)
+        if hasattr(self.service, "can_edit_process") and not self.service.can_edit_process():
+            QMessageBox.warning(
+                self,
+                "Importar proposta Nomus",
+                "Seu usuario pode visualizar, mas nao importar/cadastrar propostas.",
+            )
+            return
+        start = str(Path.home() / "Downloads")
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Selecionar proposta Nomus",
+            start,
+            "Documentos PDF (*.pdf)",
+        )
+        if not path:
+            return
+        importer = ProposalImportDialog(self, allow_pdf_selection=False)
+        if not importer.load_pdf(path):
+            return
+        self._transfer_import_dialog_data(importer)
+
+    def open_nomus_api_preview(self):
+        lookup = NomusApiImportDialog(self)
+        if lookup.exec() != QDialog.Accepted or not lookup.preview_payload:
+            return
+        importer = ProposalImportDialog(
+            self,
+            initial_data=lookup.preview_payload,
+            standard_result=lookup.standard_result,
+            source_label="Origem dos dados",
+            allow_pdf_selection=False,
+        )
+        self._transfer_import_dialog_data(importer)
+
+    def open_nomus_batch_import(self):
+        lookup = NomusBatchImportDialog(self)
+        if lookup.exec() != QDialog.Accepted:
+            return
+        self.last_nomus_batch_result = lookup.batch_result
+        self.last_nomus_batch_ready_results = list(lookup.ready_results)
+        ready_count = len(self.last_nomus_batch_ready_results)
+        if lookup.batch_result is None:
+            return
+        conference = NomusBatchConferenceDialog(lookup.batch_result, self.service, self)
+        conference.exec()
+        self.last_nomus_batch_persistence_result = conference.persistence_result
+        persisted = list(conference.persistence_results.values())
+        saved = len([result for result in persisted if result.success])
+        existing = len([result for result in persisted if result.status.value == "ALREADY_EXISTS"])
+        failed = len([result for result in persisted if result.status.value == "FAILED"])
+        if persisted:
+            notice = f"Lote Nomus finalizado: {saved} gravada(s), {existing} ja cadastrada(s), {failed} falha(s)."
+        else:
+            notice = f"Lote Nomus preparado com {ready_count} proposta(s), sem gravacao confirmada."
+        self.import_notice.setText(notice)
+        self.import_notice.show()
+
+    def _transfer_import_dialog_data(self, importer: ProposalImportDialog) -> bool:
+        """Extract and validate data from a headless import dialog, then fill the form directly."""
+        importer.validate_import()
+        data = importer.prepared_data or importer.collect_data()
+        return self.apply_import_data(data)
+
+    def _nomus_api_import_available(self) -> tuple[bool, str]:
+        if hasattr(self.service, "can_edit_process") and not self.service.can_edit_process():
+            return False, "Seu usuario pode visualizar, mas nao importar/cadastrar propostas."
+        try:
+            from app.services.nomus_api_config import NomusApiConfigStore
+
+            settings = NomusApiConfigStore().load_settings()
+        except Exception:
+            return False, "Configure a integracao Nomus nas Configuracoes antes de usar a importacao."
+        if not settings.enabled:
+            return False, "A integracao Nomus esta desativada nas Configuracoes."
+        if not settings.base_url:
+            return False, "Configure a URL da API Nomus antes de importar."
+        if not settings.api_key_configured:
+            return False, "Configure a chave da API Nomus antes de importar."
+        return True, ""
 
     def apply_import_data(self, data: dict, confirm_overwrite=None) -> bool:
         """Transfer reviewed operational data without saving the process."""
         required = {
             "proposal_number": "Proposta",
             "client": "Cliente",
-            "site": "Obra/Site",
             "proposal_date": "Data da proposta",
         }
         missing = [label for key, label in required.items() if not str(data.get(key) or "").strip()]
@@ -244,6 +358,8 @@ class ProcessFormDialog(QDialog):
         conflicts: list[str] = []
         for source, target in field_map.items():
             value = str(data.get(source) or "").strip()
+            if source == "proposal_date":
+                value = self._format_date_for_display(value)
             if not value:
                 continue
             incoming[target] = value
@@ -255,13 +371,17 @@ class ProcessFormDialog(QDialog):
                     conflicts.append(f"{target.replace('_', ' ').title()}: '{current}' sera substituido por '{value}'")
 
         deadline = str(data.get("delivery_deadline_raw") or "").strip()
-        deadline_pending = bool(data.get("delivery_deadline_needs_confirmation"))
-        if deadline and not deadline_pending:
-            incoming["prazo_entrega"] = deadline
+        deadline_display, deadline_pending = self._deadline_for_registration(
+            deadline,
+            data.get("proposal_date"),
+            bool(data.get("delivery_deadline_needs_confirmation")),
+        )
+        if deadline_display and not deadline_pending:
+            incoming["prazo_entrega"] = deadline_display
             current_deadline = self.fields["prazo_entrega"].text().strip()
-            if current_deadline and current_deadline != deadline:
+            if current_deadline and current_deadline != deadline_display:
                 conflicts.append(
-                    f"Prazo Entrega: '{current_deadline}' sera substituido por '{deadline}'"
+                    f"Prazo Entrega: '{current_deadline}' sera substituido por '{deadline_display}'"
                 )
 
         if self.items_table.rowCount():
@@ -296,6 +416,10 @@ class ProcessFormDialog(QDialog):
         for target, value in incoming.items():
             self.fields[target].setText(value)
 
+        source = str(data.get("source") or "nomus_pdf").lower()
+        source_name = "Nomus API" if source == "nomus_api" else "PDF"
+        self.import_source = "NOMUS_API" if source == "nomus_api" else "NOMUS_PDF"
+
         self.items_table.setRowCount(0)
         pending_weights = 0
         for item in items:
@@ -303,16 +427,17 @@ class ProcessFormDialog(QDialog):
             weight_text = "" if weight is None else f"{float(weight):g}"
             self.add_item(
                 str(item.get("item_number") or ""),
+                str(item.get("product_code") or "-"),
                 str(item.get("description") or ""),
                 str(item.get("quantity") or 1),
                 weight_text,
             )
             if weight is None:
                 pending_weights += 1
-                weight_cell = self.items_table.item(self.items_table.rowCount() - 1, 3)
+                weight_cell = self.items_table.item(self.items_table.rowCount() - 1, 4)
                 if weight_cell:
                     weight_cell.setToolTip(
-                        "Peso nao informado no PDF; precisa de conferencia antes do cadastro."
+                        f"Peso nao informado no {source_name}; dado auxiliar que pode ser preenchido depois."
                     )
 
         if pending_weights:
@@ -320,7 +445,7 @@ class ProcessFormDialog(QDialog):
         else:
             self.update_items_total()
 
-        notices = ["Dados do PDF apenas preenchidos no formulario; clique em Salvar para cadastrar."]
+        notices = [f"Dados do {source_name} apenas preenchidos no formulario; clique em Salvar para cadastrar."]
         if deadline_pending:
             notices.append(
                 f"Prazo '{deadline}' nao foi transferido porque ainda precisa de confirmacao."
@@ -330,37 +455,137 @@ class ProcessFormDialog(QDialog):
             )
         if pending_weights:
             notices.append(
-                f"{pending_weights} item(ns) permanecem sem peso e precisam de conferencia."
+                f"{pending_weights} item(ns) permanecem sem peso; isso nao impede o cadastro nem a movimentacao."
             )
         self.import_notice.setText(" ".join(notices))
         self.import_notice.show()
-        self.import_metadata = {
-            "origem": "NOMUS_PDF",
-            "nome_arquivo": str(data.get("source_file_name") or "").strip(),
-            "hash_sha256": str(data.get("source_file_sha256") or "").strip().lower(),
-            "observacao": "; ".join(
-                part for part in (
-                    f"Prazo relativo pendente: {deadline}" if deadline_pending else "",
-                    f"Itens sem peso confirmado: {pending_weights}" if pending_weights else "",
-                ) if part
-            ),
-        }
+        if source == "nomus_pdf":
+            self.import_metadata = {
+                "origem": "NOMUS_PDF",
+                "nome_arquivo": str(data.get("source_file_name") or "").strip(),
+                "hash_sha256": str(data.get("source_file_sha256") or "").strip().lower(),
+                "observacao": "; ".join(
+                    part for part in (
+                        f"Prazo relativo pendente: {deadline}" if deadline_pending else "",
+                        f"Itens sem peso confirmado: {pending_weights}" if pending_weights else "",
+                    ) if part
+                ),
+            }
+        else:
+            self.import_metadata = None
         return True
 
-    def add_item(self, number: str = "", description: str = "", quantity: str = "1", weight: str = ""):
+    @staticmethod
+    def _format_date_for_display(value: str) -> str:
+        text = str(value or "").strip()
+        if not text:
+            return ""
+        for pattern in ("%Y-%m-%d", "%d/%m/%Y"):
+            try:
+                return datetime.strptime(text, pattern).strftime("%d/%m/%Y")
+            except ValueError:
+                pass
+        return text
+
+    @classmethod
+    def _deadline_for_registration(
+        cls,
+        deadline: str,
+        proposal_date: str,
+        pending: bool,
+    ) -> tuple[str, bool]:
+        calculated = cls._calculate_relative_deadline(deadline, proposal_date)
+        if calculated:
+            return calculated, False
+        display = cls._format_date_for_display(deadline)
+        return display, bool(pending and not cls._is_definitive_date(display))
+
+    @classmethod
+    def _calculate_relative_deadline(cls, deadline: str, proposal_date: str) -> str:
+        match = re.fullmatch(r"(\d+)\s*DIAS?", str(deadline or "").strip(), flags=re.IGNORECASE)
+        if not match:
+            return ""
+        base_date = cls._parse_date_value(proposal_date)
+        if not base_date:
+            return ""
+        return (base_date + timedelta(days=int(match.group(1)))).strftime("%d/%m/%Y")
+
+    @staticmethod
+    def _parse_date_value(value: str):
+        text = str(value or "").strip()
+        for pattern in ("%Y-%m-%d", "%d/%m/%Y"):
+            try:
+                return datetime.strptime(text, pattern).date()
+            except ValueError:
+                pass
+        return None
+
+    @staticmethod
+    def _is_definitive_date(value: str) -> bool:
+        for pattern in ("%Y-%m-%d", "%d/%m/%Y"):
+            try:
+                datetime.strptime(str(value or "").strip(), pattern)
+                return True
+            except ValueError:
+                pass
+        return False
+
+    def _flow_combo(self, value: str = "indefinido") -> QComboBox:
+        combo = QComboBox()
+        for data, label in FLOW_OPTIONS:
+            combo.addItem(label, data)
+        combo.setCurrentIndex(max(0, combo.findData(value or "indefinido")))
+        return combo
+
+    def _reason_combo(self, value: str = "") -> QComboBox:
+        combo = QComboBox()
+        for data, label in self.reason_options:
+            combo.addItem(label, data)
+        combo.setCurrentIndex(max(0, combo.findData(value or "")))
+        return combo
+
+    def add_item(
+        self,
+        number: str = "",
+        code: str = "",
+        description: str = "",
+        quantity: str = "1",
+        weight: str = "",
+        produce: str = "indefinido",
+        reason: str = "",
+        galvanize: str = "indefinido",
+        flow_note: str = "",
+        api_id: int | None = None,
+        api_version: int | None = None,
+    ):
         self.items_table.blockSignals(True)
         row = self.items_table.rowCount()
         self.items_table.insertRow(row)
-        self.items_table.setItem(row, 0, QTableWidgetItem(number or str(row + 1)))
-        self.items_table.setItem(row, 1, QTableWidgetItem(description))
+        number_item = QTableWidgetItem(number or str(row + 1))
+        number_item.setData(Qt.UserRole, api_id)
+        number_item.setData(Qt.UserRole + 1, api_version)
+        self.items_table.setItem(row, 0, number_item)
+        code_item = QTableWidgetItem(code or "-")
+        code_item.setTextAlignment(Qt.AlignCenter)
+        self.items_table.setItem(row, 1, code_item)
+        description_item = QTableWidgetItem(description)
+        description_item.setTextAlignment(Qt.AlignTop | Qt.AlignLeft)
+        self.items_table.setItem(row, 2, description_item)
         quantity_item = QTableWidgetItem(quantity or "1")
         quantity_item.setTextAlignment(Qt.AlignCenter)
-        self.items_table.setItem(row, 2, quantity_item)
+        self.items_table.setItem(row, 3, quantity_item)
         weight_item = QTableWidgetItem(weight)
         weight_item.setTextAlignment(Qt.AlignCenter)
-        self.items_table.setItem(row, 3, weight_item)
+        self.items_table.setItem(row, 4, weight_item)
+        self.items_table.setCellWidget(row, 5, self._flow_combo(produce))
+        self.items_table.setCellWidget(row, 6, self._reason_combo(reason))
+        self.items_table.setCellWidget(row, 7, self._flow_combo(galvanize))
+        note = QLineEdit(flow_note)
+        note.setPlaceholderText("Opcional")
+        self.items_table.setCellWidget(row, 8, note)
         self.items_table.blockSignals(False)
         self.item_quantity.setValue(self.items_table.rowCount())
+        resize_rows_to_contents(self.items_table)
         self.update_items_total()
 
     def remove_item(self):
@@ -381,22 +606,32 @@ class ProcessFormDialog(QDialog):
     def update_items_total(self, *_args):
         units = 0
         total_weight = 0.0
+        known_weights = 0
+        total_items = self.items_table.rowCount()
         for row in range(self.items_table.rowCount()):
-            quantity_cell = self.items_table.item(row, 2)
-            weight_cell = self.items_table.item(row, 3)
+            quantity_cell = self.items_table.item(row, 3)
+            weight_cell = self.items_table.item(row, 4)
             try:
                 quantity = max(0, int((quantity_cell.text() if quantity_cell else "1") or 1))
             except ValueError:
                 quantity = 0
+            weight = None
             try:
-                weight = float(((weight_cell.text() if weight_cell else "") or "0").replace(",", "."))
+                text = (weight_cell.text() if weight_cell else "").strip().replace(",", ".")
+                parsed = float(text) if text else None
+                weight = parsed if parsed is not None and parsed > 0 else None
             except ValueError:
-                weight = 0
+                pass
             units += quantity
-            total_weight += quantity * weight
-        self.items_total.setText(f"{units} unidade(s) | {total_weight:g} kg")
-        if self.items_table.rowCount() and total_weight > 0:
+            if weight is not None:
+                total_weight += quantity * weight
+                known_weights += 1
+        weight_label = f"{total_weight:g} kg conhecidos" if known_weights else "peso nao informado"
+        self.items_total.setText(f"{units} unidade(s) | {weight_label} | cobertura {known_weights}/{total_items}")
+        if total_items and known_weights == total_items:
             self.fields["peso"].setText(f"{total_weight:g}")
+        else:
+            self.fields["peso"].clear()
 
     def _load(self, process_id: int):
         row = self.service.get_process_dict(process_id)
@@ -424,9 +659,16 @@ class ProcessFormDialog(QDialog):
             for item in loaded_items:
                 self.add_item(
                     str(item.get("numero_item") or ""),
+                    str(item.get("codigo_produto") or item.get("product_code") or "-"),
                     item.get("descricao") or "",
                     str(item.get("quantidade") or 1),
                     str(item.get("peso") or ""),
+                    str(item.get("produzir_internamente") or "indefinido"),
+                    str(item.get("motivo_nao_produzir") or ""),
+                    str(item.get("precisa_galvanizacao") or "indefinido"),
+                    str(item.get("observacao_fluxo_item") or ""),
+                    int(item.get("api_id") or item.get("id") or 0) or None,
+                    int(item.get("api_version") or 0) or None,
                 )
         self.item_quantity.setValue(self.items_table.rowCount())
         editable_items = not self.is_partial and not self.items_locked
@@ -450,18 +692,42 @@ class ProcessFormDialog(QDialog):
             items = []
             for row in range(self.items_table.rowCount()):
                 number = self.items_table.item(row, 0)
-                description = self.items_table.item(row, 1)
-                quantity = self.items_table.item(row, 2)
-                weight = self.items_table.item(row, 3)
+                code = self.items_table.item(row, 1)
+                description = self.items_table.item(row, 2)
+                quantity = self.items_table.item(row, 3)
+                weight = self.items_table.item(row, 4)
+                produce = self.items_table.cellWidget(row, 5)
+                reason = self.items_table.cellWidget(row, 6)
+                galvanize = self.items_table.cellWidget(row, 7)
+                flow_note = self.items_table.cellWidget(row, 8)
                 items.append({
+                    "api_id": number.data(Qt.UserRole) if number else None,
+                    "api_version": number.data(Qt.UserRole + 1) if number else None,
                     "numero_item": number.text().strip() if number else str(row + 1),
+                    "codigo_produto": code.text().strip() if code else "",
                     "descricao": description.text().strip() if description else "",
                     "quantidade": quantity.text().strip() if quantity else "1",
                     "peso": weight.text().strip() if weight else "",
+                    "produzir_internamente": produce.currentData() if isinstance(produce, QComboBox) else "indefinido",
+                    "motivo_nao_produzir": reason.currentData() if isinstance(reason, QComboBox) else "",
+                    "precisa_galvanizacao": galvanize.currentData() if isinstance(galvanize, QComboBox) else "indefinido",
+                    "observacao_fluxo_item": flow_note.text().strip() if isinstance(flow_note, QLineEdit) else "",
                 })
             data["itens"] = items
+        data["_import_source"] = self.import_source
         try:
+            if self._saving:
+                return
+            self._set_saving(True)
             self.service.save_process(data, self.process_id, self.import_metadata)
             self.accept()
         except Exception as exc:
             QMessageBox.warning(self, "Salvar proposta", str(exc))
+        finally:
+            self._set_saving(False)
+
+    def _set_saving(self, saving: bool):
+        self._saving = saving
+        self.save_button.setEnabled(not saving)
+        self.save_button.setText("Salvando..." if saving else "Salvar")
+        QApplication.processEvents()

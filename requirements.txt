@@ -1,3 +1,15 @@
 PySide6>=6.7
 pyinstaller>=6.0
 pdfplumber>=0.11,<1
+PyMuPDF>=1.24,<2
+Pillow>=10,<12
+fastapi>=0.115,<1
+uvicorn[standard]>=0.30,<1
+SQLAlchemy>=2.0,<3
+asyncpg>=0.29,<1
+alembic>=1.13,<2
+pydantic-settings>=2.4,<3
+httpx>=0.27,<1
+argon2-cffi>=23.1,<26
+PyJWT>=2.8,<3
+winotify>=1.1,<2; sys_platform == "win32"

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QDialog, QLabel, QLineEdit, QVBoxLayout
+from PySide6.QtWidgets import QCheckBox, QDialog, QLabel, QLineEdit, QVBoxLayout
 
+from app.services.login_preferences import load_login_preferences, save_login_preferences
 from app.ui.app_icon import app_icon
 from app.ui.components.modern_button import ModernButton
 
@@ -14,6 +15,7 @@ class LoginDialog(QDialog):
         self.setWindowTitle("Login")
         self.setWindowIcon(app_icon())
         self.setMinimumWidth(420)
+        self.preferences = load_login_preferences()
         self._build()
 
     def _build(self):
@@ -28,10 +30,13 @@ class LoginDialog(QDialog):
         self.error.setObjectName("ErrorText")
         self.login = QLineEdit()
         self.login.setPlaceholderText("Usuario")
-        self.login.setText("admin")
+        remembered_login = str(self.preferences.get("last_user") or "")
+        self.login.setText(remembered_login)
         self.password = QLineEdit()
         self.password.setPlaceholderText("Senha")
         self.password.setEchoMode(QLineEdit.Password)
+        self.remember_user = QCheckBox("Lembrar meu usuário")
+        self.remember_user.setChecked(bool(self.preferences.get("remember_user")) and bool(remembered_login))
         enter = ModernButton("Entrar", "status", accent=True)
         enter.clicked.connect(self.try_login)
         layout.addWidget(title)
@@ -39,11 +44,18 @@ class LoginDialog(QDialog):
         layout.addSpacing(8)
         layout.addWidget(self.login)
         layout.addWidget(self.password)
+        layout.addWidget(self.remember_user)
         layout.addWidget(self.error)
         layout.addWidget(enter, alignment=Qt.AlignRight)
+        if remembered_login:
+            self.password.setFocus()
+        else:
+            self.login.setFocus()
 
     def try_login(self):
-        if self.service.authenticate(self.login.text(), self.password.text()):
+        login = self.login.text().strip()
+        if self.service.authenticate(login, self.password.text()):
+            save_login_preferences(login, self.remember_user.isChecked())
             self.accept()
         else:
             self.error.setText("Usuario ou senha invalidos.")

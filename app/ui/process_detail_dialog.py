@@ -1,46 +1,55 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (
-    QAbstractItemView,
-    QApplication,
-    QDialog,
-    QFrame,
-    QGridLayout,
-    QHeaderView,
-    QHBoxLayout,
-    QLabel,
-    QScrollArea,
-    QTableWidget,
-    QTableWidgetItem,
-    QVBoxLayout,
-    QWidget,
-)
+from PySide6.QtCore import Signal
+from PySide6.QtWidgets import QDialog, QFrame, QHBoxLayout, QLabel, QTabWidget, QVBoxLayout
 
-from app.services.backend_adapter import legacy
+from app.services.app_logging import get_logger
+from app.ui.background_worker import start_worker
+from app.ui.components.frameless_dialog import apply_frameless_rounded_dialog
 from app.ui.components.modern_button import ModernButton
-from app.ui.icons import make_icon
+from app.ui.components.status_badge import StatusBadge
+from app.ui.dialog_utils import apply_large_dialog_geometry, style_dialog_from_parent
+from app.ui.format_utils import format_empty, format_proposal_header
+from app.ui.process_detail.cargas_tab import CargasTab
+from app.ui.process_detail.fiscal_entrega_tab import FiscalEntregaTab
+from app.ui.process_detail.fluxo_tab import FluxoTab
+from app.ui.process_detail.historico_tab import HistoricoTab
+from app.ui.process_detail.itens_tab import ItensTab
+from app.ui.process_detail.resumo_tab import ResumoTab
 from app.ui.process_form_dialog import ProcessFormDialog
-from app.ui.status_dialog import StatusDialog
+from app.ui.status_dialog import open_proposal_action_center
+from app.ui.styles import status_color
+
+log = get_logger("process_detail_dialog")
 
 
 class ProcessDetailDialog(QDialog):
-    def __init__(self, service, process_id: int, parent=None):
+    """Tela "Detalhes da proposta": cabecalho fixo (identificacao, etapa
+    atual e prazo, acoes Editar/Acoes/Fechar) + abas Resumo/Itens/Fluxo/
+    Cargas/Fiscal-Entrega/Historico. Cada aba e um widget proprio em
+    `app/ui/process_detail/` - este arquivo so monta o cabecalho, carrega os
+    dados ja existentes via `service` e distribui para cada aba, sem duplicar
+    nenhuma regra de negocio."""
+
+    # Emitido ao final de cada load() (sucesso ou erro) -- usado por testes
+    # pra saber quando a busca em background terminou (mesmo padrao de
+    # QEventLoop de test_background_stability.py) e por quem mais quiser
+    # observar o ciclo de carga.
+    loaded = Signal()
+
+    def __init__(self, service, process_id: int, parent=None, process_ids: list[int] | None = None, area: str | None = None):
         super().__init__(parent)
         self.service = service
         self.process_id = process_id
+        self.process_ids = list(dict.fromkeys([int(process_id), *(int(value) for value in (process_ids or []) if value)]))
+        self.area = area
         self.changed = False
+        self.process: dict = {}
+        self._load_thread = None
         self.setWindowTitle("Detalhes da proposta")
-        self.setMinimumSize(900, 540)
-        screen = parent.screen() if parent and hasattr(parent, "screen") else QApplication.primaryScreen()
-        available = screen.availableGeometry() if screen else None
-        if available:
-            width = min(1080, max(900, int(available.width() * 0.82)))
-            height = min(680, max(540, int(available.height() * 0.88)))
-            self.setMaximumHeight(max(540, available.height() - 20))
-            self.resize(width, height)
-        else:
-            self.resize(1000, 650)
+        apply_large_dialog_geometry(self, parent)
+        style_dialog_from_parent(self, parent)
+        apply_frameless_rounded_dialog(self)
         self._build()
         self.load()
 
@@ -54,230 +63,127 @@ class ProcessDetailDialog(QDialog):
         header = QHBoxLayout(header_panel)
         header.setContentsMargins(16, 10, 12, 10)
         header.setSpacing(8)
+
         title_box = QVBoxLayout()
         title_box.setSpacing(2)
         self.title = QLabel("")
         self.title.setStyleSheet("font-size: 18px; font-weight: 800;")
         self.subtitle = QLabel("")
         self.subtitle.setObjectName("Caption")
-        edit = ModernButton("Editar", "edit")
-        status = ModernButton("Acoes", "status", accent=True)
-        close = ModernButton("Fechar", "clear")
-        edit.clicked.connect(self.edit_process)
-        status.clicked.connect(self.change_status)
-        close.clicked.connect(self.accept)
+        status_row = QHBoxLayout()
+        status_row.setSpacing(10)
+        self.status_badge = StatusBadge("", self.service.palette.get("surface_alt", "#e2e8f0"))
+        self.deadline_label = QLabel("")
+        self.deadline_label.setObjectName("Caption")
+        status_row.addWidget(self.status_badge)
+        status_row.addWidget(self.deadline_label)
+        status_row.addStretch(1)
         title_box.addWidget(self.title)
         title_box.addWidget(self.subtitle)
+        title_box.addLayout(status_row)
+
+        self.edit_button = ModernButton("Editar", "edit")
+        self.actions_button = ModernButton("Acoes", "status", accent=True)
+        close = ModernButton("Fechar", "clear")
+        self.edit_button.clicked.connect(self.edit_process)
+        self.actions_button.clicked.connect(self.change_status)
+        close.clicked.connect(self.accept)
         header.addLayout(title_box, 1)
         header.addStretch()
-        header.addWidget(edit)
-        header.addWidget(status)
+        header.addWidget(self.edit_button)
+        header.addWidget(self.actions_button)
         header.addWidget(close)
         root.addWidget(header_panel)
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        content = QWidget()
-        content_layout = QVBoxLayout(content)
-        content_layout.setContentsMargins(2, 2, 6, 8)
-        content_layout.setSpacing(12)
+        self.tabs = QTabWidget()
+        self.tabs.setObjectName("ModernTabs")
+        self.resumo_tab = ResumoTab(self.service)
+        self.itens_tab = ItensTab(self.service)
+        self.fluxo_tab = FluxoTab(self.service)
+        self.cargas_tab = CargasTab(self.service)
+        self.fiscal_entrega_tab = FiscalEntregaTab(self.service)
+        self.historico_tab = HistoricoTab(self.service)
+        self.tabs.addTab(self.resumo_tab, "Resumo")
+        self.tabs.addTab(self.itens_tab, "Itens")
+        self.tabs.addTab(self.fluxo_tab, "Fluxo")
+        self.tabs.addTab(self.cargas_tab, "Cargas")
+        self.tabs.addTab(self.fiscal_entrega_tab, "Fiscal/Entrega")
+        self.tabs.addTab(self.historico_tab, "Historico")
+        root.addWidget(self.tabs, 1)
 
-        body = QGridLayout()
-        body.setHorizontalSpacing(12)
-        body.setVerticalSpacing(12)
-        self.status_panel = self._panel("Status por area")
-        self.info_panel = self._panel("Resumo operacional")
-        body.addWidget(self.status_panel, 0, 0)
-        body.addWidget(self.info_panel, 0, 1)
-        body.setColumnStretch(0, 2)
-        body.setColumnStretch(1, 3)
-        content_layout.addLayout(body)
-
-        items_panel = self._panel("Itens da proposta")
-        self.items_summary = QLabel("0 item(ns)")
-        self.items_summary.setObjectName("Caption")
-        items_panel.layout().addWidget(self.items_summary)
-        self.items_table = QTableWidget(0, 8)
-        self.items_table.setHorizontalHeaderLabels(["Item", "Descricao", "Qtd.", "Peso unit.", "Processo", "Produzido", "Galvanizado", "Entregue"])
-        self.items_table.verticalHeader().setVisible(False)
-        self.items_table.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.items_table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.items_table.setAlternatingRowColors(True)
-        self.items_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
-        for col, width in enumerate((70, 250, 65, 90, 120, 90, 100, 90)):
-            self.items_table.setColumnWidth(col, width)
-        self.items_table.setMinimumHeight(150)
-        self.items_table.setMaximumHeight(240)
-        items_panel.layout().addWidget(self.items_table)
-        content_layout.addWidget(items_panel)
-
-        timeline_panel = self._panel("Linha do tempo")
-        timeline_layout = timeline_panel.layout()
-        self.timeline_summary = QLabel("Historico completo das movimentacoes desta proposta")
-        self.timeline_summary.setObjectName("Caption")
-        timeline_layout.addWidget(self.timeline_summary)
-        self.timeline = QTableWidget(0, 6)
-        self.timeline.setHorizontalHeaderLabels(["Area", "Anterior", "Novo", "Quando", "Usuario", "Observacao"])
-        self.timeline.verticalHeader().setVisible(False)
-        self.timeline.setSelectionBehavior(QTableWidget.SelectRows)
-        self.timeline.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.timeline.setAlternatingRowColors(True)
-        self.timeline.horizontalHeader().setSectionResizeMode(5, QHeaderView.Stretch)
-        for col, width in enumerate((130, 160, 160, 145, 110, 360)):
-            self.timeline.setColumnWidth(col, width)
-        self.timeline.setMinimumHeight(230)
-        timeline_layout.addWidget(self.timeline)
-        content_layout.addWidget(timeline_panel, 1)
-        scroll.setWidget(content)
-        root.addWidget(scroll, 1)
-
-    def _panel(self, title: str) -> QFrame:
-        panel = QFrame()
-        panel.setObjectName("Panel")
-        layout = QVBoxLayout(panel)
-        layout.setContentsMargins(16, 14, 16, 14)
-        layout.setSpacing(8)
-        label = QLabel(title)
-        label.setStyleSheet("font-size: 14px; font-weight: 800;")
-        layout.addWidget(label)
-        return panel
-
-    def clear_panel_content(self, panel: QFrame):
-        layout = panel.layout()
-        while layout.count() > 1:
-            item = layout.takeAt(1)
-            if item.widget():
-                item.widget().deleteLater()
-            elif item.layout():
-                while item.layout().count():
-                    child = item.layout().takeAt(0)
-                    if child.widget():
-                        child.widget().deleteLater()
+    def _fetch(self) -> dict:
+        """Roda em thread de fundo (start_worker) -- so chamadas de servico,
+        nenhum acesso a widget aqui (regra do Qt: widgets so na UI thread)."""
+        if self.area:
+            processes = [self.service.get_process_area_dict(process_id, self.area) for process_id in self.process_ids]
+        else:
+            processes = [self.service.get_process_dict(process_id) for process_id in self.process_ids]
+        process = next((item for item in processes if item), None)
+        partials = self.service.process_partials(self.process_id) if process else []
+        loads = self.service.process_loads(self.process_id) if process else []
+        return {"processes": processes, "process": process, "partials": partials, "loads": loads}
 
     def load(self):
-        self.process = self.service.get_process_dict(self.process_id)
+        self.tabs.setEnabled(False)
+        self.edit_button.setEnabled(False)
+        self.actions_button.setEnabled(False)
+        self.title.setText("Carregando...")
+        self._load_thread = start_worker(self, self._fetch, self._load_success, self._load_error)
+
+    def _load_error(self, exc):
+        try:
+            self.tabs.setEnabled(True)
+            log.exception("Falha ao carregar Detalhes da proposta | process_ids=%r", self.process_ids, exc_info=exc)
+            self.reject()
+        finally:
+            self.loaded.emit()
+
+    def _load_success(self, payload: dict):
+        try:
+            self._render_loaded(payload)
+        finally:
+            self.loaded.emit()
+
+    def _render_loaded(self, payload: dict) -> None:
+        self.tabs.setEnabled(True)
+        self.edit_button.setEnabled(True)
+        self.actions_button.setEnabled(True)
+        processes = payload["processes"]
+        self.process = payload["process"]
         if not self.process:
+            log.debug("Nenhuma proposta encontrada para process_ids=%r; fechando Detalhes.", self.process_ids)
             self.reject()
             return
         p = self.process
-        self.title.setText(f"{p.get('proposta') or '-'} | {p.get('cliente') or '-'}")
-        self.subtitle.setText(
-            f"Obra/Site: {p.get('obra_site') or '-'} | Lote: {p.get('lote') or '-'} | "
-            f"Prazo: {p.get('prazo_entrega') or '-'} | Situacao: {self.service.status_label(p.get('situacao_fluxo') or '')}"
+
+        proposal_labels = [process.get("proposta") for process in processes if process]
+        self.title.setText(format_proposal_header(proposal_labels, p.get("cliente")))
+        self.subtitle.setText(format_empty(p.get("obra_site")))
+
+        area, area_label, status = self.service.current_location(p)
+        status_text = f"{area_label.upper()} . {self.service.area_status_label(area, status)}" if status else "Nao iniciado"
+        bg, fg = status_color(status, self.service.palette, area) if status else (
+            self.service.palette.get("surface_alt", "#e2e8f0"),
+            self.service.palette.get("text", "#0f172a"),
         )
-        self.load_status()
-        self.load_info()
-        self.load_items()
-        self.load_timeline()
+        self.status_badge.setText(status_text)
+        self.status_badge.setStyleSheet(f"background: {bg}; color: {fg}; border-radius: 9px; padding: 4px 9px; font-weight: 700;")
+        self.deadline_label.setText(f"Prazo: {format_empty(p.get('prazo_entrega'))}")
 
-    def load_items(self):
-        items = self.service.proposal_items(self.process_id)
-        self.items_table.setRowCount(len(items))
-        total_units = sum(int(item.get("quantidade") or 1) for item in items)
-        total_weight = sum(int(item.get("quantidade") or 1) * float(item.get("peso") or 0) for item in items)
-        self.items_summary.setText(f"{len(items)} linha(s) | {total_units} unidade(s) | {total_weight:g} kg")
-        process_names = {row.get("id"): row.get("proposta") for row in self.service.process_partials(self.process_id)}
-        for row, item in enumerate(items):
-            values = [
-                item.get("numero_item"), item.get("descricao"), item.get("quantidade") or 1,
-                f"{float(item.get('peso') or 0):g} kg",
-                process_names.get(item.get("processo_atual_id"), "-"),
-                "Sim" if item.get("produzido") else "Nao",
-                "Sim" if item.get("galvanizado") else "Nao",
-                "Sim" if item.get("entregue") else "Nao",
-            ]
-            for col, value in enumerate(values):
-                cell = QTableWidgetItem(str(value or ""))
-                cell.setTextAlignment(Qt.AlignCenter if col != 1 else Qt.AlignVCenter | Qt.AlignLeft)
-                self.items_table.setItem(row, col, cell)
-        visible_rows = min(max(len(items), 2), 6)
-        self.items_table.setFixedHeight(58 + visible_rows * 30)
+        cancelled = bool(p.get("is_cancelled")) or (p.get("status_geral") or p.get("status_localizacao")) == "CANCELADA"
+        self.edit_button.setVisible(not cancelled and len(self.process_ids) == 1)
+        self.actions_button.setVisible(not cancelled)
 
-    def load_status(self):
-        self.clear_panel_content(self.status_panel)
-        layout = self.status_panel.layout()
-        for area, meta in legacy.AREAS.items():
-            status = self.process.get(meta["column"]) or ""
-            row_frame = QFrame()
-            row_frame.setStyleSheet(
-                f"background: {self.service.palette['surface_alt']}; border-radius: 8px;"
-            )
-            line = QHBoxLayout(row_frame)
-            line.setContentsMargins(10, 7, 10, 7)
-            line.setSpacing(8)
-            icon = QLabel()
-            icon.setPixmap(make_icon(status or "status", self.service.palette["accent"], 18).pixmap(18, 18))
-            icon.setFixedWidth(24)
-            area_label = QLabel(area.title())
-            area_label.setObjectName("Caption")
-            area_label.setMinimumWidth(115)
-            status_label = QLabel(self.service.area_status_label(area, status) if status else "Nao iniciado")
-            status_label.setStyleSheet("font-weight: 800;")
-            line.addWidget(icon)
-            line.addWidget(area_label)
-            line.addWidget(status_label, 1)
-            layout.addWidget(row_frame)
+        partials = payload["partials"]
+        loads = payload["loads"]
+        partial_row = next((row for row in partials if int(row.get("id") or 0) == int(self.process_id)), partials[0] if partials else {})
 
-    def load_info(self):
-        self.clear_panel_content(self.info_panel)
-        layout = self.info_panel.layout()
-        grid = QGridLayout()
-        rows = [
-            ("Tipo", self.service.status_label(self.process.get("tipo_processo") or "")),
-            ("Peso total", self.service.display_cell("peso", self.process.get("peso"), self.process)),
-            ("Peso / saldo", self.service.weight_progress_text(self.process_id)),
-            ("Peso parcial", self.service.display_cell("peso_parcial", self.process.get("peso_parcial"), self.process)),
-            ("Saldo pendente", self.service.display_cell("saldo_pendente", self.process.get("saldo_pendente"), self.process)),
-            ("Origem remanejamento", self.process.get("origem_remanejamento") or "-"),
-            ("Obs. remanejamento", self.process.get("observacao_remanejamento") or "-"),
-            ("Atualizado por", self.process.get("atualizado_por") or "-"),
-            ("Atualizado em", self.process.get("atualizado_em") or "-"),
-        ]
-        for row, (label, value) in enumerate(rows):
-            left = QLabel(label)
-            left.setObjectName("Caption")
-            right = QLabel(str(value or "-"))
-            right.setWordWrap(True)
-            right.setStyleSheet("font-weight: 700;")
-            grid.addWidget(left, row, 0, Qt.AlignTop)
-            grid.addWidget(right, row, 1)
-        grid.setColumnMinimumWidth(0, 145)
-        grid.setColumnStretch(1, 1)
-        layout.addLayout(grid)
-
-        partials = self.service.process_partials(self.process_id)
-        loads = self.service.process_loads(self.process_id)
-        layout.addWidget(QLabel(f"Parciais vinculadas: {max(0, len(partials) - 1)}"))
-        for partial in partials[:5]:
-            layout.addWidget(QLabel(f"{partial.get('proposta')} | {self.service.status_label(partial.get('situacao_fluxo') or '')}"))
-        layout.addWidget(QLabel(f"Cargas vinculadas: {len(loads)}"))
-        for load in loads[:4]:
-            layout.addWidget(QLabel(
-                f"Carga {load.get('id')} | {self.service.load_status_label(load.get('status') or '')} | "
-                f"Prev.: {load.get('data_prevista_retorno') or '-'} | Retorno: {load.get('data_retorno') or '-'}"
-            ))
-
-    def load_timeline(self):
-        self.timeline.setRowCount(0)
-        history = self.service.process_history_rows(self.process_id)
-        self.timeline_summary.setText(f"{len(history)} movimentacao(oes) registrada(s)")
-        for item in history:
-            row = self.timeline.rowCount()
-            self.timeline.insertRow(row)
-            values = [
-                item.get("area"),
-                self.service.area_status_label(item.get("area") or "", item.get("status_anterior") or ""),
-                self.service.area_status_label(item.get("area") or "", item.get("status_novo") or ""),
-                item.get("data_hora"),
-                item.get("usuario"),
-                item.get("observacao"),
-            ]
-            for col, value in enumerate(values):
-                cell = QTableWidgetItem(str(value or ""))
-                cell.setTextAlignment(Qt.AlignCenter if col < 5 else Qt.AlignVCenter | Qt.AlignLeft)
-                self.timeline.setItem(row, col, cell)
+        self.resumo_tab.load(p, self.process_ids, partials, loads)
+        self.itens_tab.load(self.process_ids, processes)
+        history = self.historico_tab.load(self.process_ids)
+        self.fluxo_tab.load(p, partial_row, history)
+        self.cargas_tab.load(loads)
+        self.fiscal_entrega_tab.load(p, self.process_ids, history)
 
     def edit_process(self):
         dialog = ProcessFormDialog(self.service, self.process_id, self)
@@ -286,9 +192,11 @@ class ProcessDetailDialog(QDialog):
             self.load()
 
     def change_status(self):
-        area, _label, _status = self.service.current_location(self.process)
-        area = area if area in self.service.visible_areas() else None
-        dialog = StatusDialog(self.service, self.process_id, area, self)
+        # Sem area preferida: `open_proposal_action_center()` delega o
+        # auto-detect da area real para o proprio ProposalActionCenter (via
+        # `current_location()`) - este dialogo nao sabe de antemao em qual
+        # area a proposta esta, ao contrario de ProcessPage.
+        dialog = open_proposal_action_center(self.service, self.process_id, self)
         if dialog.exec():
             self.changed = True
             self.load()

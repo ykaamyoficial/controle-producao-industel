@@ -1,0 +1,422 @@
+from __future__ import annotations
+
+from datetime import datetime, timedelta
+
+from PySide6.QtCore import QEvent, Qt
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QScrollArea, QVBoxLayout, QWidget
+
+from app.ui.background_worker import start_worker
+from app.ui.components.modern_button import ModernButton
+from app.ui.icons import make_icon
+
+
+PAGE_SIZE = 30
+SCROLL_TOP_THRESHOLD_PX = 4
+PANEL_WIDTH = 480
+PANEL_MIN_HEIGHT = 420
+PANEL_MAX_HEIGHT = 680
+
+# Icone por categoria da camada generica de notificacoes (Fase 10). Chat
+# continua sendo um dos produtores (categorias CHAT_*), ao lado de eventos
+# de negocio (proposta/producao/galvanizacao/expedicao/almoxarifado).
+_CATEGORY_ICON = {
+    "CHAT_MENSAGEM": "chat",
+    "CHAT_MENCAO": "at",
+    "CHAT_RESPOSTA": "chat",
+    "CHAT_PERGUNTA": "question",
+    "CHAT_PERGUNTA_ATRASADA": "question",
+    "CHAT_NOTA": "doc",
+    "PROPOSTA_STATUS": "doc",
+    "PRODUCAO_LOTE": "settings",
+    "GALVANIZACAO_LOTE": "settings",
+    "ALMOXARIFADO": "doc",
+    "NOMUS_IMPORTACAO": "download",
+    "EXPEDICAO": "truck",
+    "SISTEMA": "bell",
+}
+
+_SEVERITY_KEY = {
+    "critica": "danger",
+    "alta": "warning",
+    "normal": "accent",
+    "info": "muted",
+}
+
+
+def _format_relative(value: str | None) -> str:
+    if not value:
+        return ""
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return str(value)
+    now = datetime.now(parsed.tzinfo)
+    delta = now - parsed
+    seconds = delta.total_seconds()
+    if seconds < 60:
+        return "Agora ha pouco"
+    if seconds < 3600:
+        return f"Ha {int(seconds // 60)} min"
+    if seconds < 86400:
+        return f"Ha {int(seconds // 3600)} h"
+    return parsed.strftime("%d/%m/%Y %H:%M")
+
+
+def _parse_day(value: str | None):
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).date()
+    except ValueError:
+        return None
+
+
+def _day_label(day) -> str:
+    today = datetime.now().date()
+    if day == today:
+        return "Hoje"
+    if day == today - timedelta(days=1):
+        return "Ontem"
+    return day.strftime("%d/%m/%Y")
+
+
+class NotificationCenterPanel(QFrame):
+    """Central de Notificacoes aberta pelo sino — popover nao-bloqueante
+    (ETAPA 10: a spec proibe explicitamente um QDialog modal aqui). So
+    mostra o que exige atencao (mencao, resposta, pergunta atribuida/
+    atrasada, nota interna direcionada/importante); atividade operacional
+    nunca aparece aqui. Historico nunca e apagado ao ser lido — ver
+    a regra "READ != RESOLVED" no service.py (ler uma Notification nunca
+    resolve ActionRequired nem avanca last_read_message_id)."""
+
+    def __init__(self, service, parent=None, on_open_deep_link=None, on_open_conversation=None):
+        super().__init__(parent, Qt.Popup)
+        self.service = service
+        # on_open_deep_link(route:str) e o contrato novo (Fase 10). O param
+        # antigo on_open_conversation ainda e aceito por compatibilidade.
+        self._on_open_deep_link = on_open_deep_link
+        self._on_open_conversation = on_open_conversation
+        self.notifications: list[dict] = []
+        # So mostra nao lidas - uma vez marcada como lida (ao abrir), some
+        # daqui sozinha no proximo refresh, sem precisar de filtro manual.
+        self._status_filter: str | None = "unread"
+        self._has_more = False
+        self._loading_more = False
+        self._closing = False
+        self._refresh_thread = None
+        self._load_more_thread = None
+        self._worker_threads = []
+        self.setObjectName("NotificationCenterPanel")
+        self._apply_panel_style()
+        self.setFixedWidth(PANEL_WIDTH)
+        self.setMinimumHeight(PANEL_MIN_HEIGHT)
+        self.setMaximumHeight(PANEL_MAX_HEIGHT)
+        self._build()
+        self.refresh()
+
+    def _apply_panel_style(self):
+        palette = self.service.palette
+        background = palette.get("surface", "#ffffff")
+        border = palette.get("border", "#cbd5e1")
+        self.setStyleSheet(
+            "QFrame#NotificationCenterPanel {"
+            f"background: {background};"
+            f"border: 1px solid {border};"
+            "border-radius: 16px;"
+            "}"
+            "QScrollArea#NotificationScrollArea, QScrollArea#NotificationScrollArea > QWidget, "
+            "QScrollArea#NotificationScrollArea > QWidget > QWidget {"
+            "background: transparent;"
+            "border: 0;"
+            "border-radius: 0;"
+            "}"
+        )
+
+    def _build(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(8)
+
+        header = QHBoxLayout()
+        title = QLabel("Notificacoes nao lidas")
+        title.setStyleSheet("font-size: 15px; font-weight: 800;")
+        header.addWidget(title)
+        header.addStretch()
+        mark_all_btn = ModernButton("Marcar todas como lidas", "status")
+        mark_all_btn.clicked.connect(self._mark_all_read)
+        header.addWidget(mark_all_btn)
+        layout.addLayout(header)
+
+        self.loading_label = QLabel("Carregando...")
+        self.loading_label.setObjectName("Caption")
+        self.loading_label.setVisible(False)
+        layout.addWidget(self.loading_label)
+
+        self.new_items_banner = ModernButton("Novas notificacoes — toque para atualizar", "status")
+        self.new_items_banner.setStyleSheet("padding: 4px 10px; font-size: 11px;")
+        self.new_items_banner.setVisible(False)
+        self.new_items_banner.clicked.connect(self._on_banner_clicked)
+        layout.addWidget(self.new_items_banner)
+
+        self.error_state = self._build_error_state()
+        self.error_state.setVisible(False)
+        layout.addWidget(self.error_state)
+
+        self.scroll = QScrollArea()
+        self.scroll.setObjectName("NotificationScrollArea")
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setFrameShape(QFrame.NoFrame)
+        self.list_widget = QWidget()
+        self.list_layout = QVBoxLayout(self.list_widget)
+        self.list_layout.setContentsMargins(0, 0, 0, 0)
+        self.list_layout.setSpacing(6)
+        self.list_layout.addStretch()
+        self.scroll.setWidget(self.list_widget)
+        self.scroll.verticalScrollBar().valueChanged.connect(self._on_scroll_changed)
+        layout.addWidget(self.scroll, 1)
+
+    def _build_error_state(self) -> QWidget:
+        container = QWidget()
+        col = QVBoxLayout(container)
+        col.setContentsMargins(0, 12, 0, 12)
+        col.setSpacing(8)
+        message = QLabel("Nao foi possivel carregar as notificacoes.")
+        message.setObjectName("Caption")
+        message.setAlignment(Qt.AlignCenter)
+        col.addWidget(message)
+        retry_btn = ModernButton("Tentar novamente", "status")
+        retry_btn.clicked.connect(self.refresh)
+        retry_row = QHBoxLayout()
+        retry_row.addStretch()
+        retry_row.addWidget(retry_btn)
+        retry_row.addStretch()
+        col.addLayout(retry_row)
+        return container
+
+    # -- carregamento -------------------------------------------------
+
+    def refresh(self):
+        """Recarrega a primeira pagina do zero — NAO marca nada como lido,
+        so consulta (ETAPA 10: abrir/listar a Central e sempre read-only)."""
+        if self._closing:
+            return
+        self.new_items_banner.setVisible(False)
+        self.error_state.setVisible(False)
+        self.loading_label.setVisible(True)
+        self._refresh_thread = self._run_background(
+            lambda: self.service.notifications_page(status=self._status_filter, limit=PAGE_SIZE, offset=0),
+            self._refresh_success,
+            self._refresh_error,
+        )
+
+    def _refresh_success(self, payload: dict):
+        if self._closing:
+            return
+        self.notifications = list(payload.get("items") or [])
+        self._has_more = bool(payload.get("has_more"))
+        self.loading_label.setVisible(False)
+        self.error_state.setVisible(False)
+        self._render()
+
+    def _refresh_error(self, _exc):
+        if self._closing:
+            return
+        self.loading_label.setVisible(False)
+        if not self.notifications:
+            self.error_state.setVisible(True)
+        else:
+            self.new_items_banner.setText("Nao foi possivel atualizar — toque para tentar de novo")
+            self.new_items_banner.setVisible(True)
+
+    def _load_more(self):
+        if self._closing or self._loading_more or not self._has_more:
+            return
+        self._loading_more = True
+        self._load_more_btn.setEnabled(False)
+        self._load_more_btn.setText("Carregando...")
+        self._load_more_thread = self._run_background(
+            lambda: self.service.notifications_page(status=self._status_filter, limit=PAGE_SIZE, offset=len(self.notifications)),
+            self._load_more_success,
+            self._load_more_error,
+        )
+
+    def _load_more_success(self, payload: dict):
+        if self._closing:
+            return
+        self._loading_more = False
+        self.notifications.extend(payload.get("items") or [])
+        self._has_more = bool(payload.get("has_more"))
+        self._render()
+
+    def _load_more_error(self, _exc):
+        if self._closing:
+            return
+        self._loading_more = False
+        self._load_more_btn.setEnabled(True)
+        self._load_more_btn.setText("Carregar mais")
+
+    # -- realtime -----------------------------------------------------
+
+    def apply_realtime_event(self, event_type: str, _data: dict) -> None:
+        """Chamado pelo MainWindow quando um evento notification.* chega
+        via WebSocket enquanto o painel esta aberto. Nunca confia no corpo
+        do evento — so usa como gatilho pra rebuscar via REST (mesma
+        filosofia das ETAPAS 7-9). Se o usuario esta lendo historico mais
+        abaixo, NAO puxa o scroll pra cima sozinho (pedido explicito da
+        spec) — so mostra um aviso discreto."""
+        if event_type not in ("notification.created", "notification.read", "notification.read_all"):
+            return
+        if self._closing:
+            return
+        if self._is_scrolled_to_top():
+            self.refresh()
+        else:
+            self.new_items_banner.setText("Novas notificacoes — toque para atualizar")
+            self.new_items_banner.setVisible(True)
+
+    def _is_scrolled_to_top(self) -> bool:
+        return self.scroll.verticalScrollBar().value() <= SCROLL_TOP_THRESHOLD_PX
+
+    def _on_scroll_changed(self, _value: int) -> None:
+        if self._is_scrolled_to_top() and self.new_items_banner.isVisible():
+            self.new_items_banner.setVisible(False)
+
+    def _on_banner_clicked(self):
+        self.new_items_banner.setVisible(False)
+        self.refresh()
+
+    # -- render ---------------------------------------------------------
+
+    def _render(self):
+        while self.list_layout.count() > 1:
+            item = self.list_layout.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.deleteLater()
+
+        if not self.notifications:
+            empty = QLabel("Nenhuma notificacao nao lida.")
+            empty.setObjectName("Caption")
+            self.list_layout.insertWidget(0, empty)
+            return
+
+        index = 0
+        last_day = None
+        for notification in self.notifications:
+            day = _parse_day(notification.get("created_at"))
+            if day != last_day:
+                last_day = day
+                header = QLabel(_day_label(day) if day else "")
+                header.setObjectName("Caption")
+                header.setStyleSheet("font-weight: 700; font-size: 10px; margin-top: 4px;")
+                self.list_layout.insertWidget(index, header)
+                index += 1
+            self.list_layout.insertWidget(index, self._build_row(notification))
+            index += 1
+
+        if self._has_more:
+            self._load_more_btn = ModernButton("Carregar mais", "history")
+            self._load_more_btn.clicked.connect(self._load_more)
+            self.list_layout.insertWidget(index, self._load_more_btn)
+
+    def _build_row(self, notification: dict) -> QFrame:
+        card = QFrame()
+        card.setObjectName("Panel")
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setSpacing(3)
+
+        category = notification.get("category")
+        severity = notification.get("severity") or "normal"
+        unread = notification.get("read_at") is None
+        palette = self.service.palette
+        severity_token = _SEVERITY_KEY.get(severity, "accent")
+        color = palette.get(severity_token, palette.get("accent", "#0078d4")) if unread else palette.get("muted", "#94a3b8")
+
+        header = QHBoxLayout()
+        header.setSpacing(6)
+        icon_label = QLabel()
+        icon_label.setPixmap(make_icon(_CATEGORY_ICON.get(category, "bell"), color, 15).pixmap(15, 15))
+        header.addWidget(icon_label)
+        title_label = QLabel(notification.get("title") or "Notificacao")
+        title_label.setWordWrap(True)
+        title_label.setStyleSheet(f"font-weight: 700; font-size: 12px; color: {color};" if unread else "font-weight: 600; font-size: 12px;")
+        header.addWidget(title_label, 1)
+        time_label = QLabel(_format_relative(notification.get("created_at")))
+        time_label.setObjectName("Caption")
+        time_label.setStyleSheet("font-size: 9px;")
+        header.addWidget(time_label)
+        layout.addLayout(header)
+
+        body = (notification.get("body") or "").strip().replace("\n", " ")
+        if len(body) > 160:
+            body = body[:157] + "..."
+        if body:
+            body_label = QLabel(body)
+            body_label.setWordWrap(True)
+            body_label.setStyleSheet("font-size: 11px;")
+            layout.addWidget(body_label)
+
+        card.setCursor(Qt.PointingHandCursor)
+        card.mousePressEvent = lambda _event, n=notification: self._open(n)
+        return card
+
+    def _open(self, notification: dict):
+        route = (notification.get("deep_link") or "").strip()
+        notification_id = notification.get("id")
+        self.close()
+        if route and self._on_open_deep_link is not None:
+            self._on_open_deep_link(route)
+        elif self._on_open_conversation is not None:
+            # compatibilidade: sem dispatcher de deep-link, tenta o caminho antigo
+            self._on_open_conversation(notification.get("proposal_id"), notification.get("conversation_id"), notification.get("message_id"))
+        if notification_id and notification_id > 0:
+            try:
+                self.service.notification_mark_read(notification_id)
+            except Exception:
+                pass
+
+    def _mark_all_read(self):
+        try:
+            self.service.notifications_mark_all_read()
+        except Exception:
+            self.new_items_banner.setText("Nao foi possivel marcar todas como lidas — toque pra tentar de novo")
+            self.new_items_banner.setVisible(True)
+            return
+        self.refresh()
+
+    def _run_background(self, operation, on_success, on_error):
+        if self._closing:
+            return None
+        thread = start_worker(self, operation, on_success, on_error)
+        self._worker_threads.append(thread)
+        thread.finished.connect(lambda target=thread: self._worker_threads.remove(target) if target in self._worker_threads else None)
+        return thread
+
+    def cleanup(self):
+        if self._closing:
+            return
+        self._closing = True
+        threads = list(self._worker_threads)
+        for thread in (self._refresh_thread, self._load_more_thread):
+            if thread is not None and thread not in threads:
+                threads.append(thread)
+        self._worker_threads.clear()
+        self._refresh_thread = None
+        self._load_more_thread = None
+        for thread in threads:
+            try:
+                if thread.isRunning():
+                    thread.quit()
+                    thread.wait(2000)
+            except RuntimeError:
+                pass
+
+    def closeEvent(self, event):
+        self.cleanup()
+        super().closeEvent(event)
+
+    def event(self, event):
+        if event.type() == QEvent.DeferredDelete:
+            self.cleanup()
+        return super().event(event)

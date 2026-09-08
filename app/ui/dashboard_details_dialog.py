@@ -4,6 +4,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QAbstractItemView, QDialog, QHeaderView, QLabel, QTableWidget, QTableWidgetItem, QVBoxLayout
 
 from app.ui.components.modern_button import ModernButton
+from app.ui.dialog_utils import apply_large_dialog_geometry, style_dialog_from_parent
 
 
 class DashboardDetailsDialog(QDialog):
@@ -11,8 +12,8 @@ class DashboardDetailsDialog(QDialog):
         super().__init__(parent)
         self.service = service
         self.setWindowTitle(title)
-        self.resize(920, 520)
-        self.setMinimumSize(720, 420)
+        apply_large_dialog_geometry(self, parent)
+        style_dialog_from_parent(self, parent)
         root = QVBoxLayout(self)
         root.setContentsMargins(18, 16, 18, 16)
         root.setSpacing(12)

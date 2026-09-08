@@ -1,0 +1,136 @@
+# Compose de producao (Fase 07) -- referencia a imagem versionada e imutavel
+# construida por scripts/build_release_image.py. NUNCA usa :latest e NUNCA
+# builda a partir do codigo fonte do host (sem "build:", sem bind mount de
+# /app/api) -- o codigo em producao e exatamente o que foi empacotado na
+# imagem com a tag abaixo.
+#
+# Uso:
+#   set -a; source .env.production; set +a   # ou defina as vars no ambiente
+#   docker compose -f docker-compose.prod.yml up -d
+#
+# IMAGE_REGISTRY e SERVER_VERSION sao obrigatorios (sem default): o compose
+# falha explicitamente se nao forem definidos, em vez de silenciosamente subir
+# uma imagem errada. Ver docs/architecture/DOCKER_RELEASE_IMAGES.md.
+
+# Nome de projeto fixo -- sem isso o Compose usa o nome da pasta (ex.: a
+# pasta local "Nova pasta" virava "novapasta"), o que tambem faz volumes/rede
+# colidirem com docker-compose.dev.yml quando os dois sao rodados na mesma
+# pasta sem "-p" explicito.
+name: controle_producao_industel
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: controle_producao_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?defina POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER:?defina POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD}
+    volumes:
+      - postgres_prod_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    # Sem publicar porta no host por padrao -- so a API (na mesma rede
+    # interna do compose) precisa alcancar o banco. Descomente se um operador
+    # precisar de acesso direto para diagnostico/backup manual.
+    # ports:
+    #   - "127.0.0.1:5432:5432"
+
+  api:
+    # Tag imutavel obrigatoria -- nunca ":latest" em producao (Secao 24).
+    image: "${IMAGE_REGISTRY:?defina IMAGE_REGISTRY, exemplo ghcr.io/sua-organizacao}/controle-producao-api:${SERVER_VERSION:?defina SERVER_VERSION, exemplo 0.8.0}"
+    container_name: controle_producao_api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      APP_ENV: production
+      API_HOST: 0.0.0.0
+      API_PORT: 8000
+      API_LOG_LEVEL: ${API_LOG_LEVEL:-INFO}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:?defina POSTGRES_USER}:${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:?defina POSTGRES_DB}
+      DATABASE_POOL_SIZE: ${DATABASE_POOL_SIZE:-5}
+      DATABASE_MAX_OVERFLOW: ${DATABASE_MAX_OVERFLOW:-10}
+      DATABASE_CONNECT_TIMEOUT: ${DATABASE_CONNECT_TIMEOUT:-10}
+      DATABASE_POOL_TIMEOUT: ${DATABASE_POOL_TIMEOUT:-30}
+      DATABASE_POOL_RECYCLE: ${DATABASE_POOL_RECYCLE:-1800}
+      SECRET_KEY: ${SECRET_KEY:?defina SECRET_KEY (>=32 caracteres)}
+      PROVISIONING_SECRET: ${PROVISIONING_SECRET:?defina PROVISIONING_SECRET}
+      OPERATIONAL_INSTANCE_ID: ${OPERATIONAL_INSTANCE_ID:-}
+      OPERATIONAL_COMPANY_ID: ${OPERATIONAL_COMPANY_ID:-}
+      OPERATIONAL_COMPANY_CODE: ${OPERATIONAL_COMPANY_CODE:?defina OPERATIONAL_COMPANY_CODE}
+      OPERATIONAL_COMPANY_NAME: ${OPERATIONAL_COMPANY_NAME:?defina OPERATIONAL_COMPANY_NAME}
+      OPERATIONAL_ENVIRONMENT_TYPE: production
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-15}
+      REFRESH_TOKEN_EXPIRE_DAYS: ${REFRESH_TOKEN_EXPIRE_DAYS:-7}
+      LOGIN_MAX_FAILED_ATTEMPTS: ${LOGIN_MAX_FAILED_ATTEMPTS:-5}
+      LOGIN_LOCK_MINUTES: ${LOGIN_LOCK_MINUTES:-15}
+      PASSWORD_MIN_LENGTH: ${PASSWORD_MIN_LENGTH:-4}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
+      NOMUS_ENCRYPTION_KEY: ${NOMUS_ENCRYPTION_KEY:?defina NOMUS_ENCRYPTION_KEY}
+      BACKUP_DIR: ${BACKUP_DIR:-/var/backups/controle-producao}
+      UPDATE_REPOSITORY_DIR: ${UPDATE_REPOSITORY_DIR:-/var/lib/controle-producao/updates}
+    # Publicado em todas as interfaces do host (Fase 1 - Servidor e Endereco
+    # Oficial da API): o servidor fisico precisa aceitar conexoes de outros
+    # computadores da rede local, nao somente da propria maquina. O acesso
+    # continua restrito pelo firewall do host a rede interna (ver
+    # docs/architecture/FASE1_SERVIDOR_E_ENDERECO_API.md) -- isto NAO abre a
+    # API para a internet, apenas deixa de restringir a 127.0.0.1.
+    ports:
+      - "${API_BIND_HOST:-0.0.0.0}:${API_PORT:-8000}:8000"
+    volumes:
+      # Repositorio de releases do Desktop (Fase 12) -- fora da camada gravavel
+      # efemera do container, senao some no proximo deploy/recreate. Nao e
+      # bind mount de codigo (Secao 17 continua valendo: nenhum arquivo de
+      # /app/api vem do host).
+      - update_repository_data:/var/lib/controle-producao/updates
+    # Sem bind mount de /app/api (Secao 17).
+    # Sem "build:" -- este compose so consome uma imagem ja publicada, nunca
+    # builda a partir do codigo fonte do host (Secao 6).
+    # Sem "command:"/"healthcheck:" -- reutiliza o CMD e o HEALTHCHECK ja
+    # definidos na propria imagem (api/Dockerfile), para a definicao de saude
+    # viajar junto com o artefato versionado em vez de arriscar divergir de um
+    # compose separado (Secao 18: "reutilize o healthcheck implementado na
+    # Fase 06", nao crie uma verificacao paralela).
+
+  # Fase 5 - HTTPS e Seguranca: unico ponto de terminacao TLS (Secao 3).
+  # Sobe em paralelo ao "api" acima -- a porta 8000 continua publicada
+  # durante a migracao (Secao 12, Etapas A-C); so deve ser bloqueada para a
+  # LAN manualmente na Etapa D, depois de validar HTTPS de outro computador
+  # (ver docs/architecture/FASE5_HTTPS_E_SEGURANCA.md).
+  caddy:
+    image: caddy:2-alpine
+    container_name: controle_producao_caddy
+    restart: unless-stopped
+    depends_on:
+      - api
+    environment:
+      # Hostname interno oficial (mesmo CN/SAN do certificado) -- nao
+      # inventar; usar o valor real definido com a estrategia de certificado.
+      CADDY_HOSTNAME: ${CADDY_HOSTNAME:?defina CADDY_HOSTNAME, hostname interno oficial do certificado}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Certificado/chave da CA interna (ou PKI corporativa) assinados para
+      # CADDY_HOSTNAME -- arquivos reais ficam fora do repositorio (Secao 5:
+      # nunca versionar chave privada). CADDY_TLS_KEY_PATH deve apontar para
+      # um arquivo com permissao restrita ao usuario que roda o Docker.
+      - ${CADDY_TLS_CERT_PATH:?defina CADDY_TLS_CERT_PATH, caminho do certificado assinado pela CA interna}:/etc/caddy/tls/server.crt:ro
+      - ${CADDY_TLS_KEY_PATH:?defina CADDY_TLS_KEY_PATH, caminho da chave privada correspondente}:/etc/caddy/tls/server.key:ro
+      - caddy_data:/data
+    ports:
+      - "${CADDY_BIND_HOST:-0.0.0.0}:443:443"
+      # Porta 80 nao publicada por padrao (Secao 9/11: redirect HTTP->HTTPS
+      # e opcional). Para mante-la, acrescente aqui (nao crie uma segunda
+      # chave "ports:") e descomente o bloco de redirect no Caddyfile:
+      # - "${CADDY_BIND_HOST:-0.0.0.0}:80:80"
+
+volumes:
+  postgres_prod_data:
+  caddy_data:
+  update_repository_data:

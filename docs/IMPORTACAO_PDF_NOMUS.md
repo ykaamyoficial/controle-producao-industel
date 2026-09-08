@@ -1,21 +1,22 @@
 # Importacao PDF Nomus
 
-Esta funcionalidade permite ler uma proposta Nomus em PDF, conferir os dados
-operacionais e preencher o cadastro de proposta do sistema.
+Esta funcionalidade permite ler uma proposta Nomus em PDF e preencher
+diretamente o cadastro de proposta do sistema, sem uma tela intermediaria de
+conferencia.
 
 ## Fluxo de uso
 
 1. Abra o **Controle Geral**.
 2. Clique em **Novo processo**.
-3. Clique em **Conferir PDF Nomus**.
+3. Clique em **Importar PDF Nomus**.
 4. Selecione o PDF da proposta Nomus.
-5. Confira os campos extraidos e corrija o que estiver pendente.
-6. Clique em **Usar dados no cadastro**.
-7. Revise o formulario preenchido.
-8. Clique em **Salvar** para gravar o processo.
+5. Os dados extraidos preenchem automaticamente o formulario de **Cadastro da
+   proposta**.
+6. Revise o formulario preenchido e corrija o que estiver pendente.
+7. Clique em **Salvar** para gravar o processo.
 
-O botao **Usar dados no cadastro** nao grava nada no banco. Ele apenas
-transfere os dados conferidos para o formulario.
+A importacao nao grava nada no banco por si so. Ela apenas preenche o
+formulario; nada e persistido ate o clique em **Salvar**.
 
 ## Campos importados
 

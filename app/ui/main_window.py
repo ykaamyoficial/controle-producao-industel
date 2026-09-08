@@ -1,19 +1,79 @@
 from __future__ import annotations
 
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QMainWindow, QStackedWidget, QVBoxLayout, QWidget
+from PySide6.QtCore import QEvent, QObject, Qt, QThread, Signal, QTimer
+from PySide6.QtGui import QColor, QPainter, QPainterPath
+from PySide6.QtWidgets import QApplication, QFrame, QHBoxLayout, QLabel, QMainWindow, QMessageBox, QStackedWidget, QVBoxLayout, QWidget
 
 from app.services.backend_adapter import BackendService
+from app.services.session_sync_service import SessionSyncService
 from app.ui.animations import animate_width, fade_in
 from app.ui.app_icon import app_icon
+from app.ui.background_worker import start_worker
+from app.ui.chat_center_page import ChatCenterDialog
+from app.ui.chat_realtime import ChatRealtimeClient
+from app.ui.components.area_identity import refresh_area_theme
+from app.ui.components.floating_chat_button import FloatingChatButton
+from app.ui.components.login_summary_banner import LoginSummaryBanner
+from app.ui.components.native_frameless import FramelessHitTestMixin
+from app.ui.components.title_bar import TitleBar
+from app.ui.components.toast_manager import InAppToastManager
 from app.ui.data_page import DataPage
 from app.ui.dashboard_page import DashboardPage
+from app.ui.executive_dashboard_page import ExecutiveDashboardPage
 from app.ui.fiscal_page import FiscalPage
 from app.ui.login_dialog import LoginDialog
 from app.ui.operational_reports_page import OperationalReportsPage
 from app.ui.process_page import ProcessPage
-from app.ui.settings_page import SettingsPage
+from app.ui.production_items_page import ProductionAreaPage
+from app.ui.galvanization_items_page import GalvanizationAreaPage
+from app.ui.settings_dialog import SettingsDialog
 from app.ui.sidebar import Sidebar
-from app.ui.styles import app_stylesheet
+from app.ui.icons import icon_cache
+from app.ui.styles import app_stylesheet, chrome_bg_color
+from app.version import APP_NAME, APP_VERSION
+from app.services.update_distribution_client import check_for_updates
+from app.services.app_logging import get_logger
+from app.ui.update_dialog import UpdateDialog
+
+log = get_logger("main_window")
+
+
+class _ContentCornerNotch(QWidget):
+    """Recorte arredondado no canto superior esquerdo do MainContent, sem
+    reservar margem nenhuma pro conteudo (o usuario nao quis gap nenhum).
+
+    QSS border-radius sozinho nao aparece ali porque a pagina ativa cobre o
+    canto inteiro sem margem. Este widget fica por cima de tudo, mas pinta
+    SO a meia-lua fora do arco (cor do chrome) - nunca preenche o interior
+    do arco, que fica transparente e deixa a pagina real por baixo aparecer
+    sem alteracao. Assim nao importa se algum texto/icone da pagina cai
+    dentro do quadrado RADIUSxRADIUS: so o pixel morto fora do arco vira
+    chrome, o resto continua exatamente como a pagina desenhou.
+    """
+
+    RADIUS = 10
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(self.RADIUS, self.RADIUS)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self.setAttribute(Qt.WA_NoSystemBackground, True)
+        self._chrome_color = QColor("#000000")
+
+    def set_colors(self, chrome_hex: str):
+        self._chrome_color = QColor(chrome_hex)
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        square = QPainterPath()
+        square.addRect(0, 0, self.RADIUS, self.RADIUS)
+        d = self.RADIUS * 2
+        arc = QPainterPath()
+        arc.addRoundedRect(0, 0, d, d, self.RADIUS, self.RADIUS)
+        crescent = square.subtracted(arc)
+        painter.fillPath(crescent, self._chrome_color)
 
 
 class SimplePage(QWidget):
@@ -35,16 +95,35 @@ class SimplePage(QWidget):
         box.addStretch()
         layout.addWidget(panel)
 
+class UpdateCheckWorker(QObject):
+    finished = Signal(dict)
 
-class MainWindow(QMainWindow):
-    def __init__(self):
+    def run(self):
+        result = check_for_updates(timeout=8)
+        self.finished.emit(result)
+
+
+
+class MainWindow(FramelessHitTestMixin, QMainWindow):
+    def __init__(self, *, skip_auto_update_check: bool = False, update_available_notice: str | None = None):
         super().__init__()
         self.service = BackendService()
+        self.service.on_conversation_marked_read = self._poll_chat_unread
         self.sidebar_collapsed = False
         self._width_animation = None
         self._page_animation = None
+        self._update_thread = None
+        self._update_worker = None
+        self._settings_dialog = None
+        self._auto_update_checked = skip_auto_update_check
+        self._login_summary_shown = False
+        self._realtime_ever_connected = False
+        self._notification_poll_thread = None
+        self._notifications_summary_thread = None
+        self._update_available_notice = update_available_notice
+        self._update_available_notice_shown = False
         self.pages: dict[str, QWidget] = {}
-        self.setWindowTitle("Controle de Producao Industel 2.0")
+        self.setWindowTitle(f"{APP_NAME} {APP_VERSION}")
         self.setWindowIcon(app_icon())
         self.resize(1380, 820)
         self.setMinimumSize(1120, 680)
@@ -56,15 +135,92 @@ class MainWindow(QMainWindow):
         if not login.exec():
             return False
         self._build()
+        self._ensure_notifier_startup_registration()
+        self._consume_pending_deep_link()
         return True
+
+    def _consume_pending_deep_link(self) -> None:
+        """Clique num toast do agente de bandeja com o app fechado: abre o
+        item assim que a janela termina de montar."""
+        try:
+            from app.services.notifier_agent import consume_pending_deep_link
+            from PySide6.QtCore import QTimer
+
+            route = consume_pending_deep_link()
+            if route:
+                QTimer.singleShot(0, lambda: self.open_deep_link(route))
+        except Exception:
+            log.exception("Falha ao consumir deep-link pendente")
+
+    def open_deep_link(self, route: str) -> None:
+        """Dispatcher de rota interna (ex.: 'proposal/123?message=456'). Hoje
+        toda rota conhecida abre a Central de Chats no contexto certo; rotas
+        futuras (producao/<lote>, ...) entram aqui."""
+        route = (route or "").strip()
+        if not route:
+            return
+        path, _, query = route.partition("?")
+        parts = [segment for segment in path.strip("/").split("/") if segment]
+        params = dict(pair.split("=", 1) for pair in query.split("&") if "=" in pair)
+
+        def _as_int(value):
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return None
+
+        message_id = _as_int(params.get("message"))
+        if len(parts) >= 2 and parts[0] == "proposal":
+            self.open_chat_center(proposal_id=_as_int(parts[1]), message_id=message_id)
+        elif len(parts) >= 2 and parts[0] == "chat":
+            self.open_chat_center(conversation_id=_as_int(parts[1]), message_id=message_id)
+        else:
+            log.info("Deep-link sem rota conhecida, abrindo Central de Chats | route=%s", route)
+            self.open_chat_center()
+
+    def _ensure_notifier_startup_registration(self) -> None:
+        try:
+            from app.services.notifier_agent import ensure_startup_registration
+
+            ensure_startup_registration()
+        except Exception:
+            log.exception("Falha inesperada ao registrar notificador na pasta Startup")
 
     def _build(self):
         root = QWidget()
         root.setObjectName("AppRoot")
         self.setCentralWidget(root)
-        main = QHBoxLayout(root)
+        root_layout = QVBoxLayout(root)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.setSpacing(0)
+
+        has_chats = self._can_view("chats", "CHATS")
+        self.title_bar = TitleBar(
+            self.service,
+            on_open_conversation=self._open_conversation_from_notification,
+            on_open_deep_link=self.open_deep_link,
+        )
+        self.title_bar.chat_requested.connect(self.open_chat_center)
+        self.title_bar.theme_toggle_requested.connect(self.toggle_theme)
+        self.title_bar.settings_requested.connect(self.open_settings)
+        self.title_bar.logout_callback = self._logout
+        self.title_bar.profile_callback = self.open_user_profile
+        self.title_bar.password_callback = self.open_user_profile
+        self.title_bar.set_theme_icon(getattr(self.service, "palette_name", "claro") != "claro")
+        for widget in (self.title_bar.chat_btn, self.title_bar.notification_bell, self.title_bar.pending_btn):
+            widget.setVisible(has_chats)
+        root_layout.addWidget(self.title_bar)
+
+        self.notification_bell = self.title_bar.notification_bell if has_chats else None
+        self.pending_btn = self.title_bar.pending_btn if has_chats else None
+
+        body = QWidget()
+        body.setObjectName("AppBody")
+        body.setAttribute(Qt.WA_StyledBackground, True)
+        main = QHBoxLayout(body)
         main.setContentsMargins(0, 0, 0, 0)
         main.setSpacing(0)
+        root_layout.addWidget(body, 1)
 
         self.sidebar = Sidebar(self.service)
         self.sidebar.page_selected.connect(self.select_page)
@@ -72,43 +228,217 @@ class MainWindow(QMainWindow):
         main.addWidget(self.sidebar)
 
         content = QWidget()
-        content_layout = QVBoxLayout(content)
-        content_layout.setContentsMargins(18, 14, 18, 18)
-        content_layout.setSpacing(10)
+        content.setObjectName("MainContent")
+        content.setAttribute(Qt.WA_StyledBackground, True)
+        self.content_layout = QVBoxLayout(content)
+        self.content_layout.setContentsMargins(0, 0, 0, 0)
+        self.content_layout.setSpacing(0)
         main.addWidget(content, 1)
 
-        self.stack = QStackedWidget()
-        content_layout.addWidget(self.stack, 1)
-        self._create_pages()
-        self.select_page("PAINEL GERAL")
+        self._content_corner_notch = _ContentCornerNotch(content)
+        self._content_corner_notch.move(0, 0)
+        self._update_corner_notch_colors()
 
+        self.session_policy_banner = QLabel()
+        self.session_policy_banner.setObjectName("SessionPolicyBanner")
+        self.session_policy_banner.setWordWrap(True)
+        self.session_policy_banner.hide()
+        self.content_layout.addWidget(self.session_policy_banner)
+
+        self.stack = QStackedWidget()
+        self.content_layout.addWidget(self.stack, 1)
+        self._create_pages()
+        first_page = next(iter(self.pages), "")
+        if first_page:
+            self.select_page(first_page)
+            QTimer.singleShot(1500, self._start_background_update_check)
+            self._start_session_policy_timer()
+
+        # Precisa ser raised por ultimo: qualquer widget adicionado ao
+        # content_layout depois dele (session banner, stack com as paginas)
+        # nasce por cima por padrao e cobriria o recorte do canto de novo.
+        self._content_corner_notch.raise_()
+
+        self.floating_chat_button = None
+        if self._can_view("chats", "CHATS"):
+            self.floating_chat_button = FloatingChatButton(self.service, parent=root)
+            self.floating_chat_button.clicked.connect(self.open_chat_center)
+            self.floating_chat_button.raise_()
+            self._reposition_floating_button()
+
+        self._chat_center_dialog = None
+        self.chat_realtime = None
+        self.session_sync = None
+        if self._can_view("chats", "CHATS"):
+            self.chat_realtime = ChatRealtimeClient(self.service, parent=self)
+            self.chat_realtime.conversation_updated.connect(self._on_conversation_updated)
+            self.chat_realtime.conversation_event.connect(self._on_conversation_event)
+            self.chat_realtime.read_state_updated.connect(self._poll_chat_unread)
+            self.chat_realtime.connection_changed.connect(self._on_realtime_connection_changed)
+            self.chat_realtime.notification_event.connect(self._on_notification_event)
+            self.chat_realtime.start()
+
+            # ETAPA 8: SessionSyncService reconcilia badges/resumo a partir do
+            # snapshot oficial (Postgres) — reusado tanto pelo sync inicial de
+            # login (abaixo) quanto pelo poll periodico, pelos eventos
+            # realtime e pela reconexao (_on_realtime_connection_changed).
+            self.session_sync = SessionSyncService(self.service, parent=self)
+            self.session_sync.sync_completed.connect(self._apply_chat_unread_summary)
+            self.session_sync.sync_failed.connect(self._on_session_sync_failed)
+
+        self.toast_manager = None
+        if has_chats:
+            self.toast_manager = InAppToastManager(self.service, root, self._open_conversation_from_notification)
+
+        if self.notification_bell is not None or self.floating_chat_button is not None:
+            self._chat_poll_timer = QTimer(self)
+            self._chat_poll_timer.timeout.connect(self._poll_chat_unread)
+            self._chat_poll_timer.start(20000)
+            # Sync inicial roda na hora (sem delay artificial) — ordem pedida
+            # pela ETAPA 8 e AUTH -> REALTIME (ja iniciado acima) -> SESSION
+            # SYNC; o timer de 20s continua so como heartbeat de fallback.
+            self._poll_chat_unread()
+
+        if self._update_available_notice and not self._update_available_notice_shown:
+            self._update_available_notice_shown = True
+            log.info("Atualizacao recomendada disponivel | detalhe=%s", self._update_available_notice)
+
+    
+
+    def _start_background_update_check(self):
+        if self._auto_update_checked:
+           return
+        self._auto_update_checked = True
+
+        self._update_thread = QThread(self)
+        self._update_worker = UpdateCheckWorker()
+        self._update_worker.moveToThread(self._update_thread)
+
+        self._update_thread.started.connect(self._update_worker.run)
+        self._update_worker.finished.connect(self._handle_background_update_result)
+        self._update_worker.finished.connect(self._update_thread.quit)
+        self._update_worker.finished.connect(self._update_worker.deleteLater)
+        self._update_thread.finished.connect(self._update_thread.deleteLater)
+        self._update_thread.finished.connect(self._clear_update_worker_refs)
+
+        self._update_thread.start()
+
+    
+
+
+    def _handle_background_update_result(self, result: dict):
+        if not result or result.get("error"):
+            if result and result.get("error"):
+                log.warning("Verificacao automatica indisponivel | tipo=%s | detalhe=%s", result.get("error_kind"), result.get("error"))
+            return
+
+        if result.get("update_available"):
+            dialog = UpdateDialog(result, self)
+            dialog.setStyleSheet(app_stylesheet(self.service.palette))
+            dialog.exec()
+            if getattr(dialog, "update_launched", False):
+                # Fase 07: o Updater ja foi lancado e esta esperando este
+                # processo (parent_pid) encerrar para aplicar a troca --
+                # mesmo padrao de encerramento usado em _logout().
+                self.close()
+                QApplication.quit()
+
+    def _clear_update_worker_refs(self):
+       self._update_thread = None
+       self._update_worker = None
+
+    def _start_session_policy_timer(self, *, interval_ms: int = 20 * 60 * 1000):
+        """Fase 13, Secao 14: re-checa a politica de enforcement periodicamente
+        durante uma sessao ja ativa (nao apenas no startup) -- OPTIONAL/RECOMMENDED
+        atualizam so um aviso discreto, nunca interrompem; REQUIRED/INCOMPATIBLE
+        mostram um aviso persistente orientando salvar e reiniciar. O bloqueio
+        pleno (impedir novas operacoes) acontece de fato na proxima inicializacao,
+        via CompatibilityGateDialog -- ver Riscos/Pendencias no relatorio da fase."""
+        self._session_policy_timer = QTimer(self)
+        self._session_policy_timer.timeout.connect(self._check_session_policy)
+        self._session_policy_timer.start(interval_ms)
+
+    def _check_session_policy(self):
+        from app.integrations.api.client import DesktopApiClient
+        from app.integrations.api.config import DesktopApiConfigStore
+        from app.integrations.api.system_client import SystemApiClient
+        from app.services.compatibility_check import run_compatibility_check
+
+        settings = DesktopApiConfigStore().load_settings()
+        if not settings.enabled:
+            return
+
+        def perform_check():
+            client = DesktopApiClient(settings)
+            try:
+                return run_compatibility_check(SystemApiClient(client))
+            finally:
+                client.close()
+
+        start_worker(self, perform_check, self._on_session_policy_result, self._on_session_policy_error)
+
+    def _on_session_policy_result(self, result):
+        from app.services.session_policy_monitor import classify_session_policy_action
+
+        action = classify_session_policy_action(result)
+        self._apply_session_policy_action(action)
+
+    def _on_session_policy_error(self, exc):
+        log.warning("Falha inesperada ao reavaliar politica de atualizacao durante a sessao", exc_info=exc)
+
+    def _apply_session_policy_action(self, action):
+        if not action.show_banner:
+            self.session_policy_banner.hide()
+            return
+        self.session_policy_banner.setText(action.banner_text)
+        self.session_policy_banner.setProperty("severity", action.severity)
+        self.session_policy_banner.style().unpolish(self.session_policy_banner)
+        self.session_policy_banner.style().polish(self.session_policy_banner)
+        self.session_policy_banner.show()
+
+
+    
     def _create_pages(self):
-        self.pages["PAINEL GERAL"] = DashboardPage(self.service)
-        self.stack.addWidget(self.pages["PAINEL GERAL"])
+        if self._can_view("dashboard", "PAINEL GERAL"):
+            self.pages["PAINEL GERAL"] = DashboardPage(self.service)
+            self.stack.addWidget(self.pages["PAINEL GERAL"])
+
+        if self._can_view("executive_dashboard", "DASHBOARD EXECUTIVO"):
+            self.pages["DASHBOARD EXECUTIVO"] = ExecutiveDashboardPage(self.service)
+            self.stack.addWidget(self.pages["DASHBOARD EXECUTIVO"])
 
         for area in self.service.visible_areas():
-            self.pages[area] = ProcessPage(self.service, area, area.title())
+            if area == "PRODUCAO":
+                self.pages[area] = ProductionAreaPage(self.service)
+            elif area == "GALVANIZACAO":
+                self.pages[area] = GalvanizationAreaPage(self.service)
+            else:
+                self.pages[area] = ProcessPage(self.service, area, area.title())
             self.stack.addWidget(self.pages[area])
 
-        self.pages["PARCIAIS"] = ProcessPage(self.service, "PARCIAIS", "Parciais e pendencias")
-        self.stack.addWidget(self.pages["PARCIAIS"])
+        if self._can_view("partials", "PARCIAIS"):
+            self.pages["PARCIAIS"] = ProcessPage(self.service, "PARCIAIS", "Parciais e pendencias")
+            self.stack.addWidget(self.pages["PARCIAIS"])
 
-        self.pages["FISCAL"] = FiscalPage(self.service)
-        self.stack.addWidget(self.pages["FISCAL"])
+        if self._can_view("fiscal", "FISCAL"):
+            self.pages["FISCAL"] = FiscalPage(self.service)
+            self.stack.addWidget(self.pages["FISCAL"])
 
-        self.pages["RELATORIOS OPERACIONAIS"] = OperationalReportsPage(self.service)
-        self.stack.addWidget(self.pages["RELATORIOS OPERACIONAIS"])
+        if self._can_view("operational_reports", "RELATORIOS OPERACIONAIS"):
+            self.pages["RELATORIOS OPERACIONAIS"] = OperationalReportsPage(self.service)
+            self.stack.addWidget(self.pages["RELATORIOS OPERACIONAIS"])
 
-        self.pages["HISTORICO"] = DataPage(
-            "Historico",
-            [
-                ("proposta", "Proposta"), ("area", "Area"), ("status_anterior", "Anterior"),
-                ("status_novo", "Novo"), ("data_hora", "Quando"), ("usuario", "Usuario"),
-                ("computador", "Computador"), ("observacao", "Observacao"),
-            ],
-            self.service.history_rows,
-        )
-        self.stack.addWidget(self.pages["HISTORICO"])
+        if self._can_view("history", "HISTORICO"):
+            self.pages["HISTORICO"] = DataPage(
+                "Historico",
+                [
+                    ("proposta", "Proposta"), ("area", "Area"), ("status_anterior", "Anterior"),
+                    ("status_novo", "Novo"), ("data_hora", "Quando"), ("usuario", "Usuario"),
+                    ("computador", "Computador"), ("observacao", "Observacao"),
+                ],
+                self.service.history_rows,
+            )
+            self.stack.addWidget(self.pages["HISTORICO"])
 
         if self.service.user_profile() == "Administrador":
             self.pages["AUDITORIA"] = DataPage(
@@ -136,35 +466,90 @@ class MainWindow(QMainWindow):
         )
         self.stack.addWidget(self.pages["RELATORIOS"])
 
-        self.pages["CONFIGURACOES"] = SettingsPage(self.service, self.apply_theme)
-        self.stack.addWidget(self.pages["CONFIGURACOES"])
+    def _can_view(self, area_key: str, nav_key: str = "") -> bool:
+        if hasattr(self.service, "can_view"):
+            return bool(self.service.can_view(area_key))
+        visible = set(self.service.visible_areas()) if hasattr(self.service, "visible_areas") else set()
+        always_visible = {"PAINEL GERAL", "DASHBOARD EXECUTIVO", "FISCAL", "PARCIAIS", "RELATORIOS OPERACIONAIS", "HISTORICO", "CONFIGURACOES"}
+        return nav_key in always_visible or nav_key in visible
 
     def select_page(self, key: str):
         page = self.pages.get(key)
         if not page:
             return
+        previous = self.stack.currentWidget()
+        if previous is not page and hasattr(previous, "deactivate_transient_modes"):
+            previous.deactivate_transient_modes()
         self.stack.setCurrentWidget(page)
         self.sidebar.set_active(key)
         if hasattr(page, "refresh"):
             page.refresh()
         self._page_animation = fade_in(page)
 
+    def open_chat_center(self, *, proposal_id=None, conversation_id=None, message_id=None):
+        if not self._can_view("chats", "CHATS"):
+            return
+        dialog = ChatCenterDialog(
+            self.service,
+            self,
+            proposal_id=proposal_id,
+            conversation_id=conversation_id,
+            message_id=message_id,
+        )
+        self._chat_center_dialog = dialog
+        try:
+            dialog.exec()
+        finally:
+            self._chat_center_dialog = None
+
+    def open_settings(self):
+        if not self._can_view("settings", "CONFIGURACOES"):
+            return
+        dialog = SettingsDialog(self.service, self.apply_theme, self)
+        self._settings_dialog = dialog
+        try:
+            dialog.exec()
+        finally:
+            self._settings_dialog = None
+
+    def open_user_profile(self, focus_password: bool = False):
+        from app.ui.user_profile_dialog import UserProfileDialog
+
+        dialog = UserProfileDialog(self.service, focus_password=focus_password, parent=self)
+        if dialog.exec():
+            self.title_bar.apply_palette(self.service.palette)
+            self.title_bar.refresh_profile_avatar()
+
     def refresh_current(self):
         page = self.stack.currentWidget()
         if hasattr(page, "refresh"):
             page.refresh()
 
+    def _update_corner_notch_colors(self):
+        palette = self.service.palette
+        self._content_corner_notch.set_colors(chrome_bg_color(palette))
+
     def apply_theme(self):
+        icon_cache.clear()
         self.setStyleSheet(app_stylesheet(self.service.palette))
         current = self.stack.currentWidget()
         self.sidebar.setStyleSheet("")
+        self.sidebar.apply_palette(self.service.palette)
+        self.title_bar.apply_palette(self.service.palette)
+        self.title_bar.set_theme_icon(getattr(self.service, "palette_name", "claro") != "claro")
+        self._update_corner_notch_colors()
         for page in self.pages.values():
             page.style().unpolish(page)
             page.style().polish(page)
+            refresh_area_theme(page, self.service.palette)
         if current and hasattr(current, "refresh"):
             current.refresh()
         if current:
             self._page_animation = fade_in(current)
+
+    def toggle_theme(self):
+        self.service.toggle_palette()
+        self.apply_theme()
 
     def toggle_sidebar(self):
         start = self.sidebar.width()
@@ -173,6 +558,179 @@ class MainWindow(QMainWindow):
         self.sidebar.set_collapsed(self.sidebar_collapsed)
         self._width_animation = animate_width(self.sidebar, start, end)
 
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._reposition_floating_button()
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() == QEvent.WindowStateChange and hasattr(self, "title_bar"):
+            self.title_bar.set_maximized(self.isMaximized())
+
+    def _logout(self):
+        if self.title_bar is not None:
+            self.title_bar.notification_bell.close_center()
+        if self.session_sync is not None:
+            self.session_sync.stop()
+        if self.chat_realtime is not None:
+            self.chat_realtime.stop()
+        try:
+            self.service.logout()
+        except Exception:
+            log.exception("Falha ao encerrar sessao no logout")
+        self.close()
+        QApplication.quit()
+
+    def _reposition_floating_button(self):
+        button = getattr(self, "floating_chat_button", None)
+        if not button:
+            return
+        parent = button.parentWidget()
+        if not parent:
+            return
+        margin = 24
+        x = parent.width() - button.width() - margin
+        y = parent.height() - button.height() - margin
+        button.move(max(0, x), max(0, y))
+
+    def _poll_chat_unread(self):
+        # ETAPA 8: todo gatilho (timer de 20s, evento realtime, callback de
+        # leitura local, sync inicial de login) passa pelo mesmo
+        # SessionSyncService — garante o sequence guard contra resposta fora
+        # de ordem em qualquer um desses caminhos, nao so no login.
+        if self.session_sync is not None:
+            self.session_sync.sync("poll")
+        if self.notification_bell is not None and hasattr(self.service, "chat_notifications"):
+            if self._notification_poll_thread is None or not self._notification_poll_thread.isRunning():
+                # lista curta so pros toasts in-app de notificacao nova, nunca pra contar.
+                thread = start_worker(
+                    self, lambda: self.service.chat_notifications(limit=50), self._apply_notifications_summary, lambda _exc: None
+                )
+                self._notification_poll_thread = thread
+                thread.finished.connect(lambda: self._clear_notification_poll(thread))
+        # Fase 10: o badge do sino vem da camada generica de notificacoes
+        # (total_unread de TODAS as categorias, nao so chat).
+        if self.notification_bell is not None and hasattr(self.service, "notifications_unread_summary"):
+            if self._notifications_summary_thread is None or not self._notifications_summary_thread.isRunning():
+                summary_thread = start_worker(
+                    self, self.service.notifications_unread_summary, self._apply_notifications_unread_summary, lambda _exc: None
+                )
+                self._notifications_summary_thread = summary_thread
+                summary_thread.finished.connect(lambda: self._clear_notifications_summary_thread(summary_thread))
+
+    def _clear_notifications_summary_thread(self, thread) -> None:
+        if self._notifications_summary_thread is thread:
+            self._notifications_summary_thread = None
+
+    def _apply_notifications_unread_summary(self, summary: dict):
+        if self.notification_bell is not None:
+            self.notification_bell.set_unread_count(int((summary or {}).get("total_unread") or 0))
+
+    def _clear_notification_poll(self, thread) -> None:
+        if self._notification_poll_thread is thread:
+            self._notification_poll_thread = None
+
+    def _apply_notifications_summary(self, notifications):
+        # o contador do sino vem de notification_unread_count (COUNT agregado
+        # no backend, via _apply_chat_unread_summary) — esta lista so serve
+        # pros toasts de notificacao nova, nunca pra contar (list_notifications
+        # tem teto de linhas e nao pode ser usada como fonte do badge).
+        if self.toast_manager is not None:
+            self.toast_manager.set_current_conversation(self._current_open_conversation_id())
+            self.toast_manager.handle_notifications(notifications or [])
+
+    def _current_open_conversation_id(self):
+        dialog = self._chat_center_dialog
+        if dialog is None:
+            return None
+        panel = getattr(dialog.page, "panel", None)
+        return getattr(panel, "conversation_id", None) if panel is not None else None
+
+    def _open_conversation_from_notification(self, proposal_id, conversation_id, message_id):
+        self.open_chat_center(proposal_id=proposal_id, conversation_id=conversation_id, message_id=message_id)
+
+    def _on_realtime_connection_changed(self, connected: bool):
+        # ETAPA 8: primeira conexao apos o login ja e coberta pelo sync
+        # inicial disparado em _build() — so reconciliamos aqui numa
+        # RECONEXAO de verdade (rede caiu, notebook suspendeu), pra nao
+        # duplicar a busca que ja esta em voo.
+        if connected and self._realtime_ever_connected:
+            self._poll_chat_unread()
+        if connected:
+            self._realtime_ever_connected = True
+
+    def _on_session_sync_failed(self, _exc):
+        # Nao mexe em nenhum badge (evita mostrar "0" como se fosse
+        # verdade) e nao marca o resumo de login como exibido — assim, o
+        # resumo aparece assim que um sync futuro (poll/reconexao) tiver
+        # sucesso, em vez de nunca aparecer.
+        log.warning("Falha ao sincronizar estado de chat/notificacoes")
+
+    def _on_conversation_updated(self, conversation_id: int):
+        self._poll_chat_unread()
+        dialog = self._chat_center_dialog
+        if dialog is not None:
+            dialog.page.on_conversation_updated(conversation_id)
+
+    def _on_conversation_event(self, event_type: str, data: dict):
+        dialog = self._chat_center_dialog
+        if dialog is not None and hasattr(dialog.page, "on_conversation_event"):
+            dialog.page.on_conversation_event(event_type, data)
+
+    def _on_notification_event(self, event_type: str, data: dict):
+        # ETAPA 10: badge do sino reconcilia pelo mesmo SessionSyncService
+        # de sempre (nunca confia no corpo do evento) -- e se a Central
+        # estiver aberta agora, ela tambem reage (refresh silencioso se o
+        # usuario esta no topo, aviso discreto se estiver lendo historico).
+        self._poll_chat_unread()
+        if self.title_bar is not None:
+            self.title_bar.notification_bell.apply_realtime_event(event_type, data)
+
+    def _apply_chat_unread_summary(self, summary: dict):
+        total = int(summary.get("total_unread") or 0)
+        if self.floating_chat_button is not None:
+            self.floating_chat_button.set_unread_count(total)
+        self.title_bar.set_chat_unread_count(total)
+        # Fase 10: o badge do sino agora vem de notifications_unread_summary
+        # (via _apply_notifications_unread_summary) — todas as categorias, nao
+        # so as CHAT_*. Aqui so cuidamos de chat/pendencias.
+        if self.pending_btn is not None:
+            self.title_bar.set_pending_count(int(summary.get("pending_questions") or 0))
+        if not self._login_summary_shown:
+            self._login_summary_shown = True
+            self._show_login_summary(summary)
+
+    def _show_login_summary(self, summary: dict):
+        # so a primeira leitura pos-login (ETAPA 6) — puramente informativo,
+        # nunca chama mark-read/resolve, so apresenta numeros que os badges
+        # do header ja mostram.
+        unread_messages = int(summary.get("total_unread") or 0)
+        unread_mentions = int(summary.get("unread_mentions") or 0)
+        open_action_required = int(summary.get("pending_questions") or 0)
+        if unread_messages <= 0 and unread_mentions <= 0 and open_action_required <= 0:
+            return
+        user = self.service.user or {}
+        display_name = user.get("display_name") or user.get("username") or ""
+        banner = LoginSummaryBanner(self.service, display_name, unread_messages, unread_mentions, open_action_required, parent=self)
+        banner.view_messages_requested.connect(self.open_chat_center)
+        banner.view_pending_requested.connect(self.open_chat_center)
+        self.content_layout.insertWidget(0, banner)
+
     def closeEvent(self, event):
-        self.service.close()
-        super().closeEvent(event)
+      log.info("Fechamento solicitado")
+      if self.title_bar is not None:
+          self.title_bar.notification_bell.close_center()
+      if self.session_sync is not None:
+          self.session_sync.stop()
+      if self.chat_realtime is not None:
+          self.chat_realtime.stop()
+      if self._update_thread and self._update_thread.isRunning():
+           self._update_thread.requestInterruption()
+           self._update_thread.quit()
+           if not self._update_thread.wait(3000):
+               log.warning("Thread de atualizacao nao encerrou dentro do prazo")
+      try:
+          self.service.close()
+      except Exception:
+          log.exception("Falha ao fechar conexao do sistema")
+      super().closeEvent(event)
