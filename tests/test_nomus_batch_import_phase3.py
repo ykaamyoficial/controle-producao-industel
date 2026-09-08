@@ -194,7 +194,8 @@ class NomusBatchImportPhase3Tests(unittest.TestCase):
 
         thread.start()
         self.assertTrue(completed.wait(3))
-        thread.wait(3000)
+        thread.quit()
+        self.assertTrue(thread.wait(3000))  # nunca deixar a QThread viva pro GC
 
         self.assertTrue(client.thread_ids)
         self.assertNotIn(calling_thread, client.thread_ids)

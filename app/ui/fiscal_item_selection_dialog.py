@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import QAbstractItemView, QDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QTreeWidget, QTreeWidgetItem, QVBoxLayout
 
 from app.services.app_logging import get_logger
@@ -245,9 +245,24 @@ class FiscalItemSelectionDialog(QDialog):
                     self.selected_item_ids.update(ids)
                 else:
                     self.selected_item_ids.difference_update(ids)
-                self._render()
+                # NAO reconstruir a arvore (self._render -> self.tree.clear())
+                # aqui dentro: estamos tratando o sinal itemChanged do proprio
+                # `item` pai, e limpar a arvore destroi esse QTreeWidgetItem em
+                # pleno voo (use-after-free -> corrompe o heap e derruba a
+                # suite/o app mais tarde, em outro ponto qualquer). O estado
+                # logico ja esta atualizado; so o redesenho e adiado.
+                self._update_summary()
+                QTimer.singleShot(0, self._render_if_alive)
                 return
         self._update_summary()
+
+    def _render_if_alive(self):
+        try:
+            self.tree.blockSignals(True)
+        except RuntimeError:
+            return  # dialog ja fechado/destruido antes do redesenho adiado
+        self.tree.blockSignals(False)
+        self._render()
 
     def _item_clicked(self, item: QTreeWidgetItem, column: int):
         if item is not None and column != 0 and item.data(0, _ITEM_ROLE) and not item.isDisabled():

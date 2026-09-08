@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import os
+import time
 import unittest
 from unittest.mock import MagicMock, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QEventLoop, QTimer
+from PySide6.QtCore import QThread
 from PySide6.QtWidgets import QApplication
 
 from app.services.backend_adapter import OFFICIAL_COLOR_PALETTES, legacy
@@ -97,20 +98,39 @@ class ProcessDetailDialogTests(unittest.TestCase):
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
 
-    @staticmethod
-    def _wait_loaded(dialog: ProcessDetailDialog) -> None:
-        # ProcessDetailDialog.load() busca em thread de fundo (start_worker);
-        # espera o sinal `loaded` (emitido em _load_success/_load_error) do
-        # mesmo jeito que test_background_stability.py espera workers, com um
-        # teto de seguranca pra nunca travar a suite se algo quebrar.
-        loop = QEventLoop()
-        dialog.loaded.connect(loop.quit)
-        QTimer.singleShot(5000, loop.quit)
-        loop.exec()
+    def setUp(self):
+        self._dialogs: list[ProcessDetailDialog] = []
+
+    def tearDown(self):
+        # ProcessDetailDialog.load() dispara start_worker (QThread real
+        # parentada ao dialog). Sem parar/esperar essas threads, o dialog local
+        # e coletado pelo GC com a QThread ainda viva ("QThread: Destroyed
+        # while thread is still running") -> corrompe o heap e derruba a suite
+        # mais tarde, num teste posterior qualquer.
+        for dialog in self._dialogs:
+            for thread in dialog.findChildren(QThread):
+                thread.quit()
+                thread.wait(2000)
+            dialog.deleteLater()
+        self._dialogs.clear()
+        self.app.processEvents()
+
+    def _wait_loaded(self, dialog: ProcessDetailDialog) -> None:
+        # Poll com processEvents em vez de QEventLoop.exec() aninhado: um event
+        # loop aninhado aqui reentra o processamento de DeferredDelete/sinais
+        # cross-thread de objetos vazados por testes anteriores no meio de uma
+        # coleta de lixo, o que aborta o processo.
+        done = {"loaded": False}
+        dialog.loaded.connect(lambda *_: done.__setitem__("loaded", True))
+        deadline = time.monotonic() + 5.0
+        while not done["loaded"] and time.monotonic() < deadline:
+            self.app.processEvents()
+            time.sleep(0.005)
 
     def _dialog(self, service=None) -> ProcessDetailDialog:
         service = service or FakeDetailService()
         dialog = ProcessDetailDialog(service, service.process["id"], None)
+        self._dialogs.append(dialog)
         self._wait_loaded(dialog)
         return dialog
 
@@ -252,6 +272,7 @@ class ProcessDetailDialogTests(unittest.TestCase):
         service.process_partials = counting_partials
 
         dialog = ProcessDetailDialog(service, 10, None, process_ids=[10, 11])
+        self._dialogs.append(dialog)
         self._wait_loaded(dialog)
 
         # ProcessDetailDialog.load() ainda faz sua propria chamada unica a

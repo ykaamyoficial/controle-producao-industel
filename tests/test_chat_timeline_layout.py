@@ -105,10 +105,30 @@ class ChatTimelineLayoutTests(unittest.TestCase):
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
 
+    def setUp(self):
+        self._panels: list[ChatConversationPanel] = []
+
+    def tearDown(self):
+        # ChatConversationPanel.refresh() usa QThread real (start_worker). Sem
+        # fechar o painel, o dialog local e coletado pelo GC com a QThread ainda
+        # viva -> corrompe o heap e derruba a suite num teste posterior
+        # qualquer. panel.close() dispara closeEvent -> cleanup() (quit()+wait()
+        # de todas as threads do painel).
+        for panel in self._panels:
+            try:
+                panel.close()
+                panel.deleteLater()
+            except RuntimeError:
+                pass
+        self._panels.clear()
+        for _ in range(5):
+            self.app.processEvents()
+
     def _build_panel(self, entries: list[dict]) -> ChatConversationPanel:
         service = FakeService()
         service.timeline_items = entries
         panel = ChatConversationPanel(service, proposal_id=123)
+        self._panels.append(panel)
         panel.resize(700, 900)
         panel.show()
         # refresh() usa uma QThread real (start_worker); processa o loop de

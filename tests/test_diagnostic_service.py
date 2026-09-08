@@ -28,7 +28,9 @@ def _client_factory(handler):
 
 
 _COMPATIBLE_PAYLOAD = {
-    "server_version": "0.8.0",
+    # >= app.version.MINIMUM_API_VERSION (0.8.1) -- fixture ficou obsoleta quando
+    # o minimo subiu; um server 0.8.0 hoje e SERVER_UPDATE_REQUIRED, nao "compativel".
+    "server_version": "0.9.0",
     "api_contract_version": "v1",
     "database_revision": "rev1",
     "minimum_desktop_version": "0.1.0",
