@@ -290,6 +290,81 @@ async def _insert_notification(session: AsyncSession, *, user_id: int, conversat
         .on_conflict_do_nothing(index_elements=["user_id", "message_id", "notification_type"])
     )
     await session.execute(stmt)
+    await _mirror_notification_to_generic(
+        session, user_id=user_id, conversation_id=conversation_id, message_id=message_id, notification_type=notification_type
+    )
+
+
+# Ponte para a camada generica de notificacoes (api/app/modules/notifications).
+# Nesta fase o chat continua escrevendo em `chat_notifications` normalmente e
+# apenas ESPELHA cada aviso para `notifications`, para o novo agente de bandeja
+# e a futura Central unificada terem uma unica fonte. Mapeamento
+# notification_type -> (category, severity):
+_GENERIC_NOTIFICATION_MAP: dict[str, tuple[str, str]] = {
+    "MENSAGEM": ("CHAT_MENSAGEM", "info"),
+    "MENCAO": ("CHAT_MENCAO", "normal"),
+    "RESPOSTA": ("CHAT_RESPOSTA", "normal"),
+    "PERGUNTA_ATRIBUIDA": ("CHAT_PERGUNTA", "alta"),
+    "PERGUNTA_ATRASADA": ("CHAT_PERGUNTA_ATRASADA", "critica"),
+    "PERGUNTA_RESPONDIDA": ("CHAT_RESPOSTA", "normal"),
+    "NOTA_DIRECIONADA": ("CHAT_NOTA", "normal"),
+    "NOTA_IMPORTANTE": ("CHAT_NOTA", "alta"),
+}
+
+_GENERIC_NOTIFICATION_VERB = {
+    "MENSAGEM": "enviou uma mensagem",
+    "MENCAO": "mencionou voce",
+    "RESPOSTA": "respondeu sua mensagem",
+    "PERGUNTA_ATRIBUIDA": "atribuiu uma pergunta a voce",
+    "PERGUNTA_ATRASADA": "tem uma pergunta atribuida a voce em atraso",
+    "PERGUNTA_RESPONDIDA": "respondeu sua pergunta",
+    "NOTA_DIRECIONADA": "registrou uma nota interna para voce",
+    "NOTA_IMPORTANTE": "registrou uma nota interna importante",
+}
+
+
+async def _mirror_notification_to_generic(
+    session: AsyncSession, *, user_id: int, conversation_id: int, message_id: int, notification_type: str
+) -> None:
+    mapping = _GENERIC_NOTIFICATION_MAP.get(notification_type)
+    if mapping is None:
+        return
+    from api.app.modules.notifications import service as notifications_service
+
+    category, severity = mapping
+    row = (
+        await session.execute(
+            select(ChatMessage.body, ChatMessage.author_user_id, ChatConversation.proposal_id)
+            .join(ChatConversation, ChatConversation.id == ChatMessage.conversation_id)
+            .where(ChatMessage.id == message_id)
+        )
+    ).first()
+    if row is None:
+        return
+    body, author_user_id, proposal_id = row
+    author = await session.get(User, author_user_id) if author_user_id else None
+    who = author.display_name if author else "Alguem"
+    if proposal_id:
+        deep_link = f"proposal/{proposal_id}?message={message_id}"
+    else:
+        deep_link = f"chat/{conversation_id}?message={message_id}"
+    snippet = (body or "").strip().replace("\n", " ")
+    if len(snippet) > 160:
+        snippet = snippet[:157] + "..."
+    try:
+        await notifications_service.emit(
+            session,
+            user_ids=[user_id],
+            category=category,
+            severity=severity,
+            title=f"{who} {_GENERIC_NOTIFICATION_VERB.get(notification_type, 'gerou uma notificacao')}",
+            body=snippet,
+            deep_link=deep_link,
+            actor_user_id=author_user_id,
+            dedup_key=f"chat:{message_id}:{notification_type}",
+        )
+    except Exception:  # pragma: no cover - espelho best-effort, nunca derruba o chat
+        logger.warning("chat_notification_mirror_falhou | message_id=%s tipo=%s", message_id, notification_type, exc_info=True)
 
 
 async def _prior_participants(session: AsyncSession, conversation_id: int, *, exclude_user_id: int, exclude_message_id: int) -> set[int]:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import uuid
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 
@@ -5782,6 +5783,95 @@ async def _request_event_exists(
     return (await session.execute(stmt.limit(1))).scalar_one_or_none() is not None
 
 
+# Fase 10 (notificacoes multicanal): eventos de proposta que valem uma
+# notificacao para o criador + participantes do chat da proposta. Eventos de
+# recalculo/fluxo de item/sync ficam de fora de proposito (ruido operacional).
+_NOTIFY_PROPOSAL_EVENTS: dict[str, tuple[str, str]] = {
+    "PROPOSAL_STATUS_CHANGED": ("PROPOSTA_STATUS", "normal"),
+    "WAREHOUSE_STATUS_CHANGED": ("ALMOXARIFADO", "normal"),
+    "PROPOSAL_CANCELLED": ("PROPOSTA_STATUS", "alta"),
+    "PROPOSAL_CANCELLED_TERMINAL": ("PROPOSTA_STATUS", "alta"),
+    "PROPOSAL_DEACTIVATED": ("PROPOSTA_STATUS", "alta"),
+    "PROPOSAL_REACTIVATED": ("PROPOSTA_STATUS", "normal"),
+    "PROPOSAL_ADMINISTRATIVE_CORRECTION": ("PROPOSTA_STATUS", "normal"),
+    "PRODUCTION_STARTED": ("PRODUCAO_LOTE", "normal"),
+    "PRODUCTION_PAUSED": ("PRODUCAO_LOTE", "normal"),
+    "PRODUCTION_RESUMED": ("PRODUCAO_LOTE", "normal"),
+    "PRODUCTION_COMPLETED": ("PRODUCAO_LOTE", "alta"),
+    "PRODUCTION_PARTIALLY_COMPLETED": ("PRODUCAO_LOTE", "normal"),
+    "REALLOCATED_PRODUCTION_COMPLETED": ("PRODUCAO_LOTE", "normal"),
+    "GALVANIZATION_ITEM_SENT": ("GALVANIZACAO_LOTE", "normal"),
+    "GALVANIZATION_ITEM_RETURNED": ("GALVANIZACAO_LOTE", "normal"),
+    "GALVANIZATION_RETURN_REGISTERED": ("GALVANIZACAO_LOTE", "normal"),
+    "EXPEDITION_SEPARATION_STARTED": ("EXPEDICAO", "normal"),
+    "EXPEDITION_ITEM_DELIVERED": ("EXPEDICAO", "alta"),
+    "EXPEDITION_RETURN_TO_PRODUCTION": ("EXPEDICAO", "alta"),
+    "COMPENSATED_REMANAGEMENT_APPLIED": ("PROPOSTA_STATUS", "alta"),
+    "COMPENSATED_REMANAGEMENT_RECEIVED": ("PROPOSTA_STATUS", "normal"),
+    "PARENT_PROPOSAL_OPERATIONAL_DEATH": ("PROPOSTA_STATUS", "alta"),
+    "PARENT_PROPOSAL_REBORN": ("PROPOSTA_STATUS", "normal"),
+}
+
+
+async def _proposal_notification_recipients(session: AsyncSession, proposal: Proposal) -> set[int]:
+    """Quem acompanha esta proposta: o criador + quem ja mandou mensagem no
+    chat dela (mesmo conceito de 'participante' do modulo chat)."""
+    from api.app.modules.chat.models import ChatConversation, ChatMessage
+
+    recipients: set[int] = set()
+    if proposal.created_by:
+        recipients.add(int(proposal.created_by))
+    rows = (
+        await session.execute(
+            select(ChatMessage.author_user_id)
+            .join(ChatConversation, ChatConversation.id == ChatMessage.conversation_id)
+            .where(ChatConversation.proposal_id == proposal.id, ChatMessage.author_user_id.is_not(None))
+            .distinct()
+        )
+    ).scalars().all()
+    recipients.update(int(uid) for uid in rows if uid)
+    return recipients
+
+
+async def _emit_proposal_event_notification(
+    session: AsyncSession,
+    proposal: Proposal,
+    event_type: str,
+    actor: User,
+    *,
+    request_id: str | None,
+    from_status: str | None,
+    to_status: str | None,
+    metadata: dict | None,
+) -> None:
+    mapping = _NOTIFY_PROPOSAL_EVENTS.get(event_type)
+    if mapping is None:
+        return
+    from api.app.modules.notifications import service as notifications_service
+
+    category, severity = mapping
+    recipients = await _proposal_notification_recipients(session, proposal)
+    recipients.discard(actor.id)
+    if not recipients:
+        return
+    headline = _activity_headline(event_type, actor.display_name, metadata or {}, from_status, to_status)
+    key_suffix = request_id or uuid.uuid4().hex
+    try:
+        await notifications_service.emit(
+            session,
+            user_ids=recipients,
+            category=category,
+            severity=severity,
+            title=headline,
+            body=f"{proposal.proposal_number} - {proposal.customer_name}",
+            deep_link=f"proposal/{proposal.id}",
+            actor_user_id=actor.id,
+            dedup_key=f"pevent:{proposal.id}:{event_type}:{key_suffix}",
+        )
+    except Exception:  # pragma: no cover - best effort, nunca derruba a transacao de negocio
+        logger.warning("proposal_event_notification_falhou | proposal=%s evento=%s", proposal.id, event_type, exc_info=True)
+
+
 async def _record_event(
     session: AsyncSession,
     proposal: Proposal,
@@ -5828,6 +5918,16 @@ async def _record_event(
         actor_user_id=actor.id,
         request_id=request_id,
         details=security_details,
+    )
+    await _emit_proposal_event_notification(
+        session,
+        proposal,
+        event_type,
+        actor,
+        request_id=request_id,
+        from_status=from_status,
+        to_status=to_status,
+        metadata=metadata,
     )
 
 
