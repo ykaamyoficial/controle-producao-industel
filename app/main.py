@@ -249,6 +249,18 @@ def main():
         run_notifier_loop()
         return 0
 
+    # Clique num toast do agente de bandeja com o app fechado: guarda a rota
+    # para a MainWindow abrir o item certo ao terminar de iniciar.
+    if "--open" in sys.argv[1:]:
+        try:
+            requested_route = sys.argv[sys.argv.index("--open") + 1]
+        except IndexError:
+            requested_route = ""
+        if requested_route:
+            from app.services.notifier_agent import stash_pending_deep_link
+
+            stash_pending_deep_link(requested_route)
+
     def handle_exception(exc_type, exc_value, exc_traceback):
         traceback.print_exception(exc_type, exc_value, exc_traceback)
         log.critical("Erro nao tratado", exc_info=(exc_type, exc_value, exc_traceback))

@@ -148,6 +148,9 @@ class DesktopApiClient:
     def patch(self, path: str, *, json_payload: dict[str, Any] | None = None, access_token: str | None = None) -> ApiResponse:
         return self.request("PATCH", path, json_payload=json_payload, access_token=access_token, retries=0)
 
+    def put(self, path: str, *, json_payload: dict[str, Any] | None = None, access_token: str | None = None) -> ApiResponse:
+        return self.request("PUT", path, json_payload=json_payload, access_token=access_token, retries=0)
+
     def delete(self, path: str, *, json_payload: dict[str, Any] | None = None, access_token: str | None = None) -> ApiResponse:
         return self.request("DELETE", path, json_payload=json_payload, access_token=access_token, retries=0)
 
