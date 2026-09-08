@@ -5872,6 +5872,89 @@ async def _emit_proposal_event_notification(
         logger.warning("proposal_event_notification_falhou | proposal=%s evento=%s", proposal.id, event_type, exc_info=True)
 
 
+# Fase 10 (follow-up): lotes de galvanizacao e jobs de sync tambem notificam.
+_NOTIFY_LOAD_EVENTS = {"GALVANIZATION_LOAD_RELEASED", "GALVANIZATION_LOAD_CLOSED"}
+_LOAD_EVENT_VERB = {
+    "GALVANIZATION_LOAD_RELEASED": "liberou a carga de galvanizacao",
+    "GALVANIZATION_LOAD_CLOSED": "fechou a carga de galvanizacao",
+}
+
+
+async def _emit_load_event_notification(session: AsyncSession, load: GalvanizationLoad, event_type: str, actor: User) -> None:
+    if event_type not in _NOTIFY_LOAD_EVENTS:
+        return
+    from api.app.modules.notifications import service as notifications_service
+
+    recipients: set[int] = set()
+    if load.created_by:
+        recipients.add(int(load.created_by))
+    proposal_creator_rows = (
+        await session.execute(
+            select(Proposal.created_by)
+            .join(GalvanizationLoadItem, GalvanizationLoadItem.proposal_id == Proposal.id)
+            .where(GalvanizationLoadItem.load_id == load.id, Proposal.created_by.is_not(None))
+            .distinct()
+        )
+    ).scalars().all()
+    recipients.update(int(uid) for uid in proposal_creator_rows if uid)
+    recipients.discard(actor.id)
+    if not recipients:
+        return
+    try:
+        await notifications_service.emit(
+            session,
+            user_ids=recipients,
+            category="GALVANIZACAO_LOTE",
+            severity="normal",
+            title=f"{actor.display_name} {_LOAD_EVENT_VERB.get(event_type, 'atualizou a carga de galvanizacao')} {load.code}",
+            body=f"Carga {load.code}",
+            deep_link=f"galvanizacao/{load.id}",
+            actor_user_id=actor.id,
+            dedup_key=f"load:{load.id}:{event_type}",
+        )
+    except Exception:  # pragma: no cover
+        logger.warning("load_event_notification_falhou | load=%s evento=%s", load.id, event_type, exc_info=True)
+
+
+async def _emit_sync_finished_notification(
+    session: AsyncSession, actor: User, *, sync_label: str, run: "SyncRun", summary: "SyncSummary", request_id: str | None
+) -> list[int]:
+    """Avisa quem disparou a importacao (/admin/sync/*) que ela terminou.
+    Retorna os user_ids criados para publish_created pos-commit."""
+    from api.app.modules.notifications import service as notifications_service
+
+    partial = run.status != "COMPLETED"
+    resumo = (
+        f"{summary.created} criada(s), {summary.updated} atualizada(s), "
+        f"{summary.unchanged} sem mudanca, {summary.rejected} rejeitada(s)"
+    )
+    try:
+        return await notifications_service.emit(
+            session,
+            user_ids=[actor.id],
+            category="NOMUS_IMPORTACAO",
+            severity="alta" if partial else "normal",
+            title=f"Importacao de {sync_label}: {'PARCIAL' if partial else 'concluida'}",
+            body=resumo,
+            actor_user_id=None,
+            dedup_key=f"sync:{run.id}",
+        )
+    except Exception:  # pragma: no cover
+        logger.warning("sync_notification_falhou | sync_run=%s", run.id, exc_info=True)
+        return []
+
+
+async def _publish_sync_notification(user_ids: list[int]) -> None:
+    if not user_ids:
+        return
+    try:
+        from api.app.modules.notifications import service as notifications_service
+
+        await notifications_service.publish_created(user_ids)
+    except Exception:  # pragma: no cover
+        logger.warning("sync_notification_publish_falhou", exc_info=True)
+
+
 async def _record_event(
     session: AsyncSession,
     proposal: Proposal,
@@ -5970,6 +6053,7 @@ async def _record_load_event(
         request_id=request_id,
         details=security_details,
     )
+    await _emit_load_event_notification(session, load, event_type, actor)
 
 
 async def sync_batch(session: AsyncSession, batch: ProposalSyncBatch, actor: User, *, request_id: str | None) -> SyncSummary:
@@ -5999,7 +6083,9 @@ async def sync_batch(session: AsyncSession, batch: ProposalSyncBatch, actor: Use
         run.details = {"batch_number": batch.batch_number, "batch_total": batch.batch_total, "errors": summary.errors[:20]}
         event = "PROPOSAL_SYNC_COMPLETED" if run.status == "COMPLETED" else "PROPOSAL_SYNC_PARTIAL"
         await auth_repository.create_security_event(session, event, actor_user_id=actor.id, request_id=request_id, details={"sync_run_id": run.id, "received": summary.received, "created": summary.created, "updated": summary.updated, "unchanged": summary.unchanged, "rejected": summary.rejected})
+        notified = await _emit_sync_finished_notification(session, actor, sync_label="propostas", run=run, summary=summary, request_id=request_id)
         await session.commit()
+        await _publish_sync_notification(notified)
         return summary
     except Exception as exc:
         await session.rollback()
@@ -6188,7 +6274,9 @@ async def sync_galvanization_batch(session: AsyncSession, batch: GalvanizationSy
         run.details = {"batch_number": batch.batch_number, "batch_total": batch.batch_total, "errors": summary.errors[:20]}
         event = "GALVANIZATION_SYNC_COMPLETED" if run.status == "COMPLETED" else "GALVANIZATION_SYNC_PARTIAL"
         await auth_repository.create_security_event(session, event, actor_user_id=actor.id, request_id=request_id, details={"sync_run_id": run.id, "received": summary.received, "created": summary.created, "updated": summary.updated, "unchanged": summary.unchanged, "rejected": summary.rejected})
+        notified = await _emit_sync_finished_notification(session, actor, sync_label="galvanizacao", run=run, summary=summary, request_id=request_id)
         await session.commit()
+        await _publish_sync_notification(notified)
         return summary
     except Exception as exc:
         await session.rollback()
@@ -6301,7 +6389,9 @@ async def sync_fiscal_batch(session: AsyncSession, batch: FiscalSyncBatch, actor
         run.details = {"batch_number": batch.batch_number, "batch_total": batch.batch_total, "errors": summary.errors[:20]}
         event = "FISCAL_SYNC_COMPLETED" if run.status == "COMPLETED" else "FISCAL_SYNC_PARTIAL"
         await auth_repository.create_security_event(session, event, actor_user_id=actor.id, request_id=request_id, details={"sync_run_id": run.id, "received": summary.received, "created": summary.created, "updated": summary.updated, "unchanged": summary.unchanged, "rejected": summary.rejected})
+        notified = await _emit_sync_finished_notification(session, actor, sync_label="fiscal (Nomus)", run=run, summary=summary, request_id=request_id)
         await session.commit()
+        await _publish_sync_notification(notified)
         return summary
     except Exception as exc:
         await session.rollback()

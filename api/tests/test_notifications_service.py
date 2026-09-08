@@ -86,7 +86,8 @@ class NotificationsServiceTests(unittest.TestCase):
                 text(
                     "TRUNCATE TABLE notification_deliveries, notification_preferences, "
                     "notification_user_settings, notifications, "
-                    "proposal_events, chat_messages, chat_conversations, proposals, sync_runs, "
+                    "galvanization_load_events, galvanization_load_items, galvanization_loads, "
+                    "proposal_events, proposal_items, chat_messages, chat_conversations, proposals, sync_runs, "
                     "role_permissions, user_roles, users, roles RESTART IDENTITY CASCADE"
                 )
             )
@@ -277,6 +278,74 @@ class NotificationsServiceTests(unittest.TestCase):
                 self.assertEqual(got, {creator.id, participant.id})
                 self.assertEqual(rows[0].category, "PRODUCAO_LOTE")
                 self.assertEqual(rows[0].deep_link, f"proposal/{proposal.id}")
+
+        asyncio.run(_run())
+
+    def test_sync_finished_notification_goes_to_the_actor(self):
+        from api.app.modules.proposals import service as proposals_service
+        from api.app.modules.proposals.models import SyncRun
+        from api.app.modules.proposals.schemas import SyncSummary
+
+        async def _run():
+            factory = get_sessionmaker()
+            async with factory() as session:
+                actor = await self._make_user(session, "sync_actor")
+                run = SyncRun(sync_type="proposals", status="PARTIAL", source_identifier="nomus", actor_user_id=actor.id)
+                session.add(run)
+                await session.flush()
+                summary = SyncSummary(received=10, created=6, updated=1, unchanged=0, rejected=3, sync_run_id=run.id)
+                notified = await proposals_service._emit_sync_finished_notification(
+                    session, actor, sync_label="propostas", run=run, summary=summary, request_id="r-1"
+                )
+                await session.commit()
+                self.assertEqual(notified, [actor.id])
+                row = (await session.execute(select(Notification))).scalars().one()
+                self.assertEqual(row.category, "NOMUS_IMPORTACAO")
+                self.assertEqual(row.severity, "alta")  # PARTIAL
+                self.assertIn("PARCIAL", row.title)
+
+        asyncio.run(_run())
+
+    def test_galvanization_load_event_notifies_load_and_proposal_creators(self):
+        from datetime import date
+
+        from decimal import Decimal
+
+        from api.app.modules.proposals import service as proposals_service
+        from api.app.modules.proposals.models import GalvanizationLoad, GalvanizationLoadItem, Proposal, ProposalItem
+
+        async def _run():
+            factory = get_sessionmaker()
+            async with factory() as session:
+                load_creator = await self._make_user(session, "load_creator")
+                proposal_creator = await self._make_user(session, "gz_prop_creator")
+                actor = await self._make_user(session, "gz_actor")
+                await session.flush()
+                proposal = Proposal(
+                    proposal_number="GZ-1", customer_name="Cliente GZ", proposal_date=date(2026, 9, 1),
+                    deadline_date=date(2026, 9, 20), source="MANUAL", version=1, source_hash="gz-1",
+                    legacy_id=-991, created_by=proposal_creator.id,
+                )
+                session.add(proposal)
+                await session.flush()
+                pitem = ProposalItem(
+                    proposal_id=proposal.id, item_number="1", description="peca", quantity=Decimal("1"),
+                    produce_internally="SIM", requires_galvanization="SIM",
+                )
+                session.add(pitem)
+                load = GalvanizationLoad(code="LOTE-GZ-1", driver_name="Motorista Teste", status="LIBERADA_PARA_ENVIO", active=True, created_by=load_creator.id)
+                session.add(load)
+                await session.flush()
+                session.add(GalvanizationLoadItem(
+                    load_id=load.id, proposal_id=proposal.id, proposal_item_id=pitem.id,
+                    sent_quantity=Decimal("1"), active=True,
+                ))
+                await session.commit()
+
+                await proposals_service._emit_load_event_notification(session, load, "GALVANIZATION_LOAD_CLOSED", actor)
+                await session.commit()
+                got = {n.user_id for n in (await session.execute(select(Notification))).scalars().all()}
+                self.assertEqual(got, {load_creator.id, proposal_creator.id})
 
         asyncio.run(_run())
 

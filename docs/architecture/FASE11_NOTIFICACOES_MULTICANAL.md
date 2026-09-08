@@ -44,6 +44,13 @@ para o usuário saber o que está acontecendo mesmo fora do programa.
   compensado. Destinatários = criador da proposta + participantes do chat dela, menos o ator.
   Título reaproveita `_activity_headline`; `dedup_key` usa o `request_id`. Best-effort:
   falha na notificação nunca derruba a transação de negócio.
+- `proposals/service.py::_record_load_event` — mesmo padrão para o ciclo de vida da carga de
+  galvanização (`GALVANIZATION_LOAD_RELEASED` / `_CLOSED`, `_emit_load_event_notification`):
+  notifica quem criou a carga + os criadores das propostas com item nela.
+- `proposals/service.py` — os 3 jobs de importação (`sync_batch`, `sync_galvanization_batch`,
+  `sync_fiscal_batch`) emitem, ao terminar, uma notificação para quem disparou
+  (`_emit_sync_finished_notification`, categoria `NOMUS_IMPORTACAO`, severidade `alta` em
+  PARCIAL) com o resumo de criadas/atualizadas/rejeitadas.
 - `users.email` (coluna opcional nova) exposta em `UserCreate` / `UserUpdate` / `MeUpdate` /
   `UserOut` e no serviço de usuários (`_normalize_email`).
 
@@ -107,9 +114,12 @@ para o usuário saber o que está acontecendo mesmo fora do programa.
 
 - `python -m compileall -q app api/app`
 - `python -m pytest api/tests -q -k "not docker_release" --deselect api/tests/test_docker_release_integration.py`
-  → **687 passed, 269 skipped** (os 269 skipped incluem a suíte PostgreSQL de
-  `api/tests/test_notifications_service.py`, executada no CI com `APP_ENV=test` +
-  `POSTGRES_TEST_DATABASE_URL`).
+  → **687 passed, 271 skipped** (os skipped incluem a suíte PostgreSQL de
+  `api/tests/test_notifications_service.py`).
+- Suíte PostgreSQL executada de verdade (PostgreSQL 16 em container, `APP_ENV=test` +
+  `POSTGRES_TEST_DATABASE_URL`): `python -m pytest api/tests/test_notifications_service.py -q`
+  → **7 passed** (emit/dedup, preferências + silêncio, worker de e-mail imediato + digest,
+  evento de proposta, evento de carga de galvanização, notificação de job de sync).
 - `python scripts/check_migration_safety.py` → **Politica de risco das migrations OK**
   (revisions `20260908_0031` TRANSITIONAL, `20260908_0032` ADDITIVE, `20260908_0033` ADDITIVE).
 - Desktop (subconjunto tocado pela fase):
@@ -125,9 +135,9 @@ para o usuário saber o que está acontecendo mesmo fora do programa.
   `tests/test_api_diagnostic_dialog.py`, `tests/test_fiscal_item_selection_dialog.py` em
   execução conjunta) — confirmadas em `git stash`. Não foram introduzidas aqui; a validação
   acima usa o subconjunto relevante.
-- Notificações de jobs de sync (`/admin/sync/*` — Nomus fiscal, galvanização, propostas) e a
-  nível de carga de galvanização (`_record_load_event`) ficaram fora da allowlist da Fase 4 —
-  follow-up.
+- Smoke test contra um PostgreSQL real (não só o CI) validou as 3 migrations, os 6 endpoints
+  REST via HTTP e as `NotificationDelivery`; pegou e corrigiu um bug: o canal e-mail estava
+  desligado por padrão para toda categoria (ver a atualização de `defaults.py`).
 - `release/latest.json` / `release/manifest.json` não foram alterados: são artefatos do
   pipeline de release (`release-checklist`), publicados no passo de release, não aqui.
 
