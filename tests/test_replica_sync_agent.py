@@ -121,6 +121,53 @@ class ReplicaSyncAgentTests(unittest.TestCase):
         self._pump(lambda: False, timeout=0.3)
         self.assertEqual((self.finished, self.changed), ([], []))
 
+    # ---- aviso em tempo real (Fase 3) --------------------------------------
+    def test_push_with_newer_seq_triggers_sync(self):
+        self.results.extend([
+            SyncResult(mode=MODE_BOOTSTRAP, seq=5, changed_entities={"proposals"}),
+            SyncResult(mode=MODE_INCREMENTAL, seq=6, changed_entities={"proposals"}),
+        ])
+        self.agent.start()
+        self.assertTrue(self._pump(lambda: len(self.finished) == 1))
+        self.agent.notify_head(6)
+        self.assertTrue(self._pump(lambda: len(self.finished) == 2))
+        self.assertEqual(self.calls, 2)
+
+    def test_push_with_the_seq_already_applied_does_nothing(self):
+        self.results.append(SyncResult(mode=MODE_BOOTSTRAP, seq=5, changed_entities={"proposals"}))
+        self.agent.start()
+        self.assertTrue(self._pump(lambda: len(self.finished) == 1))
+        self.agent.notify_head(5)
+        self._pump(lambda: False, timeout=0.2)
+        self.assertEqual(self.calls, 1)
+
+    def test_push_with_lower_seq_still_syncs(self):
+        # Servidor restaurado de backup: o seq voltou atras e a replica precisa recarregar.
+        self.results.append(SyncResult(mode=MODE_BOOTSTRAP, seq=9, changed_entities={"proposals"}))
+        self.agent.start()
+        self.assertTrue(self._pump(lambda: len(self.finished) == 1))
+        self.agent.notify_head(2)
+        self.assertTrue(self._pump(lambda: len(self.finished) == 2))
+
+    def test_push_during_a_sync_queues_a_follow_up(self):
+        self.gate = threading.Event()
+        self.agent.start()
+        self.assertTrue(self._pump(lambda: self.calls == 1))
+        self.agent.notify_head(0)
+        self.gate.set()
+        self.assertTrue(self._pump(lambda: len(self.finished) == 2))
+        self.assertEqual(self.calls, 2)
+
+    def test_poll_interval_follows_realtime_health(self):
+        agent = ReplicaSyncAgent(self._sync_once, poll_interval_ms=30_000, realtime_poll_interval_ms=300_000)
+        self.assertEqual(agent._timer.interval(), 30_000)
+        agent.set_realtime_healthy(True)
+        self.assertEqual(agent._timer.interval(), 300_000)
+        agent.set_realtime_healthy(True)
+        self.assertEqual(agent._timer.interval(), 300_000)
+        agent.set_realtime_healthy(False)
+        self.assertEqual(agent._timer.interval(), 30_000)
+
     def test_poll_timer_triggers_sync(self):
         self.agent.stop()
         self.agent = ReplicaSyncAgent(self._sync_once, poll_interval_ms=30)

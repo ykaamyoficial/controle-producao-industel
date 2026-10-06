@@ -14,6 +14,7 @@ from app.ui.chat_realtime import ChatRealtimeClient
 from app.ui.chat_sync_coordinator import ChatSyncCoordinator
 from app.replica.factory import build_replica_sync, replica_enabled
 from app.replica.sync_agent import ReplicaSyncAgent
+from app.replica.sync_realtime import ReplicaRealtimeClient
 from app.ui.components.area_identity import refresh_area_theme
 from app.ui.components.floating_chat_button import FloatingChatButton
 from app.ui.components.login_summary_banner import LoginSummaryBanner
@@ -607,6 +608,7 @@ class MainWindow(FramelessHitTestMixin, QMainWindow):
         # mantem o arquivo sincronizado -- nenhuma tela le dela ainda.
         self.replica_db = None
         self.replica_sync = None
+        self.replica_realtime = None
         if not replica_enabled(getattr(self.service, "config", None)):
             return
         try:
@@ -616,9 +618,18 @@ class MainWindow(FramelessHitTestMixin, QMainWindow):
             self.replica_db = None
             return
         self.replica_sync = ReplicaSyncAgent(engine.sync_once, parent=self)
+        # Fase 3: o servidor avisa cada mudanca por websocket; o poll vira rede
+        # de seguranca (curto sem websocket, longo com ele).
+        storage = self.service.official_proposal_storage
+        self.replica_realtime = ReplicaRealtimeClient(storage.current_access_token, storage.api_base_url, parent=self)
+        self.replica_realtime.head_advanced.connect(self.replica_sync.notify_head)
+        self.replica_realtime.connection_changed.connect(self.replica_sync.set_realtime_healthy)
         self.replica_sync.start()
+        self.replica_realtime.start()
 
     def _stop_replica_sync(self):
+        if getattr(self, "replica_realtime", None) is not None:
+            self.replica_realtime.stop()
         if getattr(self, "replica_sync", None) is not None:
             self.replica_sync.stop()
 

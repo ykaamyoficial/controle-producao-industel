@@ -322,6 +322,30 @@ class SyncIntegrationTests(unittest.TestCase):
                 expected[(entity, row["id"])] = row
         self.assertEqual(replica, expected)
 
+    # ---- aviso em tempo real ------------------------------------------------
+    def test_websocket_announces_head_on_connect_and_after_each_write(self):
+        self._create("SYNC-WS-0")
+        head = self._get("/api/v1/sync/head")["seq"]
+        with TestClient(create_app()) as client:
+            headers = {"Authorization": self.headers["Authorization"]}
+            with client.websocket_connect("/api/v1/sync/ws", headers=headers) as websocket:
+                self.assertEqual(websocket.receive_json(), {"type": "sync.head", "seq": head})
+                created = client.post("/api/v1/proposals", json=_proposal_payload("SYNC-WS-1"), headers=headers)
+                self.assertLess(created.status_code, 300, created.text)
+                notice = websocket.receive_json()
+                new_head = client.get("/api/v1/sync/head", headers=headers).json()["seq"]
+                self.assertEqual(notice, {"type": "sync.head", "seq": new_head})
+                self.assertGreater(new_head, head)
+
+    def test_websocket_rejects_missing_or_invalid_token(self):
+        from starlette.websockets import WebSocketDisconnect
+
+        for headers in ({}, {"Authorization": "Bearer token-invalido"}):
+            with self.assertRaises(WebSocketDisconnect) as raised:
+                with self.client.websocket_connect("/api/v1/sync/ws", headers=headers):
+                    pass
+            self.assertEqual(raised.exception.code, 4401)
+
     # ---- permissoes ---------------------------------------------------------
     def test_requires_authentication(self):
         for url in ("/api/v1/sync/head", "/api/v1/sync/changes", "/api/v1/sync/snapshot?entity=proposals"):

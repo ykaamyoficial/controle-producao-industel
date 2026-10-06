@@ -1,12 +1,13 @@
 """Captura automatica de mudancas das entidades replicadas.
 
-Tres listeners do SQLAlchemy, validos para qualquer sessao ORM da API:
+Listeners do SQLAlchemy, validos para qualquer sessao ORM da API:
 
 * `after_flush`: anota em `session.info` as linhas inseridas, alteradas ou
   removidas das entidades de `registry.SYNC_ENTITIES`.
 * `before_commit`: grava essas anotacoes em `change_log`, na MESMA transacao
   (rollback descarta o evento junto com o dado).
 * `after_rollback`: descarta as anotacoes pendentes.
+* `after_commit`: avisa as replicas conectadas em `/sync/ws` (`notifier.py`).
 
 Ordem: o `seq` so e atribuido no commit, sob um advisory lock transacional
 que dura do INSERT ate o COMMIT. Assim a ordem dos `seq` e a ordem dos
@@ -20,16 +21,22 @@ Model)...)`) nao passam pelo ORM e nao sao capturados; nesses casos chame
 
 from __future__ import annotations
 
+import logging
+
 from sqlalchemy import event, func, insert, select
 from sqlalchemy.orm import Session
 
 from api.app.modules.sync.models import ChangeLog
+from api.app.modules.sync.notifier import notifier
 from api.app.modules.sync.registry import ENTITY_BY_MODEL, ENTITY_BY_NAME
+
+log = logging.getLogger("api.sync.capture")
 
 OP_UPSERT = "upsert"
 OP_DELETE = "delete"
 
 _PENDING = "sync_pending_changes"
+_COMMITTING_SEQ = "sync_committing_seq"
 _SEQ_LOCK_KEY = 7_204_001_018
 
 
@@ -76,12 +83,25 @@ def _write_change_log(session: Session) -> None:
         return
     connection = session.connection()
     connection.execute(select(func.pg_advisory_xact_lock(_SEQ_LOCK_KEY)))
-    connection.execute(
-        insert(ChangeLog),
+    result = connection.execute(
+        insert(ChangeLog).returning(ChangeLog.seq),
         [{"entity": entity, "entity_id": entity_id, "op": op} for (entity, entity_id), op in pending.items()],
     )
+    session.info[_COMMITTING_SEQ] = max(result.scalars().all())
+
+
+@event.listens_for(Session, "after_commit")
+def _notify_replicas(session: Session) -> None:
+    seq = session.info.pop(_COMMITTING_SEQ, None)
+    if seq is None:
+        return
+    try:
+        notifier.notify_committed(seq)
+    except Exception:  # o aviso e best-effort; o commit ja aconteceu
+        log.warning("Falha ao agendar aviso de sync", exc_info=True)
 
 
 @event.listens_for(Session, "after_rollback")
 def _discard_changes(session: Session) -> None:
     session.info.pop(_PENDING, None)
+    session.info.pop(_COMMITTING_SEQ, None)

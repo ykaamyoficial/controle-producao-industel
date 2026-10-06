@@ -10,8 +10,10 @@ from app.ui.background_worker import start_worker
 
 log = get_logger("replica_sync_agent")
 
-# Sem aviso em tempo real ainda (Fase 3): a replica acompanha o servidor por poll.
+# Poll curto: sem websocket saudavel, e o unico jeito de acompanhar o servidor.
 POLL_INTERVAL_MS = 30_000
+# Poll longo: com o websocket avisando cada mudanca, o poll e so rede de seguranca.
+REALTIME_POLL_INTERVAL_MS = 300_000
 
 STATE_IDLE = "idle"
 STATE_SYNCING = "syncing"
@@ -31,7 +33,14 @@ class ReplicaSyncAgent(QObject):
     sync_failed = Signal(object)
     state_changed = Signal(str)
 
-    def __init__(self, sync_once: Callable[[], SyncResult], parent: QObject | None = None, *, poll_interval_ms: int = POLL_INTERVAL_MS):
+    def __init__(
+        self,
+        sync_once: Callable[[], SyncResult],
+        parent: QObject | None = None,
+        *,
+        poll_interval_ms: int = POLL_INTERVAL_MS,
+        realtime_poll_interval_ms: int = REALTIME_POLL_INTERVAL_MS,
+    ):
         super().__init__(parent)
         self.setObjectName("ReplicaSyncAgent")
         self._sync_once = sync_once
@@ -39,6 +48,10 @@ class ReplicaSyncAgent(QObject):
         self._pending = False
         self._stopped = True
         self.state = STATE_IDLE
+        self._poll_interval_ms = poll_interval_ms
+        self._realtime_poll_interval_ms = realtime_poll_interval_ms
+        self._realtime_healthy = False
+        self._last_seq: int | None = None
         self._timer = QTimer(self)
         self._timer.setInterval(poll_interval_ms)
         self._timer.timeout.connect(lambda: self.request_sync("poll"))
@@ -64,6 +77,19 @@ class ReplicaSyncAgent(QObject):
         log.debug("replica_sync.requested reason=%s", reason)
         start_worker(self, self._sync_once, self._on_success, self._on_error, operation_name="worker:replica.sync_once")
 
+    def set_realtime_healthy(self, healthy: bool) -> None:
+        healthy = bool(healthy)
+        if healthy == self._realtime_healthy:
+            return
+        self._realtime_healthy = healthy
+        self._timer.setInterval(self._realtime_poll_interval_ms if healthy else self._poll_interval_ms)
+        log.info("replica_sync.poll realtime_healthy=%s interval_ms=%s", healthy, self._timer.interval())
+
+    def notify_head(self, seq: int) -> None:
+        """Aviso do servidor (`sync.head`): sincroniza so se a replica nao esta nesse seq."""
+        if self._last_seq is None or int(seq) != self._last_seq or self._in_flight:
+            self.request_sync("push")
+
     def _set_state(self, state: str) -> None:
         if state != self.state:
             self.state = state
@@ -73,6 +99,7 @@ class ReplicaSyncAgent(QObject):
         self._in_flight = False
         if self._stopped:
             return
+        self._last_seq = int(result.seq)
         self._set_state(STATE_READY)
         self.sync_finished.emit(result)
         if result.mode != MODE_NOOP and result.changed_entities:
