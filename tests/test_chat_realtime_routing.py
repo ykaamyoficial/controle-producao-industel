@@ -73,3 +73,37 @@ def test_attachment_deleted_refreshes_and_exposes_payload():
     client._on_text_message(_event("attachment.deleted", conversation_id=12))
 
     assert events == [("attachment.deleted", {"conversation_id": 12, "last_read_message_id": 42})]
+
+
+def test_ping_without_pong_aborts_connection_and_pong_cancels_timeout():
+    app = QApplication.instance() or QApplication([])
+    client = ChatRealtimeClient(_Service())
+    calls: list[str] = []
+    client._socket.ping = lambda *a: calls.append("ping")
+    client._socket.abort = lambda: calls.append("abort")
+
+    client._send_ping()
+    assert calls == ["ping"]
+    assert client._pong_timer.isActive()
+    client._on_pong(0, b"")
+    assert not client._pong_timer.isActive()
+
+    client._send_ping()
+    client._send_ping()  # ping ainda pendente: nao empilha outro
+    assert calls == ["ping", "ping"]
+    client._on_pong_timeout()
+    assert calls[-1] == "abort"
+    client._stop_watchdog()
+
+
+def test_disconnect_stops_watchdog_timers():
+    app = QApplication.instance() or QApplication([])
+    client = ChatRealtimeClient(_Service())
+    client._stopped = True  # sem reconexao real no teste
+    client._ping_timer.start()
+    client._pong_timer.start()
+
+    client._on_disconnected()
+
+    assert not client._ping_timer.isActive()
+    assert not client._pong_timer.isActive()

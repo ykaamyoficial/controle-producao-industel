@@ -11,6 +11,7 @@ from app.ui.app_icon import app_icon
 from app.ui.background_worker import start_worker
 from app.ui.chat_center_page import ChatCenterDialog
 from app.ui.chat_realtime import ChatRealtimeClient
+from app.ui.chat_sync_coordinator import ChatSyncCoordinator
 from app.ui.components.area_identity import refresh_area_theme
 from app.ui.components.floating_chat_button import FloatingChatButton
 from app.ui.components.login_summary_banner import LoginSummaryBanner
@@ -108,7 +109,7 @@ class MainWindow(FramelessHitTestMixin, QMainWindow):
     def __init__(self, *, skip_auto_update_check: bool = False, update_available_notice: str | None = None):
         super().__init__()
         self.service = BackendService()
-        self.service.on_conversation_marked_read = self._poll_chat_unread
+        self.service.on_conversation_marked_read = lambda *a, **k: self._poll_chat_unread("local_read")
         self.sidebar_collapsed = False
         self._width_animation = None
         self._page_animation = None
@@ -273,7 +274,7 @@ class MainWindow(FramelessHitTestMixin, QMainWindow):
             self.chat_realtime = ChatRealtimeClient(self.service, parent=self)
             self.chat_realtime.conversation_updated.connect(self._on_conversation_updated)
             self.chat_realtime.conversation_event.connect(self._on_conversation_event)
-            self.chat_realtime.read_state_updated.connect(self._poll_chat_unread)
+            self.chat_realtime.read_state_updated.connect(lambda: self._poll_chat_unread("realtime_read"))
             self.chat_realtime.connection_changed.connect(self._on_realtime_connection_changed)
             self.chat_realtime.notification_event.connect(self._on_notification_event)
             self.chat_realtime.start()
@@ -291,13 +292,14 @@ class MainWindow(FramelessHitTestMixin, QMainWindow):
             self.toast_manager = InAppToastManager(self.service, root, self._open_conversation_from_notification)
 
         if self.notification_bell is not None or self.floating_chat_button is not None:
-            self._chat_poll_timer = QTimer(self)
-            self._chat_poll_timer.timeout.connect(self._poll_chat_unread)
-            self._chat_poll_timer.start(20000)
+            # Heartbeat adaptativo: 20s sem websocket saudavel, 120s com ele
+            # (o push cobre as mudancas; o poll e so rede de seguranca).
+            self._chat_sync = ChatSyncCoordinator(self._run_chat_sync, parent=self)
+            self._chat_sync.start()
             # Sync inicial roda na hora (sem delay artificial) — ordem pedida
             # pela ETAPA 8 e AUTH -> REALTIME (ja iniciado acima) -> SESSION
-            # SYNC; o timer de 20s continua so como heartbeat de fallback.
-            self._poll_chat_unread()
+            # SYNC.
+            self._chat_sync.request("login", with_notifications=True, immediate=True)
 
         if self._update_available_notice and not self._update_available_notice_shown:
             self._update_available_notice_shown = True
@@ -570,6 +572,8 @@ class MainWindow(FramelessHitTestMixin, QMainWindow):
     def _logout(self):
         if self.title_bar is not None:
             self.title_bar.notification_bell.close_center()
+        if getattr(self, "_chat_sync", None) is not None:
+            self._chat_sync.stop()
         if self.session_sync is not None:
             self.session_sync.stop()
         if self.chat_realtime is not None:
@@ -593,14 +597,24 @@ class MainWindow(FramelessHitTestMixin, QMainWindow):
         y = parent.height() - button.height() - margin
         button.move(max(0, x), max(0, y))
 
-    def _poll_chat_unread(self):
-        # ETAPA 8: todo gatilho (timer de 20s, evento realtime, callback de
-        # leitura local, sync inicial de login) passa pelo mesmo
-        # SessionSyncService — garante o sequence guard contra resposta fora
-        # de ordem em qualquer um desses caminhos, nao so no login.
+    def _poll_chat_unread(self, reason: str = "poll", with_notifications: bool = False):
+        # Gatilhos (evento realtime, leitura local, heartbeat, login) passam
+        # pelo coordenador, que coalesce rajadas e escolhe o heartbeat.
+        coordinator = getattr(self, "_chat_sync", None)
+        if coordinator is None:
+            self._run_chat_sync((reason,), with_notifications)
+            return
+        coordinator.request(reason, with_notifications=with_notifications)
+
+    def _run_chat_sync(self, reasons, with_notifications: bool):
+        # ETAPA 8: todo sync passa pelo mesmo SessionSyncService — garante o
+        # sequence guard contra resposta fora de ordem. A lista de
+        # notificacoes (limit=50, so p/ toasts) so e buscada quando
+        # `with_notifications` (notification.created, heartbeat, login,
+        # reconexao).
         if self.session_sync is not None:
-            self.session_sync.sync("poll")
-        if self.notification_bell is not None and hasattr(self.service, "chat_notifications"):
+            self.session_sync.sync("+".join(reasons))
+        if with_notifications and self.notification_bell is not None and hasattr(self.service, "chat_notifications"):
             if self._notification_poll_thread is None or not self._notification_poll_thread.isRunning():
                 # lista curta so pros toasts in-app de notificacao nova, nunca pra contar.
                 thread = start_worker(
@@ -654,8 +668,11 @@ class MainWindow(FramelessHitTestMixin, QMainWindow):
         # inicial disparado em _build() — so reconciliamos aqui numa
         # RECONEXAO de verdade (rede caiu, notebook suspendeu), pra nao
         # duplicar a busca que ja esta em voo.
+        coordinator = getattr(self, "_chat_sync", None)
+        if coordinator is not None:
+            coordinator.set_realtime_healthy(connected)
         if connected and self._realtime_ever_connected:
-            self._poll_chat_unread()
+            self._poll_chat_unread("reconnect", with_notifications=True)
         if connected:
             self._realtime_ever_connected = True
 
@@ -667,7 +684,7 @@ class MainWindow(FramelessHitTestMixin, QMainWindow):
         log.warning("Falha ao sincronizar estado de chat/notificacoes")
 
     def _on_conversation_updated(self, conversation_id: int):
-        self._poll_chat_unread()
+        self._poll_chat_unread("conversation_event")
         dialog = self._chat_center_dialog
         if dialog is not None:
             dialog.page.on_conversation_updated(conversation_id)
@@ -682,7 +699,8 @@ class MainWindow(FramelessHitTestMixin, QMainWindow):
         # de sempre (nunca confia no corpo do evento) -- e se a Central
         # estiver aberta agora, ela tambem reage (refresh silencioso se o
         # usuario esta no topo, aviso discreto se estiver lendo historico).
-        self._poll_chat_unread()
+        # A lista (toasts) so e buscada quando ha notificacao NOVA.
+        self._poll_chat_unread(event_type, with_notifications=event_type == "notification.created")
         if self.title_bar is not None:
             self.title_bar.notification_bell.apply_realtime_event(event_type, data)
 
@@ -720,6 +738,8 @@ class MainWindow(FramelessHitTestMixin, QMainWindow):
       log.info("Fechamento solicitado")
       if self.title_bar is not None:
           self.title_bar.notification_bell.close_center()
+      if getattr(self, "_chat_sync", None) is not None:
+          self._chat_sync.stop()
       if self.session_sync is not None:
           self.session_sync.stop()
       if self.chat_realtime is not None:

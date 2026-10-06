@@ -16,6 +16,10 @@ log = get_logger("chat_realtime")
 MIN_RECONNECT_DELAY_MS = 1000
 MAX_RECONNECT_DELAY_MS = 30000
 SUPPORTED_ENVELOPE_VERSION = 1
+# Watchdog: conexao "aberta" que nao responde ping (rede caiu sem FIN, proxy
+# segurando o socket) e derrubada pra voltar ao poll curto e reconectar.
+PING_INTERVAL_MS = 30000
+PONG_TIMEOUT_MS = 10000
 # Todos reagem do mesmo jeito hoje (poll do resumo + refresh do painel
 # aberto) — o servidor manda o tipo de dominio certo (ETAPA 7), mas o
 # cliente ainda nao precisa de uma reacao diferente por tipo; so precisa
@@ -74,10 +78,19 @@ class ChatRealtimeClient(QObject):
         self._socket.disconnected.connect(self._on_disconnected)
         self._socket.textMessageReceived.connect(self._on_text_message)
         self._socket.errorOccurred.connect(self._on_error)
+        self._socket.pong.connect(self._on_pong)
 
         self._reconnect_timer = QTimer(self)
         self._reconnect_timer.setSingleShot(True)
         self._reconnect_timer.timeout.connect(self._connect)
+
+        self._ping_timer = QTimer(self)
+        self._ping_timer.setInterval(PING_INTERVAL_MS)
+        self._ping_timer.timeout.connect(self._send_ping)
+        self._pong_timer = QTimer(self)
+        self._pong_timer.setSingleShot(True)
+        self._pong_timer.setInterval(PONG_TIMEOUT_MS)
+        self._pong_timer.timeout.connect(self._on_pong_timeout)
 
     def start(self) -> None:
         self._stopped = False
@@ -87,6 +100,7 @@ class ChatRealtimeClient(QObject):
     def stop(self) -> None:
         self._stopped = True
         self._reconnect_timer.stop()
+        self._stop_watchdog()
         self._socket.close()
 
     def _connect(self) -> None:
@@ -122,11 +136,32 @@ class ChatRealtimeClient(QObject):
     def _on_connected(self) -> None:
         log.info("Websocket de chat conectado")
         self._reconnect_delay_ms = MIN_RECONNECT_DELAY_MS
+        self._ping_timer.start()
         self.connection_changed.emit(True)
 
     def _on_disconnected(self) -> None:
+        self._stop_watchdog()
         self.connection_changed.emit(False)
         self._schedule_reconnect()
+
+    def _stop_watchdog(self) -> None:
+        self._ping_timer.stop()
+        self._pong_timer.stop()
+
+    def _send_ping(self) -> None:
+        if self._pong_timer.isActive():
+            return
+        self._socket.ping()
+        self._pong_timer.start()
+
+    def _on_pong(self, *_args) -> None:
+        self._pong_timer.stop()
+
+    def _on_pong_timeout(self) -> None:
+        # abort() fecha na hora e dispara disconnected -> connection_changed(False)
+        # + reconexao com backoff; close() esperaria um handshake que nao vem.
+        log.warning("Websocket de chat sem resposta ao ping; reconectando")
+        self._socket.abort()
 
     def _on_error(self, _error) -> None:
         log.debug("Erro no websocket de chat: %s", self._socket.errorString())
