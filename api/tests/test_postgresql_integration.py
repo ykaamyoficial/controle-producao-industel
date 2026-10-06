@@ -209,6 +209,7 @@ class PostgreSQLIntegrationTests(unittest.TestCase):
                     [
                         "alembic_version",
                         "auth_sessions",
+                        "change_log",
                         "chat_attachments",
                         "chat_conversations",
                         "chat_message_reads",
@@ -233,6 +234,7 @@ class PostgreSQLIntegrationTests(unittest.TestCase):
                         "pilot_client_reports",
                         "product_catalog_entries",
                         "production_allocation_transfers",
+                        "proposal_attachments",
                         "proposal_events",
                         "proposal_items",
                         "proposal_remanagement_items",

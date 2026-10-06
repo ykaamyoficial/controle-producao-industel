@@ -30,6 +30,7 @@ from api.app.modules.proposal_import.router import router as proposal_import_rou
 from api.app.modules.proposals.router import router as proposals_router
 from api.app.modules.provisioning.router import router as provisioning_router
 from api.app.modules.security_events.router import router as security_events_router
+from api.app.modules.sync.router import router as sync_router
 from api.app.modules.system.router import router as system_router
 from api.app.modules.update_audit.router import router as update_audit_router
 from api.app.modules.users.router import router as users_router
@@ -190,6 +191,7 @@ def create_app() -> FastAPI:
     application.include_router(proposal_attachments_router, prefix="/api/v1")
     application.include_router(chat_router, prefix="/api/v1")
     application.include_router(notifications_router, prefix="/api/v1")
+    application.include_router(sync_router, prefix="/api/v1")
     application.include_router(proposal_import_router, prefix="/api/v1")
     application.include_router(nomus_integration_router, prefix="/api/v1")
     application.include_router(provisioning_router, prefix="/api/v1")

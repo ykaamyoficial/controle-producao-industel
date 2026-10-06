@@ -168,5 +168,10 @@
     "classification": "ADDITIVE",
     "summary": "Adiciona a coluna opcional users.email, usada apenas pelo canal de notificacao por e-mail.",
     "justification": "ADD COLUMN nullable sem default e sem backfill. Nenhuma constraint nova, nenhum consumidor pre-existente depende da coluna; codigo trata email ausente como 'usuario sem canal de e-mail'."
+  },
+  "20261006_0034": {
+    "classification": "ADDITIVE",
+    "summary": "Cria a tabela change_log, outbox de mudancas lido pelos endpoints /sync para a replica local dos Desktops.",
+    "justification": "CREATE TABLE nova e vazia, sem FK e sem alterar tabelas existentes. Sem backfill: Desktops fazem carga inicial por /sync/snapshot. Codigo antigo ignora a tabela; o downgrade apenas a remove."
   }
 }
