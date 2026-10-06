@@ -72,6 +72,14 @@ def create_app() -> FastAPI:
 
         await sync_official_permissions()
         await ensure_default_admin()
+        # Expedicao/Fiscal: derivados (ExpeditionItem/FiscalRecord) nao sao mais
+        # gerados por GET; o backfill idempotente cobre dados ja existentes.
+        try:
+            from api.app.modules.proposals.derived_sync import backfill_derived_state
+
+            await backfill_derived_state()
+        except Exception:
+            logging.getLogger("api.lifecycle").exception("derived_backfill_on_startup_failed")
         recovered = update_distribution_service.recover_incomplete_staging()
         if recovered:
             logging.getLogger("api.updates").warning("release_staging_recovered_on_startup count=%s", len(recovered))

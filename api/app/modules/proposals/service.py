@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 
-from sqlalchemy import Select, func, or_, select, text
+from sqlalchemy import Select, case, exists, func, or_, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -743,35 +743,90 @@ async def close_galvanization_load(session: AsyncSession, load_id: int, payload:
     return await get_galvanization_load_detail(session, load_id)
 
 
-async def list_expedition_proposals(session: AsyncSession, *, search: str | None, limit: int, offset: int) -> PaginatedExpeditionResponse:
-    if await _sync_expedition_from_available_items(session):
-        await session.commit()
-    stmt = (
-        select(Proposal)
-        .options(selectinload(Proposal.items), selectinload(Proposal.expedition_items).selectinload(ExpeditionItem.proposal_item))
-        .where(Proposal.active.is_(True))
-        .where(_proposal_operational_clause())
-    )
-    rows = (await session.execute(stmt)).scalars().unique().all()
-    filtered = []
+def _proposal_search_clause(search: str | None):
+    """Equivalente SQL de `needle in " ".join([numero, cliente, projeto or "", lote or ""]).lower()`."""
     needle = (search or "").strip().lower()
-    for proposal in rows:
-        exp_items = _active_expedition_items(proposal)
-        if not exp_items:
-            continue
-        if not any(item.available_quantity > item.delivered_quantity + item.remanaged_quantity for item in exp_items):
-            continue
-        text = " ".join([proposal.proposal_number, proposal.customer_name, proposal.project_name or "", proposal.lot or ""]).lower()
-        if needle and needle not in text:
-            continue
-        filtered.append(proposal)
-    filtered.sort(key=lambda proposal: (_expedition_sort_key(proposal), -(proposal.updated_at.timestamp() if proposal.updated_at else 0), proposal.id))
-    return PaginatedExpeditionResponse(items=[_expedition_summary(row) for row in filtered[offset:offset + limit]], total=len(filtered), limit=limit, offset=offset)
+    if not needle:
+        return None
+    haystack = func.lower(func.concat(
+        Proposal.proposal_number, " ", Proposal.customer_name, " ",
+        func.coalesce(Proposal.project_name, ""), " ", func.coalesce(Proposal.lot, ""),
+    ))
+    return func.strpos(haystack, needle) > 0  # strpos: sem curingas, igual ao `in` do Python
+
+
+_EXPEDITION_SORT_ORDER = {
+    "EM_SEPARACAO": 0,
+    "AGUARDANDO_SEPARACAO_PARCIAL": 0,
+    "SEPARACAO_INICIADA": 1,
+    "SEPARADO_COM_PENDENCIA": 2,
+    "SEPARADO": 2,
+    "ENTREGUE_PARCIAL": 3,
+}
+
+
+def _expedition_display_status(proposal: Proposal) -> str:
+    """Status da proposta do ponto de vista da Expedicao.
+
+    Proposta mista (itens ja liberados para Expedicao, mas `current_area`
+    ainda em outra area) nao tem `shipping_status` e o `current_status` e de
+    outra area: para a Expedicao ela esta aguardando separacao.
+    """
+    if proposal.shipping_status:
+        return proposal.shipping_status
+    if proposal.current_status in _EXPEDITION_SORT_ORDER:
+        return proposal.current_status
+    return "EM_SEPARACAO"
+
+
+def _expedition_sort_key_sql():
+    """Espelho SQL de `_expedition_sort_key` / `_expedition_display_status`."""
+    status = func.coalesce(
+        func.nullif(Proposal.shipping_status, ""),
+        case((Proposal.current_status.in_(tuple(_EXPEDITION_SORT_ORDER)), Proposal.current_status), else_=None),
+        "EM_SEPARACAO",
+    )
+    return case(_EXPEDITION_SORT_ORDER, value=status, else_=99)
+
+
+def _expedition_listable_clause():
+    """Espelho SQL de `_active_expedition_items` + saldo pendente (ao menos um item)."""
+    return exists().where(
+        ExpeditionItem.proposal_id == Proposal.id,
+        ExpeditionItem.active.is_(True),
+        ExpeditionItem.status != "ENTREGUE",
+        ExpeditionItem.available_quantity > ExpeditionItem.delivered_quantity + ExpeditionItem.remanaged_quantity,
+    )
+
+
+async def list_expedition_proposals(session: AsyncSession, *, search: str | None, limit: int, offset: int) -> PaginatedExpeditionResponse:
+    # Somente leitura: ExpeditionItem e materializado na escrita / backfill
+    # (derived_sync). Filtro, ordenacao e paginacao rodam no SQL; relacoes so
+    # sao carregadas para a pagina devolvida.
+    conditions = [Proposal.active.is_(True), _proposal_operational_clause(), _expedition_listable_clause()]
+    search_clause = _proposal_search_clause(search)
+    if search_clause is not None:
+        conditions.append(search_clause)
+    total = (await session.execute(select(func.count()).select_from(Proposal).where(*conditions))).scalar_one()
+    page_ids = list((await session.execute(
+        select(Proposal.id)
+        .where(*conditions)
+        .order_by(_expedition_sort_key_sql(), Proposal.updated_at.desc().nulls_last(), Proposal.id)
+        .limit(limit)
+        .offset(offset)
+    )).scalars())
+    rows_by_id: dict[int, Proposal] = {}
+    if page_ids:
+        rows = (await session.execute(
+            select(Proposal)
+            .options(selectinload(Proposal.items), selectinload(Proposal.expedition_items).selectinload(ExpeditionItem.proposal_item))
+            .where(Proposal.id.in_(page_ids))
+        )).scalars().unique().all()
+        rows_by_id = {int(row.id): row for row in rows}
+    return PaginatedExpeditionResponse(items=[_expedition_summary(rows_by_id[int(pid)]) for pid in page_ids], total=total, limit=limit, offset=offset)
 
 
 async def get_expedition_detail(session: AsyncSession, proposal_id: int) -> ExpeditionProposalDetail:
-    if await _sync_expedition_from_available_items(session):
-        await session.commit()
     proposal = await _get_expedition_proposal(session, proposal_id)
     return _expedition_detail(proposal)
 
@@ -1982,59 +2037,115 @@ async def deliver_proposal_by_remanagement(session: AsyncSession, proposal_id: i
     return await apply_remanagement(session, payload, actor, request_id=request_id)
 
 
+_FISCAL_SITUATION_ORDER = ("PENDENCIA_FISCAL_CRITICA", "DISPONIVEL_PARA_EMISSAO", "NF_PARCIAL", "CP_EM_PROCESSAMENTO", "NF_EMITIDA", "NF_RETIRADA_CLIENTE")
+_FISCAL_SHIPPING_OPEN = ("EM_SEPARACAO", "AGUARDANDO_SEPARACAO_PARCIAL", "SEPARACAO_INICIADA", "SEPARADO_COM_PENDENCIA", "SEPARADO", "ENTREGUE_PARCIAL")
+
+
+def _fiscal_situation_sql():
+    """Espelho SQL de `_fiscal_situation` (mesma precedencia)."""
+    return case(
+        (FiscalRecord.fiscal_situation == "NF_RETIRADA_CLIENTE", "NF_RETIRADA_CLIENTE"),
+        (FiscalRecord.status_fiscal == "NOTA_FISCAL_EMITIDA", "NF_EMITIDA"),
+        (FiscalRecord.status_fiscal == "NOTA_FISCAL_PARCIAL", "NF_PARCIAL"),
+        (Proposal.shipping_status == "ENTREGUE", "PENDENCIA_FISCAL_CRITICA"),
+        (Proposal.shipping_status.in_(_FISCAL_SHIPPING_OPEN), "DISPONIVEL_PARA_EMISSAO"),
+        else_="CP_EM_PROCESSAMENTO",
+    )
+
+
+def _fiscal_sort_key_sql():
+    return case({name: index for index, name in enumerate(_FISCAL_SITUATION_ORDER)}, value=_fiscal_situation_sql(), else_=99)
+
+
+def _fiscal_base_conditions():
+    """Mesmo universo de `_load_fiscal_records` (requer join com FiscalRecord.proposal)."""
+    return [
+        FiscalRecord.active.is_(True),
+        _proposal_operational_clause(),
+        or_(Proposal.parent_proposal_id.is_(None), Proposal.current_area == "EXPEDICAO"),
+    ]
+
+
 async def list_fiscal_records(session: AsyncSession, *, search: str | None, status: str | None, situation: str | None, limit: int, offset: int) -> PaginatedFiscalResponse:
-    if await _sync_fiscal_records(session):
-        await session.commit()
-    rows = await _load_fiscal_records(session)
-    needle = (search or "").strip().lower()
-    filtered = []
-    for record in rows:
-        row_situation = _fiscal_situation(record)
-        if status and record.status_fiscal != status:
-            continue
-        if situation and row_situation != situation:
-            continue
-        text = " ".join([record.proposal.proposal_number, record.proposal.customer_name, record.proposal.project_name or "", record.proposal.lot or ""]).lower()
-        if needle and needle not in text:
-            continue
-        filtered.append(record)
-    filtered.sort(key=lambda record: (_fiscal_sort_key(record), record.entry_date, -record.id))
-    return PaginatedFiscalResponse(items=[_fiscal_record_summary(row) for row in filtered[offset:offset + limit]], total=len(filtered), limit=limit, offset=offset)
+    # Somente leitura (FiscalRecord/FiscalItem sao materializados na escrita /
+    # backfill). Filtro, ordenacao e paginacao no SQL.
+    conditions = _fiscal_base_conditions()
+    if status:
+        conditions.append(FiscalRecord.status_fiscal == status)
+    if situation:
+        conditions.append(_fiscal_situation_sql() == situation)
+    search_clause = _proposal_search_clause(search)
+    if search_clause is not None:
+        conditions.append(search_clause)
+    total = (await session.execute(select(func.count()).select_from(FiscalRecord).join(FiscalRecord.proposal).where(*conditions))).scalar_one()
+    page_ids = list((await session.execute(
+        select(FiscalRecord.id)
+        .join(FiscalRecord.proposal)
+        .where(*conditions)
+        .order_by(_fiscal_sort_key_sql(), FiscalRecord.entry_date, FiscalRecord.id.desc())
+        .limit(limit)
+        .offset(offset)
+    )).scalars())
+    records_by_id: dict[int, FiscalRecord] = {}
+    if page_ids:
+        records_by_id = {int(row.id): row for row in await _load_fiscal_records(session, record_ids=page_ids)}
+    return PaginatedFiscalResponse(items=[_fiscal_record_summary(records_by_id[int(rid)]) for rid in page_ids], total=total, limit=limit, offset=offset)
 
 
 async def get_fiscal_detail(session: AsyncSession, fiscal_record_id: int) -> FiscalRecordDetail:
-    if await _sync_fiscal_records(session):
-        await session.commit()
     record = await _get_fiscal_record(session, fiscal_record_id)
     return _fiscal_record_detail(record)
 
 
 async def fiscal_indicators(session: AsyncSession) -> FiscalIndicators:
-    if await _sync_fiscal_records(session):
-        await session.commit()
-    rows = await _load_fiscal_records(session)
-    falta = [row for row in rows if row.status_fiscal == "FALTA_EMITIR_NOTA_FISCAL"]
-    partial = [row for row in rows if row.status_fiscal == "NOTA_FISCAL_PARCIAL"]
-    emitted = [row for row in rows if row.status_fiscal == "NOTA_FISCAL_EMITIDA"]
-    critical = [row for row in rows if _fiscal_situation(row) == "PENDENCIA_FISCAL_CRITICA"]
-    old = [row for row in rows if _fiscal_older_than_7_days(row)]
-    pending_weight = sum((_fiscal_pending_weight(row) for row in rows if row.status_fiscal != "NOTA_FISCAL_EMITIDA"), Decimal("0")).quantize(Decimal("0.0001"))
-    billed_weight = sum((sum((item.billed_weight for item in row.items if item.active), Decimal("0")) for row in rows), Decimal("0")).quantize(Decimal("0.0001"))
+    base = _fiscal_base_conditions()
+    today = datetime.now(UTC).date()
+    situation = _fiscal_situation_sql()
+    counts = (await session.execute(
+        select(
+            func.count().filter(FiscalRecord.status_fiscal == "FALTA_EMITIR_NOTA_FISCAL"),
+            func.count().filter(FiscalRecord.status_fiscal == "NOTA_FISCAL_PARCIAL"),
+            func.count().filter(FiscalRecord.status_fiscal == "NOTA_FISCAL_EMITIDA"),
+            func.count().filter(situation == "PENDENCIA_FISCAL_CRITICA"),
+            # `(hoje - entry_date).days > 7` <=> entry_date < hoje - 7 dias
+            func.count().filter(
+                FiscalRecord.status_fiscal != "NOTA_FISCAL_EMITIDA",
+                FiscalRecord.last_emission_at.is_(None),
+                FiscalRecord.entry_date < today - timedelta(days=7),
+            ),
+        )
+        .select_from(FiscalRecord)
+        .join(FiscalRecord.proposal)
+        .where(*base)
+    )).one()
+    falta, partial, emitted, critical, old = (int(value or 0) for value in counts)
+    pending_weight = (await session.execute(
+        select(func.coalesce(func.sum(FiscalItem.total_weight - FiscalItem.billed_weight), 0))
+        .select_from(FiscalItem)
+        .join(FiscalRecord, FiscalRecord.id == FiscalItem.fiscal_record_id)
+        .join(FiscalRecord.proposal)
+        .where(*base, FiscalItem.active.is_(True), FiscalItem.total_weight.is_not(None), FiscalRecord.status_fiscal != "NOTA_FISCAL_EMITIDA")
+    )).scalar_one()
+    billed_weight = (await session.execute(
+        select(func.coalesce(func.sum(FiscalItem.billed_weight), 0))
+        .select_from(FiscalItem)
+        .join(FiscalRecord, FiscalRecord.id == FiscalItem.fiscal_record_id)
+        .join(FiscalRecord.proposal)
+        .where(*base, FiscalItem.active.is_(True))
+    )).scalar_one()
     return FiscalIndicators(
-        falta_emitir=len(falta),
-        nf_parcial=len(partial),
-        nf_emitida=len(emitted),
-        pendencia_critica=len(critical),
-        entregues_sem_nf=len(critical),
-        peso_pendente=pending_weight,
-        peso_faturado=billed_weight,
-        mais_7_dias_sem_emissao=len(old),
+        falta_emitir=falta,
+        nf_parcial=partial,
+        nf_emitida=emitted,
+        pendencia_critica=critical,
+        entregues_sem_nf=critical,
+        peso_pendente=Decimal(str(pending_weight)).quantize(Decimal("0.0001")),
+        peso_faturado=Decimal(str(billed_weight)).quantize(Decimal("0.0001")),
+        mais_7_dias_sem_emissao=old,
     )
 
 
 async def fiscal_indicator_records(session: AsyncSession, indicator: str) -> list[FiscalRecordSummary]:
-    if await _sync_fiscal_records(session):
-        await session.commit()
     rows = await _load_fiscal_records(session)
     if indicator == "falta_emitir":
         rows = [row for row in rows if row.status_fiscal == "FALTA_EMITIR_NOTA_FISCAL"]
@@ -2233,7 +2344,8 @@ async def mark_fiscal_invoice_withdrawn(session: AsyncSession, fiscal_record_id:
     return await get_fiscal_detail(session, fiscal_record_id)
 
 
-async def _load_fiscal_records(session: AsyncSession) -> list[FiscalRecord]:
+async def _load_fiscal_records(session: AsyncSession, record_ids: list[int] | None = None) -> list[FiscalRecord]:
+    id_filter = [FiscalRecord.id.in_(record_ids)] if record_ids is not None else []
     return (
         (await session.execute(
             select(FiscalRecord)
@@ -2243,7 +2355,7 @@ async def _load_fiscal_records(session: AsyncSession) -> list[FiscalRecord]:
                 selectinload(FiscalRecord.invoices).selectinload(FiscalInvoice.items).selectinload(FiscalInvoiceItem.fiscal_item).selectinload(FiscalItem.proposal_item),
                 selectinload(FiscalRecord.events),
             )
-            .where(FiscalRecord.active.is_(True))
+            .where(FiscalRecord.active.is_(True), *id_filter)
             .join(FiscalRecord.proposal)
             .where(_proposal_operational_clause())
             .where(or_(Proposal.parent_proposal_id.is_(None), Proposal.current_area == "EXPEDICAO"))
@@ -2278,18 +2390,20 @@ async def _get_fiscal_record(session: AsyncSession, fiscal_record_id: int, *, fo
     return record
 
 
-async def _sync_fiscal_records(session: AsyncSession) -> bool:
-    proposals = (
-        (await session.execute(
-            select(Proposal)
-            .options(selectinload(Proposal.items), selectinload(Proposal.fiscal_record).selectinload(FiscalRecord.items))
-            .where(Proposal.active.is_(True))
-            .where(_proposal_operational_clause())
-        ))
-        .scalars()
-        .unique()
-        .all()
+_AUTO_FISCAL_OBSERVATION = "Entrada fiscal oficial automatica."
+
+
+async def _sync_fiscal_records(session: AsyncSession, proposal_ids: set[int] | None = None) -> bool:
+    """Materializa FiscalRecord/FiscalItem faltantes. Idempotente; ver `_sync_expedition_from_available_items`."""
+    stmt = (
+        select(Proposal)
+        .options(selectinload(Proposal.items), selectinload(Proposal.fiscal_record).selectinload(FiscalRecord.items))
+        .where(Proposal.active.is_(True))
+        .where(_proposal_operational_clause())
     )
+    if proposal_ids is not None:
+        stmt = stmt.where(Proposal.id.in_(proposal_ids)).execution_options(populate_existing=True)
+    proposals = (await session.execute(stmt)).scalars().unique().all()
     changed = False
     today = datetime.now(UTC).date()
     for proposal in proposals:
@@ -2298,7 +2412,7 @@ async def _sync_fiscal_records(session: AsyncSession) -> bool:
         if proposal.parent_proposal_id is not None and proposal.current_area != "EXPEDICAO":
             continue
         if proposal.fiscal_record is None:
-            record = FiscalRecord(proposal_id=proposal.id, entry_date=today, observation="Entrada fiscal oficial automatica.")
+            record = FiscalRecord(proposal_id=proposal.id, entry_date=today, observation=_AUTO_FISCAL_OBSERVATION)
             record.proposal = proposal
             session.add(record)
             await session.flush()
@@ -2335,8 +2449,33 @@ async def _ensure_fiscal_items_for_record(session: AsyncSession, record: FiscalR
         .all()
     )
     changed = False
+    # Item de proposta que mudou de proposta (mae -> filha parcial, fusao de
+    # filhas) mantem o FiscalItem (e seu historico de NF) do registro antigo:
+    # reaponta para este registro em vez de criar um segundo FiscalItem, que
+    # roubaria a relacao 1:1 ProposalItem.fiscal_item. Com os derivados
+    # materializados na escrita, o FiscalItem antigo ja existe nesse momento.
+    missing_ids = [int(item.id) for item in proposal_items if item.active and int(item.id) not in existing]
+    foreign_by_item: dict[int, FiscalItem] = {}
+    if missing_ids:
+        foreign_by_item = {
+            int(row.proposal_item_id): row
+            for row in (
+                await session.execute(
+                    select(FiscalItem)
+                    .where(FiscalItem.proposal_item_id.in_(missing_ids))
+                    .where(FiscalItem.fiscal_record_id != record.id)
+                    .where(FiscalItem.active.is_(True))
+                )
+            ).scalars()
+        }
     for proposal_item in proposal_items:
         if not proposal_item.active or int(proposal_item.id) in existing:
+            continue
+        moved = foreign_by_item.get(int(proposal_item.id))
+        if moved is not None:
+            moved.fiscal_record = record
+            moved.proposal_id = record.proposal_id
+            changed = True
             continue
         fiscal_item = FiscalItem(
             fiscal_record_id=record.id,
@@ -2789,21 +2928,25 @@ async def _reborn_parent_when_children_converge(
     return parent
 
 
-async def _sync_expedition_from_available_items(session: AsyncSession) -> bool:
-    proposals = (
-        (await session.execute(
-            select(Proposal)
-            .options(
-                selectinload(Proposal.items),
-                selectinload(Proposal.expedition_items).selectinload(ExpeditionItem.proposal_item),
-            )
-            .where(Proposal.active.is_(True))
-            .where(_proposal_operational_clause())
-        ))
-        .scalars()
-        .unique()
-        .all()
+async def _sync_expedition_from_available_items(session: AsyncSession, proposal_ids: set[int] | None = None, *, recalculate: bool = True) -> bool:
+    """Materializa/reconcilia ExpeditionItem. Idempotente.
+
+    Fora do caminho de leitura: chamado pelo hook de escrita (escopo
+    `proposal_ids`) e pelo backfill (todas as propostas). Nunca por GET.
+    """
+    stmt = (
+        select(Proposal)
+        .options(
+            selectinload(Proposal.items),
+            selectinload(Proposal.expedition_items).selectinload(ExpeditionItem.proposal_item),
+        )
+        .where(Proposal.active.is_(True))
+        .where(_proposal_operational_clause())
     )
+    if proposal_ids is not None:
+        # Escopo pos-flush: recarrega do banco para nao usar colecoes obsoletas.
+        stmt = stmt.where(Proposal.id.in_(proposal_ids)).execution_options(populate_existing=True)
+    proposals = (await session.execute(stmt)).scalars().unique().all()
     changed = False
     changed_proposals: list[Proposal] = []
     for proposal in proposals:
@@ -2811,8 +2954,9 @@ async def _sync_expedition_from_available_items(session: AsyncSession) -> bool:
         changed = proposal_changed or changed
         if proposal_changed:
             changed_proposals.append(proposal)
-    for proposal in changed_proposals:
-        _recalculate_expedition_proposal_state(proposal, proposal.updated_by)
+    if recalculate:
+        for proposal in changed_proposals:
+            _recalculate_expedition_proposal_state(proposal, proposal.updated_by)
     await session.flush()
     return changed
 
@@ -2899,7 +3043,7 @@ def _all_expedition_items(proposal: Proposal) -> list[ExpeditionItem]:
 
 
 def _expedition_sort_key(proposal: Proposal) -> int:
-    status = proposal.shipping_status or proposal.current_status or "EM_SEPARACAO"
+    status = _expedition_display_status(proposal)
     order = {
         "EM_SEPARACAO": 0,
         "AGUARDANDO_SEPARACAO_PARCIAL": 0,
@@ -2926,7 +3070,7 @@ def _expedition_summary(proposal: Proposal) -> ExpeditionProposalSummary:
         customer_name=proposal.customer_name,
         project_name=proposal.project_name,
         lot=proposal.lot,
-        shipping_status=proposal.shipping_status or proposal.current_status,
+        shipping_status=_expedition_display_status(proposal),
         general_status=proposal.general_status,
         version=proposal.version,
         item_count=len(active_items),
@@ -3077,7 +3221,7 @@ def _expedition_actions(proposal: Proposal):
     items = _active_expedition_items(proposal)
     has_available = any(item.available_quantity > item.separated_quantity + item.remanaged_quantity for item in items)
     has_separated = any(item.separated_quantity > item.delivered_quantity for item in items)
-    status = proposal.shipping_status or proposal.current_status or "EM_SEPARACAO"
+    status = _expedition_display_status(proposal)
     actions = []
     if status in {"EM_SEPARACAO", "AGUARDANDO_SEPARACAO_PARCIAL"}:
         actions.append({"id": "START_SEPARATION", "label": "Iniciar separacao", "enabled": bool(items)})
@@ -6418,7 +6562,9 @@ async def _simulate_fiscal(session: AsyncSession, batch: FiscalSyncBatch) -> Syn
             summary.errors.append(f"proposta legada {payload.proposal_legacy_id} nao encontrada para o registro fiscal {payload.legacy_id}")
             continue
         existing = (await session.execute(select(FiscalRecord).where(FiscalRecord.proposal_id == proposal.id))).scalars().first()
-        if existing is None:
+        has_invoices = existing is not None and bool((await session.execute(select(FiscalInvoice.id).where(FiscalInvoice.fiscal_record_id == existing.id).limit(1))).first())
+        placeholder = existing is not None and existing.legacy_id is None and not has_invoices and existing.observation == _AUTO_FISCAL_OBSERVATION
+        if existing is None or placeholder:
             summary.created += 1
         else:
             summary.updated += 1
@@ -6453,11 +6599,19 @@ async def _upsert_fiscal_record(
         summary.created += 1
         existing_items: list[FiscalItem] = []
         existing_invoices: list[FiscalInvoice] = []
+        placeholder = False
     else:
         record = existing
         existing_items = list(existing.items)
         existing_invoices = list(existing.invoices)
-        summary.updated += 1
+        # O FiscalRecord auto-provisionado (derived_sync, na escrita da proposta)
+        # ainda sem NF/legacy_id e um placeholder: para o resumo da sincronizacao
+        # equivale a "nao existia" (antes ele so nascia numa leitura da tela).
+        placeholder = existing.legacy_id is None and not existing_invoices and existing.observation == _AUTO_FISCAL_OBSERVATION
+        if placeholder:
+            summary.created += 1
+        else:
+            summary.updated += 1
     _apply_fiscal_record(record, payload)
     record.proposal_id = proposal.id
     await session.flush()
@@ -6472,6 +6626,8 @@ async def _upsert_fiscal_record(
         if fiscal_item is None:
             fiscal_item = FiscalItem(fiscal_record_id=record.id, proposal_id=proposal.id, proposal_item_id=proposal_item.id)
             session.add(fiscal_item)
+            summary.item_created += 1
+        elif placeholder and fiscal_item.billed_quantity == 0:
             summary.item_created += 1
         else:
             summary.item_updated += 1
@@ -6572,3 +6728,8 @@ async def sync_expedition_backfill(session: AsyncSession, actor: User, *, reques
     await auth_repository.create_security_event(session, "EXPEDITION_BACKFILL_COMPLETED", actor_user_id=actor.id, request_id=request_id, details={"created": summary.created, "unchanged": summary.unchanged})
     await session.commit()
     return summary
+
+
+# Registra o hook de escrita (materializacao de ExpeditionItem/FiscalRecord) e
+# o rastreamento de propostas alteradas. Import no fim: derived_sync usa este modulo.
+from api.app.modules.proposals import derived_sync as _derived_sync  # noqa: E402,F401
