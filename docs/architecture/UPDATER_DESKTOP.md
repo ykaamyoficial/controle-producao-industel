@@ -298,15 +298,28 @@ reais), `test_updater_journal_store.py`, `test_updater_lock.py`,
 `test_updater_orchestrator.py` (21 cenários de integração cobrindo toda a
 Seção 29) e `test_main_post_update_handshake.py`.
 
-## Riscos/pendências
+## Elevação administrativa sob demanda (2.7.2)
 
-- **Elevação administrativa não implementada**: o instalador atual roda com
-  `PrivilegesRequired=admin`, então `install_dir` (`Program Files\...`)
-  normalmente exige elevação para escrita. O Updater detecta isso no
-  PRECHECK_LOCAL (`_is_writable`) e falha com uma mensagem clara, mas o
-  mecanismo de auto-elevação via UAC (`ShellExecuteW` com verbo `runas`) não
-  foi implementado nesta fase -- não verificável de forma automatizada neste
-  ambiente (exigiria um prompt real do Windows). Documentado, não construído.
+Fechada a lacuna anteriormente documentada abaixo como pendência: o
+instalador roda com `PrivilegesRequired=admin`, então `install_dir`
+(`Program Files\...`) normalmente exige elevação para escrita. Em máquinas
+onde o usuário Windows logado não é administrador, toda atualização
+silenciosa falhava sempre no PRECHECK_LOCAL, exigindo reinstalação manual --
+provavelmente a causa das falhas de atualização relatadas em algumas
+estações.
+
+`app/updater/elevation.py` (`is_admin`, `is_writable`, `relaunch_elevated`):
+antes de processar qualquer request, `__main__.py` verifica se `install_dir`
+é gravável; se não for e o processo atual não for elevado, relança a si
+mesmo via `ShellExecuteW` (verbo `"runas"`, prompt UAC) com os mesmos
+argumentos e encerra a instância não-elevada (código 0). Se o usuário recusar
+o prompt UAC ou a elevação falhar por qualquer motivo, o fluxo normal
+continua sem privilégio elevado -- PRECHECK_LOCAL reprova com a mensagem já
+existente, preservando o comportamento anterior como rede de segurança.
+Testado com `ShellExecuteW` mockado (`tests/test_updater_elevation.py`); o
+prompt UAC real não é verificável de forma automatizada.
+
+## Riscos/pendências
 - **Antivírus/EDR**: a detecção de sharing violation existe (retry +
   `SwapError.sharing_violation`), mas o comportamento real contra um
   antivírus específico interceptando o arquivo recém-extraído não pôde ser

@@ -19,6 +19,7 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 from app.updater.contract import InvalidUpdateRequestError, UpdateRequest
+from app.updater.elevation import is_admin, is_writable, relaunch_elevated
 from app.updater.exceptions import ConcurrentUpdateError, UpdateFailedError, UpdaterError
 from app.updater.journal_store import UpdateJournalStore
 from app.updater.orchestrator import OrchestratorConfig, UpdaterOrchestrator
@@ -61,6 +62,18 @@ def main(argv: list[str] | None = None) -> int:
         log.error("update_request_load_failed | erro=%s", exc)
         print(f"ERRO: nao foi possivel ler o UpdateRequest: {exc}")
         return 1
+
+    install_dir = Path(request.install_dir)
+    if not is_admin() and not is_writable(install_dir):
+        log.warning("update_elevation_required | install_dir=%s", install_dir)
+        if relaunch_elevated(argv if argv is not None else sys.argv[1:]):
+            log.warning("update_elevation_relaunched | request_id=%s", request.request_id)
+            return 0
+        log.warning("update_elevation_declined_or_failed | request_id=%s", request.request_id)
+        # segue o fluxo normal sem privilegio elevado -- PRECHECK_LOCAL
+        # reprova com a mensagem ja existente ("pode exigir elevacao
+        # administrativa"), preservando o comportamento anterior como rede
+        # de seguranca quando o usuario recusa o prompt UAC.
 
     store = UpdateJournalStore(journal_dir())
     config = OrchestratorConfig(
