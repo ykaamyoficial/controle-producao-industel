@@ -119,6 +119,26 @@ mensagens de chat (permissão e volume).
 - **Fiscal:** é independente do status da proposta (nota pode ser emitida com material não pronto). A mãe entra no Fiscal na criação e segue como referência; o registro próprio da filha continua surgindo quando ela chega à Expedição. Validar esse ponto em homologação com quem opera o Fiscal.
 - **Pendente:** medir ganho real em homologação com dados de produção (`scripts/analyze_performance_log.py`).
 
+## Validação em homologação (06/10/2026)
+
+Cópia dos dados de produção (267 propostas, 1 216 itens, 267 registros fiscais)
+no ambiente `controle_producao_industel_dev`. Código antigo (`0befc0a`) e novo
+medidos na mesma máquina, sobre o mesmo banco, mediana de 5 chamadas:
+
+| Endpoint | Antes | Depois |
+|---|---:|---:|
+| `GET /shipping/proposals?limit=50` | 3 338 ms | 301 ms |
+| `GET /shipping/proposals?limit=200` | 3 271 ms | 389 ms |
+| `GET /shipping/proposals?search=a` | 3 493 ms | 216 ms |
+| `GET /fiscal/records?limit=50` | 3 917 ms | 235 ms |
+| `GET /fiscal/records?limit=200` | 3 921 ms | 815 ms |
+| `GET /fiscal/indicators` | 4 130 ms | 24 ms |
+| `GET /proposals?limit=200` (não alterado) | 556 ms | 672 ms |
+
+- As respostas JSON dos 7 endpoints são **idênticas** entre o código antigo e o novo (mesmos itens, ordem, totais e campos).
+- O backfill no startup não alterou nenhuma linha (`changed=False`) e não mudou área/status de nenhuma proposta.
+- Nesta base não há hoje proposta mista afetada pela mudança de regra de área; o caso segue coberto só por teste unitário.
+
 ## Critério de sucesso (metas a validar na Fase 4)
 
 - Abertura de Expedição e Fiscal: p50 < 300 ms a partir da réplica.
