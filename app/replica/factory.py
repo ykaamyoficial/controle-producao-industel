@@ -1,8 +1,10 @@
 """Montagem da replica local para a sessao atual do Desktop.
 
-Desligada por padrao: so liga com `"local_replica": {"enabled": true}` no
-arquivo de configuracao. Enquanto as telas nao leem da replica (Fase 4),
-ligar serve apenas para manter o arquivo sincronizado e validar o mecanismo.
+Desligada por padrao. No arquivo de configuracao:
+
+* `"local_replica": {"enabled": true}` mantem o arquivo sincronizado;
+* `"local_replica": {"enabled": true, "read": true}` tambem faz as telas ja
+  migradas lerem dele (hoje: lista de Expedicao).
 """
 
 from __future__ import annotations
@@ -22,6 +24,11 @@ CONFIG_KEY = "local_replica"
 def replica_enabled(config: dict[str, Any] | None) -> bool:
     section = (config or {}).get(CONFIG_KEY)
     return bool(isinstance(section, dict) and section.get("enabled"))
+
+
+def replica_read_enabled(config: dict[str, Any] | None) -> bool:
+    """Telas lendo da replica: exige a replica ligada E `"read": true`."""
+    return replica_enabled(config) and bool((config or {})[CONFIG_KEY].get("read"))
 
 
 def get_replica_dir() -> Path:

@@ -24,6 +24,7 @@ from app.integrations.api.notifications_client import NotificationsApiClient
 from app.integrations.api.proposals_client import ProposalsApiClient
 from app.integrations.api.session import ExperimentalApiSession
 from app.integrations.api.token_store import ApiTokenStore
+from app.replica import expedition_view
 from app.services.app_logging import get_logger
 
 # Reaproveita os identificadores oficiais definidos no backend (unica fonte
@@ -191,6 +192,12 @@ class _BorrowedApiClient:
         retries: int = 0,
     ):
         token = access_token if access_token else None
+        # Escrita pela API: a replica local so volta a ser lida depois de sincronizar.
+        gate = getattr(self._storage, "replica_gate", None)
+        if gate is not None and not gate.is_write(method, path):
+            gate = None
+        if gate is not None:
+            gate.write_started()
         try:
             return self._client.request(method, path, json_payload=json_payload, access_token=token, files=files, data=data, retries=retries)
         except ApiSessionExpiredError:
@@ -200,6 +207,9 @@ class _BorrowedApiClient:
             if not state.access_token:
                 raise
             return self._client.request(method, path, json_payload=json_payload, access_token=state.access_token, files=files, data=data, retries=retries)
+        finally:
+            if gate is not None:
+                gate.write_finished()
 
 
 class OfficialProposalApiStorage:
@@ -218,6 +228,8 @@ class OfficialProposalApiStorage:
         self._session: ExperimentalApiSession | None = None
         self._settings_key: tuple[Any, ...] | None = None
         self.refresh_count = 0
+        # Replica local (app/replica): None = todas as leituras vao a API.
+        self.replica_gate = None
 
     def list_proposals(self, **filters) -> list[dict[str, Any]]:
         return self.list_proposals_page(**filters)["items"]
@@ -946,7 +958,25 @@ class OfficialProposalApiStorage:
     def list_expedition_proposals(self, **filters) -> list[dict[str, Any]]:
         return self.list_expedition_proposals_page(**filters)["items"]
 
+    def _expedition_page_from_replica(self, filters: dict[str, Any]) -> dict[str, Any] | None:
+        gate = self.replica_gate
+        if gate is None or not gate.can_read(expedition_view.REQUIRED_ENTITIES):
+            return None
+        try:
+            return expedition_view.list_expedition_proposals(
+                gate.database,
+                search=filters.get("search"),
+                limit=int(filters.get("limit") or 50),
+                offset=int(filters.get("offset") or 0),
+            )
+        except Exception:
+            log.exception("Leitura da Expedicao pela replica local falhou; usando a API")
+            return None
+
     def list_expedition_proposals_page(self, **filters) -> dict[str, Any]:
+        payload = self._expedition_page_from_replica(filters)
+        if payload is not None:
+            return {"items": [_api_expedition_to_process(row) for row in payload.get("items", [])], "total": payload.get("total")}
         client, proposals, token = self._client()
         try:
             payload = proposals.list_expedition_proposals(token, **filters)

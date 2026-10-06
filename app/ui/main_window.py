@@ -12,7 +12,8 @@ from app.ui.background_worker import start_worker
 from app.ui.chat_center_page import ChatCenterDialog
 from app.ui.chat_realtime import ChatRealtimeClient
 from app.ui.chat_sync_coordinator import ChatSyncCoordinator
-from app.replica.factory import build_replica_sync, replica_enabled
+from app.replica.factory import build_replica_sync, replica_enabled, replica_read_enabled
+from app.replica.read_gate import ReplicaReadGate
 from app.replica.sync_agent import ReplicaSyncAgent
 from app.replica.sync_realtime import ReplicaRealtimeClient
 from app.ui.components.area_identity import refresh_area_theme
@@ -617,7 +618,19 @@ class MainWindow(FramelessHitTestMixin, QMainWindow):
             log.exception("Falha ao preparar a replica local; seguindo sem ela")
             self.replica_db = None
             return
-        self.replica_sync = ReplicaSyncAgent(engine.sync_once, parent=self)
+        gate = ReplicaReadGate(self.replica_db)
+
+        def sync_once():
+            generation = gate.begin_sync()
+            result = engine.sync_once()
+            gate.complete_sync(generation)
+            return result
+
+        self.replica_sync = ReplicaSyncAgent(sync_once, parent=self)
+        gate.on_write = lambda: self.replica_sync.sync_requested.emit("write")
+        if replica_read_enabled(self.service.config):
+            # Fase 4: telas migradas leem da replica quando ela esta em dia.
+            self.service.official_proposal_storage.replica_gate = gate
         # Fase 3: o servidor avisa cada mudanca por websocket; o poll vira rede
         # de seguranca (curto sem websocket, longo com ele).
         storage = self.service.official_proposal_storage
@@ -628,6 +641,9 @@ class MainWindow(FramelessHitTestMixin, QMainWindow):
         self.replica_realtime.start()
 
     def _stop_replica_sync(self):
+        storage = getattr(self.service, "official_proposal_storage", None)
+        if storage is not None:
+            storage.replica_gate = None
         if getattr(self, "replica_realtime", None) is not None:
             self.replica_realtime.stop()
         if getattr(self, "replica_sync", None) is not None:

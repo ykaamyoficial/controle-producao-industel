@@ -32,6 +32,8 @@ class ReplicaSyncAgent(QObject):
     sync_finished = Signal(object)  # SyncResult
     sync_failed = Signal(object)
     state_changed = Signal(str)
+    # Pedido de sync vindo de outro thread (ex.: worker que acabou de gravar pela API).
+    sync_requested = Signal(str)
 
     def __init__(
         self,
@@ -55,6 +57,7 @@ class ReplicaSyncAgent(QObject):
         self._timer = QTimer(self)
         self._timer.setInterval(poll_interval_ms)
         self._timer.timeout.connect(lambda: self.request_sync("poll"))
+        self.sync_requested.connect(self.request_sync)
 
     def start(self) -> None:
         self._stopped = False
