@@ -42,6 +42,9 @@ from app.ui.update_dialog import UpdateDialog
 
 log = get_logger("main_window")
 
+# Igual ao heartbeat longo do chat: no pior caso um badge fica defasado por esse tempo.
+CHAT_STATUS_CACHE_SECONDS = 120
+
 
 class _ContentCornerNotch(QWidget):
     """Recorte arredondado no canto superior esquerdo do MainContent, sem
@@ -580,6 +583,9 @@ class MainWindow(FramelessHitTestMixin, QMainWindow):
             self.title_bar.notification_bell.close_center()
         if getattr(self, "_chat_sync", None) is not None:
             self._chat_sync.stop()
+        # Outro usuario pode entrar em seguida: nada de badges do anterior.
+        if hasattr(self.service, "set_chat_status_cache_ttl"):
+            self.service.set_chat_status_cache_ttl(0)
         self._stop_replica_sync()
         if self.session_sync is not None:
             self.session_sync.stop()
@@ -652,6 +658,8 @@ class MainWindow(FramelessHitTestMixin, QMainWindow):
     def _poll_chat_unread(self, reason: str = "poll", with_notifications: bool = False):
         # Gatilhos (evento realtime, leitura local, heartbeat, login) passam
         # pelo coordenador, que coalesce rajadas e escolhe o heartbeat.
+        if hasattr(self.service, "invalidate_chat_status"):
+            self.service.invalidate_chat_status()
         coordinator = getattr(self, "_chat_sync", None)
         if coordinator is None:
             self._run_chat_sync((reason,), with_notifications)
@@ -723,6 +731,9 @@ class MainWindow(FramelessHitTestMixin, QMainWindow):
         coordinator = getattr(self, "_chat_sync", None)
         if coordinator is not None:
             coordinator.set_realtime_healthy(connected)
+        # Badges de chat das listas: cache so enquanto o websocket garante os avisos.
+        if hasattr(self.service, "set_chat_status_cache_ttl"):
+            self.service.set_chat_status_cache_ttl(CHAT_STATUS_CACHE_SECONDS if connected else 0)
         if connected and self._realtime_ever_connected:
             self._poll_chat_unread("reconnect", with_notifications=True)
         if connected:

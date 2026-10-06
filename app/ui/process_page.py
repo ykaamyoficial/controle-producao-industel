@@ -349,6 +349,8 @@ class ProcessPage(QWidget):
         )
 
     def _fetch_chat_status(self) -> dict[int, dict]:
+        if hasattr(self.service, "chat_status_by_proposal"):
+            return self.service.chat_status_by_proposal()
         if not hasattr(self.service, "chat_conversations"):
             return {}
         try:

@@ -193,6 +193,10 @@ class _BorrowedApiClient:
     ):
         token = access_token if access_token else None
         # Escrita pela API: a replica local so volta a ser lida depois de sincronizar.
+        if method.upper() != "GET" and path.startswith("/api/v1/chat"):
+            on_chat_write = getattr(self._storage, "on_chat_write", None)
+            if on_chat_write is not None:
+                on_chat_write()
         gate = getattr(self._storage, "replica_gate", None)
         if gate is not None and not gate.is_write(method, path):
             gate = None
@@ -230,6 +234,8 @@ class OfficialProposalApiStorage:
         self.refresh_count = 0
         # Replica local (app/replica): None = todas as leituras vao a API.
         self.replica_gate = None
+        # Chamado a cada escrita em /api/v1/chat (BackendService invalida os badges).
+        self.on_chat_write = None
 
     def list_proposals(self, **filters) -> list[dict[str, Any]]:
         return self.list_proposals_page(**filters)["items"]

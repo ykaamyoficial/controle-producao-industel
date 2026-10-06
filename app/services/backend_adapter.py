@@ -1,5 +1,8 @@
 from __future__ import annotations
 import json
+import threading
+import time
+from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from typing import Any
 from urllib.parse import urlparse, urlunparse
@@ -12,6 +15,14 @@ from app.services.app_logging import get_logger
 from app.services.short_cache import ShortLivedCache
 from app.services.configuration_service import get_configuration_service
 log = get_logger('backend')
+
+
+@dataclass
+class _ChatStatusCache:
+    lock: threading.Lock = field(default_factory=threading.Lock)
+    entry: tuple[float, dict[int, dict]] | None = None
+    ttl: float = 0.0
+    generation: int = 0
 _UNSET = object()
 PERMISSION_LEVEL_NONE = 'NONE'
 PERMISSION_LEVEL_VIEW = 'VIEW'
@@ -204,6 +215,11 @@ class BackendService:
         self._api_refresh_token: str | None = None
         self._avatar_cache: dict[int, bytes | None] = {}
         self._read_cache = ShortLivedCache(default_ttl=2.0)
+        # Status de chat por proposta (badges das listas). TTL 0 = sem cache;
+        # a MainWindow liga o cache enquanto o websocket de chat esta saudavel
+        # e o invalida a cada evento de chat (ver chat_status_by_proposal).
+        self._chat_status = _ChatStatusCache()
+        self.official_proposal_storage.on_chat_write = self.invalidate_chat_status
         # Callback opcional, setado pela MainWindow: chamado depois que uma
         # conversa e confirmada como lida no backend, para que o badge global
         # do cabecalho seja atualizado sem o dialog de chat precisar conhecer
@@ -867,6 +883,71 @@ class BackendService:
             return self.official_proposal_storage.galvanization_load_all_items(load_id)
         except Exception as exc:
             raise self._api_app_error(exc) from exc
+
+    def _chat_status_state(self) -> _ChatStatusCache:
+        state = getattr(self, "_chat_status", None)
+        if state is None:
+            state = self._chat_status = _ChatStatusCache()
+        return state
+
+    def set_chat_status_cache_ttl(self, seconds: float) -> None:
+        state = self._chat_status_state()
+        with state.lock:
+            state.ttl = max(0.0, float(seconds))
+            if not state.ttl:
+                state.entry = None
+
+    def invalidate_chat_status(self) -> None:
+        state = self._chat_status_state()
+        with state.lock:
+            state.entry = None
+            state.generation += 1
+
+    def chat_status_by_proposal(self) -> dict[int, dict]:
+        """Status de chat por proposta para os badges das listas (uma copia por chamada).
+
+        Custa duas chamadas a API (conversas + resumo de nao lidas). Como toda
+        mudanca de chat chega por evento realtime ou e feita por este Desktop,
+        o resultado fica em cache enquanto o websocket esta saudavel e e
+        descartado a cada evento/escrita; sem websocket (TTL 0) busca sempre.
+        """
+        state = self._chat_status_state()
+        with state.lock:
+            cached = state.entry
+            ttl = state.ttl
+            generation = state.generation
+        if cached is not None and ttl and time.monotonic() - cached[0] < ttl:
+            return {proposal_id: dict(row) for proposal_id, row in cached[1].items()}
+        complete = True
+        try:
+            conversations = self.chat_conversations({"limit": 200})
+        except Exception:
+            conversations = []
+            complete = False
+        status_by_proposal: dict[int, dict] = {
+            int(item["proposal_id"]): dict(item) for item in conversations if item.get("proposal_id")
+        }
+        # chat_conversations() e paginado (teto de 200, ordenado por atividade
+        # recente) e nao reflete corretamente o unread_count de propostas mais
+        # antigas quando ha mais de 200 conversas ativas. chat_unread_summary()
+        # varre todas as conversas numa unica consulta agregada, sem esse teto,
+        # entao ele e a fonte de verdade para o contador exibido no badge.
+        try:
+            summary = self.chat_unread_summary()
+        except Exception:
+            summary = None
+            complete = False
+        for entry in (summary or {}).get("conversations", []):
+            proposal_id = entry.get("proposal_id")
+            if not proposal_id:
+                continue
+            row = status_by_proposal.setdefault(int(proposal_id), {})
+            row["unread_count"] = entry.get("unread_count", 0)
+        with state.lock:
+            # Nao guarda resultado parcial nem um que ja nasceu velho (evento durante a busca).
+            if complete and state.ttl and generation == state.generation:
+                state.entry = (time.monotonic(), status_by_proposal)
+        return {proposal_id: dict(row) for proposal_id, row in status_by_proposal.items()}
 
     def chat_conversations(self, filters: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         filters = filters or {}
