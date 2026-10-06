@@ -12,6 +12,8 @@ from app.ui.background_worker import start_worker
 from app.ui.chat_center_page import ChatCenterDialog
 from app.ui.chat_realtime import ChatRealtimeClient
 from app.ui.chat_sync_coordinator import ChatSyncCoordinator
+from app.replica.factory import build_replica_sync, replica_enabled
+from app.replica.sync_agent import ReplicaSyncAgent
 from app.ui.components.area_identity import refresh_area_theme
 from app.ui.components.floating_chat_button import FloatingChatButton
 from app.ui.components.login_summary_banner import LoginSummaryBanner
@@ -301,6 +303,8 @@ class MainWindow(FramelessHitTestMixin, QMainWindow):
             # SYNC.
             self._chat_sync.request("login", with_notifications=True, immediate=True)
 
+        self._start_replica_sync()
+
         if self._update_available_notice and not self._update_available_notice_shown:
             self._update_available_notice_shown = True
             log.info("Atualizacao recomendada disponivel | detalhe=%s", self._update_available_notice)
@@ -574,6 +578,7 @@ class MainWindow(FramelessHitTestMixin, QMainWindow):
             self.title_bar.notification_bell.close_center()
         if getattr(self, "_chat_sync", None) is not None:
             self._chat_sync.stop()
+        self._stop_replica_sync()
         if self.session_sync is not None:
             self.session_sync.stop()
         if self.chat_realtime is not None:
@@ -596,6 +601,26 @@ class MainWindow(FramelessHitTestMixin, QMainWindow):
         x = parent.width() - button.width() - margin
         y = parent.height() - button.height() - margin
         button.move(max(0, x), max(0, y))
+
+    def _start_replica_sync(self):
+        # Replica local SQLite (Fase 2): desligada por padrao. Ligada, so
+        # mantem o arquivo sincronizado -- nenhuma tela le dela ainda.
+        self.replica_db = None
+        self.replica_sync = None
+        if not replica_enabled(getattr(self.service, "config", None)):
+            return
+        try:
+            self.replica_db, engine = build_replica_sync(self.service)
+        except Exception:
+            log.exception("Falha ao preparar a replica local; seguindo sem ela")
+            self.replica_db = None
+            return
+        self.replica_sync = ReplicaSyncAgent(engine.sync_once, parent=self)
+        self.replica_sync.start()
+
+    def _stop_replica_sync(self):
+        if getattr(self, "replica_sync", None) is not None:
+            self.replica_sync.stop()
 
     def _poll_chat_unread(self, reason: str = "poll", with_notifications: bool = False):
         # Gatilhos (evento realtime, leitura local, heartbeat, login) passam
@@ -740,6 +765,7 @@ class MainWindow(FramelessHitTestMixin, QMainWindow):
           self.title_bar.notification_bell.close_center()
       if getattr(self, "_chat_sync", None) is not None:
           self._chat_sync.stop()
+      self._stop_replica_sync()
       if self.session_sync is not None:
           self.session_sync.stop()
       if self.chat_realtime is not None:

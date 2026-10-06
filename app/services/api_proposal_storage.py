@@ -1700,6 +1700,17 @@ class OfficialProposalApiStorage:
         finally:
             client.close()
 
+    def sync_get_json(self, path: str) -> Any:
+        """GET autenticado nos endpoints /api/v1/sync/* (replica local)."""
+        client, _proposals, token = self._client()
+        try:
+            return client.get(path, access_token=token).data
+        finally:
+            client.close()
+
+    def api_base_url(self) -> str:
+        return str(self._load_enabled_settings().base_url)
+
     def chat_unread_summary(self) -> dict[str, Any]:
         client, chat, token = self._chat_client()
         try:
