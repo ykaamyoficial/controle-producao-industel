@@ -69,11 +69,31 @@ def create_engine_from_settings(settings: Settings) -> AsyncEngine | None:
     return engine
 
 
+_PRE_COMMIT_HOOKS: list = []
+
+
+def register_pre_commit_hook(hook) -> None:
+    """Registra `async def hook(session)` executado antes de cada `commit()`.
+
+    Permite a um modulo de dominio materializar dados derivados na escrita
+    (na mesma transacao) em vez de recalcula-los em leituras.
+    """
+    if hook not in _PRE_COMMIT_HOOKS:
+        _PRE_COMMIT_HOOKS.append(hook)
+
+
+class HookedAsyncSession(AsyncSession):
+    async def commit(self) -> None:
+        for hook in tuple(_PRE_COMMIT_HOOKS):
+            await hook(self)
+        await super().commit()
+
+
 def get_sessionmaker() -> async_sessionmaker | None:
     engine = get_engine()
     if engine is None:
         return None
-    return async_sessionmaker(engine, expire_on_commit=False)
+    return async_sessionmaker(engine, class_=HookedAsyncSession, expire_on_commit=False)
 
 
 async def get_db_session() -> AsyncGenerator[AsyncSession, None]:
