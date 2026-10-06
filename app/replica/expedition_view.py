@@ -11,15 +11,17 @@ respostas divergirem.
 from __future__ import annotations
 
 from datetime import datetime
-from decimal import Decimal
 from typing import Any
 
 from app.replica.replica_db import ReplicaDatabase
+from app.replica.view_common import ZERO as _ZERO
+from app.replica.view_common import dec as _dec
+from app.replica.view_common import fmt as _fmt
+from app.replica.view_common import matches_search as _matches
+from app.replica.view_common import not_cancelled
 
 REQUIRED_ENTITIES = ("proposals", "expedition_items")
 
-_QUANTUM = Decimal("0.0001")
-_ZERO = Decimal("0")
 _STATUS_ORDER = {
     "EM_SEPARACAO": 0,
     "AGUARDANDO_SEPARACAO_PARCIAL": 0,
@@ -30,21 +32,8 @@ _STATUS_ORDER = {
 }
 
 
-def _dec(value: Any) -> Decimal:
-    return Decimal(str(value)) if value is not None else _ZERO
-
-
-def _fmt(value: Decimal) -> str:
-    return str(value.quantize(_QUANTUM))
-
-
 def _operational(proposal: dict[str, Any]) -> bool:
-    return (
-        bool(proposal.get("active"))
-        and not proposal.get("is_cancelled")
-        and (proposal.get("current_status") or "") != "CANCELADA"
-        and (proposal.get("general_status") or "") != "CANCELADA"
-    )
+    return bool(proposal.get("active")) and not_cancelled(proposal)
 
 
 def _has_balance(item: dict[str, Any]) -> bool:
@@ -62,13 +51,6 @@ def display_status(proposal: dict[str, Any]) -> str:
     if proposal.get("current_status") in _STATUS_ORDER:
         return proposal["current_status"]
     return "EM_SEPARACAO"
-
-
-def _matches(proposal: dict[str, Any], needle: str) -> bool:
-    haystack = " ".join(
-        [proposal.get("proposal_number") or "", proposal.get("customer_name") or "", proposal.get("project_name") or "", proposal.get("lot") or ""]
-    ).lower()
-    return needle in haystack
 
 
 def _updated_at_desc(proposal: dict[str, Any]) -> tuple[int, float]:

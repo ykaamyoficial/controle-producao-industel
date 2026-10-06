@@ -24,7 +24,7 @@ from app.integrations.api.notifications_client import NotificationsApiClient
 from app.integrations.api.proposals_client import ProposalsApiClient
 from app.integrations.api.session import ExperimentalApiSession
 from app.integrations.api.token_store import ApiTokenStore
-from app.replica import expedition_view
+from app.replica import expedition_view, fiscal_view
 from app.services.app_logging import get_logger
 
 # Reaproveita os identificadores oficiais definidos no backend (unica fonte
@@ -958,20 +958,28 @@ class OfficialProposalApiStorage:
     def list_expedition_proposals(self, **filters) -> list[dict[str, Any]]:
         return self.list_expedition_proposals_page(**filters)["items"]
 
-    def _expedition_page_from_replica(self, filters: dict[str, Any]) -> dict[str, Any] | None:
+    def _read_from_replica(self, name: str, entities, read):
+        """Executa `read(database)` na replica local, ou devolve None para o chamador usar a API."""
         gate = self.replica_gate
-        if gate is None or not gate.can_read(expedition_view.REQUIRED_ENTITIES):
+        if gate is None or not gate.can_read(entities):
             return None
         try:
-            return expedition_view.list_expedition_proposals(
-                gate.database,
+            return read(gate.database)
+        except Exception:
+            log.exception("Leitura de %s pela replica local falhou; usando a API", name)
+            return None
+
+    def _expedition_page_from_replica(self, filters: dict[str, Any]) -> dict[str, Any] | None:
+        return self._read_from_replica(
+            "Expedicao",
+            expedition_view.REQUIRED_ENTITIES,
+            lambda database: expedition_view.list_expedition_proposals(
+                database,
                 search=filters.get("search"),
                 limit=int(filters.get("limit") or 50),
                 offset=int(filters.get("offset") or 0),
-            )
-        except Exception:
-            log.exception("Leitura da Expedicao pela replica local falhou; usando a API")
-            return None
+            ),
+        )
 
     def list_expedition_proposals_page(self, **filters) -> dict[str, Any]:
         payload = self._expedition_page_from_replica(filters)
@@ -1162,20 +1170,28 @@ class OfficialProposalApiStorage:
 
     def fiscal_rows_page(self, filters: dict[str, Any] | None = None) -> dict[str, Any]:
         filters = filters or {}
-        client, proposals, token = self._client()
-        try:
-            payload = proposals.list_fiscal_records(
-                token,
-                search=filters.get("text") or None,
-                status=filters.get("status_fiscal") or None,
-                situation=filters.get("situacao_fiscal") or None,
-                limit=int(filters.get("limit") or 50),
-                offset=int(filters.get("offset") or 0),
-            )
-            rows = _filter_fiscal_rows([_api_fiscal_record_to_legacy(row) for row in payload.get("items", [])], filters)
-            return {"items": rows, "total": payload.get("total")}
-        finally:
-            client.close()
+        query = {
+            "search": filters.get("text") or None,
+            "status": filters.get("status_fiscal") or None,
+            "situation": filters.get("situacao_fiscal") or None,
+            "limit": int(filters.get("limit") or 50),
+            "offset": int(filters.get("offset") or 0),
+        }
+        payload = self._read_from_replica(
+            "Fiscal",
+            fiscal_view.REQUIRED_ENTITIES,
+            lambda database: fiscal_view.list_fiscal_records(
+                database, search=query["search"], status=query["status"], situation_filter=query["situation"], limit=query["limit"], offset=query["offset"]
+            ),
+        )
+        if payload is None:
+            client, proposals, token = self._client()
+            try:
+                payload = proposals.list_fiscal_records(token, **query)
+            finally:
+                client.close()
+        rows = _filter_fiscal_rows([_api_fiscal_record_to_legacy(row) for row in payload.get("items", [])], filters)
+        return {"items": rows, "total": payload.get("total")}
 
     def fiscal_items(self, fiscal_record_id: int) -> list[dict[str, Any]]:
         client, proposals, token = self._client()
@@ -1202,6 +1218,9 @@ class OfficialProposalApiStorage:
             client.close()
 
     def fiscal_indicators(self) -> dict[str, Any]:
+        payload = self._read_from_replica("indicadores fiscais", fiscal_view.REQUIRED_ENTITIES, fiscal_view.fiscal_indicators)
+        if payload is not None:
+            return payload
         client, proposals, token = self._client()
         try:
             return proposals.fiscal_indicators(token)

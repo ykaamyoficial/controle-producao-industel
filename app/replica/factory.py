@@ -4,7 +4,7 @@ Desligada por padrao. No arquivo de configuracao:
 
 * `"local_replica": {"enabled": true}` mantem o arquivo sincronizado;
 * `"local_replica": {"enabled": true, "read": true}` tambem faz as telas ja
-  migradas lerem dele (hoje: lista de Expedicao).
+  migradas lerem dele (hoje: lista de Expedicao, lista e indicadores do Fiscal).
 """
 
 from __future__ import annotations
