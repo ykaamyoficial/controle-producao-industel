@@ -30,7 +30,7 @@ class LoginDialog(QDialog):
         self.error = QLabel("")
         self.error.setObjectName("ErrorText")
         self.login = QLineEdit()
-        self.login.setPlaceholderText("Usuario")
+        self.login.setPlaceholderText("Usuário")
         remembered_login = str(self.preferences.get("last_user") or "")
         self.login.setText(remembered_login)
         self.password = QLineEdit()
@@ -59,4 +59,4 @@ class LoginDialog(QDialog):
             save_login_preferences(login, self.remember_user.isChecked())
             self.accept()
         else:
-            self.error.setText("Usuario ou senha invalidos.")
+            self.error.setText("Usuário ou senha inválidos.")

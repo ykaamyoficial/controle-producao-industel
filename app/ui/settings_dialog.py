@@ -15,7 +15,7 @@ class SettingsDialog(QDialog):
         super().__init__(parent)
         self.service = service
         self._theme_changed = theme_changed
-        self.setWindowTitle("Configuracoes")
+        self.setWindowTitle("Configurações")
         self.setWindowIcon(app_icon())
         self.setModal(True)
 
@@ -31,16 +31,16 @@ class SettingsDialog(QDialog):
 
         heading = QVBoxLayout()
         heading.setSpacing(2)
-        title = QLabel("Configuracoes")
+        title = QLabel("Configurações")
         title.setStyleSheet("font-size: 22px; font-weight: 800;")
-        subtitle = QLabel("Ajustes do sistema, aparencia, usuarios, API e PostgreSQL.")
+        subtitle = QLabel("Ajustes do sistema, aparência, usuários, API e PostgreSQL.")
         subtitle.setObjectName("Caption")
         heading.addWidget(title)
         heading.addWidget(subtitle)
         header_layout.addLayout(heading)
         header_layout.addStretch()
 
-        close_button = ModernButton("Fechar", "clear")
+        close_button = ModernButton("Fechar", "clear", variant="ghost")
         close_button.clicked.connect(self.accept)
         header_layout.addWidget(close_button)
         root.addWidget(header)

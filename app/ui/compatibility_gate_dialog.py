@@ -183,7 +183,7 @@ class CompatibilityGateDialog(QDialog):
             # instante antes do dialogo fechar.
             self.update_launched = True
             self.proceed = False
-            self.message_label.setText("Atualizacao iniciada. O sistema sera fechado automaticamente para concluir a instalacao.")
+            self.message_label.setText("Atualização iniciada. O sistema será fechado automaticamente para concluir a instalação.")
             self.reject()
             return
         error_message = getattr(result, "error_message", None) or "Nao foi possivel iniciar a atualizacao."
@@ -195,7 +195,7 @@ class CompatibilityGateDialog(QDialog):
         self.retry_button.setEnabled(True)
         self.exit_button.setEnabled(True)
         log.exception("Falha inesperada ao iniciar a atualizacao")
-        self.message_label.setText(f"{_STATE_MESSAGES.get(self.check_result.state, '')}\n\nFalha ao atualizar. Consulte os logs tecnicos.")
+        self.message_label.setText(f"{_STATE_MESSAGES.get(self.check_result.state, '')}\n\nFalha ao atualizar. Consulte os logs técnicos.")
 
     def _on_exit(self) -> None:
         self.proceed = False

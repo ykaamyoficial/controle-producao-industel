@@ -22,10 +22,10 @@ class AboutDialog(QDialog):
         layout.setSpacing(6)
 
         name = QLabel(APP_DISPLAY_NAME)
-        name.setStyleSheet("font-size: 16px; font-weight: 800;")
+        name.setObjectName("DetailTitle")
         layout.addWidget(name)
 
-        version = QLabel(f"Versao {APP_VERSION} - build {APP_BUILD}")
+        version = QLabel(f"Versão {APP_VERSION} - build {APP_BUILD}")
         version.setObjectName("Caption")
         layout.addWidget(version)
 

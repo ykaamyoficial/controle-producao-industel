@@ -32,7 +32,7 @@ class UserEditorDialog(QDialog):
         super().__init__(parent)
         self.service = service
         self.user_id = user_id
-        self.setWindowTitle("Editar usuario" if user_id else "Novo usuario")
+        self.setWindowTitle("Editar usuário" if user_id else "Novo usuário")
         apply_large_dialog_geometry(self, parent)
         style_dialog_from_parent(self, parent)
         self.permission_groups: dict[str, QButtonGroup] = {}
@@ -56,14 +56,14 @@ class UserEditorDialog(QDialog):
         self.nome = QLineEdit()
         self.login = QLineEdit()
         self.email = QLineEdit()
-        self.email.setPlaceholderText("Para receber notificacoes por e-mail (opcional)")
+        self.email.setPlaceholderText("Para receber notificações por e-mail (opcional)")
         self.password = QLineEdit()
         self.password.setEchoMode(QLineEdit.Password)
-        self.password.setPlaceholderText("Obrigatoria apenas para novo usuario ou troca de senha")
+        self.password.setPlaceholderText("Obrigatória apenas para novo usuário ou troca de senha")
         self.profile = QComboBox()
         for key, label in self.service.profile_options():
             self.profile.addItem(label, key)
-        self.active = QCheckBox("Usuario ativo")
+        self.active = QCheckBox("Usuário ativo")
         self.active.setChecked(True)
         data_layout.addRow("Nome *", self.nome)
         data_layout.addRow("Login *", self.login)
@@ -73,13 +73,13 @@ class UserEditorDialog(QDialog):
         data_layout.addRow("", self.active)
         root.addWidget(data_panel)
 
-        permissions_title = QLabel("Permissoes por area")
+        permissions_title = QLabel("Permissões por área")
         permissions_title.setObjectName("SectionTitle")
         root.addWidget(permissions_title)
 
         self.permission_table = QTableWidget()
         self.permission_table.setColumnCount(4)
-        self.permission_table.setHorizontalHeaderLabels(["Area", "Sem acesso", "Visualizar", "Visualizar e alterar"])
+        self.permission_table.setHorizontalHeaderLabels(["Área", "Sem acesso", "Visualizar", "Visualizar e alterar"])
         self.permission_table.verticalHeader().setVisible(False)
         self.permission_table.setShowGrid(False)
         self.permission_table.setAlternatingRowColors(True)
@@ -95,7 +95,7 @@ class UserEditorDialog(QDialog):
 
         actions = QHBoxLayout()
         save = ModernButton("Salvar", "save", accent=True)
-        cancel = ModernButton("Cancelar", "clear")
+        cancel = ModernButton("Cancelar", "clear", variant="ghost")
         save.clicked.connect(self.save)
         cancel.clicked.connect(self.reject)
         actions.addStretch()
@@ -181,7 +181,7 @@ class UserEditorDialog(QDialog):
             self.service.save_user(data, self.user_id)
             self.accept()
         except Exception as exc:
-            QMessageBox.warning(self, "Usuarios", str(exc))
+            QMessageBox.warning(self, "Usuários", str(exc))
 
 
 class UsersManagementWidget(QWidget):
@@ -229,10 +229,10 @@ class UsersManagementWidget(QWidget):
         root.addWidget(self.table, 1)
 
         actions = QHBoxLayout()
-        self.new_btn = ModernButton("Novo usuario", "new", accent=True)
-        self.edit_btn = ModernButton("Editar usuario", "edit")
+        self.new_btn = ModernButton("Novo usuário", "new", accent=True)
+        self.edit_btn = ModernButton("Editar usuário", "edit")
         self.toggle_btn = ModernButton("Ativar/Inativar", "status")
-        self.delete_btn = ModernButton("Excluir usuario", "clear")
+        self.delete_btn = ModernButton("Excluir usuário", "clear")
         self.new_btn.clicked.connect(self.new_user)
         self.edit_btn.clicked.connect(self.edit_user)
         self.toggle_btn.clicked.connect(self.toggle_user)
@@ -257,7 +257,7 @@ class UsersManagementWidget(QWidget):
     def selected_user_id(self):
         selected = self.table.selectionModel().selectedRows()
         if not selected:
-            QMessageBox.warning(self, "Usuarios", "Selecione um usuario.")
+            QMessageBox.warning(self, "Usuários", "Selecione um usuário.")
             return None
         index = self.proxy.mapToSource(selected[0])
         return int(self.model.rows[index.row()]["id"])
@@ -302,7 +302,7 @@ class UsersManagementWidget(QWidget):
             self.service.toggle_user(user_id)
             self.refresh()
         except Exception as exc:
-            QMessageBox.warning(self, "Usuarios", str(exc))
+            QMessageBox.warning(self, "Usuários", str(exc))
 
     def delete_user(self):
         user_id = self.selected_user_id()
@@ -310,8 +310,8 @@ class UsersManagementWidget(QWidget):
             return
         answer = QMessageBox.question(
             self,
-            "Usuarios",
-            "Deseja excluir este usuario? Esta acao remove o acesso dele ao sistema.",
+            "Usuários",
+            "Deseja excluir este usuário? Esta ação remove o acesso dele ao sistema.",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,
         )
@@ -321,7 +321,7 @@ class UsersManagementWidget(QWidget):
             self.service.delete_user(user_id)
             self.refresh()
         except Exception as exc:
-            QMessageBox.warning(self, "Usuarios", str(exc))
+            QMessageBox.warning(self, "Usuários", str(exc))
 
 
 class UserManagerDialog(QDialog):
@@ -330,17 +330,17 @@ class UserManagerDialog(QDialog):
     def __init__(self, service, parent=None):
         super().__init__(parent)
         self.service = service
-        self.setWindowTitle("Usuarios e permissoes")
+        self.setWindowTitle("Usuários e permissões")
         apply_large_dialog_geometry(self, parent)
         style_dialog_from_parent(self, parent)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(18, 18, 18, 16)
         root.setSpacing(12)
-        title = QLabel("Usuarios e controle de acesso")
+        title = QLabel("Usuários e controle de acesso")
         title.setObjectName("SectionTitle")
         root.addWidget(title)
-        subtitle = QLabel("Configure quem pode visualizar ou alterar cada area do sistema.")
+        subtitle = QLabel("Configure quem pode visualizar ou alterar cada área do sistema.")
         subtitle.setObjectName("Caption")
         root.addWidget(subtitle)
 
@@ -349,7 +349,7 @@ class UserManagerDialog(QDialog):
 
         close_actions = QHBoxLayout()
         close_actions.addStretch()
-        close = ModernButton("Fechar", "clear")
+        close = ModernButton("Fechar", "clear", variant="ghost")
         close.clicked.connect(self.accept)
         close_actions.addWidget(close)
         root.addLayout(close_actions)

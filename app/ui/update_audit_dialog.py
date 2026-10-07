@@ -57,7 +57,7 @@ class EventDetailDialog(QDialog):
         text.setReadOnly(True)
         text.setPlainText(json.dumps(event, indent=2, ensure_ascii=False, sort_keys=True))
         layout.addWidget(text)
-        close = ModernButton("Fechar", "close")
+        close = ModernButton("Fechar", "close", variant="ghost")
         close.clicked.connect(self.accept)
         footer = QHBoxLayout()
         footer.addStretch()
@@ -74,7 +74,7 @@ class UpdateAuditDialog(QDialog):
 
     def __init__(self, parent=None, *, store: DesktopApiConfigStore | None = None, token_store: ApiTokenStore | None = None):
         super().__init__(parent)
-        self.setWindowTitle("Auditoria de atualizacoes")
+        self.setWindowTitle("Auditoria de atualizações")
         self.store = store or DesktopApiConfigStore()
         self.token_store = token_store or ApiTokenStore()
         self._worker_threads: list = []
@@ -92,9 +92,9 @@ class UpdateAuditDialog(QDialog):
         root.setContentsMargins(22, 20, 22, 18)
         root.setSpacing(12)
 
-        title = QLabel("Auditoria de atualizacoes")
+        title = QLabel("Auditoria de atualizações")
         title.setStyleSheet("font-size: 20px; font-weight: 800;")
-        subtitle = QLabel("Historico oficial de releases, deploys, manutencao e canais -- somente leitura.")
+        subtitle = QLabel("Histórico oficial de releases, deploys, manutenção e canais -- somente leitura.")
         subtitle.setObjectName("Caption")
         subtitle.setWordWrap(True)
         root.addWidget(title)
@@ -128,11 +128,11 @@ class UpdateAuditDialog(QDialog):
         buttons = QHBoxLayout()
         self.search_btn = ModernButton("Pesquisar", "search", accent=True)
         self.prev_btn = ModernButton("Anterior", "previous")
-        self.next_btn = ModernButton("Proximo", "next")
+        self.next_btn = ModernButton("Próximo", "next")
         self.timeline_btn = ModernButton("Ver linha do tempo", "search")
         self.clear_timeline_btn = ModernButton("Limpar filtro de linha do tempo", "refresh")
         self.clear_timeline_btn.hide()
-        self.page_label = QLabel("Pagina 1")
+        self.page_label = QLabel("Página 1")
         buttons.addWidget(self.search_btn)
         buttons.addWidget(self.prev_btn)
         buttons.addWidget(self.next_btn)
@@ -140,12 +140,12 @@ class UpdateAuditDialog(QDialog):
         buttons.addWidget(self.clear_timeline_btn)
         buttons.addWidget(self.page_label)
         buttons.addStretch()
-        close = ModernButton("Fechar", "close")
+        close = ModernButton("Fechar", "close", variant="ghost")
         buttons.addWidget(close)
         root.addLayout(buttons)
 
         self.table = QTableWidget(0, 8)
-        self.table.setHorizontalHeaderLabels(["Quando (UTC)", "Tipo", "Componente", "Resultado", "Versao", "Canal", "Instalacao", "Mensagem"])
+        self.table.setHorizontalHeaderLabels(["Quando (UTC)", "Tipo", "Componente", "Resultado", "Versão", "Canal", "Instalação", "Mensagem"])
         self.table.verticalHeader().setVisible(False)
         self.table.setAlternatingRowColors(True)
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
@@ -189,7 +189,7 @@ class UpdateAuditDialog(QDialog):
             return
         correlation_id = self._rows[row].get("correlation_id")
         if not correlation_id:
-            QMessageBox.information(self, "Auditoria", "Este evento nao possui correlation_id.")
+            QMessageBox.information(self, "Auditoria", "Este evento não possui correlation_id.")
             return
         self._active_correlation_id = correlation_id
         self._timeline_mode = True
@@ -273,7 +273,7 @@ class UpdateAuditDialog(QDialog):
 
     def _show_error(self, exc: Exception) -> None:
         message = exc.user_message if isinstance(exc, ApiClientError) else "Nao foi possivel consultar a auditoria de atualizacoes."
-        QMessageBox.warning(self, "Auditoria de atualizacoes", message)
+        QMessageBox.warning(self, "Auditoria de atualizações", message)
 
     def _run_background(self, operation, on_success, on_error) -> None:
         thread = start_worker(self, operation, on_success, on_error)

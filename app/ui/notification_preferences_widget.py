@@ -24,7 +24,7 @@ _SEVERITY_LABEL = {"info": "Info", "normal": "Normal", "alta": "Alta", "critica"
 
 class NotificationPreferencesWidget(QWidget):
     """Preferencias de notificacao do usuario (Fase 10): canal por categoria,
-    severidade minima de e-mail e horario de silencio. Fala com
+    severidade minima de e-mail e horario de silêncio. Fala com
     /api/v1/notifications/preferences e /settings via o backend adapter."""
 
     def __init__(self, service, parent=None, *, auto_load: bool = True):
@@ -57,7 +57,7 @@ class NotificationPreferencesWidget(QWidget):
             self.grid.addWidget(header, 0, col)
         layout.addLayout(self.grid)
 
-        quiet_title = QLabel("Horario de silencio")
+        quiet_title = QLabel("Horário de silêncio")
         quiet_title.setStyleSheet("font-weight: 800; font-size: 13px; margin-top: 8px;")
         layout.addWidget(quiet_title)
         quiet_row = QHBoxLayout()
@@ -79,14 +79,14 @@ class NotificationPreferencesWidget(QWidget):
         quiet_row.addStretch()
         layout.addLayout(quiet_row)
 
-        hint = QLabel("Notificacoes criticas sempre furam o horario de silencio.")
+        hint = QLabel("Notificações críticas sempre furam o horário de silêncio.")
         hint.setObjectName("Caption")
         layout.addWidget(hint)
 
         actions = QHBoxLayout()
         self.reload_btn = ModernButton("Recarregar", "refresh")
         self.reload_btn.clicked.connect(self.load)
-        self.save_btn = ModernButton("Salvar preferencias", "save", accent=True)
+        self.save_btn = ModernButton("Salvar preferências", "save", accent=True)
         self.save_btn.clicked.connect(self.save)
         actions.addWidget(self.reload_btn)
         actions.addStretch()
@@ -163,7 +163,7 @@ class NotificationPreferencesWidget(QWidget):
 
     def _on_error(self, exc) -> None:
         log.warning("Falha ao carregar preferencias de notificacao | %s", exc)
-        self.status_label.setText("Nao foi possivel carregar. Tente recarregar.")
+        self.status_label.setText("Não foi possível carregar. Tente recarregar.")
         self.save_btn.setEnabled(True)
 
     def save(self) -> None:
@@ -200,7 +200,7 @@ class NotificationPreferencesWidget(QWidget):
         self._run(_work, lambda _r: self._after_save(), self._on_error)
 
     def _after_save(self) -> None:
-        self.status_label.setText("Preferencias salvas.")
+        self.status_label.setText("Preferências salvas.")
         self.save_btn.setEnabled(True)
 
     def _run(self, work, on_success, on_error) -> None:

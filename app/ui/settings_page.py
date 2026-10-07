@@ -119,7 +119,7 @@ class SettingsPage(QWidget):
         )
         db_label = QLabel(self._local_database_text())
         db_label.setWordWrap(True)
-        api_status = ModernButton("Diagnostico API/PostgreSQL", "settings", accent=True)
+        api_status = ModernButton("Diagnóstico API/PostgreSQL", "settings", accent=True)
         api_status.setEnabled(self.service.can_admin())
         api_status.clicked.connect(self.open_api_diagnostic)
         data.addWidget(db_label)
@@ -127,16 +127,16 @@ class SettingsPage(QWidget):
 
         if self.service.can_admin():
             self._add_divider(data)
-            api_title = QLabel("Integracao com API do sistema")
+            api_title = QLabel("Integração com API do sistema")
             api_title.setStyleSheet("font-size: 15px; font-weight: 800;")
             data.addWidget(api_title)
             api_text = QLabel(self._api_panel_text())
             api_text.setWordWrap(True)
-            open_api = ModernButton("Diagnostico da API", "settings", accent=True)
+            open_api = ModernButton("Diagnóstico da API", "settings", accent=True)
             open_api.clicked.connect(self.open_api_diagnostic)
             open_api_proposals = ModernButton("Consultar propostas na API", "search")
             open_api_proposals.clicked.connect(self.open_api_proposals)
-            open_update_audit = ModernButton("Auditoria de atualizacoes", "search")
+            open_update_audit = ModernButton("Auditoria de atualizações", "search")
             open_update_audit.clicked.connect(self.open_update_audit)
             data.addWidget(api_text)
             api_actions = QHBoxLayout()
@@ -168,7 +168,7 @@ class SettingsPage(QWidget):
             "Notificacoes",
             AppIcons.BELL,
             "Notificacoes",
-            "Escolha por onde cada tipo de aviso chega (no app, bandeja, e-mail) e o horario de silencio.",
+            "Escolha por onde cada tipo de aviso chega (no app, bandeja, e-mail) e o horario de silêncio.",
         )
         self.notification_preferences_widget = None
         if hasattr(self.service, "notification_preferences"):
@@ -185,12 +185,12 @@ class SettingsPage(QWidget):
             "Atualizacoes",
             "",
         )
-        updates.addWidget(QLabel(f"Versao atual: {APP_VERSION}"))
+        updates.addWidget(QLabel(f"Versão atual: {APP_VERSION}"))
         updates.addWidget(QLabel(f"Canal: {APP_CHANNEL}"))
-        self.last_update_check = QLabel("Ultima verificacao: nunca")
+        self.last_update_check = QLabel("Última verificação: nunca")
         self.last_update_check.setObjectName("Caption")
         updates.addWidget(self.last_update_check)
-        check_updates = ModernButton("Verificar atualizacoes", "refresh", accent=True)
+        check_updates = ModernButton("Verificar atualizações", "refresh", accent=True)
         check_updates.clicked.connect(self.check_updates)
         self._add_action(updates, check_updates)
 
@@ -203,7 +203,7 @@ class SettingsPage(QWidget):
             "",
         )
         identity.addWidget(QLabel(f"Empresa configurada: {self.service.company}"))
-        identity_text = QLabel("Logo e icones profissionais foram copiados para app/assets e ficam separados da versao antiga.")
+        identity_text = QLabel("Logo e ícones profissionais foram copiados para app/assets e ficam separados da versão antiga.")
         identity_text.setWordWrap(True)
         identity.addWidget(identity_text)
 
@@ -215,13 +215,13 @@ class SettingsPage(QWidget):
             "Informacoes do sistema",
             "",
         )
-        system_info.addWidget(QLabel(f"Usuario logado: {self.service.user_name()}"))
+        system_info.addWidget(QLabel(f"Usuário logado: {self.service.user_name()}"))
         system_info.addWidget(QLabel(f"Perfil: {self.service.user_profile()}"))
         db_info = QLabel(self._database_summary_text())
         db_info.setWordWrap(True)
         system_info.addWidget(db_info)
-        system_info.addWidget(QLabel(f"Versao do sistema: {APP_VERSION}"))
-        refresh = ModernButton("Atualizar pagina atual", "refresh")
+        system_info.addWidget(QLabel(f"Versão do sistema: {APP_VERSION}"))
+        refresh = ModernButton("Atualizar página atual", "refresh")
         refresh.clicked.connect(self.refresh)
         self._add_action(system_info, refresh)
 
@@ -234,12 +234,12 @@ class SettingsPage(QWidget):
             "",
         )
         support_text = QLabel(
-            "Valide API, atualizacao e logs sem interromper o trabalho."
+            "Valide API, atualização e logs sem interromper o trabalho."
             if self.service.official_proposals_enabled()
             else "Valide banco, atualizacao e logs sem interromper o trabalho."
         )
         support_text.setWordWrap(True)
-        test_update = ModernButton("Testar servidor de atualizacao", "refresh")
+        test_update = ModernButton("Testar servidor de atualização", "refresh")
         open_logs = ModernButton("Abrir pasta de logs", "folder")
         test_update.clicked.connect(self.test_update_server)
         open_logs.clicked.connect(self.open_logs_folder)
@@ -360,7 +360,7 @@ class SettingsPage(QWidget):
 
     def apply_palette(self):
         if not self.service.can_edit("settings"):
-            QMessageBox.warning(self, "Permissao", "Seu usuario nao pode alterar configuracoes.")
+            QMessageBox.warning(self, "Permissão", "Seu usuário não pode alterar configurações.")
             return
         self.service.save_palette(self.palette_combo.currentData())
         if self.theme_changed:
@@ -377,19 +377,19 @@ class SettingsPage(QWidget):
 
     def open_api_diagnostic(self):
         if not self.service.can_admin():
-            QMessageBox.warning(self, "Permissao", "Apenas administradores podem abrir o diagnostico da API.")
+            QMessageBox.warning(self, "Permissão", "Apenas administradores podem abrir o diagnóstico da API.")
             return
         ApiDiagnosticDialog(self).exec()
 
     def open_api_proposals(self):
         if not self.service.can_admin():
-            QMessageBox.warning(self, "Permissao", "Apenas administradores podem consultar propostas pela API.")
+            QMessageBox.warning(self, "Permissão", "Apenas administradores podem consultar propostas pela API.")
             return
         ApiProposalsReadonlyDialog(self).exec()
 
     def open_update_audit(self):
         if not self.service.can_admin():
-            QMessageBox.warning(self, "Permissao", "Apenas administradores podem consultar a auditoria de atualizacoes.")
+            QMessageBox.warning(self, "Permissão", "Apenas administradores podem consultar a auditoria de atualizações.")
             return
         UpdateAuditDialog(self).exec()
 
@@ -399,15 +399,15 @@ class SettingsPage(QWidget):
     def _handle_update_result(self, result):
 
         checked_at = datetime.now().strftime("%d/%m/%Y %H:%M")
-        self.last_update_check.setText(f"Ultima verificacao: {checked_at}")
+        self.last_update_check.setText(f"Última verificação: {checked_at}")
 
         if result.get("error"):
             log.error("Verificacao manual falhou | detalhe=%s", result.get("error"))
             QMessageBox.warning(
                 self,
-                "Atualizacoes",
-                "Nao foi possivel verificar atualizacoes agora. Verifique a internet, data/hora "
-                "do computador ou bloqueio do antivirus. O sistema continuara funcionando normalmente.",
+                "Atualizações",
+                "Não foi possível verificar atualizações agora. Verifique a internet, data/hora "
+                "do computador ou bloqueio do antivírus. O sistema continuará funcionando normalmente.",
             )
             return
 
@@ -422,21 +422,21 @@ class SettingsPage(QWidget):
 
         QMessageBox.information(
             self,
-            "Atualizacoes",
+            "Atualizações",
             "Sistema atualizado.\n"
-            f"Versao instalada: {result.get('current_version', APP_VERSION)}\n"
-            f"Ultima versao: {result.get('latest_version', APP_VERSION)}",
+            f"Versão instalada: {result.get('current_version', APP_VERSION)}\n"
+            f"Última versão: {result.get('latest_version', APP_VERSION)}",
         )
 
     def _handle_update_error(self, exc):
         log.exception("Falha inesperada na verificacao manual", exc_info=(type(exc), exc, exc.__traceback__))
-        QMessageBox.warning(self, "Atualizacoes", "Nao foi possivel verificar atualizacoes agora. O sistema continuara funcionando normalmente.")
+        QMessageBox.warning(self, "Atualizações", "Não foi possível verificar atualizações agora. O sistema continuará funcionando normalmente.")
 
     def test_update_server(self):
         self._run_background(
             self._probe_update_server,
             self._show_update_diagnostic,
-            lambda exc: QMessageBox.warning(self, "Servidor de atualizacao", str(exc)),
+            lambda exc: QMessageBox.warning(self, "Servidor de atualização", str(exc)),
         )
 
     def _probe_update_server(self):
@@ -450,9 +450,9 @@ class SettingsPage(QWidget):
 
     def _show_update_diagnostic(self, result):
         if result.get("update_url") and result.get("certificate"):
-            QMessageBox.information(self, "Servidor de atualizacao", "Internet, URL e certificado de seguranca validados com sucesso.")
+            QMessageBox.information(self, "Servidor de atualização", "Internet, URL e certificado de segurança validados com sucesso.")
         else:
-            QMessageBox.warning(self, "Servidor de atualizacao", "A conexao nao foi concluida. Verifique internet, proxy, antivirus e data/hora do Windows. Detalhes foram registrados no log.")
+            QMessageBox.warning(self, "Servidor de atualização", "A conexão não foi concluída. Verifique internet, proxy, antivírus e data/hora do Windows. Detalhes foram registrados no log.")
 
     def open_logs_folder(self):
         get_logs_dir().mkdir(parents=True, exist_ok=True)
