@@ -44,7 +44,7 @@ class ReplicaFactoryTests(unittest.TestCase):
         server = FakeSyncServer()
         server.upsert("proposals", 1, proposal_number="CP1")
         storage = SimpleNamespace(api_base_url=lambda: "http://api:8000", sync_get_json=server.get_json)
-        service = SimpleNamespace(official_proposal_storage=storage, user={"id": 7, "login": "cleibe"})
+        service = SimpleNamespace(official_proposal_storage=storage, user={"id": 7, "login": "operador"})
         database, engine = factory.build_replica_sync(service)
         self.assertIsInstance(database, ReplicaDatabase)
         self.assertEqual(engine.identity, "http://api:8000|7")
