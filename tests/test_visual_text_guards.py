@@ -43,7 +43,7 @@ class DisplayOnlyAccentGuardTests(unittest.TestCase):
         # O filtro mandava `currentText().lower()`; com o rotulo "Média" isso
         # viraria "média" e deixaria de casar com a confiabilidade "media".
         source = (APP_DIR / "ui" / "executive_dashboard_page.py").read_text(encoding="utf-8")
-        self.assertIn('("Média", "media")', source)
+        self.assertIn('("Confiabilidade média", "media")', source)
         self.assertIn("self.reliability_filter.currentData()", source)
         self.assertNotIn("reliability_filter.currentText()", source)
 

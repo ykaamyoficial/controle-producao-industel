@@ -400,12 +400,126 @@ class _DetailService(_FrameService):
         ]
 
 
+class _PanelService(_DetailService):
+    """Dados falsos dos paineis: Painel geral, Dashboard Executivo e Relatorios."""
+
+    def dashboard(self):
+        return {
+            "Ativas": 42, "Vencidos": 4, "Prox. 7 dias": 7, "Producao": 18,
+            "Galvanizacao": 9, "Expedicao": 12, "Pend. remanej.": 3, "Entregues": 0,
+        }
+
+    def dashboard_charts(self):
+        return {
+            "areas": [
+                {"label": "Producao", "total": 18},
+                {"label": "Galvanizacao", "total": 9},
+                {"label": "Expedicao", "total": 12},
+                {"label": "Pend. remanej.", "total": 3},
+            ],
+            "status": [
+                {"label": "EM_PRODUCAO", "total": 18},
+                {"label": "EM_GALVANIZACAO", "total": 9},
+                {"label": "AGUARDANDO_RETIRADA", "total": 8},
+                {"label": "LIBERADO_PRODUCAO", "total": 5},
+                {"label": "ENTREGUE_PARCIAL", "total": 2},
+            ],
+            "prazos": [
+                {"label": "Vencidos", "total": 4},
+                {"label": "Hoje", "total": 0},
+                {"label": "7 dias", "total": 7},
+                {"label": "No prazo", "total": 31},
+                {"label": "Entregues", "total": 0},
+            ],
+        }
+
+    def executive_dashboard_report(self, _filters):
+        def card(title, number, unit="", reliability="alta"):
+            return {"titulo": title, "numero": number, "unidade": unit, "confiabilidade": reliability}
+
+        return {
+            "confiabilidade": "media",
+            "cards_operacionais": [
+                card("Peso produzido", 48230.5, "kg", "media"),
+                card("Peso enviado galvanizacao", 21400.0, "kg"),
+                card("Peso retornado galvanizacao", 18950.0, "kg"),
+                card("Peso expedido", 15320.75, "kg", "media"),
+                card("Propostas atrasadas", 4),
+                card("Vencendo em 7 dias", 7),
+                card("Remanejamentos", 3, "", "media"),
+                card("Pendencias criticas", 6, "", "media"),
+            ],
+            "cards_fiscais": [
+                card("Falta emitir NF", 9), card("NF parcial", 3), card("NF emitida", 31),
+                card("Entregue sem NF", 2), card("Peso fiscal pendente", 6210.0, "kg"),
+                card("Peso fiscal faturado", 40100.0, "kg"), card("+7 dias sem emissao", 1),
+            ],
+            "graficos": {
+                "comparativo_areas": [
+                    {"area": "Producao", "peso_kg": 48230.5},
+                    {"area": "Galvanizacao", "peso_kg": 21400.0},
+                    {"area": "Galv. retornada", "peso_kg": 18950.0},
+                    {"area": "Expedicao", "peso_kg": 15320.75},
+                ],
+                "gargalos_por_area": [
+                    {"area": "Producao", "quantidade": 18},
+                    {"area": "Galvanizacao", "quantidade": 9},
+                    {"area": "Expedicao", "quantidade": 12},
+                ],
+            },
+            "rankings": {
+                "clientes_por_volume": [
+                    {"cliente": "Torres Norte Telecom", "peso_operacional": 18200.0},
+                    {"cliente": "Rede Sul Energia", "peso_operacional": 12050.0},
+                    {"cliente": "Vale Verde Transmissão", "peso_operacional": 9400.0},
+                    {"cliente": "Conecta Infra", "peso_operacional": 5100.0},
+                ],
+            },
+            "alertas": [
+                {"tipo": "prazo", "criticidade": "critica", "mensagem": "Prazo vencido há 9 dias",
+                 "dados": {"proposta": "CP 05611", "cliente": "Rede Sul Energia", "prazo_entrega": "28/09/2026"}},
+                {"tipo": "galvanizacao", "criticidade": "atencao", "mensagem": "Carga sem retorno previsto",
+                 "dados": {"proposta": "CP 05672", "cliente": "Torres Norte Telecom", "data_prevista_retorno": "10/10/2026"}},
+                {"tipo": "fiscal", "criticidade": "info", "mensagem": "Entregue sem nota fiscal",
+                 "dados": {"proposta": "CP 05590", "cliente": "Conecta Infra", "prazo_entrega": "02/10/2026"}},
+            ],
+            "avisos": ["Peso fiscal estimado a partir dos itens entregues."],
+        }
+
+    def operational_report(self, area, _filters):
+        clients = ["Torres Norte Telecom", "Rede Sul Energia", "Vale Verde Transmissão", "Conecta Infra"]
+        rows = [
+            {
+                "id": 100 + i, "proposta": f"CP {5600 + i * 3:05d}", "cliente": clients[i % 4],
+                "status_producao": ["EM_PRODUCAO", "FINALIZADO", "FINALIZADO_PARCIAL"][i % 3],
+                "obra_site": f"SP-CAMP-{14 + i:03d}", "peso_produzido_atual": 1200.5 + i * 310,
+                "lote": f"L{i + 1:02d}", "tipo_processo": "Padrão", "data_final_producao": "",
+                "total_itens": 12 + i, "itens_produzidos": 6 + i, "peso_total_itens": 2400 + i * 400,
+                "origem_remanejamento": "",
+            }
+            for i in range(10)
+        ]
+        return {
+            "confiabilidade": "alta",
+            "cards": [
+                {"titulo": "Propostas em producao", "valor": 14},
+                {"titulo": "Producao completa", "valor": 9},
+                {"titulo": "Producao parcial", "valor": 3},
+                {"titulo": "Peso produzido atual", "valor": "18.240", "unidade": "kg"},
+                {"titulo": "Pend. remanejamento", "valor": 2},
+            ],
+            "linhas": rows,
+            "avisos": [],
+        }
+
+
 class FramePreview(QWidget):
     """Moldura do programa (Onda 1) com a pagina Controle Geral dentro
     (Onda 2), tudo com um servico falso. `estado` escolhe o que a pagina
-    mostra: normal, lote, vazio ou carregando."""
+    mostra: normal, lote, vazio ou carregando. `pagina` troca a pagina por um
+    dos paineis (geral, executivo, relatorios)."""
 
-    def __init__(self, palette_name: str, estado: str = "normal"):
+    def __init__(self, palette_name: str, estado: str = "normal", pagina: str = "controle"):
         super().__init__()
         from app.ui.components.floating_chat_button import FloatingChatButton
         from app.ui.components.login_summary_banner import LoginSummaryBanner
@@ -413,7 +527,7 @@ class FramePreview(QWidget):
         from app.ui.components.toast_manager import InAppToast
         from app.ui.sidebar import Sidebar
 
-        service = _DetailService(palette_name)
+        service = _PanelService(palette_name)
         self.service = service
         self.setObjectName("AppRoot")
         self.setWindowTitle("Prévia da moldura")
@@ -432,7 +546,10 @@ class FramePreview(QWidget):
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(0)
         self.sidebar = Sidebar(service)
-        self.sidebar.set_active("CONTROLE GERAL")
+        self.sidebar.set_active(
+            {"controle": "CONTROLE GERAL", "geral": "PAINEL GERAL", "executivo": "DASHBOARD EXECUTIVO",
+             "relatorios": "RELATORIOS OPERACIONAIS"}[pagina]
+        )
         self.sidebar.set_nav_badge("PRODUCAO", 4)
         self.sidebar.set_nav_badge("EXPEDICAO", 12)
         body.addWidget(self.sidebar)
@@ -440,24 +557,42 @@ class FramePreview(QWidget):
         content.setObjectName("MainContent")
         content_layout = QVBoxLayout(content)
         content_layout.setContentsMargins(0, 0, 0, 0)
-        from app.ui.process_page import ProcessPage
+        if pagina == "geral":
+            from app.ui.dashboard_page import DashboardPage
 
-        self.page = ProcessPage(service, "CONTROLE GERAL", "Controle Geral")
-        rows = service.process_rows("CONTROLE GERAL", {})
-        rows[1]["_chat_unread"] = 3
-        self.page._reload_status_options()
-        if estado == "carregando":
-            self.page._set_loading(True)
+            self.page = DashboardPage(service)
+            self.page._refresh_success({"data": service.dashboard(), "charts": service.dashboard_charts()})
+        elif pagina == "executivo":
+            from app.ui.executive_dashboard_page import ExecutiveDashboardPage
+
+            self.page = ExecutiveDashboardPage(service)
+            self.page._refresh_success(service.executive_dashboard_report({}))
+            self.page.more_filters_btn.setChecked(estado == "lote")
+        elif pagina == "relatorios":
+            from app.ui.operational_reports_page import OperationalReportsPage
+
+            self.page = OperationalReportsPage(service)
+            self.page.refresh()
+            self.page.table.selectRow(2)
         else:
-            self.page._refresh_success((rows, {101: {"unread_count": 3, "message_count": 5}, 104: {"message_count": 2}}))
-        if estado == "lote":
-            self.page.activate_batch_selection()
-            for row in rows[2:5]:
-                self.page.batch_selection.toggle(row["id"], row)
-        elif estado == "vazio":
-            self.page.search.setText("proposta inexistente")
-        elif estado == "normal":
-            self.page.table.selectRow(3)
+            from app.ui.process_page import ProcessPage
+
+            self.page = ProcessPage(service, "CONTROLE GERAL", "Controle Geral")
+            rows = service.process_rows("CONTROLE GERAL", {})
+            rows[1]["_chat_unread"] = 3
+            self.page._reload_status_options()
+            if estado == "carregando":
+                self.page._set_loading(True)
+            else:
+                self.page._refresh_success((rows, {101: {"unread_count": 3, "message_count": 5}, 104: {"message_count": 2}}))
+            if estado == "lote":
+                self.page.activate_batch_selection()
+                for row in rows[2:5]:
+                    self.page.batch_selection.toggle(row["id"], row)
+            elif estado == "vazio":
+                self.page.search.setText("proposta inexistente")
+            elif estado == "normal":
+                self.page.table.selectRow(3)
         content_layout.addWidget(self.page)
         self.banner = LoginSummaryBanner(service, "Henrique", 5, 2, 3, parent=self)
         self.banner.setVisible(estado == "banner")
@@ -491,20 +626,26 @@ def main() -> int:
         help="com --moldura: estado da pagina Controle Geral (banner mostra tambem o resumo de login e o aviso)",
     )
     parser.add_argument(
+        "--painel",
+        choices=("geral", "executivo", "relatorios"),
+        help="mostra o painel em vez de Controle Geral, dentro da moldura (no executivo, --estado lote abre 'Mais filtros')",
+    )
+    parser.add_argument(
         "--detalhes",
         type=int,
         choices=range(6),
         metavar="ABA",
         help="com --moldura: abre Detalhes da proposta por cima, na aba 0..5",
     )
+    parser.add_argument("--altura", type=int, default=740, help="com --moldura/--painel: altura da janela (para ver a pagina inteira)")
     parser.add_argument("--shot", metavar="ARQUIVO.png")
     args = parser.parse_args()
 
     app = QApplication(sys.argv[:1])
     family = load_app_fonts()
-    if args.moldura:
-        preview = FramePreview(args.tema, args.estado)
-        preview.resize(1366, 740)
+    if args.moldura or args.painel:
+        preview = FramePreview(args.tema, args.estado, args.painel or "controle")
+        preview.resize(1366, args.altura)
         preview.show()
         detail = None
         if args.detalhes is not None:
