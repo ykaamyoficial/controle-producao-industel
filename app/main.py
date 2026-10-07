@@ -275,6 +275,10 @@ def main():
     app.setApplicationName("Controle de Producao Industel")
     app.setWindowIcon(app_icon())
 
+    from app.ui.fonts import load_app_fonts
+
+    load_app_fonts()
+
     if not run_startup_bootstrap():
         return 0
 
