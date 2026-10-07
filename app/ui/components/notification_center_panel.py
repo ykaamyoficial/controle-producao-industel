@@ -302,6 +302,7 @@ class NotificationCenterPanel(QFrame):
     def _build_row(self, notification: dict) -> QFrame:
         card = QFrame()
         card.setObjectName("Panel")
+        card.setProperty("clickable", True)
         layout = QVBoxLayout(card)
         layout.setContentsMargins(10, 8, 10, 8)
         layout.setSpacing(3)
