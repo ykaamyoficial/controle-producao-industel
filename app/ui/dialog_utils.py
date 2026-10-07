@@ -37,7 +37,13 @@ def apply_large_dialog_geometry(
         dialog.move(frame.topLeft())
 
 
-def style_dialog_from_parent(dialog: QDialog, parent=None) -> None:
+def style_dialog_from_parent(dialog: QDialog, parent=None, *, frameless: bool = True) -> None:
+    """Ponto unico dos dialogos: aplica a folha de estilo da janela dona, o
+    veu que escurece a janela de tras e a casca padrao de tela sobreposta
+    (sem moldura do Windows, cantos arredondados, tabelas padronizadas).
+
+    `frameless=False` e para o dialogo que nao tem botao proprio de fechar e
+    por isso precisa da barra de titulo nativa."""
     owner = parent.window() if parent and parent.window() else None
     if owner:
         dialog.setStyleSheet(owner.styleSheet())
@@ -46,3 +52,8 @@ def style_dialog_from_parent(dialog: QDialog, parent=None) -> None:
         from app.ui.components.dialog_scrim import attach_dialog_scrim
 
         attach_dialog_scrim(dialog, owner)
+    from app.ui.components.dialog_shell import install_dialog_shell
+
+    # Sem janela dona (dialogo de inicializacao) a barra de titulo nativa
+    # continua sendo a unica forma de fechar a janela: nao some com ela.
+    install_dialog_shell(dialog, frameless=frameless and owner is not None)

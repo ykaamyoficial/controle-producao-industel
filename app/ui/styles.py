@@ -63,9 +63,6 @@ def app_stylesheet(palette: dict) -> str:
     QMainWindow, QWidget#AppRoot, QDialog {{
         background: {bg};
     }}
-    QDialog QWidget {{
-        background: {bg};
-    }}
     QScrollArea, QScrollArea > QWidget, QScrollArea > QWidget > QWidget {{
         background: {bg};
         border: 0;
@@ -300,7 +297,7 @@ def app_stylesheet(palette: dict) -> str:
     QFrame#TopBar, QFrame#FilterBar, QFrame#Card, QFrame#KpiCard, QFrame#Panel {{
         background: {surface};
         border: 1px solid {border};
-        {radius(16)}
+        {radius(14)}
     }}
     QScrollArea#FlowSetupScroll,
     QScrollArea#FlowSetupScroll > QWidget,
@@ -396,7 +393,7 @@ def app_stylesheet(palette: dict) -> str:
     QFrame#TopBar {{
         {radius(12)}
     }}
-    QFrame#KpiCard:hover, QFrame#Panel:hover {{
+    QFrame#KpiCard:hover, QFrame#Panel[clickable="true"]:hover {{
         background: {surface_alt};
         border: 1px solid {accent};
     }}
@@ -496,6 +493,36 @@ def app_stylesheet(palette: dict) -> str:
     }}
     QLabel#DeadlineAlert[kind="danger"] {{ color: {danger}; }}
     QLabel#DeadlineAlert[kind="warning"] {{ color: {palette["warning"]}; }}
+    QFrame#DialogFooter {{
+        background: transparent;
+        border: 0;
+        border-top: 1px solid {border};
+        border-radius: 0;
+    }}
+    QFrame#DialogFooter QLabel {{
+        background: transparent;
+    }}
+    QLabel#InlineNotice {{
+        color: {muted};
+        font-size: 12px;
+    }}
+    QLabel#InlineNotice[kind="danger"] {{ color: {danger}; font-weight: 600; }}
+    QLabel#InlineNotice[kind="warning"] {{ color: {palette["warning"]}; font-weight: 600; }}
+    QGroupBox {{
+        background: {surface};
+        border: 1px solid {border};
+        {radius(14)}
+        margin-top: 14px;
+        padding: 16px 14px 12px 14px;
+        font-weight: 700;
+    }}
+    QGroupBox::title {{
+        subcontrol-origin: margin;
+        subcontrol-position: top left;
+        left: 14px;
+        padding: 0 6px;
+        color: {text};
+    }}
     QFrame#Divider {{
         background: {border};
         border: 0;
@@ -617,23 +644,46 @@ def app_stylesheet(palette: dict) -> str:
         background: {surface};
         {radius(12)}
     }}
-    QTreeWidget#FlowReviewTree {{
+    QTreeView, QTreeWidget {{
         background: {surface};
         color: {text};
-        alternate-background-color: {surface_alt};
+        alternate-background-color: {zebra};
         border: 1px solid {border};
-        {radius(8)}
-        selection-background-color: {accent};
-        selection-color: {accent_text};
+        {radius(12)}
+        selection-background-color: {selected};
+        selection-color: {text};
         outline: 0;
     }}
-    QTreeWidget#FlowReviewTree::viewport {{
+    QTreeView::viewport, QTreeWidget::viewport {{
         background: {surface};
-        {radius(8)}
+        {radius(10)}
     }}
-    QTreeWidget#FlowReviewTree::item:selected {{
+    QTreeView::item, QTreeWidget::item {{
+        min-height: 34px;
+        padding: 0 6px;
+        border: 0;
+    }}
+    QTreeView::item:hover, QTreeWidget::item:hover {{
+        background: {surface_alt};
+    }}
+    QTreeView::item:selected, QTreeWidget::item:selected {{
+        background: {selected};
+        color: {text};
+    }}
+    QTreeView::indicator, QTreeWidget::indicator {{
+        width: 15px;
+        height: 15px;
+        border: 1px solid {input_border};
+        border-radius: 4px;
+        background: {surface};
+    }}
+    QTreeView::indicator:checked, QTreeWidget::indicator:checked {{
         background: {accent};
-        color: {accent_text};
+        border-color: {accent};
+    }}
+    QTreeView::indicator:indeterminate, QTreeWidget::indicator:indeterminate {{
+        background: {selected};
+        border-color: {accent};
     }}
     QTableView#OperationalTable {{
         background: {surface};
