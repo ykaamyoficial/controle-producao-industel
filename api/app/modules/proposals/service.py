@@ -309,6 +309,7 @@ async def list_proposals(
     sort_dir: str,
     limit: int,
     offset: int,
+    search: str | None = None,
 ) -> PaginatedProposalResponse:
     stmt = _filtered_select(
         select(Proposal),
@@ -327,6 +328,10 @@ async def list_proposals(
     # O Controle Geral representa a proposta mae. Filhas continuam visiveis
     # apenas nas areas operacionais em que seus itens realmente estao.
     stmt = stmt.where(Proposal.parent_proposal_id.is_(None))
+    # Busca geral (numero, cliente, obra, lote), igual a das listas de area.
+    search_clause = _proposal_search_clause(search)
+    if search_clause is not None:
+        stmt = stmt.where(search_clause)
     total = int((await session.execute(select(func.count()).select_from(stmt.subquery()))).scalar_one())
     sort_column = SORT_FIELDS.get(sort_by, Proposal.synced_at)
     order = sort_column.desc() if sort_dir == "desc" else sort_column.asc()

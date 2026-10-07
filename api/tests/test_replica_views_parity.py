@@ -39,6 +39,12 @@ PROPOSAL_CASES = (
     {"is_partial": False, "limit": 200},
     {"date_from": "2026-07-20", "date_to": "2026-07-20", "limit": 200},
     {"date_from": "2026-07-21", "limit": 200},
+    {"search": "beta", "limit": 200},
+    {"search": "  EXP-", "limit": 2, "offset": 1},
+    {"search": "ltda", "sort_by": "proposal_date", "sort_dir": "asc", "limit": 200},
+    {"search": "site", "customer": "alfa", "limit": 200},
+    {"search": "%", "limit": 200},
+    {"search": "nao-existe", "limit": 200},
 )
 
 

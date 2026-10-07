@@ -88,6 +88,22 @@ class ProposalsViewTests(_Case):
         self.assertEqual(sorted(self._ids(customer="a\\_")), [3])
         self.assertEqual(self._ids(project="inexistente"), [])
 
+    def test_general_search_is_a_plain_substring_over_number_customer_project_lot(self):
+        self._load([
+            _proposal(1, "CP-100", customer_name="Alfa Ltda", project_name="Usina Norte", lot="L-9"),
+            _proposal(2, "CP-200", customer_name="BETA 100%", project_name=None, lot="norte"),
+            _proposal(3, "XP-300", customer_name="Gama_Sul", project_name="Sul", lot=None),
+        ])
+        self.assertEqual(sorted(self._ids(search="  NORTE ")), [1, 2])
+        self.assertEqual(self._ids(search="cp-2"), [2])
+        self.assertEqual(self._ids(search="gama"), [3])
+        self.assertEqual(self._ids(search="%"), [2])  # aqui `%` e texto, nao curinga
+        self.assertEqual(self._ids(search="_"), [3])
+        self.assertEqual(self._ids(search="inexistente"), [])
+        self.assertEqual(sorted(self._ids(search="  ")), [1, 2, 3])
+        self.assertEqual(self._ids(search="norte", customer="alfa"), [1])
+        self.assertTrue(proposals_view.can_serve({"search": "x"}))
+
     def test_exact_flag_and_date_filters(self):
         self._load([
             _proposal(1, "A", current_area="EXPEDICAO", current_status="SEPARADO", is_completed=True, proposal_date="2026-06-01", legacy_updated_at="2026-06-02T00:00:00+00:00"),

@@ -23,7 +23,7 @@ REQUIRED_ENTITIES = ("proposals",)
 
 _FILTERS = (
     "proposal_number", "customer", "project", "current_area", "current_status",
-    "is_partial", "is_cancelled", "is_completed", "date_from", "date_to", "updated_after",
+    "is_partial", "is_cancelled", "is_completed", "date_from", "date_to", "updated_after", "search",
 )
 _PAGING = ("sort_by", "sort_dir", "limit", "offset")
 # sort_by -> (coluna, e data/hora?)
@@ -126,6 +126,16 @@ def list_proposals(database: ReplicaDatabase, **filters: Any) -> dict[str, Any]:
     updated_after = _timestamp(filters.get("updated_after"))
     if updated_after is not None:
         rows = [row for row in rows if row.get("legacy_updated_at") and _timestamp(row["legacy_updated_at"]) >= updated_after]
+
+    # Busca geral: trecho, sem diferenciar maiusculas, em numero/cliente/obra/lote
+    # (`_proposal_search_clause` da API; aqui `%` e `_` sao texto comum).
+    needle = str(filters.get("search") or "").strip().lower()
+    if needle:
+        rows = [
+            row
+            for row in rows
+            if needle in " ".join([row.get("proposal_number") or "", row.get("customer_name") or "", row.get("project_name") or "", row.get("lot") or ""]).lower()
+        ]
 
     column, is_datetime = _SORTABLE[filters.get("sort_by") or "updated_at"]
     descending = (filters.get("sort_dir") or "desc") == "desc"
