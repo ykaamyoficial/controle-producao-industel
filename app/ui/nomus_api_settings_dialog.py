@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
 
 from app.services.nomus_api_config import NomusApiConfigError, NomusApiConfigStore
 from app.ui.background_worker import start_worker
+from app.ui.components.dialog_shell import dialog_footer, dialog_header
 from app.ui.components.modern_button import ModernButton
 from app.ui.dialog_utils import style_dialog_from_parent
 
@@ -52,15 +53,11 @@ class NomusIntegrationSettingsWidget(QWidget):
 
         if show_header:
             title = QLabel("Integração Nomus")
-            title.setStyleSheet("font-size: 20px; font-weight: 800;")
             subtitle = QLabel(
                 "Configure a chave REST e valide tecnicamente o acesso. "
                 "Nenhuma proposta será importada nesta etapa."
             )
-            subtitle.setObjectName("Caption")
-            subtitle.setWordWrap(True)
-            root.addWidget(title)
-            root.addWidget(subtitle)
+            root.addWidget(dialog_header(title, subtitle))
 
         form = QFrame()
         form.setObjectName("Panel")
@@ -113,19 +110,17 @@ class NomusIntegrationSettingsWidget(QWidget):
         root.addWidget(status)
         root.addStretch()
 
-        footer = QHBoxLayout()
         self.test_btn = ModernButton("Testar conexão", "refresh")
         self.test_btn.clicked.connect(self.test_connection)
-        footer.addWidget(self.test_btn)
-        footer.addStretch()
+        footer_buttons = []
         if show_cancel:
             cancel = ModernButton("Cancelar", "close", variant="ghost")
             cancel.clicked.connect(self.cancel_requested)
-            footer.addWidget(cancel)
+            footer_buttons.append(cancel)
         self.save_btn = ModernButton("Salvar", "save", accent=True)
         self.save_btn.clicked.connect(self.save)
-        footer.addWidget(self.save_btn)
-        root.addLayout(footer)
+        footer_buttons.append(self.save_btn)
+        root.addWidget(dialog_footer(left=[self.test_btn], right=footer_buttons))
 
     def _get_store(self) -> NomusApiConfigStore:
         if self.store is None:
@@ -264,7 +259,7 @@ class NomusApiSettingsDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Integração Nomus")
         root = QVBoxLayout(self)
-        root.setContentsMargins(22, 20, 22, 18)
+        root.setContentsMargins(16, 14, 16, 14)
         self.content = NomusIntegrationSettingsWidget(
             self,
             store=store,

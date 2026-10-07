@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable, Iterable
+from typing import Any, Callable
 
 from PySide6.QtCore import (
     QAbstractTableModel,
@@ -41,6 +41,7 @@ from app.services.nomus_batch_import import (
     NomusBatchTargetResult,
     NomusBatchTargetState,
 )
+from app.ui.components.dialog_shell import dialog_header
 from app.ui.components.modern_button import ModernButton
 from app.ui.dialog_utils import apply_large_dialog_geometry, style_dialog_from_parent
 from app.ui.icons import IconColorRole, make_icon, resolve_color
@@ -244,19 +245,12 @@ class NomusBatchImportDialog(QDialog):
 
     def _build(self) -> None:
         root = QVBoxLayout(self)
-        root.setContentsMargins(16, 12, 16, 12)
+        root.setContentsMargins(16, 14, 16, 14)
         root.setSpacing(LAYOUT_SPACING)
 
-        header = QVBoxLayout()
-        header.setSpacing(3)
         title = QLabel("Importar propostas do Nomus")
-        title.setStyleSheet("font-size: 20px; font-weight: 800;")
         subtitle = QLabel("Cole várias propostas e acompanhe cada resultado. Nada será salvo automaticamente nesta etapa.")
-        subtitle.setObjectName("Caption")
-        subtitle.setWordWrap(True)
-        header.addWidget(title)
-        header.addWidget(subtitle)
-        root.addLayout(header)
+        root.addWidget(dialog_header(title, subtitle))
 
         self.scroll_area = QScrollArea()
         self.scroll_area.setObjectName("NomusBatchScrollArea")

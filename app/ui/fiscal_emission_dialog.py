@@ -7,7 +7,6 @@ from PySide6.QtWidgets import (
     QFrame,
     QGridLayout,
     QHeaderView,
-    QHBoxLayout,
     QLabel,
     QLineEdit,
     QMessageBox,
@@ -20,6 +19,7 @@ from PySide6.QtWidgets import (
 
 from app.models.fiscal_table_model import format_number, format_weight
 from app.services.app_logging import get_logger
+from app.ui.components.dialog_shell import dialog_footer, dialog_header
 from app.ui.components.modern_button import ModernButton
 from app.ui.background_worker import start_worker
 from app.ui.dialog_utils import apply_large_dialog_geometry, style_dialog_from_parent
@@ -45,27 +45,23 @@ class FiscalEmissionDialog(QDialog):
 
     def _build(self):
         root = QVBoxLayout(self)
-        root.setContentsMargins(22, 20, 22, 18)
-        root.setSpacing(12)
+        root.setContentsMargins(16, 14, 16, 14)
+        root.setSpacing(10)
 
         title = QLabel(f"{self.fiscal_row.get('proposta', '')} | {self.fiscal_row.get('cliente', '')}")
-        title.setObjectName("DetailTitle")
         caption_text = "Registre manualmente a emissão fiscal por item. Este sistema não emite nota fiscal real."
         if not self.items:
             caption_text = (
-                "Esta proposta nao possui itens cadastrados. A emissao fiscal sera registrada na proposta, "
-                "sem itens vinculados. Este sistema nao emite nota fiscal real."
+                "Esta proposta não possui itens cadastrados. A emissão fiscal será registrada na proposta, "
+                "sem itens vinculados. Este sistema não emite nota fiscal real."
             )
         caption = QLabel(caption_text)
-        caption.setObjectName("Caption")
-        caption.setWordWrap(True)
-        root.addWidget(title)
-        root.addWidget(caption)
+        root.addWidget(dialog_header(title, caption))
 
         fields = QFrame()
-        fields.setObjectName("Panel")
+        fields.setObjectName("DetailPanel")
         field_layout = QGridLayout(fields)
-        field_layout.setContentsMargins(14, 12, 14, 12)
+        field_layout.setContentsMargins(16, 14, 16, 14)
         field_layout.setHorizontalSpacing(12)
         field_layout.setVerticalSpacing(6)
         self.control_number = QLineEdit()
@@ -111,8 +107,7 @@ class FiscalEmissionDialog(QDialog):
         self._populate_items()
         self.table.itemChanged.connect(self._on_item_changed)
 
-        footer = QHBoxLayout()
-        self.select_all_button = ModernButton("Selecionar todos os saldos", "status", accent=True)
+        self.select_all_button = ModernButton("Selecionar todos os saldos", "status")
         self.select_all_button.clicked.connect(self.mark_all_pending)
         self.select_all_button.setEnabled(bool(self.items))
         self.clear_button = ModernButton("Limpar seleção", "clear")
@@ -122,12 +117,12 @@ class FiscalEmissionDialog(QDialog):
         self.cancel_button.clicked.connect(self.reject)
         self.confirm_button = ModernButton("Registrar emissão fiscal", "status", accent=True)
         self.confirm_button.clicked.connect(self.confirm)
-        footer.addWidget(self.select_all_button)
-        footer.addWidget(self.clear_button)
-        footer.addStretch()
-        footer.addWidget(self.cancel_button)
-        footer.addWidget(self.confirm_button)
-        root.addLayout(footer)
+        root.addWidget(
+            dialog_footer(
+                left=[self.select_all_button, self.clear_button],
+                right=[self.cancel_button, self.confirm_button],
+            )
+        )
 
     def _populate_items(self):
         self.table.setRowCount(len(self.items))

@@ -19,7 +19,6 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QScrollArea,
-    QSpinBox,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -28,6 +27,7 @@ from PySide6.QtWidgets import (
 
 from app.services.nomus_pdf_parser import NomusPdfParserError, parse_nomus_pdf as parse_nomus_pdf_legacy
 from app.services.proposal_import import import_nomus_pdf as import_nomus_pdf_hybrid
+from app.ui.components.dialog_shell import dialog_footer, dialog_header
 from app.ui.components.modern_button import ModernButton
 from app.ui.dialog_utils import apply_large_dialog_geometry, style_dialog_from_parent
 from app.ui.proposal_import_viewmodel import ImportVisualModel, build_import_visual_model
@@ -78,25 +78,17 @@ class ProposalImportDialog(QDialog):
 
     def _build(self):
         root = QVBoxLayout(self)
-        root.setContentsMargins(18, 16, 18, 16)
-        root.setSpacing(12)
+        root.setContentsMargins(16, 14, 16, 14)
+        root.setSpacing(10)
 
-        heading_row = QHBoxLayout()
-        heading_box = QVBoxLayout()
         heading = QLabel("Conferência da proposta Nomus")
-        heading.setStyleSheet("font-size: 20px; font-weight: 800;")
         caption = QLabel(
             "Revise e corrija os dados operacionais antes de preparar o futuro cadastro."
         )
-        caption.setObjectName("Caption")
-        heading_box.addWidget(heading)
-        heading_box.addWidget(caption)
-        heading_row.addLayout(heading_box, 1)
-        self.select_button = ModernButton("Selecionar PDF", "pdf", accent=True)
+        self.select_button = ModernButton("Selecionar PDF", "pdf")
         self.select_button.clicked.connect(self.select_pdf)
         self.select_button.setVisible(self.allow_pdf_selection)
-        heading_row.addWidget(self.select_button, alignment=Qt.AlignTop)
-        root.addLayout(heading_row)
+        root.addWidget(dialog_header(heading, caption, actions=[self.select_button]))
 
         source_panel = self._section(self.source_label_text)
         source_row = QHBoxLayout()
@@ -199,20 +191,15 @@ class ProposalImportDialog(QDialog):
         scroll.setWidget(content)
         root.addWidget(scroll, 1)
 
-        footer = QHBoxLayout()
         self.validation_result = QLabel("")
         self.validation_result.setWordWrap(True)
-        footer.addWidget(self.validation_result, 1)
         close_button = ModernButton("Fechar", "clear", variant="ghost")
         validate_button = ModernButton("Validar", "status")
         use_button = ModernButton("Usar dados no cadastro", "status", accent=True)
         close_button.clicked.connect(self.reject)
         validate_button.clicked.connect(self.validate_import)
         use_button.clicked.connect(self.use_data_in_registration)
-        footer.addWidget(close_button)
-        footer.addWidget(validate_button)
-        footer.addWidget(use_button)
-        root.addLayout(footer)
+        root.addWidget(dialog_footer(left=[self.validation_result], right=[close_button, validate_button, use_button]))
 
     def _section(self, title: str) -> QFrame:
         frame = QFrame()

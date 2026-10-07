@@ -3,8 +3,9 @@ from __future__ import annotations
 from typing import Any
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QMessageBox, QTreeWidget, QTreeWidgetItem, QVBoxLayout
+from PySide6.QtWidgets import QDialog, QLabel, QMessageBox, QTreeWidget, QTreeWidgetItem, QVBoxLayout
 
+from app.ui.components.dialog_shell import StepIndicator, dialog_footer, dialog_header
 from app.ui.components.modern_button import ModernButton
 from app.ui.dialog_utils import apply_large_dialog_geometry, style_dialog_from_parent
 from app.ui.background_worker import start_worker
@@ -27,16 +28,16 @@ class FiscalEmissionReviewDialog(QDialog):
 
     def _build(self):
         root = QVBoxLayout(self)
-        root.setContentsMargins(22, 20, 22, 18)
+        root.setContentsMargins(16, 14, 16, 14)
         root.setSpacing(10)
         title = QLabel("Confirmar emissões fiscais")
-        title.setStyleSheet("font-size: 20px; font-weight: 800;")
-        root.addWidget(title)
         self.summary = QLabel()
         self.summary.setObjectName("ValueLabel")
-        root.addWidget(self.summary)
+        root.addWidget(
+            dialog_header(title, "Confira o que será registrado. Esta ação não emite nota fiscal real.", status=[self.summary])
+        )
         self.status = QLabel()
-        self.status.setObjectName("Caption")
+        self.status.setObjectName("InlineNotice")
         root.addWidget(self.status)
 
         self.tree = QTreeWidget()
@@ -49,15 +50,11 @@ class FiscalEmissionReviewDialog(QDialog):
             self.tree.setColumnWidth(column, width)
         root.addWidget(self.tree, 1)
 
-        footer = QHBoxLayout()
-        self.back_button = ModernButton("Voltar e corrigir", "clear")
+        self.back_button = ModernButton("Voltar e corrigir", "previous")
         self.confirm_button = ModernButton("Confirmar emissão", "status", accent=True)
         self.back_button.clicked.connect(self.reject)
         self.confirm_button.clicked.connect(self._confirm)
-        footer.addWidget(self.back_button)
-        footer.addStretch()
-        footer.addWidget(self.confirm_button)
-        root.addLayout(footer)
+        root.addWidget(dialog_footer(left=[StepIndicator(3, 3)], right=[self.back_button, self.confirm_button]))
 
     def _populate(self):
         total_items = sum(len(row.get("items", [])) for row in self.draft)

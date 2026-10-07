@@ -5,9 +5,10 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtWidgets import QAbstractItemView, QDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QTreeWidget, QTreeWidgetItem, QVBoxLayout
+from PySide6.QtWidgets import QAbstractItemView, QDialog, QLabel, QLineEdit, QMessageBox, QTreeWidget, QTreeWidgetItem, QVBoxLayout
 
 from app.services.app_logging import get_logger
+from app.ui.components.dialog_shell import StepIndicator, dialog_footer, dialog_header
 from app.ui.components.modern_button import ModernButton
 from app.ui.dialog_utils import apply_large_dialog_geometry, style_dialog_from_parent
 from app.ui.numeric_utils import format_decimal
@@ -101,14 +102,23 @@ class FiscalItemSelectionDialog(QDialog):
 
     def _build(self):
         root = QVBoxLayout(self)
-        root.setContentsMargins(22, 20, 22, 18)
+        root.setContentsMargins(16, 14, 16, 14)
         root.setSpacing(10)
         title = QLabel("Registrar emissão fiscal")
-        title.setStyleSheet("font-size: 20px; font-weight: 800;")
-        root.addWidget(title)
         self.header_summary = QLabel()
         self.header_summary.setObjectName("ValueLabel")
-        root.addWidget(self.header_summary)
+        select_all = ModernButton("Selecionar todos", "status")
+        clear = ModernButton("Limpar seleção", "clear")
+        select_all.clicked.connect(lambda: self._set_all(True))
+        clear.clicked.connect(lambda: self._set_all(False))
+        root.addWidget(
+            dialog_header(
+                title,
+                "Marque os itens que serão faturados nesta emissão.",
+                status=[self.header_summary],
+                actions=[select_all, clear],
+            )
+        )
 
         self.search = QLineEdit()
         self.search.setPlaceholderText("Buscar proposta, cliente, código ou descrição do item...")
@@ -127,31 +137,18 @@ class FiscalItemSelectionDialog(QDialog):
             self.tree.setColumnWidth(column, width)
         root.addWidget(self.tree, 1)
 
-        controls = QHBoxLayout()
-        select_all = ModernButton("Selecionar todos", "status")
-        clear = ModernButton("Limpar seleção", "clear")
-        select_all.clicked.connect(lambda: self._set_all(True))
-        clear.clicked.connect(lambda: self._set_all(False))
-        controls.addWidget(select_all)
-        controls.addWidget(clear)
-        controls.addStretch()
-        root.addLayout(controls)
-
-        footer_frame = QFrame()
-        footer_frame.setObjectName("Panel")
-        footer = QHBoxLayout(footer_frame)
-        footer.setContentsMargins(12, 8, 12, 8)
         self.footer_summary = QLabel()
         self.footer_summary.setObjectName("ValueLabel")
-        footer.addWidget(self.footer_summary)
-        footer.addStretch()
         cancel = ModernButton("Cancelar", "clear", variant="ghost")
-        self.advance_button = ModernButton("Avançar", "status", accent=True)
+        self.advance_button = ModernButton("Avançar", "next", accent=True)
         cancel.clicked.connect(self.reject)
         self.advance_button.clicked.connect(self._advance)
-        footer.addWidget(cancel)
-        footer.addWidget(self.advance_button)
-        root.addWidget(footer_frame)
+        root.addWidget(
+            dialog_footer(
+                left=[StepIndicator(1, 3), self.footer_summary],
+                right=[cancel, self.advance_button],
+            )
+        )
 
     def _load(self):
         try:
