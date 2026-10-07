@@ -41,3 +41,8 @@ def style_dialog_from_parent(dialog: QDialog, parent=None) -> None:
     owner = parent.window() if parent and parent.window() else None
     if owner:
         dialog.setStyleSheet(owner.styleSheet())
+        # Ponto unico dos dialogos: e aqui que toda tela sobreposta ganha o
+        # veu que escurece a janela de tras.
+        from app.ui.components.dialog_scrim import attach_dialog_scrim
+
+        attach_dialog_scrim(dialog, owner)
