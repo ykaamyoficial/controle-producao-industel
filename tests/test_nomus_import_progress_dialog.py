@@ -82,7 +82,7 @@ class NomusImportProgressDialogTests(unittest.TestCase):
             dialog.mark_failed("Nao foi possivel conectar ao Nomus.")
 
             self.assertFalse(dialog.close_button.isHidden())
-            self.assertIn("Nao foi possivel", dialog.stage_label.text())
+            self.assertIn("Não foi possível", dialog.stage_label.text())
             self.assertIn("Nomus", dialog.message_label.text())
         finally:
             dialog.close()

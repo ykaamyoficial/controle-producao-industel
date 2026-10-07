@@ -38,7 +38,7 @@ class FiscalEmissionDialog(QDialog):
         self.item_balances: dict[int, tuple[int, float]] = {}
         self.selection_items: dict[int, QTableWidgetItem] = {}
         self.quantity_inputs: dict[int, QSpinBox] = {}
-        self.setWindowTitle("Registrar emissao fiscal")
+        self.setWindowTitle("Registrar emissão fiscal")
         apply_large_dialog_geometry(self, parent)
         style_dialog_from_parent(self, parent)
         self._build()
@@ -49,8 +49,8 @@ class FiscalEmissionDialog(QDialog):
         root.setSpacing(12)
 
         title = QLabel(f"{self.fiscal_row.get('proposta', '')} | {self.fiscal_row.get('cliente', '')}")
-        title.setStyleSheet("font-size: 18px; font-weight: 800;")
-        caption_text = "Registre manualmente a emissao fiscal por item. Este sistema nao emite nota fiscal real."
+        title.setObjectName("DetailTitle")
+        caption_text = "Registre manualmente a emissão fiscal por item. Este sistema não emite nota fiscal real."
         if not self.items:
             caption_text = (
                 "Esta proposta nao possui itens cadastrados. A emissao fiscal sera registrada na proposta, "
@@ -69,15 +69,15 @@ class FiscalEmissionDialog(QDialog):
         field_layout.setHorizontalSpacing(12)
         field_layout.setVerticalSpacing(6)
         self.control_number = QLineEdit()
-        self.control_number.setPlaceholderText("Numero da NF ou controle interno")
+        self.control_number.setPlaceholderText("Número da NF ou controle interno")
         self.control_number.setMinimumWidth(260)
         self.observation = QTextEdit()
-        self.observation.setPlaceholderText("Observacao fiscal")
+        self.observation.setPlaceholderText("Observação fiscal")
         self.observation.setMinimumHeight(70)
         self.observation.setMaximumHeight(78)
         nf_label = QLabel("NF/Controle")
         nf_label.setObjectName("FieldLabel")
-        obs_label = QLabel("Observacao")
+        obs_label = QLabel("Observação")
         obs_label.setObjectName("FieldLabel")
         field_layout.addWidget(nf_label, 0, 0)
         field_layout.addWidget(self.control_number, 0, 1)
@@ -91,8 +91,8 @@ class FiscalEmissionDialog(QDialog):
         self.table.setHorizontalHeaderLabels([
             "Emitir",
             "Item",
-            "Codigo",
-            "Descricao",
+            "Código",
+            "Descrição",
             "Qtd. total",
             "Qtd. a faturar",
             "Saldo qtd.",
@@ -115,12 +115,12 @@ class FiscalEmissionDialog(QDialog):
         self.select_all_button = ModernButton("Selecionar todos os saldos", "status", accent=True)
         self.select_all_button.clicked.connect(self.mark_all_pending)
         self.select_all_button.setEnabled(bool(self.items))
-        self.clear_button = ModernButton("Limpar selecao", "clear")
+        self.clear_button = ModernButton("Limpar seleção", "clear")
         self.clear_button.clicked.connect(self.clear_selection)
         self.clear_button.setEnabled(bool(self.items))
-        self.cancel_button = ModernButton("Cancelar", "clear")
+        self.cancel_button = ModernButton("Cancelar", "clear", variant="ghost")
         self.cancel_button.clicked.connect(self.reject)
-        self.confirm_button = ModernButton("Registrar emissao fiscal", "status", accent=True)
+        self.confirm_button = ModernButton("Registrar emissão fiscal", "status", accent=True)
         self.confirm_button.clicked.connect(self.confirm)
         footer.addWidget(self.select_all_button)
         footer.addWidget(self.clear_button)
@@ -190,7 +190,7 @@ class FiscalEmissionDialog(QDialog):
             quantity_input.setValue(0)
             quantity_input.setEnabled(False)
             quantity_input.setAlignment(Qt.AlignCenter)
-            quantity_input.setToolTip("Quantidade que sera faturada nesta emissao. Padrao: todo o saldo disponivel.")
+            quantity_input.setToolTip("Quantidade que será faturada nesta emissão. Padrão: todo o saldo disponível.")
             self.quantity_inputs[fiscal_item_id] = quantity_input
             self.table.setCellWidget(row_index, 5, quantity_input)
         self.table.blockSignals(False)
@@ -258,10 +258,10 @@ class FiscalEmissionDialog(QDialog):
     def confirm(self):
         emissions, errors = self.prepared_emissions()
         if errors:
-            QMessageBox.warning(self, "Emissao fiscal", "\n".join(errors))
+            QMessageBox.warning(self, "Emissão fiscal", "\n".join(errors))
             return
         if not emissions and self.items:
-            QMessageBox.warning(self, "Emissao fiscal", "Selecione pelo menos um item com quantidade para faturar.")
+            QMessageBox.warning(self, "Emissão fiscal", "Selecione pelo menos um item com quantidade para faturar.")
             return
         confirmation = "Confirmar o registro fiscal manual dos itens selecionados?"
         if not self.items:
@@ -271,8 +271,8 @@ class FiscalEmissionDialog(QDialog):
             )
         answer = QMessageBox.question(
             self,
-            "Registrar emissao fiscal",
-            f"{confirmation}\n\nEsta acao nao emite nota fiscal real.",
+            "Registrar emissão fiscal",
+            f"{confirmation}\n\nEsta ação não emite nota fiscal real.",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,
         )
@@ -299,7 +299,7 @@ class FiscalEmissionDialog(QDialog):
         def error(exc):
             self._set_busy(False)
             log.error("Erro ao registrar emissao fiscal: %s", exc)
-            QMessageBox.warning(self, "Emissao fiscal", str(exc))
+            QMessageBox.warning(self, "Emissão fiscal", str(exc))
 
         self._worker = start_worker(
             self, operation, success, error, operation_name="fiscal_emission.register"
@@ -316,7 +316,7 @@ class FiscalEmissionDialog(QDialog):
         if busy:
             self.confirm_button.setText("Registrando...")
         else:
-            self.confirm_button.setText("Registrar emissao fiscal")
+            self.confirm_button.setText("Registrar emissão fiscal")
 
     def closeEvent(self, event):
         if getattr(self, "_busy", False):

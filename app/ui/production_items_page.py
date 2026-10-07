@@ -205,7 +205,7 @@ class ProductionItemsPage(QWidget):
         self.table.doubleClicked.connect(self._on_row_double_clicked)
         self.empty_state = EmptyState(
             "Nenhum item em produção",
-            "Quando houver itens pendentes ou produzidos, eles aparecerao aqui.",
+            "Quando houver itens pendentes ou produzidos, eles aparecerão aqui.",
             self.service.palette,
             icon="production",
         )
@@ -277,7 +277,7 @@ class ProductionItemsPage(QWidget):
 
     def _show_group_distribution(self, group_row: dict):
         dialog = QDialog(self)
-        dialog.setWindowTitle(f"Distribuicao por proposta — {group_row.get('codigo_produto') or group_row.get('descricao')}")
+        dialog.setWindowTitle(f"Distribuição por proposta — {group_row.get('codigo_produto') or group_row.get('descricao')}")
         dialog.resize(680, 380)
         layout = QVBoxLayout(dialog)
         table = QTableWidget(0, 5)
@@ -557,10 +557,10 @@ class ProductionItemsPage(QWidget):
             ToastNotification(self.window(), "Selecione um ou mais itens.", "error")
             return
         if any(not row.get("fluxo_definido") for row in rows):
-            QMessageBox.warning(self, "Registrar producao", "Defina primeiro o fluxo de todos os itens selecionados.")
+            QMessageBox.warning(self, "Registrar produção", "Defina primeiro o fluxo de todos os itens selecionados.")
             return
         if any(str(row.get("status_producao") or "").strip().upper() == "PARADO" for row in rows):
-            QMessageBox.warning(self, "Registrar producao", "A producao selecionada esta pausada. Retome-a antes de registrar itens.")
+            QMessageBox.warning(self, "Registrar produção", "A produção selecionada está pausada. Retome-a antes de registrar itens.")
             return
         item_ids = {
             int(row.get("api_id"))
@@ -598,14 +598,14 @@ class ProductionItemsPage(QWidget):
         def success(failures):
             self._set_action_busy(False)
             if failures:
-                QMessageBox.warning(self, "Iniciar producao", "Nao foi possivel iniciar toda a selecao:\n\n" + "\n".join(failures))
+                QMessageBox.warning(self, "Iniciar produção", "Não foi possível iniciar toda a seleção:\n\n" + "\n".join(failures))
             else:
                 ToastNotification(self.window(), "Produção iniciada para as propostas selecionadas.", "success")
             self.refresh()
 
         def error(exc):
             self._set_action_busy(False)
-            QMessageBox.warning(self, "Iniciar producao", str(exc))
+            QMessageBox.warning(self, "Iniciar produção", str(exc))
 
         self._action_thread = start_worker(
             self, operation, success, error, operation_name="production_items_page.start_selected"
@@ -628,7 +628,7 @@ class ProductionItemsPage(QWidget):
         already_produced = [row for row in rows if row.get("produzido")]
         pending = [row for row in rows if not row.get("produzido")]
         if any(str(row.get("status_producao") or "").strip().upper() == "PARADO" for row in pending):
-            QMessageBox.warning(self, "Montar carga", "Ha producao pausada na selecao. Retome-a antes de registrar e montar a carga.")
+            QMessageBox.warning(self, "Montar carga", "Há produção pausada na seleção. Retome-a antes de registrar e montar a carga.")
             return
 
         self._set_action_busy(True)
@@ -643,7 +643,7 @@ class ProductionItemsPage(QWidget):
             produced_rows, failures = result
             self._set_action_busy(False)
             if failures:
-                QMessageBox.warning(self, "Montar carga", "Falha ao registrar producao de parte dos itens:\n\n" + "\n".join(failures))
+                QMessageBox.warning(self, "Montar carga", "Falha ao registrar produção de parte dos itens:\n\n" + "\n".join(failures))
             if load_id:
                 self._add_produced_rows_to_load(produced_rows, load_id)
             else:

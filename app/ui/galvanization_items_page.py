@@ -82,7 +82,7 @@ class GalvanizationItemsPage(QWidget):
         self.search.textChanged.connect(lambda _text: self.refresh(debounced=True))
         self.situation = QComboBox()
         self.situation.addItem("Todos", "")
-        self.situation.addItem("Disponivel para carga", "DISPONIVEL")
+        self.situation.addItem("Disponível para carga", "DISPONIVEL")
         self.situation.addItem("Em galvanização", "EM_GALVANIZACAO")
         apply_btn = ModernButton("Aplicar", "search")
         clear_btn = ModernButton("Limpar", "clear", variant="ghost")
@@ -119,7 +119,7 @@ class GalvanizationItemsPage(QWidget):
         self.table.setModel(self.model)
         self.empty_state = EmptyState(
             "Nenhum item para galvanização",
-            "Itens disponiveis, em carga ou em retorno aparecerao aqui.",
+            "Itens disponíveis, em carga ou em retorno aparecerão aqui.",
             self.service.palette,
             icon="load",
         )

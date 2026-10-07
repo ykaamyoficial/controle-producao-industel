@@ -275,9 +275,9 @@ class NomusBatchImportDialogTests(unittest.TestCase):
         try:
             dialog.input.setPlainText(" CP 05250\nCP05250\tABC\n\n5251; cp05252 ")
 
-            self.assertIn("3 validas", dialog.counter_label.text())
+            self.assertIn("3 válidas", dialog.counter_label.text())
             self.assertIn("1 duplicadas", dialog.counter_label.text())
-            self.assertIn("1 invalidas", dialog.counter_label.text())
+            self.assertIn("1 inválidas", dialog.counter_label.text())
             self.assertTrue(dialog.locate_button.isEnabled())
         finally:
             dialog.close()
@@ -289,7 +289,7 @@ class NomusBatchImportDialogTests(unittest.TestCase):
             values = [f"CP{number:05d}" for number in range(5200, 5400)]
             dialog.input.setPlainText("\n".join(values))
 
-            self.assertIn("200 validas", dialog.counter_label.text())
+            self.assertIn("200 válidas", dialog.counter_label.text())
             self.assertTrue(dialog.locate_button.isEnabled())
             self.assertEqual(service.client.calls, [])
         finally:

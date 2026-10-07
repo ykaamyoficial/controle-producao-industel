@@ -277,7 +277,7 @@ class ProcessPage(QWidget):
         self.table.doubleClicked.connect(self._handle_table_double_click)
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self.open_context_menu)
-        self.empty_clear_button = ModernButton("Limpar filtros", "clear")
+        self.empty_clear_button = ModernButton("Limpar filtros", "clear", variant="ghost")
         self.empty_clear_button.clicked.connect(self.clear)
         self.empty_state = EmptyState(
             "Nenhuma proposta encontrada",

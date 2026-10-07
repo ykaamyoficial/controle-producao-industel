@@ -251,7 +251,7 @@ class NomusBatchImportDialog(QDialog):
         header.setSpacing(3)
         title = QLabel("Importar propostas do Nomus")
         title.setStyleSheet("font-size: 20px; font-weight: 800;")
-        subtitle = QLabel("Cole varias propostas e acompanhe cada resultado. Nada sera salvo automaticamente nesta etapa.")
+        subtitle = QLabel("Cole várias propostas e acompanhe cada resultado. Nada será salvo automaticamente nesta etapa.")
         subtitle.setObjectName("Caption")
         subtitle.setWordWrap(True)
         header.addWidget(title)
@@ -282,13 +282,13 @@ class NomusBatchImportDialog(QDialog):
         input_panel.layout().addWidget(self.input)
         input_row = QHBoxLayout()
         input_row.setSpacing(8)
-        self.counter_label = QLabel("0 validas 0 duplicadas 0 invalidas")
+        self.counter_label = QLabel("0 válidas 0 duplicadas 0 inválidas")
         self.counter_label.setObjectName("Caption")
         self.counter_label.setWordWrap(True)
         self.counter_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         input_row.addWidget(self.counter_label)
         input_row.addStretch()
-        self.clear_button = ModernButton("Limpar", "clear")
+        self.clear_button = ModernButton("Limpar", "clear", variant="ghost")
         self.locate_button = ModernButton("Localizar", "search", accent=True)
         self.locate_button.setMinimumWidth(150)
         self.clear_button.clicked.connect(self.clear)
@@ -364,10 +364,10 @@ class NomusBatchImportDialog(QDialog):
         self.status_label.setObjectName("Caption")
         self.status_label.setWordWrap(True)
         self.status_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
-        self.close_button = ModernButton("Fechar", "clear")
-        self.cancel_button = ModernButton("Cancelar", "clear")
+        self.close_button = ModernButton("Fechar", "clear", variant="ghost")
+        self.cancel_button = ModernButton("Cancelar", "clear", variant="ghost")
         self.retry_button = ModernButton("Tentar falhas novamente", "refresh")
-        self.conference_button = ModernButton("Ir para conferencia", "status", accent=True)
+        self.conference_button = ModernButton("Ir para conferência", "status", accent=True)
         self.close_button.clicked.connect(self.reject)
         self.cancel_button.clicked.connect(self.cancel_batch)
         self.retry_button.clicked.connect(self.retry_failed)
@@ -383,7 +383,7 @@ class NomusBatchImportDialog(QDialog):
         layout.setContentsMargins(12, 10, 12, 10)
         layout.setSpacing(SECTION_SPACING)
         label = QLabel(title)
-        label.setStyleSheet("font-size: 13px; font-weight: 800;")
+        label.setObjectName("PanelTitle")
         layout.addWidget(label)
         return frame
 
@@ -437,7 +437,7 @@ class NomusBatchImportDialog(QDialog):
         valid = len([target for target in targets if target.state not in {NomusBatchTargetState.INVALID, NomusBatchTargetState.DUPLICATE_INPUT}])
         duplicates = len([target for target in targets if target.state == NomusBatchTargetState.DUPLICATE_INPUT])
         invalid = len([target for target in targets if target.state == NomusBatchTargetState.INVALID])
-        self.counter_label.setText(f"{valid} validas {duplicates} duplicadas {invalid} invalidas")
+        self.counter_label.setText(f"{valid} válidas {duplicates} duplicadas {invalid} inválidas")
         self._set_progress_from_rows()
         self._update_actions()
 
@@ -633,7 +633,7 @@ class NomusBatchImportDialog(QDialog):
             self._show_global_error(result.metrics.global_error)
         counts = self.batch_result.counts_by_state()
         self.status_label.setText(
-            f"{counts.get('READY', 0)} prontas, {counts.get('NOT_FOUND', 0)} nao encontradas, {counts.get('FAILED', 0)} falhas."
+            f"{counts.get('READY', 0)} prontas, {counts.get('NOT_FOUND', 0)} não encontradas, {counts.get('FAILED', 0)} falhas."
         )
         self._running = False
         self._retrying = False
@@ -814,7 +814,7 @@ class NomusBatchImportDialog(QDialog):
     def reject(self) -> None:
         if self._running:
             self.cancel_batch()
-            QMessageBox.information(self, "Importar propostas do Nomus", "Cancelamento solicitado. Aguarde a finalizacao segura do lote.")
+            QMessageBox.information(self, "Importar propostas do Nomus", "Cancelamento solicitado. Aguarde a finalização segura do lote.")
             return
         super().reject()
 

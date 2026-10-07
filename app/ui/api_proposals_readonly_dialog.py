@@ -59,21 +59,21 @@ class ApiProposalsReadonlyDialog(QDialog):
         buttons = QHBoxLayout()
         self.search_btn = ModernButton("Pesquisar", "search", accent=True)
         self.prev_btn = ModernButton("Anterior", "previous")
-        self.next_btn = ModernButton("Proximo", "next")
+        self.next_btn = ModernButton("Próximo", "next")
         self.detail_btn = ModernButton("Detalhes e itens", "search")
-        self.page_label = QLabel("Pagina 1")
+        self.page_label = QLabel("Página 1")
         buttons.addWidget(self.search_btn)
         buttons.addWidget(self.prev_btn)
         buttons.addWidget(self.next_btn)
         buttons.addWidget(self.detail_btn)
         buttons.addWidget(self.page_label)
         buttons.addStretch()
-        close = ModernButton("Fechar", "close")
+        close = ModernButton("Fechar", "close", variant="ghost")
         buttons.addWidget(close)
         root.addLayout(buttons)
 
         self.table = QTableWidget(0, 8)
-        self.table.setHorizontalHeaderLabels(["ID legado", "Proposta", "Cliente", "Site", "Lote", "Area", "Status", "Sincronizado em"])
+        self.table.setHorizontalHeaderLabels(["ID legado", "Proposta", "Cliente", "Site", "Lote", "Área", "Status", "Sincronizado em"])
         self.table.verticalHeader().setVisible(False)
         self.table.setAlternatingRowColors(True)
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
@@ -81,7 +81,7 @@ class ApiProposalsReadonlyDialog(QDialog):
         root.addWidget(self.table, 1)
 
         self.detail = QTableWidget(0, 7)
-        self.detail.setHorizontalHeaderLabels(["Item", "Codigo", "Descricao", "Qtd.", "Peso unit.", "Peso total", "Fluxo"])
+        self.detail.setHorizontalHeaderLabels(["Item", "Código", "Descrição", "Qtd.", "Peso unit.", "Peso total", "Fluxo"])
         self.detail.verticalHeader().setVisible(False)
         self.detail.setWordWrap(True)
         self.detail.setEditTriggers(QTableWidget.NoEditTriggers)
@@ -136,7 +136,7 @@ class ApiProposalsReadonlyDialog(QDialog):
             self._access_token = session.refresh_if_needed(force=True).access_token
         if not self._access_token:
             client.close()
-            raise ApiClientError("session_missing", "Faca login experimental no Diagnostico da API antes de consultar propostas.")
+            raise ApiClientError("session_missing", "Faça login experimental no Diagnóstico da API antes de consultar propostas.")
         return client, self._access_token
 
     def _load_page(self):
@@ -186,7 +186,7 @@ class ApiProposalsReadonlyDialog(QDialog):
         self.detail.resizeRowsToContents()
 
     def _show_error(self, exc):
-        message = exc.user_message if isinstance(exc, ApiClientError) else "Nao foi possivel consultar propostas pela API."
+        message = exc.user_message if isinstance(exc, ApiClientError) else "Não foi possível consultar propostas pela API."
         QMessageBox.warning(self, "Consulta API", message)
 
     def _run_background(self, operation, on_success, on_error):

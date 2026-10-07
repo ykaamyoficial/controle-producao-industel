@@ -406,7 +406,7 @@ class FiscalPage(QWidget):
         self.register_btn.clicked.connect(self.register_emission)
         if not self.service.can_register_fiscal_emission():
             self.register_btn.setEnabled(False)
-            self.register_btn.setToolTip("Disponivel apenas para administrador ou perfil Fiscal.")
+            self.register_btn.setToolTip("Disponível apenas para administrador ou perfil Fiscal.")
         header.addWidget(self.register_btn)
         self.batch_btn = ModernButton("Ações em lote", "batch")
         self.batch_btn.clicked.connect(self.activate_batch_selection)
@@ -430,7 +430,7 @@ class FiscalPage(QWidget):
         self.critical = QComboBox()
         self.critical.addItem("Todas", "")
         self.critical.addItem("Pendência crítica", "1")
-        self.critical.addItem("Mais de 7 dias sem emissao", "7")
+        self.critical.addItem("Mais de 7 dias sem emissão", "7")
         apply_btn = ModernButton("Aplicar", "search")
         clear_btn = ModernButton("Limpar", "clear", variant="ghost")
         self.refresh_buttons = [apply_btn, clear_btn]
@@ -628,7 +628,7 @@ class FiscalPage(QWidget):
 
     def activate_batch_selection(self):
         if not self.service.can_register_fiscal_emission():
-            QMessageBox.warning(self, "Fiscal", "Seu usuario nao tem permissao para selecionar propostas fiscais.")
+            QMessageBox.warning(self, "Fiscal", "Seu usuário não tem permissão para selecionar propostas fiscais.")
             return
         if self.batch_selection.active:
             return
@@ -727,7 +727,7 @@ class FiscalPage(QWidget):
             draft_dialog = FiscalEmissionDraftDialog(self.service, selection_payload, selected_rows, self, drafts=drafts)
             if draft_dialog.exec() and draft_dialog.result is not None:
                 if not hasattr(self.service, "register_fiscal_batch"):
-                    QMessageBox.warning(self, "Emissao fiscal", "O motor fiscal em lote nao esta disponivel.")
+                    QMessageBox.warning(self, "Emissão fiscal", "O motor fiscal em lote não está disponível.")
                     return
                 self.last_fiscal_batch_draft = draft_dialog.result
                 review = FiscalEmissionReviewDialog(draft_dialog.result, self, confirm_callback=self.service.register_fiscal_batch)
@@ -738,7 +738,7 @@ class FiscalPage(QWidget):
                 self.last_fiscal_batch_result = result
                 processed = len((result or {}).get("proposals") or draft_dialog.result)
                 item_count = sum(len(row.get("items", [])) for row in draft_dialog.result)
-                QMessageBox.information(self, "Emissao fiscal", f"Emissoes fiscais registradas com sucesso.\n\n{processed} proposta(s) processada(s)\n{item_count} item(ns) atualizado(s)")
+                QMessageBox.information(self, "Emissão fiscal", f"Emissões fiscais registradas com sucesso.\n\n{processed} proposta(s) processada(s)\n{item_count} item(ns) atualizado(s)")
                 self.batch_selection.clear()
                 self._sync_selection_ui()
                 self.refresh()
@@ -750,14 +750,14 @@ class FiscalPage(QWidget):
     def _fiscal_error_message(exc: Exception) -> str:
         code = str(getattr(exc, "error_code", "") or getattr(exc, "technical_message", "") or "").upper()
         messages = {
-            "FISCAL_QUANTITY_EXCEEDED": "O saldo fiscal deste item foi alterado. Atualize os dados e revise a emissao.",
-            "FISCAL_ITEM_INVALID": "Um item fiscal ficou indisponivel ou invalido. Atualize os dados e revise a emissao.",
-            "FISCAL_INVOICE_DUPLICATED": "A NF informada ja esta registrada conforme a regra de unicidade atual.",
-            "FISCAL_VERSION_CONFLICT": "Os dados fiscais foram alterados por outra operacao. Atualize e tente novamente.",
-            "FISCAL_INVALID_STATE": "Esta proposta fiscal ja esta concluida (NF emitida). Atualize a lista e revise a selecao.",
-            "PERMISSION_DENIED": "Seu usuario nao possui permissao para registrar esta emissao.",
+            "FISCAL_QUANTITY_EXCEEDED": "O saldo fiscal deste item foi alterado. Atualize os dados e revise a emissão.",
+            "FISCAL_ITEM_INVALID": "Um item fiscal ficou indisponível ou inválido. Atualize os dados e revise a emissão.",
+            "FISCAL_INVOICE_DUPLICATED": "A NF informada já está registrada conforme a regra de unicidade atual.",
+            "FISCAL_VERSION_CONFLICT": "Os dados fiscais foram alterados por outra operação. Atualize e tente novamente.",
+            "FISCAL_INVALID_STATE": "Esta proposta fiscal já está concluída (NF emitida). Atualize a lista e revise a seleção.",
+            "PERMISSION_DENIED": "Seu usuário não possui permissão para registrar esta emissão.",
         }
-        return messages.get(code, str(exc) or "Nao foi possivel concluir a emissao fiscal.")
+        return messages.get(code, str(exc) or "Não foi possível concluir a emissão fiscal.")
 
     def clear(self):
         self.search.clear()
@@ -938,30 +938,30 @@ class FiscalPage(QWidget):
 
     def register_emission(self, row: dict | None = None) -> bool:
         if not self.service.can_register_fiscal_emission():
-            QMessageBox.warning(self, "Fiscal", "Seu usuario nao tem permissao para registrar emissao fiscal.")
+            QMessageBox.warning(self, "Fiscal", "Seu usuário não tem permissão para registrar emissão fiscal.")
             return False
         fiscal_row = row or self.selected_fiscal_row()
         if not fiscal_row:
             QMessageBox.warning(self, "Fiscal", "Selecione uma proposta fiscal.")
             return False
         if fiscal_row.get("status_fiscal") == "NOTA_FISCAL_EMITIDA":
-            QMessageBox.information(self, "Fiscal", "Esta proposta ja esta totalmente faturada.")
+            QMessageBox.information(self, "Fiscal", "Esta proposta já está totalmente faturada.")
             return False
         dialog = FiscalEmissionDialog(self.service, fiscal_row, self)
         if dialog.exec():
             self.refresh()
-            QMessageBox.information(self, "Fiscal", "Emissao fiscal registrada com sucesso.")
+            QMessageBox.information(self, "Fiscal", "Emissão fiscal registrada com sucesso.")
             return True
         return False
 
     def cancel_latest_emission(self, row: dict) -> bool:
         if not getattr(self.service, "can_cancel_fiscal_emission", lambda: False)():
-            QMessageBox.warning(self, "Fiscal", "Seu usuario nao tem permissao para cancelar emissao fiscal.")
+            QMessageBox.warning(self, "Fiscal", "Seu usuário não tem permissão para cancelar emissão fiscal.")
             return False
         answer = QMessageBox.question(
             self,
-            "Cancelar emissao fiscal",
-            "Cancelar a ultima emissao fiscal interna desta proposta?",
+            "Cancelar emissão fiscal",
+            "Cancelar a última emissão fiscal interna desta proposta?",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,
         )
@@ -973,7 +973,7 @@ class FiscalPage(QWidget):
                 "Cancelamento interno pelo Desktop",
             )
             self.refresh()
-            QMessageBox.information(self, "Fiscal", f"{cancelled} vinculo(s) fiscal(is) cancelado(s).")
+            QMessageBox.information(self, "Fiscal", f"{cancelled} vínculo(s) fiscal(is) cancelado(s).")
             return True
         except Exception as exc:
             QMessageBox.warning(self, "Fiscal", str(exc))
@@ -1019,7 +1019,7 @@ class FiscalPage(QWidget):
             ("Histórico de emissões fiscais", "EMISSOES"),
             ("Fiscal por cliente", "POR_CLIENTE"),
             ("Fiscal por periodo", "POR_PERIODO"),
-            ("Propostas ha mais de 7 dias sem emissao", "MAIS_7_DIAS"),
+            ("Propostas há mais de 7 dias sem emissão", "MAIS_7_DIAS"),
         ]
         for label, value in report_options:
             self.report_type.addItem(label, value)
@@ -1048,7 +1048,7 @@ class FiscalPage(QWidget):
         self.report_alert.setMinimumWidth(190)
         self.report_alert.addItem("Todos", "")
         self.report_alert.addItem("Pendência crítica", "critica")
-        self.report_alert.addItem("Mais de 7 dias sem emissao", "7")
+        self.report_alert.addItem("Mais de 7 dias sem emissão", "7")
         generate = ModernButton("Gerar relatório", "search", accent=True)
         clear = ModernButton("Limpar filtros", "clear", variant="ghost")
         self.export_csv_btn = ModernButton("Exportar CSV", "reports")
@@ -1089,7 +1089,7 @@ class FiscalPage(QWidget):
         self.report_partial_card = KpiCard("NF parcial", 0, "partial", palette["warning"])
         self.report_emitted_card = KpiCard("NF emitida", 0, "status", palette["success"])
         self.report_critical_card = KpiCard("Pendencia critica", 0, "clear", palette["danger"])
-        self.report_old_card = KpiCard("+7 dias sem emissao", 0, "history", palette["secondary"])
+        self.report_old_card = KpiCard("+7 dias sem emissão", 0, "history", palette["secondary"])
         self.report_pending_weight_card = KpiCard("Peso conhecido pendente", "0 kg", "clock", palette["warning"])
         for card in (
             self.report_missing_card,
@@ -1154,7 +1154,7 @@ class FiscalPage(QWidget):
     def export_report_csv(self):
         rows = self.report_model.rows
         if not rows:
-            QMessageBox.information(self, "Relatorios fiscais", "Nao ha dados para exportar.")
+            QMessageBox.information(self, "Relatórios fiscais", "Não há dados para exportar.")
             return
         path, _ = QFileDialog.getSaveFileName(
             self,
@@ -1177,4 +1177,4 @@ class FiscalPage(QWidget):
                         value = format_weight(value)
                     values.append(value or "")
                 writer.writerow(values)
-        QMessageBox.information(self, "Relatorios fiscais", "CSV gerado com sucesso.")
+        QMessageBox.information(self, "Relatórios fiscais", "CSV gerado com sucesso.")

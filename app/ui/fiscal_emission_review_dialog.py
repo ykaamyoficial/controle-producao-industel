@@ -19,7 +19,7 @@ class FiscalEmissionReviewDialog(QDialog):
         self.confirm_callback = confirm_callback
         self.result: Any = None
         self._confirm_thread = None
-        self.setWindowTitle("Confirmar emissoes fiscais")
+        self.setWindowTitle("Confirmar emissões fiscais")
         apply_large_dialog_geometry(self, parent, minimum_width=920, minimum_height=560)
         style_dialog_from_parent(self, parent)
         self._build()
@@ -29,11 +29,11 @@ class FiscalEmissionReviewDialog(QDialog):
         root = QVBoxLayout(self)
         root.setContentsMargins(22, 20, 22, 18)
         root.setSpacing(10)
-        title = QLabel("Confirmar emissoes fiscais")
+        title = QLabel("Confirmar emissões fiscais")
         title.setStyleSheet("font-size: 20px; font-weight: 800;")
         root.addWidget(title)
         self.summary = QLabel()
-        self.summary.setStyleSheet("font-weight: 700;")
+        self.summary.setObjectName("ValueLabel")
         root.addWidget(self.summary)
         self.status = QLabel()
         self.status.setObjectName("Caption")
@@ -41,7 +41,7 @@ class FiscalEmissionReviewDialog(QDialog):
 
         self.tree = QTreeWidget()
         self.tree.setColumnCount(5)
-        self.tree.setHeaderLabels(["Proposta / Cliente", "NF", "Selecao", "Itens", "Peso"])
+        self.tree.setHeaderLabels(["Proposta / Cliente", "NF", "Seleção", "Itens", "Peso"])
         self.tree.setRootIsDecorated(True)
         self.tree.setAlternatingRowColors(True)
         self.tree.setSelectionMode(QTreeWidget.NoSelection)
@@ -51,7 +51,7 @@ class FiscalEmissionReviewDialog(QDialog):
 
         footer = QHBoxLayout()
         self.back_button = ModernButton("Voltar e corrigir", "clear")
-        self.confirm_button = ModernButton("Confirmar emissao", "status", accent=True)
+        self.confirm_button = ModernButton("Confirmar emissão", "status", accent=True)
         self.back_button.clicked.connect(self.reject)
         self.confirm_button.clicked.connect(self._confirm)
         footer.addWidget(self.back_button)
@@ -67,7 +67,7 @@ class FiscalEmissionReviewDialog(QDialog):
         total_count = sum(row.get("selection_type") == "TOTAL" for row in self.draft)
         partial_count = len(self.draft) - total_count
         self.summary.setText(f"{len(self.draft)} proposta(s) | {total_items} item(ns) | {total_nfs} NF(s) | {total_count} total(is) | {partial_count} parcial(is)")
-        self.status.setText(f"Peso selecionado: {total_weight:g} kg" if known_weight else "Peso nao informado para os itens selecionados.")
+        self.status.setText(f"Peso selecionado: {total_weight:g} kg" if known_weight else "Peso não informado para os itens selecionados.")
         self.tree.clear()
         for row in self.draft:
             items = list(row.get("items", []))
@@ -92,13 +92,13 @@ class FiscalEmissionReviewDialog(QDialog):
                     str(item.get("pending_quantity") or "-"),
                     f"{item.get('pending_weight')} kg" if item.get("pending_weight") not in (None, "", "0") else "Nao informado",
                 ])
-                child.setToolTip(0, "Item selecionado na etapa anterior; use Voltar e corrigir para alterar a selecao.")
+                child.setToolTip(0, "Item selecionado na etapa anterior; use Voltar e corrigir para alterar a seleção.")
                 parent.addChild(child)
 
     def _confirm(self):
         self.confirm_button.setEnabled(False)
         self.back_button.setEnabled(False)
-        self.status.setText("Registrando emissoes...")
+        self.status.setText("Registrando emissões...")
         if self.confirm_callback is None:
             self.result = self.draft
             self.accept()
@@ -112,23 +112,23 @@ class FiscalEmissionReviewDialog(QDialog):
     def _confirm_error(self, exc: Exception):
         self.confirm_button.setEnabled(True)
         self.back_button.setEnabled(True)
-        self.status.setText("Nenhuma emissao foi registrada. Corrija a pendencia indicada e tente novamente.")
-        QMessageBox.warning(self, "Emissao fiscal", "Nenhuma emissao foi registrada.\n\n" + self._error_message(exc))
+        self.status.setText("Nenhuma emissão foi registrada. Corrija a pendência indicada e tente novamente.")
+        QMessageBox.warning(self, "Emissão fiscal", "Nenhuma emissão foi registrada.\n\n" + self._error_message(exc))
 
     @staticmethod
     def _error_message(exc: Exception) -> str:
         code = str(getattr(exc, "error_code", "") or getattr(exc, "technical_message", "") or "").upper()
         messages = {
-            "FISCAL_QUANTITY_EXCEEDED": "O saldo fiscal deste item foi alterado. Atualize os dados e revise a emissao.",
-            "FISCAL_ITEM_INVALID": "Um item fiscal ficou indisponivel ou invalido. Atualize os dados e revise a emissao.",
-            "FISCAL_INVOICE_DUPLICATED": "A NF informada ja esta registrada conforme a regra de unicidade atual.",
-            "FISCAL_VERSION_CONFLICT": "Os dados fiscais foram alterados por outra operacao. Atualize e tente novamente.",
-            "FISCAL_INVALID_STATE": "Esta proposta fiscal ja esta concluida (NF emitida). Atualize a lista e revise a selecao.",
-            "PERMISSION_DENIED": "Seu usuario nao possui permissao para registrar esta emissao.",
+            "FISCAL_QUANTITY_EXCEEDED": "O saldo fiscal deste item foi alterado. Atualize os dados e revise a emissão.",
+            "FISCAL_ITEM_INVALID": "Um item fiscal ficou indisponível ou inválido. Atualize os dados e revise a emissão.",
+            "FISCAL_INVOICE_DUPLICATED": "A NF informada já está registrada conforme a regra de unicidade atual.",
+            "FISCAL_VERSION_CONFLICT": "Os dados fiscais foram alterados por outra operação. Atualize e tente novamente.",
+            "FISCAL_INVALID_STATE": "Esta proposta fiscal já está concluída (NF emitida). Atualize a lista e revise a seleção.",
+            "PERMISSION_DENIED": "Seu usuário não possui permissão para registrar esta emissão.",
         }
-        return messages.get(code, str(exc) or "Nao foi possivel concluir a emissao fiscal.")
+        return messages.get(code, str(exc) or "Não foi possível concluir a emissão fiscal.")
 
     def set_retry_state(self):
         self.confirm_button.setEnabled(True)
         self.back_button.setEnabled(True)
-        self.status.setText("Nenhuma emissao foi registrada. Corrija a pendencia indicada e tente novamente.")
+        self.status.setText("Nenhuma emissão foi registrada. Corrija a pendência indicada e tente novamente.")

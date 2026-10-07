@@ -79,7 +79,7 @@ class NomusImportProgressDialog(QDialog):
         header_text.setSpacing(4)
         self.title_label = QLabel("Importando proposta do Nomus")
         self.title_label.setObjectName("NomusProgressTitle")
-        self.subtitle_label = QLabel("Aguarde enquanto os dados operacionais sao consultados.")
+        self.subtitle_label = QLabel("Aguarde enquanto os dados operacionais são consultados.")
         self.subtitle_label.setObjectName("NomusProgressSubtitle")
         self.subtitle_label.setWordWrap(True)
         header_text.addWidget(self.title_label)
@@ -155,7 +155,7 @@ class NomusImportProgressDialog(QDialog):
 
         footer = QHBoxLayout()
         footer.addStretch()
-        self.close_button = ModernButton("Fechar", "clear")
+        self.close_button = ModernButton("Fechar", "clear", variant="ghost")
         self.close_button.setVisible(False)
         self.close_button.clicked.connect(self.accept)
         footer.addWidget(self.close_button)
@@ -217,14 +217,14 @@ class NomusImportProgressDialog(QDialog):
         self._running = False
         self.set_indeterminate(False)
         self.animate_progress_to(100)
-        self.stage_label.setText("Importacao concluida.")
-        self.detail_label.setText("Abrindo a conferencia para revisao.")
+        self.stage_label.setText("Importação concluída.")
+        self.detail_label.setText("Abrindo a conferência para revisão.")
         self._refresh_stage_list(STAGE_CONFERENCE)
 
     def mark_failed(self, message: str):
         self._running = False
         self.set_indeterminate(False)
-        self.stage_label.setText("Nao foi possivel importar a proposta.")
+        self.stage_label.setText("Não foi possível importar a proposta.")
         self.detail_label.setText("O sistema continuara funcionando normalmente.")
         self.message_label.setObjectName("ValidationError")
         self.message_label.setText(message)
@@ -238,7 +238,7 @@ class NomusImportProgressDialog(QDialog):
         for index, stage in enumerate(PROGRESS_STAGES):
             label = self.stage_rows[stage]
             if index < current_index:
-                label.setText(f"Concluido  {STAGE_LABELS[stage]}")
+                label.setText(f"Concluído  {STAGE_LABELS[stage]}")
                 label.setObjectName("NomusProgressDone")
             elif index == current_index:
                 label.setText(f"Agora  {STAGE_LABELS[stage]}")

@@ -73,8 +73,8 @@ class NomusApiImportDialog(QDialog):
         root.setSpacing(12)
 
         title = QLabel("Importar proposta do Nomus")
-        title.setStyleSheet("font-size: 18px; font-weight: 800;")
-        subtitle = QLabel("Informe o numero da proposta ou ID do pedido. Nada sera salvo automaticamente.")
+        title.setObjectName("DetailTitle")
+        subtitle = QLabel("Informe o número da proposta ou ID do pedido. Nada será salvo automaticamente.")
         subtitle.setObjectName("Caption")
         subtitle.setWordWrap(True)
         root.addWidget(title)
@@ -91,7 +91,7 @@ class NomusApiImportDialog(QDialog):
         self.identifier = QLineEdit()
         self.identifier.setPlaceholderText("Ex.: CP05252 ou ID interno do pedido")
         self.identifier.returnPressed.connect(self.start_lookup)
-        self.status = QLabel("A consulta usa apenas dados operacionais e ignora informacoes financeiras.")
+        self.status = QLabel("A consulta usa apenas dados operacionais e ignora informações financeiras.")
         self.status.setObjectName("Caption")
         self.status.setWordWrap(True)
         panel_layout.addWidget(label)
@@ -101,7 +101,7 @@ class NomusApiImportDialog(QDialog):
 
         actions = QHBoxLayout()
         actions.addStretch()
-        self.cancel_button = ModernButton("Cancelar", "clear")
+        self.cancel_button = ModernButton("Cancelar", "clear", variant="ghost")
         self.search_button = ModernButton("Buscar no Nomus", "search", accent=True)
         self.cancel_button.clicked.connect(self.reject)
         self.search_button.clicked.connect(self.start_lookup)

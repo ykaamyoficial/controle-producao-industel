@@ -93,7 +93,7 @@ class FiscalItemSelectionDialog(QDialog):
         self.selected_item_ids: set[int] = {int(value) for value in (selected_item_ids or set())}
         self.result: FiscalItemSelectionResult | None = None
         self._busy = False
-        self.setWindowTitle("Registrar emissao fiscal")
+        self.setWindowTitle("Registrar emissão fiscal")
         apply_large_dialog_geometry(self, parent, minimum_width=1120, minimum_height=680)
         style_dialog_from_parent(self, parent)
         self._build()
@@ -103,21 +103,21 @@ class FiscalItemSelectionDialog(QDialog):
         root = QVBoxLayout(self)
         root.setContentsMargins(22, 20, 22, 18)
         root.setSpacing(10)
-        title = QLabel("Registrar emissao fiscal")
+        title = QLabel("Registrar emissão fiscal")
         title.setStyleSheet("font-size: 20px; font-weight: 800;")
         root.addWidget(title)
         self.header_summary = QLabel()
-        self.header_summary.setStyleSheet("font-weight: 700;")
+        self.header_summary.setObjectName("ValueLabel")
         root.addWidget(self.header_summary)
 
         self.search = QLineEdit()
-        self.search.setPlaceholderText("Buscar proposta, cliente, codigo ou descricao do item...")
+        self.search.setPlaceholderText("Buscar proposta, cliente, código ou descrição do item...")
         self.search.textChanged.connect(self._apply_filter)
         root.addWidget(self.search)
 
         self.tree = QTreeWidget()
         self.tree.setColumnCount(8)
-        self.tree.setHeaderLabels(["Proposta / Item", "Codigo", "Descricao", "Total", "Emitido", "Pendente", "Peso", "Status"])
+        self.tree.setHeaderLabels(["Proposta / Item", "Código", "Descrição", "Total", "Emitido", "Pendente", "Peso", "Status"])
         self.tree.setRootIsDecorated(True)
         self.tree.setAlternatingRowColors(True)
         self.tree.setSelectionMode(QAbstractItemView.SingleSelection)
@@ -129,7 +129,7 @@ class FiscalItemSelectionDialog(QDialog):
 
         controls = QHBoxLayout()
         select_all = ModernButton("Selecionar todos", "status")
-        clear = ModernButton("Limpar selecao", "clear")
+        clear = ModernButton("Limpar seleção", "clear")
         select_all.clicked.connect(lambda: self._set_all(True))
         clear.clicked.connect(lambda: self._set_all(False))
         controls.addWidget(select_all)
@@ -142,11 +142,11 @@ class FiscalItemSelectionDialog(QDialog):
         footer = QHBoxLayout(footer_frame)
         footer.setContentsMargins(12, 8, 12, 8)
         self.footer_summary = QLabel()
-        self.footer_summary.setStyleSheet("font-weight: 700;")
+        self.footer_summary.setObjectName("ValueLabel")
         footer.addWidget(self.footer_summary)
         footer.addStretch()
-        cancel = ModernButton("Cancelar", "clear")
-        self.advance_button = ModernButton("Avancar", "status", accent=True)
+        cancel = ModernButton("Cancelar", "clear", variant="ghost")
+        self.advance_button = ModernButton("Avançar", "status", accent=True)
         cancel.clicked.connect(self.reject)
         self.advance_button.clicked.connect(self._advance)
         footer.addWidget(cancel)
@@ -180,7 +180,7 @@ class FiscalItemSelectionDialog(QDialog):
         except Exception as exc:
             self.groups = []
             self._render()
-            QMessageBox.warning(self, "Registrar emissao fiscal", f"Nao foi possivel carregar os itens fiscais:\n{exc}")
+            QMessageBox.warning(self, "Registrar emissão fiscal", f"Não foi possível carregar os itens fiscais:\n{exc}")
 
     def _render(self):
         self.tree.blockSignals(True)
@@ -197,7 +197,7 @@ class FiscalItemSelectionDialog(QDialog):
             parent.setCheckState(0, Qt.Checked if available and len(selected) == len(available) else Qt.PartiallyChecked if selected else Qt.Unchecked)
             if not available:
                 parent.setDisabled(True)
-                parent.setText(7, "Nenhum item disponivel")
+                parent.setText(7, "Nenhum item disponível")
             self.tree.addTopLevelItem(parent)
             parent.setExpanded(True)
             for item in group["items"]:
@@ -305,7 +305,7 @@ class FiscalItemSelectionDialog(QDialog):
         weights = [item.get("_pending_weight_value") for item in selected]
         known_weight = sum((weight for weight in weights if weight is not None and weight > 0), Decimal("0"))
         missing = sum(1 for weight in weights if weight is None or weight <= 0)
-        self.header_summary.setText(f"{len(self.proposal_ids)} proposta(s) | {sum(len(group['available']) for group in self.groups)} item(ns) disponiveis")
+        self.header_summary.setText(f"{len(self.proposal_ids)} proposta(s) | {sum(len(group['available']) for group in self.groups)} item(ns) disponíveis")
         self.footer_summary.setText(f"{len(selected)} item(ns) | {proposal_count} proposta(s) | {format_decimal(known_weight)} kg" + (f" | {missing} sem peso" if missing else ""))
         self.advance_button.setEnabled(bool(selected) and not self._busy)
 
@@ -331,7 +331,7 @@ class FiscalItemSelectionDialog(QDialog):
     def _advance(self):
         result = self.selection_result()
         if not result.item_count:
-            QMessageBox.warning(self, "Registrar emissao fiscal", "Selecione pelo menos um item fiscal.")
+            QMessageBox.warning(self, "Registrar emissão fiscal", "Selecione pelo menos um item fiscal.")
             return
         self.result = result
         self.accept()
