@@ -24,6 +24,8 @@ from PySide6.QtWidgets import (
 
 from app.ui.components.modern_button import ModernButton
 from app.ui.background_worker import start_worker
+from app.ui.components.detail_widgets import CountTabWidget, make_panel, note_box, value_label
+from app.ui.components.dialog_shell import dialog_footer, dialog_header
 from app.ui.dialog_utils import apply_large_dialog_geometry, style_dialog_from_parent
 from app.ui.icons import IconSize, make_icon, status_icon
 from app.ui.styles import status_color
@@ -109,24 +111,24 @@ class GalvanizationLoadDialog(QDialog):
 
     def _build(self):
         root = QVBoxLayout(self)
-        root.setContentsMargins(22, 20, 22, 18)
-        root.setSpacing(12)
+        root.setContentsMargins(16, 14, 16, 14)
+        root.setSpacing(10)
 
-        self.tabs = QTabWidget()
-        self.tabs.setObjectName("ModernTabs")
+        title = QLabel("Editar carga de galvanização" if self.load_id else "Montar carga para galvanização")
+        root.addWidget(
+            dialog_header(title, "Informe os dados da carga e as quantidades de cada proposta; a gravação só acontece depois da revisão.")
+        )
+
+        self.tabs = CountTabWidget()
         self.tabs.addTab(self._build_load_tab(), "Carga")
         self.tabs.addTab(self._build_items_tab(), "Itens da carga")
         root.addWidget(self.tabs, 1)
 
-        footer = QHBoxLayout()
         self.cancel_button = ModernButton("Cancelar", "clear", variant="ghost")
         self.review_button = ModernButton("Revisar carga", "save", accent=True)
         self.cancel_button.clicked.connect(self.reject)
         self.review_button.clicked.connect(self.review_and_save)
-        footer.addStretch()
-        footer.addWidget(self.cancel_button)
-        footer.addWidget(self.review_button)
-        root.addLayout(footer)
+        root.addWidget(dialog_footer(right=[self.cancel_button, self.review_button]))
 
     def _build_load_tab(self) -> QFrame:
         page = QFrame()
@@ -630,11 +632,10 @@ class _ItemAllocationDialog(QDialog):
         style_dialog_from_parent(self, parent)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 18, 20, 16)
+        layout.setContentsMargins(16, 14, 16, 14)
         layout.setSpacing(10)
         title = QLabel(f"{code} — {description}" if description else code)
-        title.setObjectName("FilterTitle")
-        layout.addWidget(title)
+        layout.addWidget(dialog_header(title, "Informe a quantidade de cada proposta."))
 
         grid = QGridLayout()
         grid.setHorizontalSpacing(12)
@@ -652,18 +653,13 @@ class _ItemAllocationDialog(QDialog):
         layout.addLayout(grid)
 
         self.total_label = QLabel("")
-        self.total_label.setObjectName("Caption")
-        layout.addWidget(self.total_label)
+        self.total_label.setObjectName("ValueLabel")
 
-        buttons = QHBoxLayout()
         cancel = ModernButton("Cancelar", "clear", variant="ghost")
         confirm = ModernButton("Confirmar", "save", accent=True)
         cancel.clicked.connect(self.reject)
         confirm.clicked.connect(self._confirm)
-        buttons.addStretch()
-        buttons.addWidget(cancel)
-        buttons.addWidget(confirm)
-        layout.addLayout(buttons)
+        layout.addWidget(dialog_footer(left=[self.total_label], right=[cancel, confirm]))
 
         self._update_total()
 
@@ -726,11 +722,10 @@ class _GalvanizationLoadReviewDialog(QDialog):
         style_dialog_from_parent(self, parent)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(24, 20, 24, 18)
-        layout.setSpacing(8)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(10)
         heading = QLabel(title)
-        heading.setObjectName("FilterTitle")
-        layout.addWidget(heading)
+        layout.addWidget(dialog_header(heading, "Confira o resumo antes de gravar."))
 
         try:
             load_weight_value = parse_weight(load_weight)
@@ -741,21 +736,19 @@ class _GalvanizationLoadReviewDialog(QDialog):
             f"{summary['group_count']} material(is) diferente(s)",
             f"{summary['total_quantity']:g} unidade(s)",
             f"Motorista: {driver.strip() or '-'}",
-            f"Previsao de retorno: {expected_return.strip() or '-'}",
-            f"Peso informado: {f'{load_weight_value:g} kg' if load_weight_value else 'Nao informado'}",
+            f"Previsão de retorno: {expected_return.strip() or '-'}",
+            f"Peso informado: {f'{load_weight_value:g} kg' if load_weight_value else 'Não informado'}",
         ]
+        summary_panel, summary_layout = make_panel()
         for line in lines:
-            layout.addWidget(QLabel(line))
+            summary_layout.addWidget(value_label(line))
+        layout.addWidget(summary_panel)
 
-        buttons = QHBoxLayout()
-        back = ModernButton("Voltar", "clear")
+        back = ModernButton("Voltar", "previous")
         confirm = ModernButton("Salvar carga" if is_edit else "Criar carga", "save", accent=True)
         back.clicked.connect(self.reject)
         confirm.clicked.connect(self.accept)
-        buttons.addStretch()
-        buttons.addWidget(back)
-        buttons.addWidget(confirm)
-        layout.addLayout(buttons)
+        layout.addWidget(dialog_footer(right=[back, confirm]))
 
 
 class _LegacyGalvanizationLoadDetailsDialog(QDialog):
@@ -1058,35 +1051,27 @@ class GalvanizationReturnDialog(QDialog):
 
     def _build(self):
         root = QVBoxLayout(self)
-        root.setContentsMargins(22, 20, 22, 18)
-        root.setSpacing(12)
+        root.setContentsMargins(16, 14, 16, 14)
+        root.setSpacing(10)
 
         title = QLabel(self._title_text())
-        title.setObjectName("PageTitle")
         if len(self.load_ids) == 1:
             status_text = self.service.load_status_label(self.load_data.get("status") or "")
         else:
             status_text = f"{len(self.load_ids)} cargas envolvidas"
         subtitle = QLabel(f"{status_text} · {self._scope_label()}")
-        subtitle.setObjectName("PageSubtitle")
-        root.addWidget(title)
-        root.addWidget(subtitle)
+        root.addWidget(dialog_header(title, subtitle))
 
-        self.tabs = QTabWidget()
-        self.tabs.setObjectName("ModernTabs")
+        self.tabs = CountTabWidget()
         self.tabs.addTab(self._build_return_tab(), "Retorno")
         self.tabs.addTab(self._build_items_tab(), "Itens do retorno")
         root.addWidget(self.tabs, 1)
 
-        footer = QHBoxLayout()
         self.cancel_button = ModernButton("Cancelar", "clear", variant="ghost")
         self.review_button = ModernButton("Revisar retorno", "status", accent=True)
         self.cancel_button.clicked.connect(self.reject)
         self.review_button.clicked.connect(self.review_and_confirm)
-        footer.addStretch()
-        footer.addWidget(self.cancel_button)
-        footer.addWidget(self.review_button)
-        root.addLayout(footer)
+        root.addWidget(dialog_footer(right=[self.cancel_button, self.review_button]))
 
     def _build_return_tab(self) -> QFrame:
         page = QFrame()
@@ -1515,48 +1500,43 @@ class _GalvanizationReturnReviewDialog(QDialog):
         style_dialog_from_parent(self, parent)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(24, 20, 24, 18)
-        layout.setSpacing(8)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(10)
         heading = QLabel("Registrar retorno da galvanização")
-        heading.setObjectName("FilterTitle")
-        layout.addWidget(heading)
         if len(load_ids) == 1:
-            layout.addWidget(QLabel(f"Carga #{load_ids[0]}"))
+            scope = f"Carga #{load_ids[0]}"
         else:
-            listed = ", ".join(f"#{load_id}" for load_id in load_ids)
-            layout.addWidget(QLabel(f"Cargas {listed}"))
+            scope = "Cargas " + ", ".join(f"#{load_id}" for load_id in load_ids)
+        layout.addWidget(dialog_header(heading, scope))
 
+        summary_panel, summary_layout = make_panel()
         for (_proposal_id, load_id), info in summary["proposals"].items():
             prefix = f"#{load_id} — " if len(load_ids) > 1 else ""
-            layout.addWidget(QLabel(f"{prefix}{info['proposal_number']} — {info['customer_name']}"))
+            summary_layout.addWidget(value_label(f"{prefix}{info['proposal_number']} — {info['customer_name']}"))
 
         lines = [
             f"{summary['group_count']} material(is) diferente(s)",
             f"{summary['total_quantity']:g} unidade(s) retornando",
-            f"{summary['known_weight']:g} kg conhecidos" if summary["known_weight"] else "Peso conhecido nao informado",
+            f"{summary['known_weight']:g} kg conhecidos" if summary["known_weight"] else "Peso conhecido não informado",
         ]
         if summary["items_no_weight"]:
             lines.append(f"{summary['items_no_weight']} item(ns) sem peso")
         for line in lines:
-            layout.addWidget(QLabel(line))
+            summary_layout.addWidget(value_label(line))
+        layout.addWidget(summary_panel)
 
-        warning = QLabel(
-            "Somente os saldos efetivamente registrados neste retorno seguirão "
-            "para as próximas etapas conforme as regras atuais do sistema."
+        layout.addWidget(
+            note_box(
+                "Somente os saldos efetivamente registrados neste retorno seguirão "
+                "para as próximas etapas conforme as regras atuais do sistema."
+            )
         )
-        warning.setObjectName("Caption")
-        warning.setWordWrap(True)
-        layout.addWidget(warning)
 
-        buttons = QHBoxLayout()
-        back = ModernButton("Voltar", "clear")
+        back = ModernButton("Voltar", "previous")
         confirm = ModernButton("Confirmar retorno", "status", accent=True)
         back.clicked.connect(self.reject)
         confirm.clicked.connect(self.accept)
-        buttons.addStretch()
-        buttons.addWidget(back)
-        buttons.addWidget(confirm)
-        layout.addLayout(buttons)
+        layout.addWidget(dialog_footer(right=[back, confirm]))
 
 
 class GalvanizationLoadManagerDialog(QDialog):
@@ -1573,8 +1553,8 @@ class GalvanizationLoadManagerDialog(QDialog):
 
     def _build(self):
         root = QVBoxLayout(self)
-        root.setContentsMargins(22, 20, 22, 18)
-        root.setSpacing(12)
+        root.setContentsMargins(16, 14, 16, 14)
+        root.setSpacing(10)
 
         filters = QFrame()
         filters.setObjectName("FilterBar")
@@ -1629,12 +1609,11 @@ class GalvanizationLoadManagerDialog(QDialog):
             self.table.setColumnWidth(col, width)
         root.addWidget(self.table, 2)
 
-        buttons = QHBoxLayout()
         new = ModernButton("Nova carga", "new", accent=True)
         edit = ModernButton("Editar carga", "edit")
         release = ModernButton("Liberar carga", "save")
         returned = ModernButton("Registrar retorno", "load")
-        refresh = ModernButton("Atualizar", "search")
+        refresh = ModernButton("Atualizar", "refresh")
         close = ModernButton("Fechar", "clear", variant="ghost")
         new.clicked.connect(self.new_load)
         edit.clicked.connect(self.edit_load)
@@ -1642,14 +1621,15 @@ class GalvanizationLoadManagerDialog(QDialog):
         returned.clicked.connect(self.return_load)
         refresh.clicked.connect(self.load)
         close.clicked.connect(self.accept)
-        buttons.addWidget(new)
-        buttons.addWidget(edit)
-        buttons.addWidget(release)
-        buttons.addWidget(returned)
-        buttons.addWidget(refresh)
-        buttons.addStretch()
-        buttons.addWidget(close)
-        root.addLayout(buttons)
+        # Cabecalho-cartao no topo: secundarias, a unica primaria e Fechar por ultimo.
+        root.insertWidget(
+            0,
+            dialog_header(
+                "Cargas de galvanização",
+                "Monte, libere e acompanhe o retorno das cargas enviadas para galvanização.",
+                actions=[edit, release, returned, refresh, new, close],
+            ),
+        )
         self.table.cellClicked.connect(self.handle_table_click)
         self.table.cellDoubleClicked.connect(self.open_load_details_from_row)
         self.load_search.textChanged.connect(self.load)

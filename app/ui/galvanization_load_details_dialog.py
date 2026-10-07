@@ -16,7 +16,6 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMenu,
     QMessageBox,
-    QTabWidget,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -28,6 +27,7 @@ from app.ui.background_worker import start_worker
 from app.ui.components.kpi_card import KpiCard
 from app.ui.components.modern_button import ModernButton
 from app.ui.components.status_badge import StatusBadge
+from app.ui.components.detail_widgets import CountTabWidget
 from app.ui.dialog_utils import apply_large_dialog_geometry, style_dialog_from_parent
 from app.ui.icons import make_icon
 from app.ui.styles import status_color
@@ -532,17 +532,17 @@ class GalvanizationLoadDetailsDialog(QDialog):
 
     def _build(self) -> None:
         root = QVBoxLayout(self)
-        root.setContentsMargins(22, 20, 22, 18)
-        root.setSpacing(12)
+        root.setContentsMargins(16, 14, 16, 14)
+        root.setSpacing(10)
 
         header = QFrame()
-        header.setObjectName("FilterBar")
+        header.setObjectName("DetailPanel")
         header_layout = QGridLayout(header)
-        header_layout.setContentsMargins(16, 14, 16, 14)
+        header_layout.setContentsMargins(18, 12, 14, 12)
         header_layout.setHorizontalSpacing(12)
-        header_layout.setVerticalSpacing(8)
+        header_layout.setVerticalSpacing(10)
         self.title_label = QLabel(f"Carga #{self.load_id}")
-        self.title_label.setObjectName("PageTitle")
+        self.title_label.setObjectName("DetailTitle")
         header_layout.addWidget(self.title_label, 0, 0)
         badge_bg, badge_fg = status_color("", self.service.palette, "GALVANIZACAO")
         self.status_badge = StatusBadge("Carregando...", badge_bg, badge_fg)
@@ -555,6 +555,10 @@ class GalvanizationLoadDetailsDialog(QDialog):
         self.actions_button = ModernButton("Ações", "status", accent=True)
         self.actions_button.setEnabled(False)
         header_layout.addWidget(self.actions_button, 0, 4)
+        # "Fechar" sempre por ultimo no cabecalho-cartao.
+        close_button = ModernButton("Fechar", "clear", variant="ghost")
+        close_button.clicked.connect(self.accept)
+        header_layout.addWidget(close_button, 0, 5)
 
         info_layout = QGridLayout()
         info_layout.setHorizontalSpacing(26)
@@ -573,14 +577,14 @@ class GalvanizationLoadDetailsDialog(QDialog):
             column = index % 4
             row = (index // 4) * 2
             caption = QLabel(label)
-            caption.setObjectName("Caption")
+            caption.setObjectName("KeyLabel")
             value = QLabel("—")
-            value.setObjectName("FilterTitle")
+            value.setObjectName("ValueLabel")
             self.header_values[key] = value
             info_layout.addWidget(caption, row, column)
             info_layout.addWidget(value, row + 1, column)
             info_layout.setColumnStretch(column, 1)
-        header_layout.addLayout(info_layout, 1, 0, 1, 5)
+        header_layout.addLayout(info_layout, 1, 0, 1, 6)
         root.addWidget(header)
 
         self.loading_label = QLabel("Carregando detalhes da carga...")
@@ -593,8 +597,7 @@ class GalvanizationLoadDetailsDialog(QDialog):
         self.error_label.setVisible(False)
         root.addWidget(self.error_label)
 
-        self.tabs = QTabWidget()
-        self.tabs.setObjectName("ModernTabs")
+        self.tabs = CountTabWidget()
         self.summary_tab = LoadSummaryTab(self.service)
         self.proposals_tab = LoadProposalsTab(self.service)
         self.items_tab = LoadItemsTab(self.service)
@@ -607,13 +610,6 @@ class GalvanizationLoadDetailsDialog(QDialog):
         self.tabs.addTab(self.history_tab, "Histórico")
         self.tabs.setEnabled(False)
         root.addWidget(self.tabs, 1)
-
-        footer = QHBoxLayout()
-        footer.addStretch()
-        close_button = ModernButton("Fechar", "clear", variant="ghost")
-        close_button.clicked.connect(self.accept)
-        footer.addWidget(close_button)
-        root.addLayout(footer)
 
     def refresh(self) -> None:
         if self._loading:
