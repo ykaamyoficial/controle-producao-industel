@@ -145,6 +145,13 @@ class Settings(BaseSettings):
     notifications_delivery_interval_seconds: float = Field(default=45.0, ge=5, alias="NOTIFICATIONS_DELIVERY_INTERVAL_SECONDS")
     notifications_digest_hour: int = Field(default=7, ge=0, le=23, alias="NOTIFICATIONS_DIGEST_HOUR")
     notifications_email_max_attempts: int = Field(default=5, ge=1, alias="NOTIFICATIONS_EMAIL_MAX_ATTEMPTS")
+    # Retencao de dados de autenticacao (api/app/modules/auth/retention.py).
+    # Sessoes ja EXPIRADAS e eventos de token (renovacao/reuso) sao apagados apos
+    # estes prazos; logins, trocas de senha e acoes de negocio nunca sao apagados.
+    auth_retention_enabled: bool = Field(default=True, alias="AUTH_RETENTION_ENABLED")
+    auth_session_retention_days: int = Field(default=30, ge=7, alias="AUTH_SESSION_RETENTION_DAYS")
+    security_token_event_retention_days: int = Field(default=30, ge=1, alias="SECURITY_TOKEN_EVENT_RETENTION_DAYS")
+    auth_retention_interval_hours: float = Field(default=24.0, ge=1, alias="AUTH_RETENTION_INTERVAL_HOURS")
     smtp_host: str = Field(default="", alias="SMTP_HOST")
     smtp_port: int = Field(default=587, ge=1, le=65535, alias="SMTP_PORT")
     smtp_user: str = Field(default="", alias="SMTP_USER")

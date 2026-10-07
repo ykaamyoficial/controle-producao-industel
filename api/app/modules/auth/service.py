@@ -127,6 +127,13 @@ async def refresh(session: AsyncSession, refresh_token: str, *, request_id: str 
         raise AuthenticationError(error_codes.TOKEN_INVALID, "Token invalido.")
     user = await repository.get_user_by_id(session, auth_session.user_id)
     if auth_session.revoked_at is not None:
+        if auth_session.revoke_reason == "reuse_detected":
+            # Familia ja revogada por reuso: e o MESMO token morto sendo
+            # apresentado de novo (ex.: agente em segundo plano que nao
+            # desiste). O primeiro reuso ja revogou a familia e gerou o
+            # evento; repetir so enche security_events (78% da tabela em
+            # producao eram estas repeticoes) sem acrescentar informacao.
+            raise AuthenticationError(error_codes.REFRESH_TOKEN_REUSED, "Token reutilizado.")
         await session.execute(update(AuthSession).where(AuthSession.token_family == auth_session.token_family).values(revoked_at=utcnow(), revoke_reason="reuse_detected"))
         await repository.create_security_event(session, "TOKEN_REUSE_DETECTED", actor_user_id=auth_session.user_id, target_user_id=auth_session.user_id, request_id=request_id, ip_address=ip_address, user_agent=user_agent, success=False)
         await session.commit()

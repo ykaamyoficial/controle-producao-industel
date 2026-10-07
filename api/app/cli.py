@@ -144,12 +144,24 @@ async def reset_proposals_development_data(_args: argparse.Namespace) -> int:
     return 0
 
 
+async def purge_auth_data_command(args: argparse.Namespace) -> int:
+    """Retencao manual. Por padrao so MOSTRA o que apagaria; `--apply` apaga."""
+    from api.app.modules.auth.retention import purge_auth_data
+
+    result = await purge_auth_data(session_days=args.session_days, token_event_days=args.token_event_days, dry_run=not args.apply)
+    verb = "Apagadas" if args.apply else "Seriam apagadas (nada foi apagado; use --apply)"
+    print(f"{verb}: {result.sessions} sessoes de login expiradas e {result.token_events} eventos de token.")
+    return 0
+
+
 async def _run(args: argparse.Namespace) -> int:
     try:
         if args.command == "create-admin":
             return await create_admin(args)
         if args.command == "reset-proposals-development-data":
             return await reset_proposals_development_data(args)
+        if args.command == "purge-auth-data":
+            return await purge_auth_data_command(args)
         return 2
     finally:
         await dispose_engine()
@@ -160,6 +172,10 @@ def main() -> None:
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("create-admin", help="Cria manualmente o primeiro administrador da API.")
     subparsers.add_parser("reset-proposals-development-data", help="Remove dados de propostas/itens apenas em development ou test.")
+    purge = subparsers.add_parser("purge-auth-data", help="Apaga sessoes de login expiradas e eventos de token antigos (mostra antes; --apply apaga).")
+    purge.add_argument("--apply", action="store_true", help="Apaga de fato; sem isso so conta.")
+    purge.add_argument("--session-days", type=int, default=None, help="Prazo das sessoes expiradas (padrao: AUTH_SESSION_RETENTION_DAYS).")
+    purge.add_argument("--token-event-days", type=int, default=None, help="Prazo dos eventos de token (padrao: SECURITY_TOKEN_EVENT_RETENTION_DAYS).")
     raise SystemExit(asyncio.run(_run(parser.parse_args())))
 
 

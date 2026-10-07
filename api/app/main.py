@@ -136,6 +136,15 @@ def create_app() -> FastAPI:
         else:
             logging.getLogger("api.notifications").info("notifications_email_worker_desligado | motivo=sem_smtp_configurado")
 
+        # Retencao de dados de autenticacao: uma passada por dia, em lotes.
+        retention_task = None
+        if settings.auth_retention_enabled:
+            from api.app.modules.auth.retention import run_retention_loop
+
+            retention_task = asyncio.create_task(run_retention_loop())
+        else:
+            logging.getLogger("api.retention").info("auth_retention_desligada | motivo=AUTH_RETENTION_ENABLED=false")
+
         yield
 
         drain_task.cancel()
@@ -143,6 +152,12 @@ def create_app() -> FastAPI:
             await drain_task
         except asyncio.CancelledError:
             pass
+        if retention_task is not None:
+            retention_task.cancel()
+            try:
+                await retention_task
+            except asyncio.CancelledError:
+                pass
         if notifications_delivery_task is not None:
             notifications_delivery_task.cancel()
             try:
