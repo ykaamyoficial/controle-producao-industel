@@ -29,11 +29,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /build
 
-# Dependencias deterministicas (Secao 12): instala exatamente o que
-# requirements*.txt fixa, sem tocar codigo da aplicacao ainda -- cache de
+# Dependencias deterministicas (Secao 12): instala exatamente o conjunto
+# travado em requirements-lock.txt (constraints; requirements*.txt so declaram
+# faixas), sem tocar codigo da aplicacao ainda -- cache de
 # camada so invalida quando os proprios requirements mudam, nao a cada commit.
-COPY api/requirements.txt api/requirements-dev.txt ./
-RUN pip install --prefix=/install -r requirements-dev.txt
+COPY api/requirements.txt api/requirements-dev.txt api/requirements-lock.txt ./
+RUN pip install --prefix=/install -r requirements-dev.txt -c requirements-lock.txt
 
 
 FROM python:3.12-slim@sha256:229a2c5bfa27522db7815ea81f9bed70af17ccb9de9fc7ad142b1877b5830d36 AS runtime
