@@ -141,7 +141,8 @@ class ProposalsViewTests(_Case):
 class StorageProposalsReadTests(_Case):
     def setUp(self):
         super().setUp()
-        self.storage = OfficialProposalApiStorage()
+        # Token store de mentira: o padrao usa DPAPI, que so existe no Windows (o CI roda em Linux).
+        self.storage = OfficialProposalApiStorage(token_store=SimpleNamespace(get_refresh_token=lambda: None, save_refresh_token=lambda _value: None, clear=lambda: None))
         self.api_calls: list[dict] = []
 
         def fake_client():
