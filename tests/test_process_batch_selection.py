@@ -303,7 +303,7 @@ class ProcessBatchSelectionTests(unittest.TestCase):
         self._select_visible_row(page)
         page.status.addItem("Em produção", "INICIADO")
         page.status.setCurrentIndex(page.status.findData("INICIADO"))
-        page.prazo.setCurrentText("VENCIDOS")
+        page.prazo.setCurrentIndex(page.prazo.findData("VENCIDOS"))
         with patch("app.ui.process_page.start_worker", side_effect=_run_synchronously):
             page.refresh()
         self.assertEqual(page.batch_selection.selected_ids, {10})

@@ -223,12 +223,71 @@ class _FrameService:
     def chat_notifications(self, limit=30):
         return []
 
+    # ---- o minimo que ProcessPage/ModernTable pedem ----------------------
+    _STAGES = [
+        ("NAO_LIBERADO", "Não liberado", "CONTROLE GERAL"),
+        ("LIBERADO_PRODUCAO", "Liberado para produção", "CONTROLE GERAL"),
+        ("EM_PRODUCAO", "Em produção", "PRODUCAO"),
+        ("EM_GALVANIZACAO", "Em galvanização", "GALVANIZACAO"),
+        ("EM_EXPEDICAO", "Em expedição", "EXPEDICAO"),
+        ("ENTREGUE", "Entregue", "EXPEDICAO"),
+        ("CANCELADA", "Cancelada", "CONTROLE GERAL"),
+    ]
+
+    def can_edit_area(self, _area):
+        return True
+
+    def can_edit_process(self):
+        return True
+
+    def list_status(self, _area=None):
+        return ["NAO_LIBERADO", "LIBERADO_PRODUCAO", "CANCELADA"]
+
+    def status_label(self, status):
+        return {"NAO_LIBERADO": "Não liberado", "LIBERADO_PRODUCAO": "Liberado", "CANCELADA": "Cancelada"}.get(status, status)
+
+    def area_status_label(self, _area, status):
+        return next((label for key, label, _a in self._STAGES if key == status), status)
+
+    def current_location(self, row):
+        key, label, area = self._STAGES[row["_stage"]]
+        return area, label, key
+
+    def display_cell(self, key, value, row=None):
+        if key == "status_localizacao" and row is not None:
+            return self._STAGES[row["_stage"]][1]
+        return "" if value is None else str(value)
+
+    def process_rows(self, _area, _filters):
+        from datetime import date, timedelta
+
+        clients = ["Torres Norte Telecom", "Rede Sul Energia", "Vale Verde Transmissão", "Conecta Infra", "Atlas Estruturas"]
+        sites = ["SP-CAMP-014", "MG-UBER-203", "PR-LOND-077", "BA-FEIR-118", "GO-ANAP-052"]
+        rows = []
+        for i in range(24):
+            stage = (i * 3) % len(self._STAGES)
+            key = self._STAGES[stage][0]
+            rows.append(
+                {
+                    "id": 100 + i,
+                    "proposta": f"CP {5600 + i * 3:05d}",
+                    "cliente": clients[i % len(clients)],
+                    "obra_site": sites[(i * 2) % len(sites)],
+                    "prazo_entrega": (date.today() + timedelta(days=(i * 5) % 37 - 9)).strftime("%d/%m/%Y"),
+                    "status_geral": "CANCELADA" if key == "CANCELADA" else "NAO_LIBERADO" if key == "NAO_LIBERADO" else "LIBERADO_PRODUCAO",
+                    "status_expedicao": "ENTREGUE" if key == "ENTREGUE" else "",
+                    "_stage": stage,
+                }
+            )
+        return rows
+
 
 class FramePreview(QWidget):
-    """Moldura do programa (Onda 1): barra superior, barra lateral, resumo de
-    login, aviso interno e botao flutuante de chat, com um servico falso."""
+    """Moldura do programa (Onda 1) com a pagina Controle Geral dentro
+    (Onda 2), tudo com um servico falso. `estado` escolhe o que a pagina
+    mostra: normal, lote, vazio ou carregando."""
 
-    def __init__(self, palette_name: str):
+    def __init__(self, palette_name: str, estado: str = "normal"):
         super().__init__()
         from app.ui.components.floating_chat_button import FloatingChatButton
         from app.ui.components.login_summary_banner import LoginSummaryBanner
@@ -261,14 +320,33 @@ class FramePreview(QWidget):
         content = QWidget()
         content.setObjectName("MainContent")
         content_layout = QVBoxLayout(content)
-        content_layout.setContentsMargins(20, 20, 20, 20)
-        banner = LoginSummaryBanner(service, "Henrique", 5, 2, 3)
-        content_layout.addWidget(banner)
-        content_layout.addStretch(1)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        from app.ui.process_page import ProcessPage
+
+        self.page = ProcessPage(service, "CONTROLE GERAL", "Controle Geral")
+        rows = service.process_rows("CONTROLE GERAL", {})
+        rows[1]["_chat_unread"] = 3
+        self.page._reload_status_options()
+        if estado == "carregando":
+            self.page._set_loading(True)
+        else:
+            self.page._refresh_success((rows, {101: {"unread_count": 3, "message_count": 5}, 104: {"message_count": 2}}))
+        if estado == "lote":
+            self.page.activate_batch_selection()
+            for row in rows[2:5]:
+                self.page.batch_selection.toggle(row["id"], row)
+        elif estado == "vazio":
+            self.page.search.setText("proposta inexistente")
+        elif estado == "normal":
+            self.page.table.selectRow(3)
+        content_layout.addWidget(self.page)
+        self.banner = LoginSummaryBanner(service, "Henrique", 5, 2, 3, parent=self)
+        self.banner.setVisible(estado == "banner")
         body.addWidget(content, 1)
         root.addWidget(body_frame, 1)
         self.toast = InAppToast(service, self, "Marcos Silva - CP 05672", "Carga CG-0412 retornou da galvanização, pode separar.", {})
         self.toast._timer.stop()
+        self.toast.setVisible(estado == "banner")
         self.chat_button = FloatingChatButton(service, parent=self)
         self.chat_button.set_unread_count(5)
 
@@ -277,6 +355,8 @@ class FramePreview(QWidget):
         self.toast.adjustSize()
         self.toast.move(self.width() - self.toast.width() - 16, self.height() - self.toast.height() - 96)
         self.toast.raise_()
+        self.banner.setGeometry(256, 60, self.width() - 276, self.banner.sizeHint().height())
+        self.banner.raise_()
         self.chat_button.move(self.width() - 80, self.height() - 80)
         self.chat_button.raise_()
 
@@ -285,14 +365,20 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--tema", choices=tuple(OFFICIAL_COLOR_PALETTES), default="claro")
     parser.add_argument("--moldura", action="store_true", help="mostra a moldura do programa em vez dos componentes")
+    parser.add_argument(
+        "--estado",
+        choices=("normal", "lote", "vazio", "carregando", "banner"),
+        default="normal",
+        help="com --moldura: estado da pagina Controle Geral (banner mostra tambem o resumo de login e o aviso)",
+    )
     parser.add_argument("--shot", metavar="ARQUIVO.png")
     args = parser.parse_args()
 
     app = QApplication(sys.argv[:1])
     family = load_app_fonts()
     if args.moldura:
-        preview = FramePreview(args.tema)
-        preview.resize(1200, 700)
+        preview = FramePreview(args.tema, args.estado)
+        preview.resize(1366, 740)
         preview.show()
         if args.shot:
             def capture_frame():
