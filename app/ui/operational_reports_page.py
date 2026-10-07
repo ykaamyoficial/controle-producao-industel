@@ -28,47 +28,49 @@ from PySide6.QtWidgets import (
 
 from app.models.operational_report_table_model import OperationalReportTableModel
 from app.ui.components.area_identity import style_area_header, style_area_title
+from app.ui.components.detail_widgets import key_label, kv_grid, make_panel
+from app.ui.components.dialog_shell import dialog_header
 from app.ui.components.kpi_card import KpiCard
 from app.ui.components.modern_button import ModernButton
 from app.ui.components.modern_table import ModernTable
 from app.ui.components.operational_layout import (
-    OPERATIONAL_ACTION_SPACING,
     OPERATIONAL_FIELD_HORIZONTAL_SPACING,
     OPERATIONAL_FIELD_VERTICAL_SPACING,
     OPERATIONAL_PAGE_MARGINS,
     OPERATIONAL_SECTION_SPACING,
 )
-from app.ui.components.operational_header import configure_operational_header
+from app.ui.components.page_header import page_header
 from app.ui.dialog_utils import apply_large_dialog_geometry, style_dialog_from_parent
+from app.ui.format_utils import accent_label, reliability_label
 from app.ui.table_utils import configure_wrapping_table, item_product_code, resize_rows_to_contents
 
 
 AREA_OPTIONS = [
-    ("Producao", "PRODUCAO"),
-    ("Galvanizacao", "GALVANIZACAO"),
-    ("Expedicao", "EXPEDICAO"),
+    ("Produção", "PRODUCAO"),
+    ("Galvanização", "GALVANIZACAO"),
+    ("Expedição", "EXPEDICAO"),
     ("Almoxarifado", "ALMOXARIFADO"),
     ("Remanejamentos", "REMANEJAMENTOS"),
 ]
 
 REPORT_TYPES = {
-    "PRODUCAO": [("Relatorio de producao", "PADRAO")],
-    "GALVANIZACAO": [("Relatorio de galvanizacao", "PADRAO")],
-    "EXPEDICAO": [("Relatorio de expedicao", "PADRAO")],
-    "ALMOXARIFADO": [("Relatorio de almoxarifado", "PADRAO")],
-    "REMANEJAMENTOS": [("Relatorio de remanejamentos", "PADRAO")],
+    "PRODUCAO": [("Relatório de produção", "PADRAO")],
+    "GALVANIZACAO": [("Relatório de galvanização", "PADRAO")],
+    "EXPEDICAO": [("Relatório de expedição", "PADRAO")],
+    "ALMOXARIFADO": [("Relatório de almoxarifado", "PADRAO")],
+    "REMANEJAMENTOS": [("Relatório de remanejamentos", "PADRAO")],
 }
 
 TABLE_COLUMNS = {
     "PRODUCAO": [
         ("proposta", "Proposta"),
         ("cliente", "Cliente"),
-        ("status_producao", "Status producao"),
+        ("status_producao", "Status produção"),
         ("obra_site", "Obra/Site"),
         ("peso_produzido_atual", "Peso produzido"),
         ("lote", "Lote"),
         ("tipo_processo", "Tipo"),
-        ("data_final_producao", "Data producao"),
+        ("data_final_producao", "Data produção"),
         ("total_itens", "Itens"),
         ("itens_produzidos", "Produzidos"),
         ("peso_total_itens", "Peso total"),
@@ -92,7 +94,7 @@ TABLE_COLUMNS = {
     "EXPEDICAO": [
         ("proposta", "Proposta"),
         ("cliente", "Cliente"),
-        ("status_expedicao", "Status expedicao"),
+        ("status_expedicao", "Status expedição"),
         ("obra_site", "Obra/Site"),
         ("kg_entregue_atual", "Kg entregue"),
         ("lote", "Lote"),
@@ -110,23 +112,23 @@ TABLE_COLUMNS = {
         ("lote", "Lote"),
         ("tipo_processo", "Tipo"),
         ("necessita_almoxarifado", "Necessita"),
-        ("data_separacao", "Separacao"),
-        ("observacoes_almoxarifado", "Observacao"),
+        ("data_separacao", "Separação"),
+        ("observacoes_almoxarifado", "Observação"),
     ],
     "REMANEJAMENTOS": [
         ("data_hora", "Data"),
-        ("usuario", "Usuario"),
+        ("usuario", "Usuário"),
         ("proposta_origem", "Origem"),
         ("cliente_origem", "Cliente origem"),
         ("proposta_destino", "Destino"),
         ("cliente_destino", "Cliente destino"),
         ("numero_item", "Item"),
-        ("codigo_produto", "Codigo"),
-        ("item_descricao", "Descricao"),
+        ("codigo_produto", "Código"),
+        ("item_descricao", "Descrição"),
         ("quantidade", "Qtd."),
         ("peso_remanejado", "Peso remanej."),
-        ("proposta_reposicao", "Reposicao"),
-        ("observacao", "Observacao"),
+        ("proposta_reposicao", "Reposição"),
+        ("observacao", "Observação"),
     ],
 }
 
@@ -145,44 +147,21 @@ class OperationalReportsPage(QWidget):
     def _build(self) -> None:
         root = QVBoxLayout(self)
         root.setContentsMargins(*OPERATIONAL_PAGE_MARGINS)
-        root.setSpacing(OPERATIONAL_SECTION_SPACING)
+        root.setSpacing(0)
 
-        filters = QFrame()
-        self.filters_header = filters
-        fl = QVBoxLayout(filters)
-        configure_operational_header(
-            filters,
-            fl,
-            margins=(16, 12, 16, 10),
-            spacing=8,
-            area="PRODUCAO",
-            palette=self.service.palette,
-        )
-
-        header = QHBoxLayout()
-        title = QLabel("Relatórios Operacionais")
-        title.setObjectName("FilterTitle")
-        self.title_label = title
-        style_area_title(title, "PRODUCAO", self.service.palette)
-        subtitle = QLabel("Consultas por área para acompanhar produção, galvanização, expedição, almoxarifado e remanejamentos.")
-        subtitle.setObjectName("Caption")
-        subtitle.setWordWrap(True)
-        header.addWidget(title)
-        header.addStretch()
         self.reliability_badge = QLabel("Confiabilidade: -")
         self.reliability_badge.setObjectName("TopInfoChip")
-        header.addWidget(self.reliability_badge)
-        fl.addLayout(header)
-        fl.addWidget(subtitle)
 
         self.area = QComboBox()
         for label, value in AREA_OPTIONS:
             self.area.addItem(label, value)
         self.report_type = QComboBox()
         self.start = QLineEdit()
-        self.start.setPlaceholderText("AAAA-MM-DD ou DD/MM/AAAA")
+        self.start.setPlaceholderText("Data inicial")
+        self.start.setToolTip("Aceita AAAA-MM-DD ou DD/MM/AAAA")
         self.end = QLineEdit()
-        self.end.setPlaceholderText("AAAA-MM-DD ou DD/MM/AAAA")
+        self.end.setPlaceholderText("Data final")
+        self.end.setToolTip("Aceita AAAA-MM-DD ou DD/MM/AAAA")
         self.proposal = QLineEdit()
         self.proposal.setPlaceholderText("Proposta")
         self.client = QLineEdit()
@@ -194,9 +173,10 @@ class OperationalReportsPage(QWidget):
         self.status = QLineEdit()
         self.status.setPlaceholderText("Status")
 
+        # Um unico botao primario: gerar o relatorio. Exportar fica secundario.
         self.generate_btn = ModernButton("Gerar relatório", "search", accent=True)
         self.clear_btn = ModernButton("Limpar filtros", "clear", variant="ghost")
-        self.export_csv_btn = ModernButton("Exportar CSV", "excel", accent=True)
+        self.export_csv_btn = ModernButton("Exportar CSV", "excel")
         self.export_pdf_btn = ModernButton("Exportar PDF", "pdf")
         self.export_pdf_btn.setEnabled(False)
         self.export_pdf_btn.setToolTip("Planejado para versão futura")
@@ -205,51 +185,59 @@ class OperationalReportsPage(QWidget):
         self.export_csv_btn.clicked.connect(self.export_csv)
         self.area.currentIndexChanged.connect(self._sync_report_types)
 
+        filters = page_header(
+            "Relatórios Operacionais",
+            "Consultas por área para acompanhar produção, galvanização, expedição, almoxarifado e remanejamentos.",
+            side=[self.reliability_badge],
+            actions=[self.clear_btn, self.export_pdf_btn, self.export_csv_btn, self.generate_btn],
+        )
+        self.filters_header = filters
+        self.title_label = filters.title_label
+        style_area_header(filters, "PRODUCAO", self.service.palette)
+        style_area_title(self.title_label, "PRODUCAO", self.service.palette)
+
+        # Sem rotulo ao lado do campo: o placeholder e as opcoes explicam.
         grid = QGridLayout()
         grid.setHorizontalSpacing(OPERATIONAL_FIELD_HORIZONTAL_SPACING)
         grid.setVerticalSpacing(OPERATIONAL_FIELD_VERTICAL_SPACING)
-        self._add_field(grid, 0, 0, "Area", self.area)
-        self._add_field(grid, 0, 2, "Tipo de relatorio", self.report_type)
-        self._add_field(grid, 0, 4, "Data inicial", self.start)
-        self._add_field(grid, 0, 6, "Data final", self.end)
+        self._add_field(grid, 0, 0, "Área", self.area)
+        self._add_field(grid, 0, 1, "Tipo de relatório", self.report_type)
+        self._add_field(grid, 0, 2, "Data inicial", self.start)
+        self._add_field(grid, 0, 3, "Data final", self.end)
+        self._add_field(grid, 0, 4, "Status", self.status)
         self._add_field(grid, 1, 0, "Proposta", self.proposal)
-        self._add_field(grid, 1, 2, "Cliente", self.client)
-        self._add_field(grid, 1, 4, "Obra/Site", self.site)
-        self._add_field(grid, 1, 6, "Lote", self.lot)
-        self._add_field(grid, 1, 8, "Status", self.status)
-        for column in (1, 3, 5, 7, 9):
+        self._add_field(grid, 1, 1, "Cliente", self.client)
+        self._add_field(grid, 1, 2, "Obra/Site", self.site)
+        self._add_field(grid, 1, 3, "Lote", self.lot)
+        for column in range(5):
             grid.setColumnStretch(column, 1)
-        fl.addLayout(grid)
-
-        actions = QHBoxLayout()
-        actions.setSpacing(OPERATIONAL_ACTION_SPACING)
-        actions.addStretch()
-        actions.addWidget(self.generate_btn)
-        actions.addWidget(self.clear_btn)
-        actions.addWidget(self.export_csv_btn)
-        actions.addWidget(self.export_pdf_btn)
-        fl.addLayout(actions)
+        filters.body_layout.addLayout(grid)
         root.addWidget(filters)
 
-        self.cards_frame = QFrame()
-        self.cards_frame.setObjectName("Panel")
+        content = QWidget()
+        body = QVBoxLayout(content)
+        body.setContentsMargins(16, 12, 16, 16)
+        body.setSpacing(OPERATIONAL_SECTION_SPACING)
+        root.addWidget(content, 1)
+
+        self.cards_frame = QWidget()
         self.cards_layout = QHBoxLayout(self.cards_frame)
-        self.cards_layout.setContentsMargins(12, 12, 12, 12)
-        self.cards_layout.setSpacing(10)
-        root.addWidget(self.cards_frame)
+        self.cards_layout.setContentsMargins(0, 0, 0, 0)
+        self.cards_layout.setSpacing(12)
+        body.addWidget(self.cards_frame)
 
         self.warning_box = QFrame()
-        self.warning_box.setObjectName("Panel")
+        self.warning_box.setObjectName("SoftPanel")
         warning_layout = QVBoxLayout(self.warning_box)
         warning_layout.setContentsMargins(14, 10, 14, 10)
+        warning_layout.setSpacing(2)
         warning_title = QLabel("Avisos e confiabilidade")
-        warning_title.setObjectName("FilterTitle")
-        self.warning_text = QLabel("Gere um relatório para visualizar os avisos técnicos.")
-        self.warning_text.setObjectName("Caption")
+        warning_title.setObjectName("PanelTitle")
+        self.warning_text = key_label("Gere um relatório para visualizar os avisos técnicos.")
         self.warning_text.setWordWrap(True)
         warning_layout.addWidget(warning_title)
         warning_layout.addWidget(self.warning_text)
-        root.addWidget(self.warning_box)
+        body.addWidget(self.warning_box)
 
         self.table = ModernTable(self.service)
         self.table.status_shortcut_enabled = False
@@ -257,15 +245,14 @@ class OperationalReportsPage(QWidget):
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self.open_row_menu)
         self.table.doubleClicked.connect(self.open_selected_details)
-        root.addWidget(self.table, 1)
+        body.addWidget(self.table, 1)
 
         self._sync_report_types()
 
-    def _add_field(self, layout: QGridLayout, row: int, column: int, label_text: str, widget: QWidget) -> None:
-        label = QLabel(label_text)
-        label.setObjectName("FieldLabel")
-        layout.addWidget(label, row, column)
-        layout.addWidget(widget, row, column + 1)
+    def _add_field(self, layout: QGridLayout, row: int, column: int, name: str, widget: QWidget) -> None:
+        widget.setAccessibleName(name)
+        widget.setMinimumHeight(34)
+        layout.addWidget(widget, row, column)
 
     def _sync_report_types(self) -> None:
         area = self.area.currentData() or "PRODUCAO"
@@ -322,13 +309,12 @@ class OperationalReportsPage(QWidget):
             value = card.get("valor", 0)
             unit = card.get("unidade", "")
             display = f"{value} {unit}".strip()
-            widget = KpiCard(card.get("titulo", "-"), display, "reports", colors[index % len(colors)])
+            widget = KpiCard(accent_label(card.get("titulo", "-")), display, "reports", colors[index % len(colors)])
             widget.setCursor(Qt.PointingHandCursor)
             widget.setToolTip("Clique para ver os registros relacionados.")
             widget.mousePressEvent = lambda event, selected=card: self.open_card_drilldown(selected)
-            self.cards_layout.addWidget(widget)
+            self.cards_layout.addWidget(widget, 1)
             self._card_widgets.append(widget)
-        self.cards_layout.addStretch()
 
     def open_card_drilldown(self, card: dict[str, Any]) -> None:
         if not self.current_report:
@@ -339,7 +325,7 @@ class OperationalReportsPage(QWidget):
         columns = TABLE_COLUMNS.get(area) or self._columns_from_rows(rows)
         dialog = OperationalRowsDialog(
             self.service,
-            f"{title} - {area.title()}",
+            f"{accent_label(title)} - {self.area.currentText()}",
             rows,
             columns,
             self,
@@ -449,8 +435,8 @@ class OperationalReportsPage(QWidget):
             items,
             [
                 ("numero_item", "Item"),
-                ("codigo_produto", "Codigo"),
-                ("descricao", "Descricao"),
+                ("codigo_produto", "Código"),
+                ("descricao", "Descrição"),
                 ("quantidade", "Qtd."),
                 ("peso", "Peso unit."),
                 ("produzido", "Produzido"),
@@ -465,15 +451,15 @@ class OperationalReportsPage(QWidget):
             QMessageBox.information(self, "Relatórios Operacionais", "Não foi possível localizar o histórico.")
             return
         self._show_table_dialog(
-            "Historico resumido",
+            "Histórico resumido",
             self.service.process_history_rows(process_id),
             [
-                ("area", "Area"),
+                ("area", "Área"),
                 ("status_anterior", "Anterior"),
                 ("status_novo", "Novo"),
                 ("data_hora", "Quando"),
-                ("usuario", "Usuario"),
-                ("observacao", "Observacao"),
+                ("usuario", "Usuário"),
+                ("observacao", "Observação"),
             ],
         )
 
@@ -485,15 +471,15 @@ class OperationalReportsPage(QWidget):
             rows,
             [
                 ("data_hora", "Data"),
-                ("usuario", "Usuario"),
+                ("usuario", "Usuário"),
                 ("proposta_origem", "Origem"),
                 ("proposta_destino", "Destino"),
                 ("numero_item", "Item"),
-                ("codigo_produto", "Codigo"),
-                ("item_descricao", "Descricao"),
+                ("codigo_produto", "Código"),
+                ("item_descricao", "Descrição"),
                 ("quantidade", "Qtd."),
                 ("peso_remanejado", "Peso"),
-                ("observacao", "Observacao"),
+                ("observacao", "Observação"),
             ],
         )
 
@@ -530,10 +516,10 @@ class OperationalReportsPage(QWidget):
         lines = [
             ("Proposta", process.get("proposta")),
             ("Cliente", process.get("cliente")),
-            ("Status expedicao", self.service.area_status_label("EXPEDICAO", process.get("status_expedicao") or "")),
-            ("Data separacao", process.get("data_separacao")),
+            ("Status expedição", self.service.area_status_label("EXPEDICAO", process.get("status_expedicao") or "")),
+            ("Data separação", process.get("data_separacao")),
             ("Data retirada", process.get("data_retirada")),
-            ("Situacao fluxo", self.service.status_label(process.get("situacao_fluxo") or "")),
+            ("Situação fluxo", self.service.status_label(process.get("situacao_fluxo") or "")),
         ]
         text = "\n".join(f"{label}: {value or '-'}" for label, value in lines)
         QMessageBox.information(self, "Situação da expedição", text)
@@ -547,7 +533,7 @@ class OperationalReportsPage(QWidget):
         dialog.exec()
 
     def _render_warnings(self, report: dict[str, Any]) -> None:
-        reliability = str(report.get("confiabilidade") or "-").title()
+        reliability = reliability_label(report.get("confiabilidade"))
         self.reliability_badge.setText(f"Confiabilidade: {reliability}")
         warnings = report.get("avisos") or []
         if warnings:
@@ -566,7 +552,7 @@ class OperationalReportsPage(QWidget):
             return
         path, _ = QFileDialog.getSaveFileName(
             self,
-            "Exportar relatorio operacional",
+            "Exportar relatório operacional",
             self._default_csv_name(),
             "CSV (*.csv)",
         )
@@ -604,14 +590,11 @@ class OperationalRowsDialog(QDialog):
         self.setWindowTitle(title)
         apply_large_dialog_geometry(self, parent)
         root = QVBoxLayout(self)
-        root.setContentsMargins(16, 16, 16, 16)
+        root.setContentsMargins(16, 14, 16, 14)
         root.setSpacing(10)
-        heading = QLabel(title)
-        heading.setObjectName("DetailTitle")
-        summary = QLabel(f"{len(rows)} registro(s) relacionado(s)")
-        summary.setObjectName("Caption")
-        root.addWidget(heading)
-        root.addWidget(summary)
+        close = ModernButton("Fechar", "clear", variant="ghost")
+        close.clicked.connect(self.accept)
+        root.addWidget(dialog_header(title, f"{len(rows)} registro(s) relacionado(s)", actions=[close]))
         table = QTableWidget(len(rows), len(columns))
         table.setHorizontalHeaderLabels([label for _key, label in columns])
         table.setAlternatingRowColors(True)
@@ -622,11 +605,11 @@ class OperationalRowsDialog(QDialog):
         table.horizontalHeader().setStretchLastSection(True)
         description_columns = tuple(
             index for index, (key, label) in enumerate(columns)
-            if key in {"descricao", "item_descricao", "observacao"} or "Descricao" in label
+            if key in {"descricao", "item_descricao", "observacao"} or "descricao" in _normalize_text(label)
         )
         code_columns = tuple(
             index for index, (key, label) in enumerate(columns)
-            if "codigo" in key or "Codigo" in label or "Cod." in label
+            if "codigo" in key or "codigo" in _normalize_text(label) or "cod." in label.lower()
         )
         if description_columns:
             configure_wrapping_table(
@@ -648,9 +631,6 @@ class OperationalRowsDialog(QDialog):
         resize_rows_to_contents(table)
         table.resizeColumnsToContents()
         root.addWidget(table, 1)
-        close = ModernButton("Fechar", "clear", variant="ghost")
-        close.clicked.connect(self.accept)
-        root.addWidget(close, 0, Qt.AlignRight)
         style_dialog_from_parent(self, parent)
 
 
@@ -669,20 +649,16 @@ class OperationalProcessReadOnlyDialog(QDialog):
         root = QVBoxLayout(self)
         root.setContentsMargins(16, 14, 16, 14)
         root.setSpacing(12)
-        header = QFrame()
-        header.setObjectName("Panel")
-        hl = QVBoxLayout(header)
-        hl.setContentsMargins(16, 12, 16, 12)
-        title = QLabel(f"{self.process.get('proposta') or '-'} | {self.process.get('cliente') or '-'}")
-        title.setObjectName("DetailTitle")
-        subtitle = QLabel(
-            f"Obra/Site: {self.process.get('obra_site') or '-'} | Lote: {self.process.get('lote') or '-'} | "
-            f"Peso: {self.process.get('peso') or '-'} | Prazo: {self.process.get('prazo_entrega') or '-'}"
+        close = ModernButton("Fechar", "clear", variant="ghost")
+        close.clicked.connect(self.accept)
+        root.addWidget(
+            dialog_header(
+                f"{self.process.get('proposta') or '-'} | {self.process.get('cliente') or '-'}",
+                f"Obra/Site: {self.process.get('obra_site') or '-'} | Lote: {self.process.get('lote') or '-'} | "
+                f"Peso: {self.process.get('peso') or '-'} | Prazo: {self.process.get('prazo_entrega') or '-'}",
+                actions=[close],
+            )
         )
-        subtitle.setObjectName("Caption")
-        hl.addWidget(title)
-        hl.addWidget(subtitle)
-        root.addWidget(header)
 
         body = QHBoxLayout()
         body.setSpacing(12)
@@ -691,34 +667,27 @@ class OperationalProcessReadOnlyDialog(QDialog):
         root.addLayout(body)
         root.addWidget(self._items_panel(), 1)
         root.addWidget(self._history_panel(), 1)
-        close = ModernButton("Fechar", "clear", variant="ghost")
-        close.clicked.connect(self.accept)
-        root.addWidget(close, 0, Qt.AlignRight)
 
     def _panel(self, title: str) -> QFrame:
-        panel = QFrame()
-        panel.setObjectName("Panel")
-        layout = QVBoxLayout(panel)
-        layout.setContentsMargins(14, 12, 14, 12)
-        label = QLabel(title)
-        label.setObjectName("PanelTitle")
-        layout.addWidget(label)
+        panel, _layout = make_panel(title)
         return panel
 
     def _status_panel(self) -> QFrame:
-        panel = self._panel("Status por area")
+        panel = self._panel("Status por área")
         layout = panel.layout()
         statuses = [
-            ("Controle Geral", self.process.get("status_geral")),
-            ("Producao", self.process.get("status_producao")),
-            ("Galvanizacao", self.process.get("status_galvanizacao")),
-            ("Expedicao", self.process.get("status_expedicao")),
-            ("Almoxarifado", self.process.get("status_almoxarifado")),
+            ("Controle Geral", "CONTROLE GERAL", self.process.get("status_geral")),
+            ("Produção", "PRODUCAO", self.process.get("status_producao")),
+            ("Galvanização", "GALVANIZACAO", self.process.get("status_galvanizacao")),
+            ("Expedição", "EXPEDICAO", self.process.get("status_expedicao")),
+            ("Almoxarifado", "ALMOXARIFADO", self.process.get("status_almoxarifado")),
         ]
-        for area, status in statuses:
-            line = QLabel(f"{area}: {self.service.area_status_label(area.upper(), status or '') if status else '-'}")
-            line.setWordWrap(True)
-            layout.addWidget(line)
+        layout.addLayout(
+            kv_grid(
+                [(label, self.service.area_status_label(area, status or "") if status else "") for label, area, status in statuses],
+                key_width=140,
+            )
+        )
         layout.addStretch()
         return panel
 
@@ -733,10 +702,7 @@ class OperationalProcessReadOnlyDialog(QDialog):
             ("Atualizado por", self.process.get("atualizado_por")),
             ("Atualizado em", self.process.get("atualizado_em")),
         ]
-        for label, value in rows:
-            text = QLabel(f"{label}: {value or '-'}")
-            text.setWordWrap(True)
-            layout.addWidget(text)
+        layout.addLayout(kv_grid([(label, str(value or "")) for label, value in rows], key_width=140))
         layout.addStretch()
         return panel
 
@@ -757,9 +723,9 @@ class OperationalProcessReadOnlyDialog(QDialog):
                 item.get("descricao"),
                 item.get("quantidade"),
                 f"{float(item.get('peso') or 0):g} kg",
-                "Sim" if item.get("produzido") else "Nao",
-                "Sim" if item.get("galvanizado") else "Nao",
-                "Sim" if item.get("entregue") else "Nao",
+                "Sim" if item.get("produzido") else "Não",
+                "Sim" if item.get("galvanizado") else "Não",
+                "Sim" if item.get("entregue") else "Não",
             ]
             for col, value in enumerate(values):
                 cell = QTableWidgetItem(str(value or "-"))
@@ -771,7 +737,7 @@ class OperationalProcessReadOnlyDialog(QDialog):
 
     def _history_panel(self) -> QFrame:
         history = self.service.process_history_rows(self.process_id)[:20]
-        panel = self._panel(f"Historico resumido ({len(history)})")
+        panel = self._panel(f"Histórico resumido ({len(history)})")
         table = QTableWidget(len(history), 5)
         table.setHorizontalHeaderLabels(["Área", "Anterior", "Novo", "Quando", "Usuário"])
         table.setAlternatingRowColors(True)
@@ -799,13 +765,18 @@ class OperationalLoadReadOnlyDialog(QDialog):
 
     def _build(self) -> None:
         root = QVBoxLayout(self)
-        root.setContentsMargins(16, 16, 16, 16)
-        title = QLabel(
-            f"Carga {self.load_id} | {self.service.load_status_label(self.load.get('status') or '')} | "
-            f"Motorista: {self.load.get('motorista') or '-'}"
+        root.setContentsMargins(16, 14, 16, 14)
+        root.setSpacing(10)
+        close = ModernButton("Fechar", "clear", variant="ghost")
+        close.clicked.connect(self.accept)
+        root.addWidget(
+            dialog_header(
+                f"Carga {self.load_id}",
+                f"{self.service.load_status_label(self.load.get('status') or '')} | "
+                f"Motorista: {self.load.get('motorista') or '-'}",
+                actions=[close],
+            )
         )
-        title.setObjectName("DetailTitle")
-        root.addWidget(title)
         proposals = self.service.galvanization_load_items(self.load_id)
         table = QTableWidget(len(proposals), 6)
         table.setHorizontalHeaderLabels(["Proposta", "Cliente", "Peso total", "Peso enviado", "Parcial", "Itens"])
@@ -821,15 +792,12 @@ class OperationalLoadReadOnlyDialog(QDialog):
                 data.get("cliente"),
                 _display_value(data.get("peso_total_proposta")),
                 _display_value(data.get("peso_enviado")),
-                "Sim" if data.get("parcial") else "Nao",
+                "Sim" if data.get("parcial") else "Não",
                 sum(int(item.get("quantidade") or 1) for item in items),
             ]
             for col, value in enumerate(values):
                 table.setItem(row, col, QTableWidgetItem(str(value or "-")))
         root.addWidget(table, 1)
-        close = ModernButton("Fechar", "clear", variant="ghost")
-        close.clicked.connect(self.accept)
-        root.addWidget(close, 0, Qt.AlignRight)
 
 
 def _row_process_id(row: dict[str, Any], preferred_key: str = "") -> int | None:
