@@ -6,6 +6,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QDialog, QVBoxLayout
 
+from app.ui.components.dialog_shell import dialog_footer, dialog_header
 from app.ui.components.modern_button import ModernButton
 from app.ui.dialog_utils import style_dialog_from_parent
 
@@ -25,12 +26,10 @@ class UserProfileDialog(QDialog):
     def _build(self):
         user = self.service.user or {}
         root = QVBoxLayout(self)
-        root.setContentsMargins(20, 18, 20, 16)
-        root.setSpacing(12)
+        root.setContentsMargins(16, 14, 16, 14)
+        root.setSpacing(10)
         title = QLabel("Meu perfil")
-        title.setObjectName("DetailTitle")
-        root.addWidget(title)
-        root.addWidget(QLabel("Gerencie suas informações pessoais e sua segurança."))
+        root.addWidget(dialog_header(title, "Gerencie suas informações pessoais e sua segurança."))
 
         personal = QGroupBox("Informações pessoais")
         form = QFormLayout(personal)
@@ -80,15 +79,11 @@ class UserProfileDialog(QDialog):
         security_form.addRow("Confirmar nova senha", self.confirm_password)
         root.addWidget(security)
 
-        buttons = QHBoxLayout()
-        buttons.addStretch()
         cancel = ModernButton("Cancelar", "close", variant="ghost")
         save = ModernButton("Salvar alterações", "save", accent=True)
         cancel.clicked.connect(self.reject)
         save.clicked.connect(self._save)
-        buttons.addWidget(cancel)
-        buttons.addWidget(save)
-        root.addLayout(buttons)
+        root.addWidget(dialog_footer(right=[cancel, save]))
 
     @staticmethod
     def _initials(name: str) -> str:

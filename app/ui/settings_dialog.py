@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from PySide6.QtWidgets import QDialog, QFrame, QHBoxLayout, QLabel, QVBoxLayout
+from PySide6.QtWidgets import QDialog, QLabel, QVBoxLayout
 
 from app.ui.app_icon import app_icon
+from app.ui.components.dialog_shell import dialog_header
 from app.ui.components.modern_button import ModernButton
 from app.ui.dialog_utils import apply_large_dialog_geometry, style_dialog_from_parent
 from app.ui.settings_page import SettingsPage
@@ -20,30 +21,14 @@ class SettingsDialog(QDialog):
         self.setModal(True)
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(18, 18, 18, 18)
-        root.setSpacing(12)
+        root.setContentsMargins(16, 14, 16, 14)
+        root.setSpacing(10)
 
-        header = QFrame()
-        header.setObjectName("TopBar")
-        header_layout = QHBoxLayout(header)
-        header_layout.setContentsMargins(18, 12, 12, 12)
-        header_layout.setSpacing(12)
-
-        heading = QVBoxLayout()
-        heading.setSpacing(2)
         title = QLabel("Configurações")
-        title.setStyleSheet("font-size: 22px; font-weight: 800;")
         subtitle = QLabel("Ajustes do sistema, aparência, usuários, API e PostgreSQL.")
-        subtitle.setObjectName("Caption")
-        heading.addWidget(title)
-        heading.addWidget(subtitle)
-        header_layout.addLayout(heading)
-        header_layout.addStretch()
-
         close_button = ModernButton("Fechar", "clear", variant="ghost")
         close_button.clicked.connect(self.accept)
-        header_layout.addWidget(close_button)
-        root.addWidget(header)
+        root.addWidget(dialog_header(title, subtitle, actions=[close_button]))
 
         self.settings_page = SettingsPage(service, self._apply_theme, self)
         root.addWidget(self.settings_page, 1)

@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.ui.components.dialog_shell import dialog_footer, dialog_header
 from app.ui.components.modern_button import ModernButton
 from app.ui.dialog_utils import apply_large_dialog_geometry, style_dialog_from_parent
 
@@ -45,11 +46,18 @@ class UserEditorDialog(QDialog):
 
     def _build(self):
         root = QVBoxLayout(self)
-        root.setContentsMargins(24, 22, 24, 20)
-        root.setSpacing(14)
+        root.setContentsMargins(16, 14, 16, 14)
+        root.setSpacing(10)
+
+        root.addWidget(
+            dialog_header(
+                "Editar usuário" if self.user_id else "Novo usuário",
+                "Dados de acesso e permissões por área.",
+            )
+        )
 
         data_panel = QFrame()
-        data_panel.setObjectName("Panel")
+        data_panel.setObjectName("DetailPanel")
         data_layout = QFormLayout(data_panel)
         data_layout.setContentsMargins(16, 14, 16, 14)
         data_layout.setSpacing(10)
@@ -74,7 +82,7 @@ class UserEditorDialog(QDialog):
         root.addWidget(data_panel)
 
         permissions_title = QLabel("Permissões por área")
-        permissions_title.setObjectName("SectionTitle")
+        permissions_title.setObjectName("PanelTitle")
         root.addWidget(permissions_title)
 
         self.permission_table = QTableWidget()
@@ -93,15 +101,11 @@ class UserEditorDialog(QDialog):
 
         self.profile.currentIndexChanged.connect(self.apply_profile_defaults)
 
-        actions = QHBoxLayout()
         save = ModernButton("Salvar", "save", accent=True)
         cancel = ModernButton("Cancelar", "clear", variant="ghost")
         save.clicked.connect(self.save)
         cancel.clicked.connect(self.reject)
-        actions.addStretch()
-        actions.addWidget(cancel)
-        actions.addWidget(save)
-        root.addLayout(actions)
+        root.addWidget(dialog_footer(right=[cancel, save]))
 
     def _build_permission_rows(self):
         areas = self.service.permission_area_options()
@@ -335,24 +339,16 @@ class UserManagerDialog(QDialog):
         style_dialog_from_parent(self, parent)
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(18, 18, 18, 16)
-        root.setSpacing(12)
+        root.setContentsMargins(16, 14, 16, 14)
+        root.setSpacing(10)
         title = QLabel("Usuários e controle de acesso")
-        title.setObjectName("SectionTitle")
-        root.addWidget(title)
         subtitle = QLabel("Configure quem pode visualizar ou alterar cada área do sistema.")
-        subtitle.setObjectName("Caption")
-        root.addWidget(subtitle)
+        close = ModernButton("Fechar", "clear", variant="ghost")
+        close.clicked.connect(self.accept)
+        root.addWidget(dialog_header(title, subtitle, actions=[close]))
 
         self.management = UsersManagementWidget(service, self)
         root.addWidget(self.management, 1)
-
-        close_actions = QHBoxLayout()
-        close_actions.addStretch()
-        close = ModernButton("Fechar", "clear", variant="ghost")
-        close.clicked.connect(self.accept)
-        close_actions.addWidget(close)
-        root.addLayout(close_actions)
 
         # Mantem o contrato publico historico do dialogo para consumidores e testes existentes.
         self.model = self.management.model
