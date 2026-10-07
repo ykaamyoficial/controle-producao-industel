@@ -93,6 +93,11 @@ class ProcessPage(QWidget):
         # refresh passar a delegar ao RefreshCoordinator.
         self._refresh_coordinator = RefreshCoordinator(self, start_worker=self._start_worker)
         self._refresh_view_state = (0, 0)
+        # Paginacao (so no Controle Geral, e so se o servico souber paginar).
+        self._paged = area == "CONTROLE GERAL" and hasattr(service, "control_general_page")
+        self._page = 0
+        self._page_count = 1
+        self._page_filters: dict[str, str] | None = None
         self._build()
 
     def _build(self):
@@ -259,6 +264,25 @@ class ProcessPage(QWidget):
         self.table_stack = table_stack
         root.addWidget(table_stack_frame, 1)
 
+        self.pager = QFrame()
+        pager_row = QHBoxLayout(self.pager)
+        pager_row.setContentsMargins(16, 0, 16, 6)
+        pager_row.setSpacing(OPERATIONAL_ACTION_SPACING)
+        self.previous_page_btn = ModernButton("Anterior", "previous")
+        self.next_page_btn = ModernButton("Próxima", "next")
+        self.page_label = QLabel("")
+        self.page_label.setObjectName("Caption")
+        self.previous_page_btn.clicked.connect(lambda: self._go_to_page(self._page - 1))
+        self.next_page_btn.clicked.connect(lambda: self._go_to_page(self._page + 1))
+        pager_row.addStretch(1)
+        pager_row.addWidget(self.previous_page_btn)
+        pager_row.addWidget(self.page_label)
+        pager_row.addWidget(self.next_page_btn)
+        pager_row.addStretch(1)
+        self.pager.setVisible(self._paged)
+        root.addWidget(self.pager)
+        self._update_pager(0)
+
         self.search.textChanged.connect(self._apply_search_filter)
         self.batch_selection.selection_changed.connect(self._on_batch_selection_changed)
         self.batch_header.toggle_visible_requested.connect(self._toggle_visible_batch_rows)
@@ -340,8 +364,21 @@ class ProcessPage(QWidget):
             self.prazo.currentText() if self.prazo.currentText() != "TODOS" else "",
         )
         self._set_loading(True)
+        if self._paged:
+            # Filtro mudou: a pagina aberta deixa de fazer sentido, volta para a primeira.
+            if filters != self._page_filters:
+                self._page = 0
+            self._page_filters = dict(filters)
+            page = self._page
+
+            def loader():
+                return self.controller.general_page(filters, page), self._fetch_chat_status()
+        else:
+            def loader():
+                return self.controller.rows_for(self.area, filters), self._fetch_chat_status()
+
         self._refresh_coordinator.request(
-            lambda: (self.controller.rows_for(self.area, filters), self._fetch_chat_status()),
+            loader,
             self._refresh_success,
             self._refresh_error,
             operation_name="process_page.refresh",
@@ -378,8 +415,38 @@ class ProcessPage(QWidget):
                 row["unread_count"] = entry.get("unread_count", 0)
         return status_by_proposal
 
+    def _go_to_page(self, page: int) -> None:
+        if not self._paged or self._refreshing:
+            return
+        page = max(0, min(int(page), self._page_count - 1))
+        if page == self._page:
+            return
+        self._page = page
+        self.refresh()
+        self.table.verticalScrollBar().setValue(0)
+
+    def _update_pager(self, total: int) -> None:
+        if not self._paged:
+            return
+        self.page_label.setText(f"Página {self._page + 1} de {self._page_count}  |  {total} propostas")
+        self.previous_page_btn.setEnabled(self._page > 0)
+        self.next_page_btn.setEnabled(self._page < self._page_count - 1)
+
     def _refresh_success(self, result):
         rows, chat_status = result
+        total = None
+        if isinstance(rows, dict):  # pagina do Controle Geral
+            total = int(rows.get("total") or 0)
+            page_size = max(1, int(rows.get("page_size") or 1))
+            self._page = int(rows.get("page") or 0)
+            self._page_count = max(1, -(-total // page_size))
+            rows = rows.get("items", [])
+            if self._page >= self._page_count:
+                # A lista encolheu (cancelamento, filtro): volta para a ultima pagina valida.
+                self._page = self._page_count - 1
+                self._set_loading(False)
+                self.refresh()
+                return
         for row in rows:
             status = chat_status.get(int(row.get("id") or 0))
             unread = int(status.get("unread_count") or 0) if status else 0
@@ -392,6 +459,8 @@ class ProcessPage(QWidget):
         self.table.horizontalScrollBar().setValue(self._refresh_view_state[1])
         self._update_empty_state()
         self._set_loading(False)
+        if total is not None:
+            self._update_pager(total)
         self._sync_batch_header()
 
     def _refresh_error(self, exc):

@@ -16,6 +16,9 @@ from app.services.short_cache import ShortLivedCache
 from app.services.configuration_service import get_configuration_service
 log = get_logger('backend')
 
+# Propostas por pagina no Controle Geral.
+CONTROL_GENERAL_PAGE_SIZE = 200
+
 
 @dataclass
 class _ChatStatusCache:
@@ -500,6 +503,43 @@ class BackendService:
             lambda: self._process_rows_uncached(area, filters),
             ttl=2.0,
         )
+
+    def control_general_page(self, filters: dict[str, str] | None = None, *, page: int = 0, page_size: int = CONTROL_GENERAL_PAGE_SIZE) -> dict[str, Any]:
+        """Uma pagina do Controle Geral (propostas mae, mais recentes primeiro).
+
+        A busca por texto vai para a API/replica e vale para TODAS as propostas,
+        nao so para a pagina carregada. O filtro local por texto continua
+        aplicado por cima, para APIs anteriores que ignoram `search`.
+        """
+        filters = dict(filters or {})
+        page = max(0, int(page))
+        normalized = tuple(sorted((str(key), str(value or "")) for key, value in filters.items()))
+        return self._cached_read(
+            f"control_general_page:{page}:{page_size}:{normalized}",
+            lambda: self._control_general_page_uncached(filters, page, page_size),
+            ttl=2.0,
+        )
+
+    def _control_general_page_uncached(self, filters: dict[str, str], page: int, page_size: int) -> dict[str, Any]:
+        text = (filters.get('text') or '').strip()
+        try:
+            payload = self.official_proposal_storage.list_proposals_page(
+                customer=filters.get('cliente') or None,
+                current_status=filters.get('status') or None,
+                search=text or None,
+                sort_by='updated_at',
+                sort_dir='desc',
+                limit=page_size,
+                offset=page * page_size,
+            )
+        except Exception as exc:
+            raise AppError(user_message_for_api_error(exc)) from exc
+        rows = [row for row in payload.get("items", []) if not row.get('parent_proposal_id')]
+        needle = text.upper()
+        if needle:
+            rows = [row for row in rows if needle in (row.get('proposta') or '').upper() or needle in (row.get('cliente') or '').upper() or needle in (row.get('obra_site') or '').upper() or (needle in (row.get('lote') or '').upper())]
+        total = payload.get("total")
+        return {"items": rows, "total": int(total) if total is not None else len(rows), "page": page, "page_size": page_size}
 
     def process_rows_page(self, area: str | None = None, filters: dict[str, str] | None = None, *, limit: int = 50, offset: int = 0) -> dict[str, Any]:
         """Contrato paginado para telas progressivas; mantém process_rows legado."""

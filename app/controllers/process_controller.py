@@ -16,5 +16,8 @@ class ProcessController:
     def rows_for(self, area: str | None, filters: dict[str, str] | None = None):
         return self.service.process_rows(area, filters or {})
 
+    def general_page(self, filters: dict[str, str] | None = None, page: int = 0) -> dict:
+        return self.service.control_general_page(filters or {}, page=page)
+
     def update_status(self, process_id: int, area: str, status: str, observation: str):
         self.service.update_status(process_id, area, status, observation)
