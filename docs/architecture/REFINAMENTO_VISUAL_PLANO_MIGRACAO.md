@@ -207,11 +207,27 @@ Só aparência; conferir contra `NOMUS_FISCAL_INTEGRATION_CONTRACT.md` com o age
 
 Ainda não há protótipo aprovado para painéis; fazer um antes (mesmo método das duas telas anteriores).
 
+**Andamento (07/10/2026):**
+
+| Entrega | Situação |
+|---|---|
+| Painel geral, Dashboard Executivo, Relatórios Operacionais e seus componentes: textos exibidos acentuados, Limpar/Fechar como botão fantasma, títulos pela folha de estilo | Feito |
+| Filtro "Confiabilidade" do Dashboard Executivo | Corrigido - enviava o texto da opção em minúsculas como valor; passou a usar um valor interno (`itemData`), senão "Média" com acento deixaria de filtrar |
+| **Redesenho dos painéis (cartões de indicador, gráficos, cabeçalho)** | **Não feito** - sem protótipo aprovado; os componentes `kpi_card`, `card_indicador`, `grafico_status`, `header_dashboard` e `tabela_prazos` continuam com o desenho e os estilos inline de antes |
+
 ### Onda 7 — Chat (G)
 
 `chat_center_page.py`, `proposal_chat_dialog.py` (1.897 linhas) e os componentes `chat_message_attachments.py` (2.218 linhas, 45 estilos inline), `timeline_entries.py`, `chat_shared_content.py`, `chat_pending_attachments.py`, `mention_compose_bar.py`, `proposal_activity_panel.py`.
 
 É a área com mais estilo inline e mais pintura própria. Fazer protótipo antes.
+
+**Andamento (07/10/2026):**
+
+| Entrega | Situação |
+|---|---|
+| Central de chat, chat da proposta e componentes (anexos, linha do tempo, conteúdo compartilhado, barra de menção, painel de atividade): textos exibidos acentuados e títulos pela folha de estilo | Feito |
+| Handlers da central de ações (cancelar proposta, galvanização, produção): textos acentuados e Cancelar como botão fantasma | Feito |
+| **Redesenho do chat (balões, anexos, linha do tempo)** | **Não feito** - sem protótipo aprovado; os cerca de 120 estilos inline dessa área continuam |
 
 ### Onda 8 — Sistema e acesso (M)
 
@@ -227,6 +243,18 @@ Login, atualização e manutenção abrem **sem** janela principal por trás: n�
 | Botão "Reduzir animações" em Configurações | **Não feito** - a opção existe só pela chave `reduce_motion` da configuração |
 | Layout dessas telas | **Não feito** - mesma situação da Onda 4 |
 | Vários botões primários em Configurações | Mantidos - cada um é a ação principal de uma seção diferente da página |
+
+## Situação geral (07/10/2026)
+
+Todas as nove ondas passaram pela etapa que não depende de protótipo: fundação, moldura, páginas operacionais, Detalhes da proposta e centrais de ação refeitas no padrão; nas demais telas, hierarquia de botões, textos acentuados e títulos pela folha de estilo. Suíte ao fim: 2407 testes passando; estilos inline em `app/ui` caíram de 317 para 226.
+
+O que continua em aberto, em ordem de valor:
+
+1. **Conferir no sistema real, logado, nos dois temas.** Até aqui a conferência visual foi feita na galeria (`scripts/ui_gallery.py`) e pelos testes; nenhuma tela foi vista com dados reais.
+2. **Layout dos diálogos das Ondas 4, 5 e 8** (cabeçalho-cartão, painéis, rodapé de ações, indicador de passo). Só a "pele" mudou.
+3. **Redesenho de painéis (Onda 6) e chat (Onda 7)**, que pedem protótipo aprovado antes.
+4. **Estilos inline restantes** (a maior parte no chat e nos painéis).
+5. Botão "Reduzir animações" em Configurações; conferência de PDF/Excel exportados com as cores novas de status; gerar o instalador e confirmar que a fonte Inter vem junto.
 
 ## Ordem e dependências
 
