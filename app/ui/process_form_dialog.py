@@ -81,16 +81,16 @@ class ProcessFormDialog(QDialog):
 
         heading_row = QHBoxLayout()
         heading = QLabel("Cadastro da proposta")
-        heading.setStyleSheet("font-size: 18px; font-weight: 800;")
+        heading.setObjectName("DetailTitle")
         heading_row.addWidget(heading)
         heading_row.addStretch()
         if not self.process_id:
             import_button = ModernButton("Importar PDF Nomus", "pdf")
-            import_button.setToolTip("Selecionar PDF Nomus e preencher o cadastro para revisao antes de salvar")
+            import_button.setToolTip("Selecionar PDF Nomus e preencher o cadastro para revisão antes de salvar")
             import_button.clicked.connect(self.open_nomus_preview)
             heading_row.addWidget(import_button)
             api_import_button = ModernButton("Importar do Nomus", "search")
-            api_import_button.setToolTip("Buscar dados operacionais na API Nomus para conferencia")
+            api_import_button.setToolTip("Buscar dados operacionais na API Nomus para conferência")
             api_import_button.clicked.connect(self.open_nomus_api_preview)
             api_enabled, api_reason = self._nomus_api_import_available()
             api_import_button.setEnabled(api_enabled)
@@ -98,7 +98,7 @@ class ProcessFormDialog(QDialog):
                 api_import_button.setToolTip(api_reason)
             heading_row.addWidget(api_import_button)
             batch_import_button = ModernButton("Importar lote Nomus", "batch")
-            batch_import_button.setToolTip("Localizar varias propostas do Nomus sem salvar automaticamente")
+            batch_import_button.setToolTip("Localizar várias propostas do Nomus sem salvar automaticamente")
             batch_import_button.clicked.connect(self.open_nomus_batch_import)
             batch_import_button.setEnabled(api_enabled)
             if api_reason:
@@ -141,9 +141,9 @@ class ProcessFormDialog(QDialog):
         grid.setColumnStretch(0, 1)
         grid.setColumnStretch(1, 1)
         stockroom = QComboBox()
-        stockroom.addItem("Nao definido", "NAO_DEFINIDO")
+        stockroom.addItem("Não definido", "NAO_DEFINIDO")
         stockroom.addItem("Sim, precisa de almoxarifado", "SIM")
-        stockroom.addItem("Nao precisa de almoxarifado", "NAO")
+        stockroom.addItem("Não precisa de almoxarifado", "NAO")
         self.fields["necessita_almoxarifado"] = stockroom
         stock_box = QWidget()
         stock_layout = QVBoxLayout(stock_box)
@@ -159,7 +159,7 @@ class ProcessFormDialog(QDialog):
 
         notes = self._section("Observacoes")
         obs = QTextEdit()
-        obs.setPlaceholderText("Informacoes gerais, particularidades ou orientacoes da proposta")
+        obs.setPlaceholderText("Informações gerais, particularidades ou orientações da proposta")
         obs.setFixedHeight(72)
         self.fields["observacoes_gerais"] = obs
         notes.layout().addWidget(obs)
@@ -173,7 +173,7 @@ class ProcessFormDialog(QDialog):
         self.item_quantity.setRange(0, 9999)
         self.item_quantity.setFixedWidth(76)
         self.generate_button = ModernButton("Gerar lista", "new")
-        self.add_button = ModernButton("Adicionar item", "new", accent=True)
+        self.add_button = ModernButton("Adicionar item", "new")
         self.remove_button = ModernButton("Remover", "clear")
         self.generate_button.clicked.connect(self.generate_items)
         self.add_button.clicked.connect(lambda: self.add_item())
@@ -182,7 +182,7 @@ class ProcessFormDialog(QDialog):
         tools.addWidget(self.generate_button)
         tools.addStretch()
         self.items_total = QLabel("0 unidade(s) | 0 kg")
-        self.items_total.setStyleSheet("font-weight: 700;")
+        self.items_total.setObjectName("ValueLabel")
         tools.addWidget(self.items_total)
         items_panel.layout().addLayout(tools)
 
@@ -195,7 +195,7 @@ class ProcessFormDialog(QDialog):
 
         self.items_table = QTableWidget(0, 9)
         self.items_table.setHorizontalHeaderLabels([
-            "Item", "Codigo", "Descricao", "Quantidade", "Peso unit. (kg)",
+            "Item", "Código", "Descrição", "Quantidade", "Peso unit. (kg)",
             "Produzir", "Motivo", "Galvanizar", "Obs. fluxo",
         ])
         self.items_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
@@ -226,7 +226,7 @@ class ProcessFormDialog(QDialog):
         actions = QHBoxLayout()
         actions.setContentsMargins(12, 8, 12, 8)
         self.save_button = ModernButton("Salvar", "status", accent=True)
-        cancel = ModernButton("Cancelar", "clear")
+        cancel = ModernButton("Cancelar", "clear", variant="ghost")
         self.save_button.clicked.connect(self.save)
         cancel.clicked.connect(self.reject)
         actions.addStretch()
@@ -243,7 +243,7 @@ class ProcessFormDialog(QDialog):
         layout.setContentsMargins(14, 12, 14, 12)
         layout.setSpacing(8)
         label = QLabel(title)
-        label.setStyleSheet("font-size: 13px; font-weight: 800;")
+        label.setObjectName("PanelTitle")
         layout.addWidget(label)
         return frame
 
@@ -252,7 +252,7 @@ class ProcessFormDialog(QDialog):
             QMessageBox.warning(
                 self,
                 "Importar proposta Nomus",
-                "Seu usuario pode visualizar, mas nao importar/cadastrar propostas.",
+                "Seu usuário pode visualizar, mas não importar/cadastrar propostas.",
             )
             return
         start = str(Path.home() / "Downloads")
@@ -342,7 +342,7 @@ class ProcessFormDialog(QDialog):
             QMessageBox.warning(
                 self,
                 "Usar dados no cadastro",
-                f"A importacao ainda possui dados obrigatorios ausentes: {details}.",
+                f"A importação ainda possui dados obrigatórios ausentes: {details}.",
             )
             return False
 
@@ -437,7 +437,7 @@ class ProcessFormDialog(QDialog):
                 weight_cell = self.items_table.item(self.items_table.rowCount() - 1, 4)
                 if weight_cell:
                     weight_cell.setToolTip(
-                        f"Peso nao informado no {source_name}; dado auxiliar que pode ser preenchido depois."
+                        f"Peso não informado no {source_name}; dado auxiliar que pode ser preenchido depois."
                     )
 
         if pending_weights:

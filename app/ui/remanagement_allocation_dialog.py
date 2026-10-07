@@ -65,7 +65,7 @@ class RemanagementAllocationStepDialog(QDialog):
         root.setSpacing(12)
 
         title = QLabel("4. Defina de onde retirar os materiais")
-        title.setStyleSheet("font-size: 18px; font-weight: 800;")
+        title.setObjectName("DetailTitle")
         root.addWidget(title)
 
         self.destination_frame = QFrame()
@@ -89,14 +89,14 @@ class RemanagementAllocationStepDialog(QDialog):
         root.addWidget(scroll, 1)
 
         self.summary_label = QLabel("0 produto(s)")
-        self.summary_label.setStyleSheet("font-weight: 700;")
+        self.summary_label.setObjectName("ValueLabel")
         root.addWidget(self.summary_label)
 
         footer = QHBoxLayout()
         refresh = ModernButton("Atualizar disponibilidade", "status")
-        clear_all = ModernButton("Limpar alocacoes", "clear")
+        clear_all = ModernButton("Limpar alocações", "clear")
         back = ModernButton("Voltar", "clear")
-        self.advance_button = ModernButton("Avancar para compensacao", "status", accent=True)
+        self.advance_button = ModernButton("Avançar para compensação", "status", accent=True)
         self.advance_button.setEnabled(False)
         refresh.clicked.connect(self._refresh_clicked)
         clear_all.clicked.connect(self._clear_all)
@@ -204,7 +204,7 @@ class RemanagementAllocationStepDialog(QDialog):
         layout.setSpacing(6)
 
         heading = QLabel(f"Produto {group.product_code} - {group.description}")
-        heading.setStyleSheet("font-weight: 700;")
+        heading.setObjectName("ValueLabel")
         heading.setWordWrap(True)
         layout.addWidget(heading)
 
@@ -215,13 +215,13 @@ class RemanagementAllocationStepDialog(QDialog):
 
         rows = self._rows_for_group(group)
         if not rows:
-            empty = QLabel("Nenhum candidato disponivel para este produto.")
+            empty = QLabel("Nenhum candidato disponível para este produto.")
             empty.setObjectName("Caption")
             layout.addWidget(empty)
             return frame
 
         table = QTableWidget(len(rows), 4)
-        table.setHorizontalHeaderLabels(["Origem", "Cliente", "Disponivel", "Retirar"])
+        table.setHorizontalHeaderLabels(["Origem", "Cliente", "Disponível", "Retirar"])
         table.verticalHeader().setVisible(False)
         table.setSelectionMode(QTableWidget.NoSelection)
         table.horizontalHeader().setStretchLastSection(True)
@@ -395,7 +395,7 @@ class RemanagementAllocationStepDialog(QDialog):
         if any(self._item_has_invalid_row(item_id) for item_id in self._group_by_item):
             QMessageBox.warning(
                 self, "Remanejamento",
-                "Existem alocacoes que nao correspondem mais a disponibilidade atual. Corrija ou atualize a disponibilidade antes de avancar.",
+                "Existem alocações que não correspondem mais a disponibilidade atual. Corrija ou atualize a disponibilidade antes de avançar.",
             )
             return
         item_allocations = []
@@ -419,7 +419,7 @@ class RemanagementAllocationStepDialog(QDialog):
                 ],
             ))
         if not item_allocations:
-            QMessageBox.warning(self, "Remanejamento", "Aloque pelo menos uma origem para avancar.")
+            QMessageBox.warning(self, "Remanejamento", "Aloque pelo menos uma origem para avançar.")
             return
         self.state.set_allocations(item_allocations)
         self.accept()

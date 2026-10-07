@@ -116,7 +116,7 @@ class ProductionRegistrationDialogTests(unittest.TestCase):
 
     def test_review_button_is_labeled_confirmar_producao(self):
         dialog = ProductionRegistrationDialog(FakeProductionRegistrationService(), [1])
-        self.assertEqual(dialog.review_button.text(), "Confirmar producao")
+        self.assertEqual(dialog.review_button.text(), "Confirmar produção")
         dialog.reject()
 
     def test_review_dialog_constructs_without_crashing_on_the_real_weight_field(self):

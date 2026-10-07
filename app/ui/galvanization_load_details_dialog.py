@@ -610,7 +610,7 @@ class GalvanizationLoadDetailsDialog(QDialog):
 
         footer = QHBoxLayout()
         footer.addStretch()
-        close_button = ModernButton("Fechar", "clear")
+        close_button = ModernButton("Fechar", "clear", variant="ghost")
         close_button.clicked.connect(self.accept)
         footer.addWidget(close_button)
         root.addLayout(footer)

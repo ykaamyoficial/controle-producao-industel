@@ -45,15 +45,15 @@ class ProductionReviewDialog(QDialog):
     def __init__(self, groups: list[dict], observation: str, parent=None):
         super().__init__(parent)
         self.confirmed = False
-        self.setWindowTitle("Revisar registro de producao")
+        self.setWindowTitle("Revisar registro de produção")
         apply_large_dialog_geometry(self, parent, minimum_width=720, minimum_height=480)
         style_dialog_from_parent(self, parent)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(22, 20, 22, 18)
         root.setSpacing(12)
-        title = QLabel("Revisar e registrar producao")
-        title.setStyleSheet("font-size: 18px; font-weight: 800;")
+        title = QLabel("Revisar e registrar produção")
+        title.setObjectName("DetailTitle")
         root.addWidget(title)
 
         total_items = sum(len(group["selected"]) for group in groups)
@@ -64,7 +64,7 @@ class ProductionReviewDialog(QDialog):
             f"{format_decimal(total_weight)} kg"
             + (f" | {missing_weight} sem peso" if missing_weight else "")
         )
-        summary.setStyleSheet("font-weight: 700;")
+        summary.setObjectName("ValueLabel")
         root.addWidget(summary)
 
         tree = QTreeWidget()
@@ -96,7 +96,7 @@ class ProductionReviewDialog(QDialog):
         root.addWidget(tree, 1)
 
         if observation.strip():
-            note = QLabel(f"Observacao: {observation.strip()}")
+            note = QLabel(f"Observação: {observation.strip()}")
             note.setWordWrap(True)
             note.setObjectName("Caption")
             root.addWidget(note)
@@ -104,7 +104,7 @@ class ProductionReviewDialog(QDialog):
         footer = QHBoxLayout()
         footer.addStretch()
         back = ModernButton("Voltar", "back")
-        confirm = ModernButton("Confirmar producao", "status", accent=True)
+        confirm = ModernButton("Confirmar produção", "status", accent=True)
         back.clicked.connect(self.reject)
         confirm.clicked.connect(self._confirm)
         footer.addWidget(back)
@@ -144,22 +144,22 @@ class ProductionRegistrationDialog(QDialog):
         self._load()
 
     def _build(self):
-        self.setWindowTitle("Registrar producao")
+        self.setWindowTitle("Registrar produção")
         apply_large_dialog_geometry(self, self.parentWidget(), minimum_width=1120, minimum_height=680)
         style_dialog_from_parent(self, self.parentWidget())
         root = QVBoxLayout(self)
         root.setContentsMargins(22, 20, 22, 18)
         root.setSpacing(10)
 
-        title = QLabel("Registrar producao")
+        title = QLabel("Registrar produção")
         title.setStyleSheet("font-size: 20px; font-weight: 800;")
         root.addWidget(title)
         self.header_summary = QLabel()
-        self.header_summary.setStyleSheet("font-weight: 700;")
+        self.header_summary.setObjectName("ValueLabel")
         root.addWidget(self.header_summary)
 
         self.search = QLineEdit()
-        self.search.setPlaceholderText("Buscar proposta, cliente, codigo ou descricao do item...")
+        self.search.setPlaceholderText("Buscar proposta, cliente, código ou descrição do item...")
         self.search.textChanged.connect(self._apply_filter)
         root.addWidget(self.search)
 
@@ -184,7 +184,7 @@ class ProductionRegistrationDialog(QDialog):
 
         controls = QHBoxLayout()
         select_all = ModernButton("Selecionar todos", "status")
-        clear = ModernButton("Limpar selecao", "clear")
+        clear = ModernButton("Limpar seleção", "clear")
         select_all.clicked.connect(lambda: self._set_all(True))
         clear.clicked.connect(lambda: self._set_all(False))
         controls.addWidget(select_all)
@@ -193,7 +193,7 @@ class ProductionRegistrationDialog(QDialog):
         root.addLayout(controls)
 
         self.observation_input = QLineEdit()
-        self.observation_input.setPlaceholderText("Observacao (opcional)")
+        self.observation_input.setPlaceholderText("Observação (opcional)")
         self.observation_input.setText(self.observation)
         root.addWidget(self.observation_input)
 
@@ -202,11 +202,11 @@ class ProductionRegistrationDialog(QDialog):
         footer = QHBoxLayout(footer_frame)
         footer.setContentsMargins(12, 8, 12, 8)
         self.footer_summary = QLabel()
-        self.footer_summary.setStyleSheet("font-weight: 700;")
+        self.footer_summary.setObjectName("ValueLabel")
         footer.addWidget(self.footer_summary)
         footer.addStretch()
-        cancel = ModernButton("Cancelar", "clear")
-        self.review_button = ModernButton("Confirmar producao", "status", accent=True)
+        cancel = ModernButton("Cancelar", "clear", variant="ghost")
+        self.review_button = ModernButton("Confirmar produção", "status", accent=True)
         cancel.clicked.connect(self.reject)
         self.review_button.clicked.connect(self._review)
         footer.addWidget(cancel)
@@ -268,7 +268,7 @@ class ProductionRegistrationDialog(QDialog):
             if not group["available_count"]:
                 top.setCheckState(0, Qt.Unchecked)
                 top.setDisabled(True)
-                top.setText(7, "Nenhum item disponivel")
+                top.setText(7, "Nenhum item disponível")
             else:
                 eligible_count = len(group["available"])
                 top.setCheckState(0, Qt.Checked if len(selected) == eligible_count else Qt.PartiallyChecked if selected else Qt.Unchecked)
@@ -366,7 +366,7 @@ class ProductionRegistrationDialog(QDialog):
         proposal_count = len({int(row.get("processo_atual_id") or 0) for row in selected})
         weight = sum((row.get("_weight", Decimal("0")) for row in selected), Decimal("0"))
         missing = sum(1 for row in selected if row.get("_weight", Decimal("0")) <= 0)
-        self.header_summary.setText(f"{len(self.process_ids)} proposta(s) | {sum(g['available_count'] for g in self._groups)} itens disponiveis")
+        self.header_summary.setText(f"{len(self.process_ids)} proposta(s) | {sum(g['available_count'] for g in self._groups)} itens disponíveis")
         self.footer_summary.setText(
             f"{len(selected)} item(ns) | {proposal_count} proposta(s) | {format_decimal(weight)} kg"
             + (f" | {missing} sem peso" if missing else "")
@@ -380,7 +380,7 @@ class ProductionRegistrationDialog(QDialog):
             if selected:
                 groups.append({**group, "selected": selected})
         if not groups:
-            QMessageBox.warning(self, "Registrar producao", "Selecione ao menos um item disponivel.")
+            QMessageBox.warning(self, "Registrar produção", "Selecione ao menos um item disponível.")
             return
         review = ProductionReviewDialog(groups, self.observation_input.text(), self)
         if review.exec() and review.confirmed:
@@ -425,7 +425,7 @@ class ProductionRegistrationDialog(QDialog):
             self._busy = False
             self._update_summary()
             if not result.get("valid"):
-                QMessageBox.warning(self, "Registro desatualizado", result.get("message") or "Revise os itens disponiveis.")
+                QMessageBox.warning(self, "Registro desatualizado", result.get("message") or "Revise os itens disponíveis.")
                 self._load()
                 return
             QMessageBox.information(self, "Produçao", f"Produçao registrada com sucesso.\n\n{result['processed']} proposta(s) processada(s)\n{result['items']} item(ns) registrado(s)\n{format_decimal(result['weight'])} kg registrado(s)")
@@ -434,7 +434,7 @@ class ProductionRegistrationDialog(QDialog):
         def error(exc):
             self._busy = False
             self._update_summary()
-            QMessageBox.warning(self, "Registrar producao", f"A operacao nao foi concluida integralmente:\n{exc}")
+            QMessageBox.warning(self, "Registrar produção", f"A operação não foi concluída integralmente:\n{exc}")
 
         self._worker = start_worker(
             self, operation, success, error, operation_name="production_registration.execute"

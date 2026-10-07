@@ -45,8 +45,8 @@ class EarlyRemanagementDeliveryDialog(QDialog):
         root.setContentsMargins(22, 20, 22, 18)
         root.setSpacing(12)
         title = QLabel("Remanejamento compensado entre propostas")
-        title.setStyleSheet("font-size: 18px; font-weight: 800;")
-        caption = QLabel("O material pronto da origem fica disponivel no destino. A mesma quantidade da producao pendente do destino passa a atender a origem. Isto nao registra entrega ao cliente.")
+        title.setObjectName("DetailTitle")
+        caption = QLabel("O material pronto da origem fica disponível no destino. A mesma quantidade da produção pendente do destino passa a atender a origem. Isto não registra entrega ao cliente.")
         caption.setObjectName("Caption")
         caption.setWordWrap(True)
         root.addWidget(title)
@@ -65,18 +65,18 @@ class EarlyRemanagementDeliveryDialog(QDialog):
 
         root.addWidget(QLabel("Mapeamento por item e quantidade (informe somente as linhas desejadas)"))
         self.mapping_table = QTableWidget(0, 8)
-        self.mapping_table.setHorizontalHeaderLabels(["Item origem", "Item destino", "Produto", "Un.", "Pronto A", "Necessidade B", "Maximo", "Quantidade"])
+        self.mapping_table.setHorizontalHeaderLabels(["Item origem", "Item destino", "Produto", "Un.", "Pronto A", "Necessidade B", "Máximo", "Quantidade"])
         self.mapping_table.verticalHeader().setVisible(False)
         self.mapping_table.horizontalHeader().setStretchLastSection(True)
         root.addWidget(self.mapping_table, 1)
 
         self.reason = QTextEdit()
-        self.reason.setPlaceholderText("Motivo obrigatorio do remanejamento")
+        self.reason.setPlaceholderText("Motivo obrigatório do remanejamento")
         self.reason.setMaximumHeight(72)
         root.addWidget(self.reason)
 
         footer = QHBoxLayout()
-        cancel = ModernButton("Cancelar", "clear")
+        cancel = ModernButton("Cancelar", "clear", variant="ghost")
         confirm = ModernButton("Simular e confirmar", "save", accent=True)
         cancel.clicked.connect(self.reject); confirm.clicked.connect(self.apply)
         footer.addStretch()
@@ -130,7 +130,7 @@ class EarlyRemanagementDeliveryDialog(QDialog):
                 self.dest_search.setEnabled(False)
                 self.dest_table.setEnabled(False)
                 return
-        QMessageBox.warning(self, "Remanejamento", "A proposta destino selecionada nao esta mais disponivel. Selecione o destino novamente.")
+        QMessageBox.warning(self, "Remanejamento", "A proposta destino selecionada não está mais disponível. Selecione o destino novamente.")
 
     def load_compatible_items(self):
         source_id, destination_id = self._selected_id(self.source_table), self._selected_id(self.dest_table)

@@ -56,9 +56,9 @@ class ItemFlowDialog(QDialog):
         root.setContentsMargins(18, 16, 18, 16)
         root.setSpacing(10)
         title = QLabel("Definir fluxo dos itens")
-        title.setStyleSheet("font-size: 18px; font-weight: 800;")
+        title.setObjectName("DetailTitle")
         caption = QLabel(
-            "Informe se cada item sera produzido internamente e se precisa passar pela galvanizacao."
+            "Informe se cada item será produzido internamente e se precisa passar pela galvanização."
         )
         caption.setObjectName("Caption")
         caption.setWordWrap(True)
@@ -89,7 +89,7 @@ class ItemFlowDialog(QDialog):
 
         footer = QHBoxLayout()
         footer.addStretch()
-        cancel = ModernButton("Cancelar", "clear")
+        cancel = ModernButton("Cancelar", "clear", variant="ghost")
         save = ModernButton("Salvar fluxo", "status", accent=True)
         cancel.clicked.connect(self.reject)
         save.clicked.connect(self.save)
@@ -172,7 +172,7 @@ class ItemFlowDialog(QDialog):
             if changed:
                 QMessageBox.information(self, "Fluxo dos itens", f"{changed} item(ns) atualizado(s).")
             else:
-                QMessageBox.information(self, "Fluxo dos itens", "Nenhuma alteracao para salvar.")
+                QMessageBox.information(self, "Fluxo dos itens", "Nenhuma alteração para salvar.")
             self.accept()
         except VersionConflictError:
             self._handle_version_conflict(definitions)
@@ -183,9 +183,9 @@ class ItemFlowDialog(QDialog):
         answer = QMessageBox.question(
             self,
             "Fluxo dos itens",
-            "Os dados desta proposta foram atualizados desde que esta janela foi aberta.\n\n"
+            "Os dados desta proposta foram atualizados desde que está janela foi aberta.\n\n"
             "Deseja recarregar os dados mais recentes?\n"
-            "As alteracoes ainda nao salvas serao revisadas antes de continuar.",
+            "As alterações ainda não salvas serão revisadas antes de continuar.",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.Yes,
         )

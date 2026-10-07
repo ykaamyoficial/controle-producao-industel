@@ -54,7 +54,7 @@ class RemanagementItemSelectionStepDialog(QDialog):
         root.setSpacing(12)
 
         title = QLabel("2. Selecione os itens que deseja atender com remanejamento")
-        title.setStyleSheet("font-size: 18px; font-weight: 800;")
+        title.setObjectName("DetailTitle")
         root.addWidget(title)
 
         self.destination_frame = QFrame()
@@ -67,7 +67,7 @@ class RemanagementItemSelectionStepDialog(QDialog):
         root.addWidget(self.destination_frame)
 
         self.search = QLineEdit()
-        self.search.setPlaceholderText("Buscar por codigo ou descricao...")
+        self.search.setPlaceholderText("Buscar por código ou descrição...")
         self.search.textChanged.connect(self._render_rows)
         root.addWidget(self.search)
 
@@ -82,8 +82,8 @@ class RemanagementItemSelectionStepDialog(QDialog):
         root.addWidget(self.table, 1)
 
         bulk = QHBoxLayout()
-        select_eligible = ModernButton("Selecionar elegiveis", "status")
-        clear_selection = ModernButton("Limpar selecao", "clear")
+        select_eligible = ModernButton("Selecionar elegíveis", "status")
+        clear_selection = ModernButton("Limpar seleção", "clear")
         select_eligible.clicked.connect(self._select_eligible)
         clear_selection.clicked.connect(self._clear_selection)
         bulk.addWidget(select_eligible)
@@ -92,12 +92,12 @@ class RemanagementItemSelectionStepDialog(QDialog):
         root.addLayout(bulk)
 
         self.summary_label = QLabel("0 item(ns) selecionado(s)")
-        self.summary_label.setStyleSheet("font-weight: 700;")
+        self.summary_label.setObjectName("ValueLabel")
         root.addWidget(self.summary_label)
 
         footer = QHBoxLayout()
         back = ModernButton("Voltar", "clear")
-        self.advance_button = ModernButton("Buscar materiais disponiveis", "status", accent=True)
+        self.advance_button = ModernButton("Buscar materiais disponíveis", "status", accent=True)
         self.advance_button.setEnabled(False)
         back.clicked.connect(lambda: self.done(self.RESULT_BACK))
         self.advance_button.clicked.connect(self._advance)
@@ -278,7 +278,7 @@ class RemanagementItemSelectionStepDialog(QDialog):
             if data is None or not data.get("selectable") or not data.get("product_code") or quantity <= 0 or quantity > need:
                 QMessageBox.warning(
                     self, "Remanejamento",
-                    "Revise a selecao: ha um item invalido, sem codigo de produto ou com quantidade fora da necessidade.",
+                    "Revise a seleção: há um item inválido, sem código de produto ou com quantidade fora da necessidade.",
                 )
                 return
             selections.append(RemanagementItemSelection(

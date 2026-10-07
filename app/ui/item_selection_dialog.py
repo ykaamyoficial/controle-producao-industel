@@ -45,11 +45,11 @@ class ItemSelectionDialog(QDialog):
         }
         title = titles.get(self.mode, "Selecionar itens")
         heading = QLabel(title)
-        heading.setStyleSheet("font-size: 18px; font-weight: 800;")
-        caption = QLabel("Marque os itens que fazem parte desta movimentacao.")
+        heading.setObjectName("DetailTitle")
+        caption = QLabel("Marque os itens que fazem parte desta movimentação.")
         caption.setObjectName("Caption")
         self.table = QTableWidget(0, 6)
-        self.table.setHorizontalHeaderLabels(["Selecionar", "Item", "Codigo", "Descricao", "Qtd.", "Peso total (kg)"])
+        self.table.setHorizontalHeaderLabels(["Selecionar", "Item", "Código", "Descrição", "Qtd.", "Peso total (kg)"])
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setAlternatingRowColors(True)
         self.table.horizontalHeader().setStretchLastSection(False)
@@ -62,11 +62,11 @@ class ItemSelectionDialog(QDialog):
         configure_wrapping_table(self.table, description_columns=(3,), code_columns=(2,), min_row_height=42)
         self.table.itemChanged.connect(self._update_summary)
         self.summary = QLabel("0 item(ns) | 0 kg")
-        self.summary.setStyleSheet("font-weight: 700;")
+        self.summary.setObjectName("ValueLabel")
         buttons = QHBoxLayout()
         select_all = ModernButton("Selecionar todos", "status")
-        clear = ModernButton("Limpar selecao", "clear")
-        cancel = ModernButton("Cancelar", "clear")
+        clear = ModernButton("Limpar seleção", "clear")
+        cancel = ModernButton("Cancelar", "clear", variant="ghost")
         confirm = ModernButton("Confirmar itens", "status", accent=True)
         select_all.clicked.connect(lambda: self._set_all(True))
         clear.clicked.connect(lambda: self._set_all(False))
@@ -134,7 +134,7 @@ class ItemSelectionDialog(QDialog):
             QMessageBox.warning(
                 self,
                 "Selecionar itens",
-                "Os seguintes itens possuem quantidade fracionada, o que nao e suportado: "
+                "Os seguintes itens possuem quantidade fracionada, o que não é suportado: "
                 + ", ".join(str(value) for value in non_integer_items),
             )
 
@@ -157,7 +157,7 @@ class ItemSelectionDialog(QDialog):
                 weight += row_weight
                 missing_weight = missing_weight or row_weight <= 0
         count_text = format_decimal(count)
-        self.summary.setText(f"{count_text} item(ns) | {weight:g} kg" + (" | ha item(ns) sem peso" if missing_weight else ""))
+        self.summary.setText(f"{count_text} item(ns) | {weight:g} kg" + (" | há item(ns) sem peso" if missing_weight else ""))
 
     def _confirm(self):
         self.selected_ids = [

@@ -386,7 +386,7 @@ class FlowReviewDialogTests(unittest.TestCase):
         QMessageBox.question = staticmethod(lambda *a, **k: (captured.append(a[2] if len(a) > 2 else ""), QMessageBox.No)[1])
         dialog.overwrite_checkbox.setChecked(True)
         self.assertTrue(captured)
-        self.assertIn("2 excecao", captured[0])
+        self.assertIn("2 exceção", captured[0])
         self.assertFalse(dialog.overwrite_checkbox.isChecked())  # declining reverts the checkbox
 
     def test_closing_with_unsaved_changes_prompts_and_can_be_cancelled(self):

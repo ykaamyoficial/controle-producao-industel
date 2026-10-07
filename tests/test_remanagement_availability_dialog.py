@@ -103,7 +103,7 @@ class RemanagementAvailabilityStepDialogTests(unittest.TestCase):
     def test_empty_state_shown_for_item_without_candidates(self):
         dialog = RemanagementAvailabilityStepDialog(FakeAvailabilityService(), None, _state_with_selection())
         texts = _summary_texts(dialog)
-        self.assertTrue(any("Nenhum material pronto disponivel" in text for text in texts))
+        self.assertTrue(any("Nenhum material pronto disponível" in text for text in texts))
 
     def test_coverage_labels_rendered_in_portuguese(self):
         dialog = RemanagementAvailabilityStepDialog(FakeAvailabilityService(), None, _state_with_selection())

@@ -169,6 +169,19 @@ Detalhes da proposta é o segundo protótipo aprovado. Central de ações: a ord
 
 Aqui entra o rodapé de ações (Cancelar, Voltar, confirmar) e o indicador de passo nos assistentes. Clique fora **não** fecha.
 
+**Andamento (07/10/2026):**
+
+| Entrega | Situação |
+|---|---|
+| Os 14 diálogos: textos exibidos acentuados (títulos, rótulos, colunas, dicas, avisos, mensagens de `QMessageBox`) | Feito |
+| Cancelar/Fechar/Limpar como botão fantasma; títulos e destaques pela folha de estilo em vez de estilo inline | Feito |
+| Um único botão primário por diálogo | Feito - só dois tinham dois ("Adicionar item" no cadastro de proposta e "Aplicar" na lista de cargas viraram secundários) |
+| Véu, cantos e botões animados | Já vinham da Onda 0 |
+| **Layout dos diálogos (cabeçalho-cartão, painéis, rodapé de ações padronizado, indicador de passo)** | **Não feito** - os diálogos continuam com a disposição de antes; só a "pele" mudou. Refazer cada um pede protótipo e conferência no sistema real, como foi com Detalhes da proposta |
+| Estilos inline restantes nesses arquivos | Não removidos (cores de alerta e destaques específicos) |
+
+A passada foi mecânica (ferramenta que só toca texto exibido, nunca chaves ou códigos) e conferida pela suíte: 6 testes que comparavam os textos antigos foram atualizados.
+
 ### Onda 5 — Fiscal e Nomus (G)
 
 `fiscal_emission_dialog.py`, `fiscal_emission_draft_dialog.py`, `fiscal_emission_review_dialog.py`, `fiscal_item_selection_dialog.py`, `nomus_api_import_dialog.py`, `nomus_api_settings_dialog.py`, `nomus_batch_import_dialog.py`, `nomus_batch_conference_dialog.py`, `nomus_import_progress_dialog.py`, `proposal_import_dialog.py`, `api_proposals_readonly_dialog.py`.

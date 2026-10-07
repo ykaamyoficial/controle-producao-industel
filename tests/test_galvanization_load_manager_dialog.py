@@ -272,7 +272,7 @@ class GalvanizationLoadManagerDialogTests(unittest.TestCase):
         with patch("app.ui.galvanization_load_dialog.current_date", return_value=date(2026, 7, 19)):
             dialog = GalvanizationLoadManagerDialog(self.service)
 
-        self.assertEqual(dialog.table.horizontalHeaderItem(0).text(), "Acao")
+        self.assertEqual(dialog.table.horizontalHeaderItem(0).text(), "Ação")
         self.assertEqual(dialog.table.horizontalHeaderItem(1).text(), "Carga")
         self.assertEqual(dialog.table.rowCount(), 3)
         self.assertFalse(hasattr(dialog, "load_proposals"))

@@ -63,10 +63,10 @@ class RemanagementReviewStepDialog(QDialog):
         root.setSpacing(12)
 
         title = QLabel("6. Revisar remanejamento")
-        title.setStyleSheet("font-size: 18px; font-weight: 800;")
+        title.setObjectName("DetailTitle")
         root.addWidget(title)
 
-        notice = QLabel("Esta operacao NAO registra entrega ao cliente. Ela apenas realoca material pronto entre propostas e transfere a obrigacao produtiva equivalente.")
+        notice = QLabel("Esta operação NÃO registra entrega ao cliente. Ela apenas realoca material pronto entre propostas e transfere a obrigação produtiva equivalente.")
         notice.setObjectName("Caption")
         notice.setWordWrap(True)
         root.addWidget(notice)
@@ -79,7 +79,7 @@ class RemanagementReviewStepDialog(QDialog):
         self.destination_label.setWordWrap(True)
         destination_layout.addWidget(self.destination_label)
         self.summary_label = QLabel("")
-        self.summary_label.setStyleSheet("font-weight: 700;")
+        self.summary_label.setObjectName("ValueLabel")
         self.summary_label.setWordWrap(True)
         destination_layout.addWidget(self.summary_label)
         root.addWidget(self.destination_frame)
@@ -103,7 +103,7 @@ class RemanagementReviewStepDialog(QDialog):
 
         root.addWidget(QLabel("Motivo do remanejamento *"))
         self.reason_edit = QTextEdit()
-        self.reason_edit.setPlaceholderText("Descreva o motivo real desta operacao (obrigatorio).")
+        self.reason_edit.setPlaceholderText("Descreva o motivo real desta operação (obrigatório).")
         self.reason_edit.setMaximumHeight(72)
         self.reason_edit.setPlainText(self.state.reason)
         self.reason_edit.textChanged.connect(self._on_reason_changed)
@@ -208,11 +208,11 @@ class RemanagementReviewStepDialog(QDialog):
         non_reason_errors = [error for error in result.errors if error.code != "REASON_REQUIRED"]
         if non_reason_errors:
             messages = "; ".join(error.message for error in non_reason_errors[:3])
-            self.warnings_label.setText(f"Erros que impedem a confirmacao: {messages}")
+            self.warnings_label.setText(f"Erros que impedem a confirmação: {messages}")
             self.warnings_label.setStyleSheet("color: #c0392b; font-weight: 600;")
             self.warnings_label.setVisible(True)
         elif result.warnings:
-            self.warnings_label.setText("Atencao: " + " | ".join(result.warnings))
+            self.warnings_label.setText("Atenção: " + " | ".join(result.warnings))
             self.warnings_label.setStyleSheet("")
             self.warnings_label.setVisible(True)
         else:
@@ -267,7 +267,7 @@ class RemanagementReviewStepDialog(QDialog):
         destination_label = (self.destination_summary or {}).get("proposta") or ""
 
         heading = QLabel(f"Produto {item.product_code} - {description}")
-        heading.setStyleSheet("font-weight: 700;")
+        heading.setObjectName("ValueLabel")
         heading.setWordWrap(True)
         layout.addWidget(heading)
 
@@ -282,7 +282,7 @@ class RemanagementReviewStepDialog(QDialog):
         layout.addWidget(indicator)
 
         if item.status == "PARCIAL":
-            partial_notice = QLabel(f"Atencao: {format_decimal(item.remaining)} {unit} continuarao sem atendimento por remanejamento.")
+            partial_notice = QLabel(f"Atenção: {format_decimal(item.remaining)} {unit} continuarão sem atendimento por remanejamento.")
             partial_notice.setObjectName("Caption")
             layout.addWidget(partial_notice)
 
@@ -294,26 +294,26 @@ class RemanagementReviewStepDialog(QDialog):
 
         if item.sources:
             ready_header = QLabel("MATERIAL PRONTO (origem -> destino)")
-            ready_header.setStyleSheet("font-weight: 700;")
+            ready_header.setObjectName("ValueLabel")
             layout.addWidget(ready_header)
             for source in item.sources:
                 proposal_number, source_unit = self._display_source(item.destination_item_id, source.source_proposal_id, source.source_item_id)
                 display_unit = source_unit or unit
                 line = QLabel(
                     f"{proposal_number} -- {format_decimal(source.ready_transfer)} {display_unit} --> {destination_label}"
-                    f"    (Pronto na Expedicao: {format_decimal(source.source_before)} -> {format_decimal(source.source_after_simulated)})"
+                    f"    (Pronto na Expedição: {format_decimal(source.source_before)} -> {format_decimal(source.source_after_simulated)})"
                 )
                 line.setWordWrap(True)
                 layout.addWidget(line)
 
-            obligation_header = QLabel("OBRIGACAO DE PRODUCAO (destino -> origem)")
-            obligation_header.setStyleSheet("font-weight: 700;")
+            obligation_header = QLabel("OBRIGAÇÃO DE PRODUÇÃO (destino -> origem)")
+            obligation_header.setObjectName("ValueLabel")
             layout.addWidget(obligation_header)
             for source in item.sources:
                 proposal_number, source_unit = self._display_source(item.destination_item_id, source.source_proposal_id, source.source_item_id)
                 display_unit = source_unit or unit
                 line = QLabel(
-                    f"{destination_label} -- obrigacao equivalente {format_decimal(source.production_compensation)} {display_unit} --> {proposal_number}"
+                    f"{destination_label} -- obrigação equivalente {format_decimal(source.production_compensation)} {display_unit} --> {proposal_number}"
                 )
                 line.setWordWrap(True)
                 layout.addWidget(line)

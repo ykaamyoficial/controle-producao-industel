@@ -39,13 +39,13 @@ class ItemWeightDialog(QDialog):
         process = self.service.get_process_dict(self.process_id)
         title = QLabel(f"{process.get('proposta') or '-'} | {process.get('cliente') or '-'}")
         title.setStyleSheet("font-size: 19px; font-weight: 800;")
-        subtitle = QLabel("Informe o peso unitario dos itens. Descricao e quantidade permanecem inalteradas.")
+        subtitle = QLabel("Informe o peso unitário dos itens. Descrição e quantidade permanecem inalteradas.")
         subtitle.setObjectName("Caption")
         root.addWidget(title)
         root.addWidget(subtitle)
 
         self.table = QTableWidget(0, 6)
-        self.table.setHorizontalHeaderLabels(["Item", "Codigo", "Descricao", "Quantidade", "Peso atual (kg)", "Novo peso (kg)"])
+        self.table.setHorizontalHeaderLabels(["Item", "Código", "Descrição", "Quantidade", "Peso atual (kg)", "Novo peso (kg)"])
         configure_wrapping_table(
             self.table,
             description_columns=(2,),
@@ -82,7 +82,7 @@ class ItemWeightDialog(QDialog):
 
         footer = QHBoxLayout()
         footer.addStretch()
-        cancel = ModernButton("Cancelar", "clear")
+        cancel = ModernButton("Cancelar", "clear", variant="ghost")
         save = ModernButton("Salvar pesos", "save", accent=True)
         cancel.clicked.connect(self.reject)
         save.clicked.connect(self.save)

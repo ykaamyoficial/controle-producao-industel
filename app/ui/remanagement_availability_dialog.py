@@ -51,8 +51,8 @@ class RemanagementAvailabilityStepDialog(QDialog):
         root.setContentsMargins(22, 20, 22, 18)
         root.setSpacing(12)
 
-        title = QLabel("3. Materiais prontos encontrados na Expedicao")
-        title.setStyleSheet("font-size: 18px; font-weight: 800;")
+        title = QLabel("3. Materiais prontos encontrados na Expedição")
+        title.setObjectName("DetailTitle")
         root.addWidget(title)
 
         self.destination_frame = QFrame()
@@ -78,7 +78,7 @@ class RemanagementAvailabilityStepDialog(QDialog):
         footer = QHBoxLayout()
         refresh = ModernButton("Atualizar", "status")
         back = ModernButton("Voltar", "clear")
-        self.advance_button = ModernButton("Avancar para alocacao", "status", accent=True)
+        self.advance_button = ModernButton("Avançar para alocação", "status", accent=True)
         self.advance_button.setEnabled(False)
         refresh.clicked.connect(self._refresh_clicked)
         back.clicked.connect(lambda: self.done(self.RESULT_BACK))
@@ -150,7 +150,7 @@ class RemanagementAvailabilityStepDialog(QDialog):
         unit = group.get("unit") or ""
         requested = format_decimal(group.get("requested_quantity"))
         heading = QLabel(f"Produto {group.get('product_code') or ''} - {group.get('description') or ''}")
-        heading.setStyleSheet("font-weight: 700;")
+        heading.setObjectName("ValueLabel")
         heading.setWordWrap(True)
         subtitle = QLabel(f"Solicitado no destino: {requested} {unit}".strip())
         subtitle.setObjectName("Caption")
@@ -159,14 +159,14 @@ class RemanagementAvailabilityStepDialog(QDialog):
 
         candidates = group.get("candidates") or []
         if not candidates:
-            empty = QLabel("Nenhum material pronto disponivel na Expedicao para este codigo.")
+            empty = QLabel("Nenhum material pronto disponível na Expedição para este código.")
             empty.setObjectName("Caption")
             empty.setWordWrap(True)
             layout.addWidget(empty)
             return frame
 
         table = QTableWidget(len(candidates), 5)
-        table.setHorizontalHeaderLabels(["Proposta origem", "Cliente", "Obra/Site", "Disponivel", "Status"])
+        table.setHorizontalHeaderLabels(["Proposta origem", "Cliente", "Obra/Site", "Disponível", "Status"])
         table.verticalHeader().setVisible(False)
         table.setEditTriggers(QTableWidget.NoEditTriggers)
         table.setSelectionMode(QTableWidget.NoSelection)
@@ -189,8 +189,8 @@ class RemanagementAvailabilityStepDialog(QDialog):
 
         total_available = format_decimal(group.get("total_available"))
         coverage_label = COVERAGE_LABELS.get(group.get("coverage_status"), group.get("coverage_status") or "-")
-        summary = QLabel(f"Disponivel encontrado: {total_available} {unit} | Cobertura: {coverage_label}".strip())
-        summary.setStyleSheet("font-weight: 700;")
+        summary = QLabel(f"Disponível encontrado: {total_available} {unit} | Cobertura: {coverage_label}".strip())
+        summary.setObjectName("ValueLabel")
         layout.addWidget(summary)
         return frame
 

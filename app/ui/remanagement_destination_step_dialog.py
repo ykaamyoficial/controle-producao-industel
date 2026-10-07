@@ -44,9 +44,9 @@ class RemanagementDestinationStepDialog(QDialog):
         root.setSpacing(12)
 
         title = QLabel("1. Proposta destino")
-        title.setStyleSheet("font-size: 18px; font-weight: 800;")
+        title.setObjectName("DetailTitle")
         caption = QLabel(
-            "Escolha a proposta que recebera o material pronto. Depois de avancar, o sistema "
+            "Escolha a proposta que recebera o material pronto. Depois de avançar, o sistema "
             "descobre automaticamente quais propostas podem fornecer esse material."
         )
         caption.setObjectName("Caption")
@@ -80,8 +80,8 @@ class RemanagementDestinationStepDialog(QDialog):
         root.addWidget(self.summary)
 
         footer = QHBoxLayout()
-        cancel = ModernButton("Cancelar", "clear")
-        self.advance_button = ModernButton("Avancar para selecionar itens", "status", accent=True)
+        cancel = ModernButton("Cancelar", "clear", variant="ghost")
+        self.advance_button = ModernButton("Avançar para selecionar itens", "status", accent=True)
         self.advance_button.setEnabled(False)
         cancel.clicked.connect(self.reject)
         self.advance_button.clicked.connect(self._advance)
@@ -167,7 +167,7 @@ class RemanagementDestinationStepDialog(QDialog):
         if not any(int(row["id"]) == selected_id for row in candidates):
             QMessageBox.warning(
                 self, "Remanejamento",
-                "A proposta selecionada nao esta mais disponivel como destino. Escolha novamente.",
+                "A proposta selecionada não está mais disponível como destino. Escolha novamente.",
             )
             self._load_candidates()
             return

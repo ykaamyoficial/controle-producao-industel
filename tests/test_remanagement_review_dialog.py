@@ -162,16 +162,16 @@ class RemanagementReviewStepDialogTests(unittest.TestCase):
         dialog = RemanagementReviewStepDialog(service, None, _state_with_allocations())
         text = _all_group_text(dialog)
         self.assertIn("MATERIAL PRONTO", text)
-        self.assertIn("OBRIGACAO DE PRODUCAO", text)
+        self.assertIn("OBRIGAÇÃO DE PRODUÇÃO", text)
         ready_index = text.index("MATERIAL PRONTO")
-        obligation_index = text.index("OBRIGACAO DE PRODUCAO")
+        obligation_index = text.index("OBRIGAÇÃO DE PRODUÇÃO")
         self.assertLess(ready_index, obligation_index)
 
     def test_before_after_balance_is_shown_per_source(self):
         service = FakeReviewService()
         dialog = RemanagementReviewStepDialog(service, None, _state_with_allocations())
         text = _all_group_text(dialog)
-        self.assertIn("Pronto na Expedicao: 15 -> 3", text)
+        self.assertIn("Pronto na Expedição: 15 -> 3", text)
 
     def test_partial_coverage_shows_attention_notice(self):
         service = FakeReviewService()
@@ -182,8 +182,8 @@ class RemanagementReviewStepDialogTests(unittest.TestCase):
         service.response["summary"]["partial_items"] = 1
         dialog = RemanagementReviewStepDialog(service, None, _state_with_allocations())
         text = _all_group_text(dialog)
-        self.assertIn("Atencao", text)
-        self.assertIn("continuarao sem atendimento", text)
+        self.assertIn("Atenção", text)
+        self.assertIn("continuarão sem atendimento", text)
 
     def test_invalid_item_blocks_confirm_and_shows_error(self):
         service = FakeReviewService()

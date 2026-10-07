@@ -216,7 +216,7 @@ class FlowReviewDialog(QDialog):
         root.setSpacing(12)
 
         self.header_label = QLabel("Carregando propostas e itens...")
-        self.header_label.setStyleSheet("font-size: 16px; font-weight: 800;")
+        self.header_label.setObjectName("DetailTitle")
         self.header_label.setWordWrap(True)
         root.addWidget(self.header_label)
 
@@ -233,7 +233,7 @@ class FlowReviewDialog(QDialog):
         layout.setContentsMargins(12, 10, 12, 10)
         layout.setSpacing(6)
         heading = QLabel(title)
-        heading.setStyleSheet("font-size: 13px; font-weight: 800;")
+        heading.setObjectName("PanelTitle")
         layout.addWidget(heading)
         if description:
             caption = QLabel(description)
@@ -300,7 +300,7 @@ class FlowReviewDialog(QDialog):
             "Ao salvar",
             "Use a mesma validacao da acao manual para iniciar ou retomar a producao depois que todo o fluxo for salvo.",
         )
-        self.auto_start_checkbox = QCheckBox("Iniciar producao automaticamente ao salvar este fluxo")
+        self.auto_start_checkbox = QCheckBox("Iniciar produção automaticamente ao salvar este fluxo")
         self.auto_start_frame.layout().addWidget(self.auto_start_checkbox)
         layout.addWidget(self.auto_start_frame)
 
@@ -309,9 +309,9 @@ class FlowReviewDialog(QDialog):
             "Escolha se a rota deve completar apenas lacunas ou revisar todo o conjunto editavel.",
         )
         scope_layout = scope_frame.layout()
-        self.scope_undefined_radio = QRadioButton("Aplicar somente aos itens nao definidos")
+        self.scope_undefined_radio = QRadioButton("Aplicar somente aos itens não definidos")
         self.scope_undefined_radio.setChecked(True)
-        self.scope_all_radio = QRadioButton("Aplicar a todos os itens editaveis")
+        self.scope_all_radio = QRadioButton("Aplicar a todos os itens editáveis")
         scope_layout.addWidget(self.scope_undefined_radio)
         scope_layout.addWidget(self.scope_all_radio)
         layout.addWidget(scope_frame)
@@ -323,9 +323,9 @@ class FlowReviewDialog(QDialog):
         exceptions_layout = exceptions_frame.layout()
         self.exception_group = QButtonGroup(self)
         self.exception_group.setExclusive(True)
-        self.preserve_checkbox = QRadioButton("Preservar excecoes existentes")
+        self.preserve_checkbox = QRadioButton("Preservar exceções existentes")
         self.preserve_checkbox.setChecked(True)
-        self.overwrite_checkbox = QRadioButton("Sobrescrever excecoes ja cadastradas")
+        self.overwrite_checkbox = QRadioButton("Sobrescrever exceções já cadastradas")
         self.exception_group.addButton(self.preserve_checkbox)
         self.exception_group.addButton(self.overwrite_checkbox)
         self.overwrite_checkbox.toggled.connect(self._on_overwrite_toggled)
@@ -362,7 +362,7 @@ class FlowReviewDialog(QDialog):
         page_layout.addWidget(self.setup_scroll, 1)
 
         footer = QHBoxLayout()
-        cancel = ModernButton("Cancelar", "clear")
+        cancel = ModernButton("Cancelar", "clear", variant="ghost")
         cancel.clicked.connect(self.reject)
         self.continue_button = ModernButton("Continuar", "next", accent=True)
         self.continue_button.clicked.connect(self._continue_to_review)
@@ -390,7 +390,7 @@ class FlowReviewDialog(QDialog):
         filters = QHBoxLayout()
         filters.setSpacing(8)
         self.search_edit = QLineEdit()
-        self.search_edit.setPlaceholderText("Buscar por proposta, cliente, codigo ou descricao")
+        self.search_edit.setPlaceholderText("Buscar por proposta, cliente, código ou descrição")
         self.search_edit.textChanged.connect(self._apply_filters)
         self.quick_filter_combo = QComboBox()
         for key, label in _QUICK_FILTERS:
@@ -454,7 +454,7 @@ class FlowReviewDialog(QDialog):
         back_btn.clicked.connect(lambda: self.stack.setCurrentIndex(0))
         footer.addWidget(back_btn)
         footer.addStretch()
-        cancel = ModernButton("Cancelar", "clear")
+        cancel = ModernButton("Cancelar", "clear", variant="ghost")
         cancel.clicked.connect(self.reject)
         self.save_button = ModernButton("Salvar fluxo", "status", accent=True)
         self.save_button.clicked.connect(self._confirm_and_save)
@@ -518,7 +518,7 @@ class FlowReviewDialog(QDialog):
             undefined = sum(1 for item in proposal.items if item.original_route == FlowRoute.INDEFINIDO)
             self.header_label.setText(
                 f"{proposal.proposal_number} — {proposal.customer_name}\n"
-                f"{len(proposal.items)} itens | {existing_exceptions} definidos | {undefined} nao definidos"
+                f"{len(proposal.items)} itens | {existing_exceptions} definidos | {undefined} não definidos"
             )
         else:
             self.header_label.setText(f"{len(self.proposals)} propostas selecionadas\n{total_items} itens encontrados")
@@ -582,8 +582,8 @@ class FlowReviewDialog(QDialog):
             return
         answer = QMessageBox.question(
             self,
-            "Sobrescrever excecoes",
-            f"Atencao: {affected} excecao(oes) existente(s) poderao ser substituidas.\n\nDeseja continuar?",
+            "Sobrescrever exceções",
+            f"Atenção: {affected} exceção(ões) existente(s) poderão ser substituídas.\n\nDeseja continuar?",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,
         )
@@ -781,7 +781,7 @@ class FlowReviewDialog(QDialog):
                 suffix = f" (+{len(issues) - 1})" if len(issues) > 1 else ""
                 message = f"Nao e possivel salvar: {preview}{suffix}"
             self.validation_button.setText(message)
-            self.validation_button.setToolTip("Clique para localizar a primeira pendencia.")
+            self.validation_button.setToolTip("Clique para localizar a primeira pendência.")
             self.validation_button.setVisible(True)
         else:
             self.validation_button.setVisible(False)
@@ -949,7 +949,7 @@ class FlowReviewDialog(QDialog):
                 lines.extend(f"- {reason}" for reason in sorted(locked_reasons))
                 QMessageBox.information(self, "Definir fluxo dos itens", "\n".join(lines))
             else:
-                QMessageBox.information(self, "Definir fluxo dos itens", "Nenhuma alteracao para salvar.")
+                QMessageBox.information(self, "Definir fluxo dos itens", "Nenhuma alteração para salvar.")
             return
         summary = summarize(self.proposals)
         if len(self.proposals) == 1:
@@ -1028,7 +1028,7 @@ class FlowReviewDialog(QDialog):
             if not auto_start_requested:
                 ToastNotification(self.window(), "Fluxo salvo com sucesso.", "success")
             elif not start_errors:
-                ToastNotification(self.window(), "Fluxo salvo e producao iniciada com sucesso.", "success")
+                ToastNotification(self.window(), "Fluxo salvo e produção iniciada com sucesso.", "success")
             else:
                 started_count = len(start_results) - len(start_errors)
                 if started_count:
@@ -1040,7 +1040,7 @@ class FlowReviewDialog(QDialog):
                     lines = ["Fluxo salvo com sucesso, mas nao foi possivel iniciar a producao automaticamente."]
                 for result in start_errors:
                     lines.append(f"{result['proposal'].proposal_number}: {result['error']}")
-                QMessageBox.warning(self, "Inicio automatico da producao", "\n".join(lines))
+                QMessageBox.warning(self, "Início automático da produção", "\n".join(lines))
             self.accept()
             return
         lines = [f"{len(saved)} proposta(s) salva(s) com sucesso." if saved else "Nenhuma proposta foi salva."]
@@ -1096,13 +1096,13 @@ class FlowReviewDialog(QDialog):
         if conflicted_field_count:
             ToastNotification(
                 self.window(),
-                f"{conflicted_field_count} item(ns) foram alterados por outro usuario e mantiveram o valor do servidor. Revise antes de salvar novamente.",
+                f"{conflicted_field_count} item(ns) foram alterados por outro usuário e mantiveram o valor do servidor. Revise antes de salvar novamente.",
                 "error",
             )
 
     def _reload_conflicted_error(self, exc: Exception) -> None:
         log.error("Erro ao recarregar proposta em conflito: %s", exc)
-        QMessageBox.warning(self, "Definir fluxo dos itens", f"Nao foi possivel recarregar a proposta em conflito: {exc}")
+        QMessageBox.warning(self, "Definir fluxo dos itens", f"Não foi possível recarregar a proposta em conflito: {exc}")
 
     # ------------------------------------------------------------------ close guard
 
@@ -1116,7 +1116,7 @@ class FlowReviewDialog(QDialog):
             answer = QMessageBox.question(
                 self,
                 "Definir fluxo dos itens",
-                "Existem alteracoes de fluxo ainda nao salvas.\n\nDeseja sair e descartar essas alteracoes?",
+                "Existem alterações de fluxo ainda não salvas.\n\nDeseja sair e descartar essas alterações?",
                 QMessageBox.Yes | QMessageBox.No,
                 QMessageBox.No,
             )
