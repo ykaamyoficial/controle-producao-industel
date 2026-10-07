@@ -3,7 +3,7 @@ from __future__ import annotations
 from uuid import uuid4
 
 from PySide6.QtWidgets import (
-    QComboBox, QDialog, QFormLayout, QFrame, QHBoxLayout, QLabel, QMessageBox, QTextEdit, QVBoxLayout,
+    QComboBox, QDialog, QFormLayout, QFrame, QLabel, QMessageBox, QTextEdit, QVBoxLayout,
 )
 
 from app.ui.action_center.handlers.control_general import ControlGeneralStatusHandler
@@ -24,7 +24,9 @@ from app.ui.action_center.provider import (
 )
 from app.ui.action_center.proposal_action_center import ProposalActionCenter
 from app.ui.action_center.registry import ActionRegistry
+from app.ui.components.dialog_shell import dialog_footer, dialog_header
 from app.ui.components.modern_button import ModernButton
+from app.ui.dialog_utils import style_dialog_from_parent
 
 # Re-exported for backwards compatibility: callers/tests that imported
 # ProductionPauseDialog from this module keep working - the dialog itself
@@ -125,20 +127,16 @@ class ManualStatusDialog(QDialog):
         self.preview: dict | None = None
         self.setWindowTitle("Correção administrativa")
         self.setMinimumWidth(720)
+        style_dialog_from_parent(self, parent)
         root = QVBoxLayout(self)
-        root.setContentsMargins(24, 22, 24, 20)
-        root.setSpacing(12)
-        warning = QLabel(
-            "Esta é uma operação administrativa auditada. Use somente para corrigir "
-            "uma projeção incompatível com os fatos reais do processo."
-        )
-        warning.setWordWrap(True)
-        warning.setObjectName("PanelTitle")
+        root.setContentsMargins(16, 14, 16, 14)
+        root.setSpacing(10)
+        warning = "Esta é uma operação administrativa auditada. Use somente para corrigir uma projeção incompatível com os fatos reais do processo."
 
         current_frame = QFrame()
-        current_frame.setObjectName("Card")
+        current_frame.setObjectName("DetailPanel")
         current_layout = QFormLayout(current_frame)
-        current_layout.setContentsMargins(14, 12, 14, 12)
+        current_layout.setContentsMargins(16, 14, 16, 14)
         current_layout.setSpacing(8)
         current_layout.addRow("Área atual", QLabel(self._display(self.current_state.get("current_area"))))
         current_layout.addRow("Status atual", QLabel(self._display(self.current_state.get("current_status"))))
@@ -165,19 +163,20 @@ class ManualStatusDialog(QDialog):
         self.save_button.clicked.connect(self.save)
         cancel.clicked.connect(self.reject)
         self.option_combo.currentIndexChanged.connect(self.load_preview)
-        root.addWidget(warning)
+        def field_label(text: str) -> QLabel:
+            label = QLabel(text)
+            label.setObjectName("FieldLabel")
+            return label
+
+        root.addWidget(dialog_header("Correção administrativa", warning))
         root.addWidget(current_frame)
-        root.addWidget(QLabel("Estado desejado (opções calculadas pela API)"))
+        root.addWidget(field_label("Estado desejado (opções calculadas pela API)"))
         root.addWidget(self.option_combo)
-        root.addWidget(QLabel("Impacto da correção"))
+        root.addWidget(field_label("Impacto da correção"))
         root.addWidget(self.impact)
-        root.addWidget(QLabel("Motivo"))
+        root.addWidget(field_label("Motivo"))
         root.addWidget(self.reason)
-        footer = QHBoxLayout()
-        footer.addStretch()
-        footer.addWidget(cancel)
-        footer.addWidget(self.save_button)
-        root.addLayout(footer)
+        root.addWidget(dialog_footer(right=[cancel, self.save_button]))
         self.load_preview()
 
     @staticmethod

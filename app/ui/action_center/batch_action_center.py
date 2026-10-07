@@ -16,6 +16,7 @@ from app.ui.action_center.handlers.galvanization import (
 )
 from app.ui.background_worker import start_worker
 from app.ui.components.action_card_button import ActionCardButton
+from app.ui.components.dialog_shell import dialog_header
 from app.ui.components.modern_button import ModernButton
 from app.ui.components.status_badge import area_badge, neutral_badge
 from app.ui.dialog_utils import style_dialog_from_parent
@@ -358,7 +359,7 @@ class BatchProposalActionCenter(QDialog):
         root.setContentsMargins(20, 16, 20, 14)
         root.setSpacing(12)
 
-        root.addLayout(self._build_header(palette))
+        root.addWidget(self._build_header(palette))
 
         instruction = QLabel("Ações disponíveis")
         instruction.setObjectName("PanelTitle")
@@ -384,18 +385,13 @@ class BatchProposalActionCenter(QDialog):
 
         root.addLayout(self._build_footer())
 
-    def _build_header(self, palette) -> QVBoxLayout:
-        header = QVBoxLayout()
-        header.setSpacing(4)
+    def _build_header(self, palette) -> QFrame:
         count = len(self.item_ids) if self.item_rows else len(self.process_ids)
         if self.item_rows:
             title = f"{count} {'item' if count == 1 else 'itens'} selecionado{'s' if count != 1 else ''}"
         else:
             title = f"{count} proposta{'s' if count != 1 else ''} selecionada{'s' if count != 1 else ''}"
         self._title_label = QLabel(title)
-        self._title_label.setObjectName("DetailTitle")
-        self._title_label.setWordWrap(True)
-        header.addWidget(self._title_label)
 
         badges = QHBoxLayout()
         badges.setContentsMargins(0, 0, 0, 0)
@@ -408,9 +404,7 @@ class BatchProposalActionCenter(QDialog):
             badges.addWidget(
                 neutral_badge(f"{proposals} proposta{'s' if proposals != 1 else ''}", palette)
             )
-        badges.addStretch()
-        header.addLayout(badges)
-        return header
+        return dialog_header(self._title_label, status=[badges])
 
     def _populate_actions(self, layout: QVBoxLayout, palette):
         if not self.actions:

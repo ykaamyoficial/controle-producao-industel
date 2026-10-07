@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
 from app.ui.action_center.descriptor import ActionCategory, ActionDescriptor
 from app.ui.action_center.provider import CATEGORY_TO_CARD_TYPE
 from app.ui.components.action_card_button import ActionCardButton
+from app.ui.components.dialog_shell import dialog_header
 from app.ui.components.modern_button import ModernButton
 from app.ui.components.status_badge import area_badge, neutral_badge
 from app.ui.dialog_utils import style_dialog_from_parent
@@ -62,9 +63,9 @@ class GalvanizationLoadActionCenter(QDialog):
     def _build(self):
         palette = self.service.palette
         root = QVBoxLayout(self)
-        root.setContentsMargins(20, 16, 20, 14)
-        root.setSpacing(12)
-        root.addLayout(self._header(palette))
+        root.setContentsMargins(16, 14, 16, 14)
+        root.setSpacing(10)
+        root.addWidget(self._header(palette))
 
         title = QLabel("Ações disponíveis")
         title.setObjectName("PanelTitle")
@@ -105,16 +106,10 @@ class GalvanizationLoadActionCenter(QDialog):
         footer.addWidget(close)
         root.addLayout(footer)
 
-    def _header(self, palette) -> QVBoxLayout:
-        header = QVBoxLayout()
-        header.setSpacing(4)
+    def _header(self, palette) -> QFrame:
         load_id = self.load.get("id") or "-"
         driver = str(self.load.get("motorista") or "").strip()
         title = QLabel(f"Carga #{load_id}" + (f" — {driver}" if driver else ""))
-        title.setObjectName("DetailTitle")
-        title.setWordWrap(True)
-        header.addWidget(title)
-
         badges = QHBoxLayout()
         badges.setContentsMargins(0, 0, 0, 0)
         area = area_badge("Galvanização", palette.get("area_galvanization", palette["accent"]))
@@ -123,9 +118,7 @@ class GalvanizationLoadActionCenter(QDialog):
         status_label = self.service.load_status_label(status) if hasattr(self.service, "load_status_label") else status
         if status_label:
             badges.addWidget(neutral_badge(status_label, palette))
-        badges.addStretch()
-        header.addLayout(badges)
-        return header
+        return dialog_header(title, status=[badges])
 
     def _descriptors(self) -> list[ActionDescriptor]:
         actions = [

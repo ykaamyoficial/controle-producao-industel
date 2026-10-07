@@ -3,6 +3,7 @@ from __future__ import annotations
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QAbstractItemView, QDialog, QHeaderView, QLabel, QTableWidget, QTableWidgetItem, QVBoxLayout
 
+from app.ui.components.dialog_shell import dialog_header
 from app.ui.components.modern_button import ModernButton
 from app.ui.dialog_utils import apply_large_dialog_geometry, style_dialog_from_parent
 
@@ -15,15 +16,14 @@ class DashboardDetailsDialog(QDialog):
         apply_large_dialog_geometry(self, parent)
         style_dialog_from_parent(self, parent)
         root = QVBoxLayout(self)
-        root.setContentsMargins(18, 16, 18, 16)
-        root.setSpacing(12)
+        root.setContentsMargins(16, 14, 16, 14)
+        root.setSpacing(10)
 
         heading = QLabel(title)
-        heading.setObjectName("DetailTitle")
         summary = QLabel(f"{len(rows)} proposta(s) relacionada(s)")
-        summary.setObjectName("Caption")
-        root.addWidget(heading)
-        root.addWidget(summary)
+        close = ModernButton("Fechar", "clear", variant="ghost")
+        close.clicked.connect(self.accept)
+        root.addWidget(dialog_header(heading, summary, actions=[close]))
 
         table = QTableWidget(0, 6)
         table.setHorizontalHeaderLabels(["Proposta", "Cliente", "Obra/Site", "Localização", "Status", "Prazo"])
@@ -63,6 +63,4 @@ class DashboardDetailsDialog(QDialog):
                 table.setItem(row, column, item)
         root.addWidget(table, 1)
 
-        close = ModernButton("Fechar", "clear", variant="ghost")
-        close.clicked.connect(self.accept)
-        root.addWidget(close, 0, Qt.AlignRight)
+

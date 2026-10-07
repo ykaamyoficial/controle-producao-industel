@@ -14,6 +14,7 @@ from app.ui.action_center.provider import AREA_COLOR_KEYS, CATEGORY_TO_CARD_TYPE
 from app.ui.action_center.registry import ActionRegistry
 from app.ui.background_worker import start_worker
 from app.ui.components.action_card_button import ActionCardButton
+from app.ui.components.dialog_shell import dialog_header
 from app.ui.components.modern_button import ModernButton
 from app.ui.components.status_badge import area_badge, neutral_badge
 from app.ui.dialog_utils import style_dialog_from_parent
@@ -106,10 +107,10 @@ class ProposalActionCenter(QDialog):
     def _build(self):
         palette = self.service.palette
         root = QVBoxLayout(self)
-        root.setContentsMargins(20, 16, 20, 14)
-        root.setSpacing(12)
+        root.setContentsMargins(16, 14, 16, 14)
+        root.setSpacing(10)
 
-        root.addLayout(self._build_header(palette))
+        root.addWidget(self._build_header(palette))
 
         instruction = QLabel("Ações disponíveis")
         instruction.setObjectName("PanelTitle")
@@ -135,22 +136,16 @@ class ProposalActionCenter(QDialog):
 
         root.addLayout(self._build_footer())
 
-    def _build_header(self, palette) -> QVBoxLayout:
-        header = QVBoxLayout()
-        header.setSpacing(4)
+    def _build_header(self, palette) -> QFrame:
         self._title_label = QLabel()
-        self._title_label.setObjectName("DetailTitle")
-        self._title_label.setWordWrap(True)
-        header.addWidget(self._title_label)
 
         self._badges_widget = QWidget()
         self._badges_layout = QHBoxLayout(self._badges_widget)
         self._badges_layout.setContentsMargins(0, 0, 0, 0)
         self._badges_layout.setSpacing(6)
-        header.addWidget(self._badges_widget)
 
         self._update_header(palette)
-        return header
+        return dialog_header(self._title_label, status=[self._badges_widget])
 
     def _update_header(self, palette):
         self._title_label.setText(f"{self.process.get('proposta', '')} — {self.process.get('cliente', '')}")

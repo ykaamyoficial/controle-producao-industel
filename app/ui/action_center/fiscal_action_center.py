@@ -7,6 +7,7 @@ from PySide6.QtWidgets import QDialog, QFrame, QGridLayout, QHBoxLayout, QLabel,
 from app.ui.action_center.descriptor import ActionCategory, ActionDescriptor
 from app.ui.action_center.provider import CATEGORY_TO_CARD_TYPE
 from app.ui.components.action_card_button import ActionCardButton
+from app.ui.components.dialog_shell import dialog_header
 from app.ui.components.modern_button import ModernButton
 from app.ui.components.status_badge import area_badge, neutral_badge
 from app.ui.dialog_utils import style_dialog_from_parent
@@ -38,9 +39,9 @@ class FiscalActionCenter(QDialog):
     def _build(self):
         palette = self.service.palette
         root = QVBoxLayout(self)
-        root.setContentsMargins(20, 16, 20, 14)
-        root.setSpacing(12)
-        root.addLayout(self._header(palette))
+        root.setContentsMargins(16, 14, 16, 14)
+        root.setSpacing(10)
+        root.addWidget(self._header(palette))
         label = QLabel("Ações disponíveis")
         label.setObjectName("PanelTitle")
         root.addWidget(label)
@@ -84,15 +85,10 @@ class FiscalActionCenter(QDialog):
         footer.addWidget(close)
         root.addLayout(footer)
 
-    def _header(self, palette) -> QVBoxLayout:
-        root = QVBoxLayout()
-        root.setSpacing(4)
+    def _header(self, palette) -> QFrame:
         proposal = self.fiscal_row.get("proposta") or "Proposta fiscal"
         client = self.fiscal_row.get("cliente") or ""
         title = QLabel(f"{proposal}" + (f" — {client}" if client else ""))
-        title.setObjectName("DetailTitle")
-        title.setWordWrap(True)
-        root.addWidget(title)
         badges = QHBoxLayout()
         badges.setContentsMargins(0, 0, 0, 0)
         area_color = palette.get("area_fiscal", palette["danger"])
@@ -101,9 +97,7 @@ class FiscalActionCenter(QDialog):
         status_label = self.service.fiscal_status_label(status) if hasattr(self.service, "fiscal_status_label") else status
         if status_label:
             badges.addWidget(neutral_badge(status_label, palette))
-        badges.addStretch()
-        root.addLayout(badges)
-        return root
+        return dialog_header(title, status=[badges])
 
     def _descriptors(self) -> list[ActionDescriptor]:
         row = self.fiscal_row

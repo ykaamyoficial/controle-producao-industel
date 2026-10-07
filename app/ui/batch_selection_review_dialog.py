@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QDialog, QHeaderView, QHBoxLayout, QLabel, QTableWidget, QTableWidgetItem, QVBoxLayout
+from PySide6.QtWidgets import QDialog, QHeaderView, QLabel, QTableWidget, QTableWidgetItem, QVBoxLayout
 
 from app.ui.components.batch_selection import BatchSelectionController
+from app.ui.components.dialog_shell import dialog_header
 from app.ui.components.modern_button import ModernButton
 from app.ui.dialog_utils import style_dialog_from_parent
 
@@ -23,11 +24,14 @@ class BatchSelectionReviewDialog(QDialog):
 
     def _build(self) -> None:
         root = QVBoxLayout(self)
-        root.setContentsMargins(20, 18, 20, 16)
+        root.setContentsMargins(16, 14, 16, 14)
         root.setSpacing(10)
         self.title_label = QLabel("")
-        self.title_label.setObjectName("PageTitle")
-        root.addWidget(self.title_label)
+        close_button = ModernButton("Fechar", "close", variant="ghost")
+        close_button.clicked.connect(self.accept)
+        root.addWidget(
+            dialog_header(self.title_label, "Propostas marcadas no modo de seleção. Remova as que não devem entrar na ação.", actions=[close_button])
+        )
         self.table = QTableWidget(0, 4)
         self.table.setHorizontalHeaderLabels(["Proposta", "Cliente", "Obra/Site", ""])
         self.table.verticalHeader().setVisible(False)
@@ -40,15 +44,9 @@ class BatchSelectionReviewDialog(QDialog):
         self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
         root.addWidget(self.table, 1)
         self.empty_label = QLabel("Nenhuma proposta selecionada.")
-        self.empty_label.setObjectName("Caption")
+        self.empty_label.setObjectName("KeyLabel")
         self.empty_label.setAlignment(Qt.AlignCenter)
         root.addWidget(self.empty_label)
-        footer = QHBoxLayout()
-        footer.addStretch()
-        close_button = ModernButton("Fechar", "close", variant="ghost")
-        close_button.clicked.connect(self.accept)
-        footer.addWidget(close_button)
-        root.addLayout(footer)
 
     def refresh(self) -> None:
         rows = self.controller.selected_entities()
