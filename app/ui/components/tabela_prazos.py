@@ -6,6 +6,9 @@ from PySide6.QtWidgets import QGridLayout, QLabel, QVBoxLayout, QWidget
 from app.ui.components.badge_status import BadgeStatus
 
 
+DISPLAY = {"Prox. 7 dias": "Próx. 7 dias"}
+
+
 class TabelaPrazos(QWidget):
     item_clicked = Signal(str)
 
@@ -17,7 +20,7 @@ class TabelaPrazos(QWidget):
         root.setSpacing(12)
         total = sum(values.values())
         summary = QLabel(f"Visão consolidada de {total} processo(s)")
-        summary.setStyleSheet(f"color: {palette['muted']}; font-size: 10px;")
+        summary.setObjectName("KeyLabel")
         root.addWidget(summary)
         grid = QGridLayout()
         grid.setSpacing(10)
@@ -29,7 +32,7 @@ class TabelaPrazos(QWidget):
             ("Entregues", values.get("entregues", 0), palette["success"]),
         ]
         for index, (label, value, color) in enumerate(definitions):
-            badge = BadgeStatus(label, value, color, palette)
+            badge = BadgeStatus(label, value, color, palette, display=DISPLAY.get(label))
             badge.clicked.connect(self.item_clicked)
             grid.addWidget(badge, index // 3, index % 3)
         root.addLayout(grid)
