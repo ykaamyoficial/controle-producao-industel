@@ -166,7 +166,7 @@ class ChatCenterPage(QWidget):
         # ver ChatConversationPanel._build() em proposal_chat_dialog.py.
         self.center_layout.setContentsMargins(0, 0, 0, 0)
         self.center_layout.setSpacing(0)
-        self.empty_center_label = QLabel("Selecione uma conversa a esquerda para comecar.")
+        self.empty_center_label = QLabel("Selecione uma conversa a esquerda para começar.")
         self.empty_center_label.setAlignment(Qt.AlignCenter)
         self.empty_center_label.setObjectName("Caption")
         self.center_layout.addWidget(self.empty_center_label)

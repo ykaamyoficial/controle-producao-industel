@@ -130,7 +130,7 @@ class _SelectGalvanizationLoadDialog(QDialog):
 
         footer = QHBoxLayout()
         footer.addStretch()
-        cancel = ModernButton("Cancelar", AppIcons.CLOSE)
+        cancel = ModernButton("Cancelar", AppIcons.CLOSE, variant="ghost")
         confirm_button = ModernButton(confirm_label, AppIcons.CARGO, accent=True)
         cancel.clicked.connect(self.reject)
         confirm_button.clicked.connect(self._accept_selected)

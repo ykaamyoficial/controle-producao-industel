@@ -37,7 +37,7 @@ class ProductionPauseDialog(QDialog):
 
         footer = QHBoxLayout()
         footer.addStretch()
-        cancel = ModernButton("Cancelar", AppIcons.CLOSE)
+        cancel = ModernButton("Cancelar", AppIcons.CLOSE, variant="ghost")
         pause = ModernButton("Pausar produção", AppIcons.CIRCLE_PAUSE, accent=True)
         cancel.clicked.connect(self.reject)
         pause.clicked.connect(self._accept_pause)
@@ -70,7 +70,7 @@ class RegisterProductionHandler:
             answer = QMessageBox.question(
                 dialog,
                 "Fluxo dos itens",
-                "Existem itens sem definicao de fluxo. Deseja definir agora antes de registrar a producao?",
+                "Existem itens sem definição de fluxo. Deseja definir agora antes de registrar a produção?",
                 QMessageBox.Yes | QMessageBox.No,
                 QMessageBox.Yes,
             )

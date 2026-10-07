@@ -101,17 +101,17 @@ class InternalNoteDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setSpacing(8)
 
-        area_label = QLabel("Area de origem")
+        area_label = QLabel("Área de origem")
         layout.addWidget(area_label)
         self.area_combo = QComboBox()
         for area in NOTE_AREA_OPTIONS:
             self.area_combo.addItem(area.title(), area)
         layout.addWidget(self.area_combo)
 
-        recipient_label = QLabel("Destinatario (opcional)")
+        recipient_label = QLabel("Destinatário (opcional)")
         layout.addWidget(recipient_label)
         self.recipient_combo = QComboBox()
-        self.recipient_combo.addItem("Nenhum — visivel para quem acessa a conversa", None)
+        self.recipient_combo.addItem("Nenhum — visível para quem acessa a conversa", None)
         for user in mentionable_users or []:
             self.recipient_combo.addItem(user.get("display_name") or "-", user.get("id"))
         layout.addWidget(self.recipient_combo)
@@ -122,7 +122,7 @@ class InternalNoteDialog(QDialog):
         body_label = QLabel("Nota")
         layout.addWidget(body_label)
         self.body_edit = QTextEdit()
-        self.body_edit.setPlaceholderText("Descreva a informacao interna importante...")
+        self.body_edit.setPlaceholderText("Descreva a informação interna importante...")
         self.body_edit.setMinimumHeight(100)
         layout.addWidget(self.body_edit)
 
@@ -559,7 +559,7 @@ class ChatConversationPanel(QWidget):
 
         title = QLabel("Nenhuma mensagem nesta proposta")
         title.setAlignment(Qt.AlignCenter)
-        title.setStyleSheet("font-weight: 700; font-size: 13px;")
+        title.setObjectName("PanelTitle")
         layout.addWidget(title)
 
         subtitle = QLabel("Inicie uma conversa com os participantes da proposta.")
@@ -684,7 +684,7 @@ class ChatConversationPanel(QWidget):
         title_col = QVBoxLayout()
         title_col.setSpacing(0)
         proposal_label = QLabel(proposal.get("proposta") or str(self.proposal_id))
-        proposal_label.setStyleSheet("font-size: 17px; font-weight: 800;")
+        proposal_label.setObjectName("DetailTitle")
         title_col.addWidget(proposal_label)
         client_label = QLabel(proposal.get("cliente") or "-")
         client_label.setObjectName("Caption")
@@ -774,7 +774,7 @@ class ChatConversationPanel(QWidget):
         layout.setSpacing(10)
 
         title = QLabel("Detalhes da proposta")
-        title.setStyleSheet("font-weight: 800;")
+        title.setObjectName("ValueLabel")
         layout.addWidget(title)
 
         proposal = self.proposal or {}
@@ -792,14 +792,14 @@ class ChatConversationPanel(QWidget):
             caption = QLabel(label)
             caption.setObjectName("Caption")
             content = QLabel(str(value))
-            content.setStyleSheet("font-weight: 700;")
+            content.setObjectName("ValueLabel")
             content.setWordWrap(True)
             cell.addWidget(caption)
             cell.addWidget(content)
             layout.addLayout(cell)
 
         participants_title = QLabel("Participantes")
-        participants_title.setStyleSheet("font-weight: 800;")
+        participants_title.setObjectName("ValueLabel")
         layout.addWidget(participants_title)
         self._drawer_participants_layout = QVBoxLayout()
         self._drawer_participants_layout.setSpacing(4)
@@ -981,7 +981,7 @@ class ChatConversationPanel(QWidget):
             "attach": "Anexos ainda nao estao disponiveis nesta versao.",
             "mic": "Gravacao de audio ainda nao esta disponivel nesta versao.",
         }
-        ToastNotification(self.window(), messages.get(action, "Ainda nao disponivel nesta versao."), "error")
+        ToastNotification(self.window(), messages.get(action, "Ainda não disponível nesta versão."), "error")
 
     def refresh(self):
         if self._closing:
@@ -1101,7 +1101,7 @@ class ChatConversationPanel(QWidget):
             self._load_older_messages()
             return
         self._pending_jump_message_id = None
-        ToastNotification(self.window(), "Mensagem original nao esta mais disponivel no historico carregado.", "error")
+        ToastNotification(self.window(), "Mensagem original não está mais disponível no histórico carregado.", "error")
 
     def _older_error(self, exc):
         self._loading_older = False
@@ -1341,7 +1341,7 @@ class ChatConversationPanel(QWidget):
     def _jump_to_message(self, message_id: int):
         cached = self._entry_widgets.get(("chat", message_id))
         if cached is None:
-            ToastNotification(self.window(), "Mensagem original nao esta carregada nesta pagina.", "error")
+            ToastNotification(self.window(), "Mensagem original não está carregada nesta página.", "error")
             return
         row, _content = cached
         self.scroll.ensureWidgetVisible(row)
@@ -1357,7 +1357,7 @@ class ChatConversationPanel(QWidget):
             self._jump_to_message(message_id)
             return
         if not self._has_more_older:
-            ToastNotification(self.window(), "Mensagem original nao esta mais disponivel no historico carregado.", "error")
+            ToastNotification(self.window(), "Mensagem original não está mais disponível no histórico carregado.", "error")
             return
         self._pending_jump_message_id = message_id
         if not self._loading_older:
@@ -1560,7 +1560,7 @@ class ChatConversationPanel(QWidget):
 
     def _reassign_question(self, message_id: int):
         if not self._mentionable_users:
-            ToastNotification(self.window(), "Nenhum usuario disponivel para reatribuicao.", "error")
+            ToastNotification(self.window(), "Nenhum usuário disponível para reatribuição.", "error")
             return
         names = [user.get("display_name") or "-" for user in self._mentionable_users]
         name, ok = QInputDialog.getItem(self, "Reatribuir pergunta", "Novo responsavel:", names, 0, False)
@@ -1577,12 +1577,12 @@ class ChatConversationPanel(QWidget):
         except Exception as exc:
             ToastNotification(self.window(), str(exc), "error")
             return
-        ToastNotification(self.window(), "Pergunta reatribuida.", "success")
+        ToastNotification(self.window(), "Pergunta reatribuída.", "success")
         self.refresh()
 
     def _open_internal_note_dialog(self):
         if not self.conversation_id:
-            ToastNotification(self.window(), "Conversa ainda nao carregada, tente novamente.", "error")
+            ToastNotification(self.window(), "Conversa ainda não carregada, tente novamente.", "error")
             return
         dialog = InternalNoteDialog(self, mentionable_users=self._mentionable_users)
         if dialog.exec() != QDialog.Accepted:
@@ -1608,7 +1608,7 @@ class ChatConversationPanel(QWidget):
             ToastNotification(self.window(), "Escreva uma mensagem ou adicione um anexo antes de enviar.", "error")
             return
         if not self.conversation_id:
-            ToastNotification(self.window(), "Conversa ainda nao carregada, tente novamente.", "error")
+            ToastNotification(self.window(), "Conversa ainda não carregada, tente novamente.", "error")
             return
         if self._upload_thread is not None and self._upload_thread.isRunning():
             ToastNotification(self.window(), "Aguarde o envio dos anexos em andamento.", "error")
@@ -1789,10 +1789,10 @@ class ChatConversationPanel(QWidget):
         try:
             attachment_id = int(attachment["id"])
         except (KeyError, TypeError, ValueError):
-            ToastNotification(self.window(), "Anexo invalido para download.", "error")
+            ToastNotification(self.window(), "Anexo inválido para download.", "error")
             return
         if attachment_id in self._download_jobs:
-            ToastNotification(self.window(), "Este anexo ja esta sendo baixado.", "error")
+            ToastNotification(self.window(), "Este anexo já está sendo baixado.", "error")
             return
         thread = QThread(self)
         worker = ChatAttachmentDownloadWorker(self.service, attachment, destination)
@@ -1825,7 +1825,7 @@ class ChatConversationPanel(QWidget):
     def _on_attachment_download_failed(self, attachment: dict, message: str) -> None:
         name = attachment_filename(attachment)
         self._remember_attachment_error(attachment, message)
-        ToastNotification(self.window(), f"Nao foi possivel baixar {name}: {message}", "error")
+        ToastNotification(self.window(), f"Não foi possível baixar {name}: {message}", "error")
 
     def _open_downloaded_attachment(self, attachment: dict, path: str) -> None:
         if attachment_display_category(attachment) == "image" or resolve_media_kind(attachment) == "video":
@@ -1833,7 +1833,7 @@ class ChatConversationPanel(QWidget):
             return
         opened = QDesktopServices.openUrl(QUrl.fromLocalFile(path))
         if not opened:
-            ToastNotification(self.window(), "Nao foi possivel abrir o arquivo no Windows.", "error")
+            ToastNotification(self.window(), "Não foi possível abrir o arquivo no Windows.", "error")
 
     def _remember_attachment_cache_path(self, attachment: dict, path: str) -> None:
         attachment_id = attachment.get("id")
@@ -1871,7 +1871,7 @@ class ChatConversationPanel(QWidget):
         failed = [item for item in self.compose_bar.pending_attachments() if item.state in {AttachmentState.FAILED, AttachmentState.CANCELLED}]
         if failed:
             self.compose_bar.set_sending(False)
-            ToastNotification(self.window(), "Alguns anexos nao foram enviados. Voce pode remover ou tentar novamente.", "error")
+            ToastNotification(self.window(), "Alguns anexos não foram enviados. Você pode remover ou tentar novamente.", "error")
             self.refresh()
             return
         self._pending_attachment_message_id = None

@@ -390,7 +390,7 @@ class MediaViewerDialog(QDialog):
 
         header = QHBoxLayout()
         self.title_label = QLabel()
-        self.title_label.setStyleSheet("font-weight: 700; font-size: 13px;")
+        self.title_label.setObjectName("PanelTitle")
         header.addWidget(self.title_label, 1)
         self.counter_label = QLabel()
         self.counter_label.setStyleSheet("font-size: 11px; color: #94a3b8;")
@@ -423,7 +423,7 @@ class MediaViewerDialog(QDialog):
         self.prev_btn.clicked.connect(self.previous_media)
         nav_row.addWidget(self.prev_btn)
         nav_row.addStretch()
-        self.next_btn = QPushButton("Proxima >")
+        self.next_btn = QPushButton("Próxima >")
         self.next_btn.clicked.connect(self.next_media)
         nav_row.addWidget(self.next_btn)
         canvas_col.addLayout(nav_row)
@@ -1820,7 +1820,7 @@ class ChatAttachmentWidget(QFrame):
                 preview.setPixmap(rounded_pixmap(scaled_contained_pixmap(pixmap, size), MEDIA_CORNER_RADIUS))
             elif self.attachment.get("_download_error"):
                 preview.setFixedSize(IMAGE_LOADING_SIZE)
-                preview.setText("Nao foi possivel\ncarregar o arquivo")
+                preview.setText("Não foi possível\ncarregar o arquivo")
             else:
                 preview.setFixedSize(IMAGE_LOADING_SIZE)
                 preview.setText("Carregando...")
@@ -1834,7 +1834,7 @@ class ChatAttachmentWidget(QFrame):
             return
 
         if self.category == "video":
-            preview = QLabel("Carregar visualizacao" if self.category == "image" else "Video")
+            preview = QLabel("Carregar visualização" if self.category == "image" else "Video")
             preview.setObjectName("AttachmentPreview")
             preview.setAlignment(Qt.AlignCenter)
             preview.setFixedSize(300 if not self.compact else 240, 170 if not self.compact else 136)

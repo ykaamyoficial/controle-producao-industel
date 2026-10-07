@@ -152,7 +152,7 @@ class _MentionPopup(QFrame):
             if widget:
                 widget.deleteLater()
         if not self._filtered:
-            empty = QLabel("Nenhum usuario encontrado.")
+            empty = QLabel("Nenhum usuário encontrado.")
             empty.setObjectName("Caption")
             self.layout_.addWidget(empty)
             self.adjustSize()
@@ -173,7 +173,7 @@ class _MentionPopup(QFrame):
         text_col = QVBoxLayout()
         text_col.setSpacing(0)
         name_label = QLabel(user.get("display_name") or "-")
-        name_label.setStyleSheet("font-weight: 700;")
+        name_label.setObjectName("ValueLabel")
         text_col.addWidget(name_label)
         if user.get("sector"):
             sector_label = QLabel(user["sector"])
@@ -329,7 +329,7 @@ class MentionComposeBar(QFrame):
         self.text_edit = _ComposeTextEdit()
         self.text_edit.setObjectName("ComposeTextEdit")
         self.text_edit.setStyleSheet("QTextEdit#ComposeTextEdit { border: none; background: transparent; }")
-        self.text_edit.setPlaceholderText("Digite uma mensagem ou utilize @ para mencionar alguem...")
+        self.text_edit.setPlaceholderText("Digite uma mensagem ou utilize @ para mencionar alguém...")
         self.text_edit.setAcceptRichText(False)
         self.text_edit.setLineWrapMode(QTextEdit.WidgetWidth)
         self.text_edit.setWordWrapMode(QTextOption.WrapAtWordBoundaryOrAnywhere)

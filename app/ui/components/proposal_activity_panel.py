@@ -114,7 +114,7 @@ class ProposalActivityPanel(QFrame):
         layout.setSpacing(8)
 
         title = QLabel("Atividade da proposta")
-        title.setStyleSheet("font-weight: 800;")
+        title.setObjectName("ValueLabel")
         layout.addWidget(title)
 
         self.filter_combo = QComboBox()

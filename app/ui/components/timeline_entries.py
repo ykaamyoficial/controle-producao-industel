@@ -323,7 +323,7 @@ class OtherUserMessageWidget(MessageBubble):
             f"border: {border}; border-radius: 12px; }}"
         )
         if mentions_me:
-            bubble.setToolTip("Voce foi mencionado nesta mensagem")
+            bubble.setToolTip("Você foi mencionado nesta mensagem")
         outer.addWidget(bubble, 1)
 
         content_col = QVBoxLayout(bubble)
@@ -473,7 +473,7 @@ class DirectedQuestionWidget(TimelineEntryWidget):
 
         author = self.entry.get("author_name") or "-"
         mentioned = self.entry.get("mentioned_user_name") or "-"
-        who_label = QLabel(f"{author} perguntou · Responsavel: {mentioned}")
+        who_label = QLabel(f"{author} perguntou · Responsável: {mentioned}")
         who_label.setObjectName("Caption")
         who_label.setStyleSheet("font-size: 10px;")
         who_label.setWordWrap(True)
@@ -533,7 +533,7 @@ class DirectedQuestionWidget(TimelineEntryWidget):
         self._due_label.setVisible(bool(due_at))
 
         viewed_at = self.entry.get("viewed_at")
-        self._viewed_label.setText(f"Visualizada pelo responsavel em {_format_day_and_clock(viewed_at)}" if viewed_at else "")
+        self._viewed_label.setText(f"Visualizada pelo responsável em {_format_day_and_clock(viewed_at)}" if viewed_at else "")
         self._viewed_label.setVisible(bool(viewed_at))
 
         cancellation_reason = self.entry.get("cancellation_reason")
@@ -619,7 +619,7 @@ class ReplyMessageWidget(TimelineEntryWidget):
             quote.setCursor(Qt.PointingHandCursor)
             quote.mousePressEvent = lambda _event, mid=original_id: self.jump_to_message_requested.emit(mid)
         else:
-            unavailable = QLabel("Mensagem original indisponivel.")
+            unavailable = QLabel("Mensagem original indisponível.")
             unavailable.setObjectName("Caption")
             _make_label_background_transparent(unavailable)
             unavailable.setStyleSheet("font-size: 11px; font-style: italic; background: transparent;")
