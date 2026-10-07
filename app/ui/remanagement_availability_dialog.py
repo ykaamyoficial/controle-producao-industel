@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QDialog, QFrame, QHBoxLayout, QLabel, QMessageBox, QScrollArea,
+    QDialog, QFrame, QLabel, QMessageBox, QScrollArea,
     QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
 from app.services.remanagement_flow_state import RemanagementFlowState, availability_from_api
+from app.ui.components.dialog_shell import StepIndicator, dialog_footer, dialog_header
 from app.ui.components.modern_button import ModernButton
 from app.ui.dialog_utils import style_dialog_from_parent
 from app.ui.numeric_utils import format_decimal
@@ -48,15 +49,21 @@ class RemanagementAvailabilityStepDialog(QDialog):
 
     def _build(self):
         root = QVBoxLayout(self)
-        root.setContentsMargins(22, 20, 22, 18)
-        root.setSpacing(12)
+        root.setContentsMargins(16, 14, 16, 14)
+        root.setSpacing(10)
 
-        title = QLabel("3. Materiais prontos encontrados na Expedição")
-        title.setObjectName("DetailTitle")
-        root.addWidget(title)
+        title = QLabel("Materiais prontos encontrados na Expedição")
+        refresh = ModernButton("Atualizar", "refresh")
+        root.addWidget(
+            dialog_header(
+                title,
+                "Propostas que já têm, prontos, os produtos que o destino precisa.",
+                actions=[refresh],
+            )
+        )
 
         self.destination_frame = QFrame()
-        self.destination_frame.setObjectName("Card")
+        self.destination_frame.setObjectName("DetailPanel")
         destination_layout = QVBoxLayout(self.destination_frame)
         destination_layout.setContentsMargins(14, 12, 14, 12)
         self.destination_label = QLabel("Destino")
@@ -75,19 +82,13 @@ class RemanagementAvailabilityStepDialog(QDialog):
         scroll.setWidget(self.groups_container)
         root.addWidget(scroll, 1)
 
-        footer = QHBoxLayout()
-        refresh = ModernButton("Atualizar", "status")
-        back = ModernButton("Voltar", "clear")
-        self.advance_button = ModernButton("Avançar para alocação", "status", accent=True)
+        back = ModernButton("Voltar", "previous")
+        self.advance_button = ModernButton("Avançar para alocação", "next", accent=True)
         self.advance_button.setEnabled(False)
         refresh.clicked.connect(self._refresh_clicked)
         back.clicked.connect(lambda: self.done(self.RESULT_BACK))
         self.advance_button.clicked.connect(self.accept)
-        footer.addWidget(refresh)
-        footer.addStretch()
-        footer.addWidget(back)
-        footer.addWidget(self.advance_button)
-        root.addLayout(footer)
+        root.addWidget(dialog_footer(left=[StepIndicator(3, 5)], right=[back, self.advance_button]))
 
     def _load_availability(self) -> str | None:
         try:

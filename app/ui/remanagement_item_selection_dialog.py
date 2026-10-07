@@ -4,11 +4,12 @@ from decimal import Decimal
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
+    QDialog, QFrame, QLabel, QLineEdit, QMessageBox,
     QTableWidget, QTableWidgetItem, QVBoxLayout,
 )
 
 from app.services.remanagement_flow_state import RemanagementFlowState, RemanagementItemSelection
+from app.ui.components.dialog_shell import StepIndicator, dialog_footer, dialog_header
 from app.ui.components.modern_button import ModernButton
 from app.ui.dialog_utils import style_dialog_from_parent
 from app.ui.numeric_utils import format_decimal, parse_decimal
@@ -50,15 +51,24 @@ class RemanagementItemSelectionStepDialog(QDialog):
 
     def _build(self):
         root = QVBoxLayout(self)
-        root.setContentsMargins(22, 20, 22, 18)
-        root.setSpacing(12)
+        root.setContentsMargins(16, 14, 16, 14)
+        root.setSpacing(10)
 
-        title = QLabel("2. Selecione os itens que deseja atender com remanejamento")
-        title.setObjectName("DetailTitle")
-        root.addWidget(title)
+        title = QLabel("Itens a atender com remanejamento")
+        select_eligible = ModernButton("Selecionar elegíveis", "status")
+        clear_selection = ModernButton("Limpar seleção", "clear")
+        select_eligible.clicked.connect(self._select_eligible)
+        clear_selection.clicked.connect(self._clear_selection)
+        root.addWidget(
+            dialog_header(
+                title,
+                "Marque os itens da proposta destino e informe quanto remanejar de cada um.",
+                actions=[select_eligible, clear_selection],
+            )
+        )
 
         self.destination_frame = QFrame()
-        self.destination_frame.setObjectName("Card")
+        self.destination_frame.setObjectName("DetailPanel")
         destination_layout = QVBoxLayout(self.destination_frame)
         destination_layout.setContentsMargins(14, 12, 14, 12)
         self.destination_label = QLabel("Destino selecionado")
@@ -73,7 +83,7 @@ class RemanagementItemSelectionStepDialog(QDialog):
 
         self.table = QTableWidget(0, 7)
         self.table.setHorizontalHeaderLabels(
-            ["", "Codigo", "Descricao", "Qtd. proposta", "Ja atendido/pronto", "Necessario", "Remanejar"]
+            ["", "Código", "Descrição", "Qtd. proposta", "Já atendido/pronto", "Necessário", "Remanejar"]
         )
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionMode(QTableWidget.NoSelection)
@@ -81,30 +91,20 @@ class RemanagementItemSelectionStepDialog(QDialog):
         self.table.itemChanged.connect(self._on_item_changed)
         root.addWidget(self.table, 1)
 
-        bulk = QHBoxLayout()
-        select_eligible = ModernButton("Selecionar elegíveis", "status")
-        clear_selection = ModernButton("Limpar seleção", "clear")
-        select_eligible.clicked.connect(self._select_eligible)
-        clear_selection.clicked.connect(self._clear_selection)
-        bulk.addWidget(select_eligible)
-        bulk.addWidget(clear_selection)
-        bulk.addStretch()
-        root.addLayout(bulk)
-
         self.summary_label = QLabel("0 item(ns) selecionado(s)")
         self.summary_label.setObjectName("ValueLabel")
-        root.addWidget(self.summary_label)
 
-        footer = QHBoxLayout()
-        back = ModernButton("Voltar", "clear")
-        self.advance_button = ModernButton("Buscar materiais disponíveis", "status", accent=True)
+        back = ModernButton("Voltar", "previous")
+        self.advance_button = ModernButton("Buscar materiais disponíveis", "next", accent=True)
         self.advance_button.setEnabled(False)
         back.clicked.connect(lambda: self.done(self.RESULT_BACK))
         self.advance_button.clicked.connect(self._advance)
-        footer.addStretch()
-        footer.addWidget(back)
-        footer.addWidget(self.advance_button)
-        root.addLayout(footer)
+        root.addWidget(
+            dialog_footer(
+                left=[StepIndicator(2, 5), self.summary_label],
+                right=[back, self.advance_button],
+            )
+        )
 
     def _load_items(self):
         try:

@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from PySide6.QtWidgets import (
-    QDialog, QFrame, QHBoxLayout, QLabel, QMessageBox, QScrollArea,
+    QDialog, QFrame, QLabel, QMessageBox, QScrollArea,
     QTextEdit, QVBoxLayout, QWidget,
 )
 
 from app.services.remanagement_flow_state import RemanagementFlowState, review_from_api
+from app.ui.components.dialog_shell import StepIndicator, dialog_footer, dialog_header, set_notice_kind
 from app.ui.components.modern_button import ModernButton
 from app.ui.dialog_utils import style_dialog_from_parent
 from app.ui.numeric_utils import format_decimal
@@ -59,20 +60,16 @@ class RemanagementReviewStepDialog(QDialog):
 
     def _build(self):
         root = QVBoxLayout(self)
-        root.setContentsMargins(22, 20, 22, 18)
-        root.setSpacing(12)
+        root.setContentsMargins(16, 14, 16, 14)
+        root.setSpacing(10)
 
-        title = QLabel("6. Revisar remanejamento")
-        title.setObjectName("DetailTitle")
-        root.addWidget(title)
-
+        title = QLabel("Revisar remanejamento")
         notice = QLabel("Esta operação NÃO registra entrega ao cliente. Ela apenas realoca material pronto entre propostas e transfere a obrigação produtiva equivalente.")
-        notice.setObjectName("Caption")
-        notice.setWordWrap(True)
-        root.addWidget(notice)
+        revalidate = ModernButton("Revalidar", "refresh")
+        root.addWidget(dialog_header(title, notice, actions=[revalidate]))
 
         self.destination_frame = QFrame()
-        self.destination_frame.setObjectName("Card")
+        self.destination_frame.setObjectName("DetailPanel")
         destination_layout = QVBoxLayout(self.destination_frame)
         destination_layout.setContentsMargins(14, 12, 14, 12)
         self.destination_label = QLabel("Destino")
@@ -85,7 +82,7 @@ class RemanagementReviewStepDialog(QDialog):
         root.addWidget(self.destination_frame)
 
         self.warnings_label = QLabel("")
-        self.warnings_label.setObjectName("Caption")
+        self.warnings_label.setObjectName("InlineNotice")
         self.warnings_label.setWordWrap(True)
         self.warnings_label.setVisible(False)
         root.addWidget(self.warnings_label)
@@ -101,7 +98,9 @@ class RemanagementReviewStepDialog(QDialog):
         scroll.setWidget(self.groups_container)
         root.addWidget(scroll, 1)
 
-        root.addWidget(QLabel("Motivo do remanejamento *"))
+        reason_label = QLabel("Motivo do remanejamento *")
+        reason_label.setObjectName("FieldLabel")
+        root.addWidget(reason_label)
         self.reason_edit = QTextEdit()
         self.reason_edit.setPlaceholderText("Descreva o motivo real desta operação (obrigatório).")
         self.reason_edit.setMaximumHeight(72)
@@ -109,19 +108,13 @@ class RemanagementReviewStepDialog(QDialog):
         self.reason_edit.textChanged.connect(self._on_reason_changed)
         root.addWidget(self.reason_edit)
 
-        footer = QHBoxLayout()
-        back = ModernButton("Voltar", "clear")
-        revalidate = ModernButton("Revalidar", "status")
+        back = ModernButton("Voltar", "previous")
         self.confirm_button = ModernButton("Confirmar remanejamento", "save", accent=True)
         self.confirm_button.setEnabled(False)
         back.clicked.connect(lambda: self.done(self.RESULT_BACK))
         revalidate.clicked.connect(self._revalidate_clicked)
         self.confirm_button.clicked.connect(self._confirm_clicked)
-        footer.addWidget(revalidate)
-        footer.addStretch()
-        footer.addWidget(back)
-        footer.addWidget(self.confirm_button)
-        root.addLayout(footer)
+        root.addWidget(dialog_footer(left=[StepIndicator(5, 5)], right=[back, self.confirm_button]))
 
     # -- carregamento / revalidacao ------------------------------------------------
 
@@ -209,11 +202,11 @@ class RemanagementReviewStepDialog(QDialog):
         if non_reason_errors:
             messages = "; ".join(error.message for error in non_reason_errors[:3])
             self.warnings_label.setText(f"Erros que impedem a confirmação: {messages}")
-            self.warnings_label.setStyleSheet("color: #c0392b; font-weight: 600;")
+            set_notice_kind(self.warnings_label, "danger")
             self.warnings_label.setVisible(True)
         elif result.warnings:
             self.warnings_label.setText("Atenção: " + " | ".join(result.warnings))
-            self.warnings_label.setStyleSheet("")
+            set_notice_kind(self.warnings_label, "warning")
             self.warnings_label.setVisible(True)
         else:
             self.warnings_label.setVisible(False)
@@ -256,7 +249,7 @@ class RemanagementReviewStepDialog(QDialog):
 
     def _build_item_frame(self, item, item_errors: list) -> QFrame:
         frame = QFrame()
-        frame.setObjectName("Card")
+        frame.setObjectName("DetailPanel")
         layout = QVBoxLayout(frame)
         layout.setContentsMargins(14, 12, 14, 12)
         layout.setSpacing(6)
@@ -278,17 +271,17 @@ class RemanagementReviewStepDialog(QDialog):
         )
         indicator.setObjectName("Caption")
         if item.status in {"INVALIDO"}:
-            indicator.setStyleSheet("color: #c0392b; font-weight: 600;")
+            set_notice_kind(indicator, "danger")
         layout.addWidget(indicator)
 
         if item.status == "PARCIAL":
             partial_notice = QLabel(f"Atenção: {format_decimal(item.remaining)} {unit} continuarão sem atendimento por remanejamento.")
-            partial_notice.setObjectName("Caption")
+            set_notice_kind(partial_notice, "warning")
             layout.addWidget(partial_notice)
 
         for error in item_errors:
             error_label = QLabel(f"Bloqueio: {error.message}")
-            error_label.setStyleSheet("color: #c0392b;")
+            set_notice_kind(error_label, "danger")
             error_label.setWordWrap(True)
             layout.addWidget(error_label)
 

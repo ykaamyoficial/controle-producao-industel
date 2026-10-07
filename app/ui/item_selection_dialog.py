@@ -4,11 +4,12 @@ from decimal import Decimal
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QAbstractItemView, QDialog, QHBoxLayout, QLabel, QMessageBox,
+    QAbstractItemView, QDialog, QLabel, QMessageBox,
     QTableWidget, QTableWidgetItem, QVBoxLayout,
 )
 
 from app.services.app_logging import get_logger
+from app.ui.components.dialog_shell import dialog_footer, dialog_header
 from app.ui.components.modern_button import ModernButton
 from app.ui.dialog_utils import apply_large_dialog_geometry, style_dialog_from_parent
 from app.ui.numeric_utils import format_decimal, parse_decimal, parse_whole_quantity
@@ -37,17 +38,16 @@ class ItemSelectionDialog(QDialog):
 
     def _build(self):
         root = QVBoxLayout(self)
-        root.setContentsMargins(22, 20, 22, 18)
-        root.setSpacing(12)
+        root.setContentsMargins(16, 14, 16, 14)
+        root.setSpacing(10)
         titles = {
             "delivery": "Itens entregues ao cliente",
-            "remanagement": "Itens prontos na Expedicao para remanejar",
+            "remanagement": "Itens prontos na Expedição para remanejar",
         }
         title = titles.get(self.mode, "Selecionar itens")
         heading = QLabel(title)
         heading.setObjectName("DetailTitle")
         caption = QLabel("Marque os itens que fazem parte desta movimentação.")
-        caption.setObjectName("Caption")
         self.table = QTableWidget(0, 6)
         self.table.setHorizontalHeaderLabels(["Selecionar", "Item", "Código", "Descrição", "Qtd.", "Peso total (kg)"])
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
@@ -63,7 +63,6 @@ class ItemSelectionDialog(QDialog):
         self.table.itemChanged.connect(self._update_summary)
         self.summary = QLabel("0 item(ns) | 0 kg")
         self.summary.setObjectName("ValueLabel")
-        buttons = QHBoxLayout()
         select_all = ModernButton("Selecionar todos", "status")
         clear = ModernButton("Limpar seleção", "clear")
         cancel = ModernButton("Cancelar", "clear", variant="ghost")
@@ -72,16 +71,9 @@ class ItemSelectionDialog(QDialog):
         clear.clicked.connect(lambda: self._set_all(False))
         cancel.clicked.connect(self.reject)
         confirm.clicked.connect(self._confirm)
-        buttons.addWidget(select_all)
-        buttons.addWidget(clear)
-        buttons.addStretch()
-        buttons.addWidget(cancel)
-        buttons.addWidget(confirm)
-        root.addWidget(heading)
-        root.addWidget(caption)
-        root.addWidget(self.table)
-        root.addWidget(self.summary)
-        root.addLayout(buttons)
+        root.addWidget(dialog_header(heading, caption, actions=[select_all, clear]))
+        root.addWidget(self.table, 1)
+        root.addWidget(dialog_footer(left=[self.summary], right=[cancel, confirm]))
 
     def _load(self):
         rows = self.service.proposal_items(

@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QStyledItemDelegate, QTableWidget, QTableWidgetItem, QTextEdit, QVBoxLayout, QWidget,
 )
 
+from app.ui.components.dialog_shell import dialog_footer, dialog_header
 from app.ui.components.modern_button import ModernButton
 from app.ui.dialog_utils import apply_large_dialog_geometry, style_dialog_from_parent
 from app.ui.item_flow_dialog import FLOW_OPTIONS
@@ -76,19 +77,16 @@ class ProcessFormDialog(QDialog):
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         content = QWidget()
         body = QVBoxLayout(content)
-        body.setContentsMargins(2, 2, 6, 8)
+        body.setContentsMargins(0, 0, 8, 8)
         body.setSpacing(12)
 
-        heading_row = QHBoxLayout()
-        heading = QLabel("Cadastro da proposta")
-        heading.setObjectName("DetailTitle")
-        heading_row.addWidget(heading)
-        heading_row.addStretch()
+        heading = QLabel("Editar proposta" if self.process_id else "Cadastro da proposta")
+        header_actions = []
         if not self.process_id:
             import_button = ModernButton("Importar PDF Nomus", "pdf")
             import_button.setToolTip("Selecionar PDF Nomus e preencher o cadastro para revisão antes de salvar")
             import_button.clicked.connect(self.open_nomus_preview)
-            heading_row.addWidget(import_button)
+            header_actions.append(import_button)
             api_import_button = ModernButton("Importar do Nomus", "search")
             api_import_button.setToolTip("Buscar dados operacionais na API Nomus para conferência")
             api_import_button.clicked.connect(self.open_nomus_api_preview)
@@ -96,22 +94,20 @@ class ProcessFormDialog(QDialog):
             api_import_button.setEnabled(api_enabled)
             if api_reason:
                 api_import_button.setToolTip(api_reason)
-            heading_row.addWidget(api_import_button)
+            header_actions.append(api_import_button)
             batch_import_button = ModernButton("Importar lote Nomus", "batch")
             batch_import_button.setToolTip("Localizar várias propostas do Nomus sem salvar automaticamente")
             batch_import_button.clicked.connect(self.open_nomus_batch_import)
             batch_import_button.setEnabled(api_enabled)
             if api_reason:
                 batch_import_button.setToolTip(api_reason)
-            heading_row.addWidget(batch_import_button)
-        caption = QLabel("Preencha os dados gerais e organize os itens que compoem a proposta.")
-        caption.setObjectName("Caption")
+            header_actions.append(batch_import_button)
+        caption = QLabel("Preencha os dados gerais e organize os itens que compõem a proposta.")
         self.import_notice = QLabel("")
         self.import_notice.setObjectName("ValidationWarning")
         self.import_notice.setWordWrap(True)
         self.import_notice.hide()
-        body.addLayout(heading_row)
-        body.addWidget(caption)
+        root.addWidget(dialog_header(heading, caption, actions=header_actions))
         body.addWidget(self.import_notice)
 
         general = self._section("Dados gerais")
@@ -157,7 +153,7 @@ class ProcessFormDialog(QDialog):
         general.layout().addLayout(grid)
         body.addWidget(general)
 
-        notes = self._section("Observacoes")
+        notes = self._section("Observações")
         obs = QTextEdit()
         obs.setPlaceholderText("Informações gerais, particularidades ou orientações da proposta")
         obs.setFixedHeight(72)
@@ -219,28 +215,18 @@ class ProcessFormDialog(QDialog):
         body.addWidget(items_panel, 1)
         scroll.setWidget(content)
 
-        footer = QFrame()
-        footer.setObjectName("Panel")
-        footer.setMinimumHeight(52)
-        footer.setMaximumHeight(52)
-        actions = QHBoxLayout()
-        actions.setContentsMargins(12, 8, 12, 8)
         self.save_button = ModernButton("Salvar", "status", accent=True)
         cancel = ModernButton("Cancelar", "clear", variant="ghost")
         self.save_button.clicked.connect(self.save)
         cancel.clicked.connect(self.reject)
-        actions.addStretch()
-        actions.addWidget(cancel)
-        actions.addWidget(self.save_button)
-        footer.setLayout(actions)
         root.addWidget(scroll, 1)
-        root.addWidget(footer)
+        root.addWidget(dialog_footer(right=[cancel, self.save_button]))
 
     def _section(self, title: str) -> QFrame:
         frame = QFrame()
-        frame.setObjectName("Panel")
+        frame.setObjectName("DetailPanel")
         layout = QVBoxLayout(frame)
-        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setContentsMargins(16, 14, 16, 14)
         layout.setSpacing(8)
         label = QLabel(title)
         label.setObjectName("PanelTitle")

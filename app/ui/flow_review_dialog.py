@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
 from app.services.app_logging import get_logger
 from app.services.backend_adapter import VersionConflictError
 from app.ui.background_worker import start_worker
+from app.ui.components.dialog_shell import StepIndicator, dialog_footer, dialog_header
 from app.ui.components.modern_button import ModernButton
 from app.ui.components.status_badge import StatusBadge
 from app.ui.components.toast_notification import ToastNotification
@@ -212,13 +213,13 @@ class FlowReviewDialog(QDialog):
 
     def _build(self) -> None:
         root = QVBoxLayout(self)
-        root.setContentsMargins(20, 18, 20, 16)
-        root.setSpacing(12)
+        root.setContentsMargins(16, 14, 16, 14)
+        root.setSpacing(10)
 
         self.header_label = QLabel("Carregando propostas e itens...")
-        self.header_label.setObjectName("DetailTitle")
-        self.header_label.setWordWrap(True)
-        root.addWidget(self.header_label)
+        root.addWidget(
+            dialog_header(self.header_label, "Defina quais itens serão produzidos e galvanizados, e o motivo quando não forem.")
+        )
 
         self.stack = QStackedWidget()
         self.stack.addWidget(self._build_setup_page())
@@ -361,15 +362,11 @@ class FlowReviewDialog(QDialog):
         self.setup_scroll.setWidget(setup_content)
         page_layout.addWidget(self.setup_scroll, 1)
 
-        footer = QHBoxLayout()
         cancel = ModernButton("Cancelar", "clear", variant="ghost")
         cancel.clicked.connect(self.reject)
         self.continue_button = ModernButton("Continuar", "next", accent=True)
         self.continue_button.clicked.connect(self._continue_to_review)
-        footer.addWidget(cancel)
-        footer.addStretch()
-        footer.addWidget(self.continue_button)
-        page_layout.addLayout(footer)
+        page_layout.addWidget(dialog_footer(left=[StepIndicator(1, 2)], right=[cancel, self.continue_button]))
 
         self.default_route_combo.currentIndexChanged.connect(self._on_default_route_changed)
         self._update_exception_help()
@@ -449,18 +446,13 @@ class FlowReviewDialog(QDialog):
         self.validation_button.clicked.connect(self._focus_first_problem)
         layout.addWidget(self.validation_button)
 
-        footer = QHBoxLayout()
         back_btn = ModernButton("Voltar", "previous")
         back_btn.clicked.connect(lambda: self.stack.setCurrentIndex(0))
-        footer.addWidget(back_btn)
-        footer.addStretch()
         cancel = ModernButton("Cancelar", "clear", variant="ghost")
         cancel.clicked.connect(self.reject)
         self.save_button = ModernButton("Salvar fluxo", "status", accent=True)
         self.save_button.clicked.connect(self._confirm_and_save)
-        footer.addWidget(cancel)
-        footer.addWidget(self.save_button)
-        layout.addLayout(footer)
+        layout.addWidget(dialog_footer(left=[StepIndicator(2, 2)], right=[cancel, back_btn, self.save_button]))
         return page
 
     def _configure_review_columns(self) -> None:

@@ -5,7 +5,6 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
     QDialog,
-    QHBoxLayout,
     QHeaderView,
     QLabel,
     QLineEdit,
@@ -17,6 +16,7 @@ from PySide6.QtWidgets import (
 
 from app.services.app_logging import get_logger
 from app.services.backend_adapter import VersionConflictError
+from app.ui.components.dialog_shell import dialog_footer, dialog_header
 from app.ui.components.modern_button import ModernButton
 from app.ui.dialog_utils import apply_large_dialog_geometry, style_dialog_from_parent
 from app.ui.table_utils import configure_wrapping_table, resize_rows_to_contents
@@ -53,21 +53,18 @@ class ItemFlowDialog(QDialog):
 
     def _build(self):
         root = QVBoxLayout(self)
-        root.setContentsMargins(18, 16, 18, 16)
+        root.setContentsMargins(16, 14, 16, 14)
         root.setSpacing(10)
         title = QLabel("Definir fluxo dos itens")
         title.setObjectName("DetailTitle")
         caption = QLabel(
             "Informe se cada item será produzido internamente e se precisa passar pela galvanização."
         )
-        caption.setObjectName("Caption")
-        caption.setWordWrap(True)
-        root.addWidget(title)
-        root.addWidget(caption)
+        root.addWidget(dialog_header(title, caption))
 
         self.table = QTableWidget(0, 8)
         self.table.setHorizontalHeaderLabels(
-            ["Item", "Codigo", "Descricao", "Qtd.", "Produzir", "Motivo", "Galvanizar", "Obs. fluxo"]
+            ["Item", "Código", "Descrição", "Qtd.", "Produzir", "Motivo", "Galvanizar", "Obs. fluxo"]
         )
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setAlternatingRowColors(True)
@@ -87,15 +84,11 @@ class ItemFlowDialog(QDialog):
         root.addWidget(self.table, 1)
         self._load_items()
 
-        footer = QHBoxLayout()
-        footer.addStretch()
         cancel = ModernButton("Cancelar", "clear", variant="ghost")
         save = ModernButton("Salvar fluxo", "status", accent=True)
         cancel.clicked.connect(self.reject)
         save.clicked.connect(self.save)
-        footer.addWidget(cancel)
-        footer.addWidget(save)
-        root.addLayout(footer)
+        root.addWidget(dialog_footer(right=[cancel, save]))
 
     def _flow_combo(self, value: str) -> QComboBox:
         combo = QComboBox()

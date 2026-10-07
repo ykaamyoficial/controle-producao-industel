@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
+    QDialog, QFrame, QLabel, QLineEdit, QMessageBox,
     QTableWidget, QTableWidgetItem, QVBoxLayout,
 )
 
 from app.services.remanagement_flow_state import RemanagementFlowState
+from app.ui.components.dialog_shell import StepIndicator, dialog_footer, dialog_header
 from app.ui.components.modern_button import ModernButton
 from app.ui.dialog_utils import style_dialog_from_parent
 
@@ -40,19 +41,15 @@ class RemanagementDestinationStepDialog(QDialog):
 
     def _build(self):
         root = QVBoxLayout(self)
-        root.setContentsMargins(22, 20, 22, 18)
-        root.setSpacing(12)
+        root.setContentsMargins(16, 14, 16, 14)
+        root.setSpacing(10)
 
-        title = QLabel("1. Proposta destino")
-        title.setObjectName("DetailTitle")
+        title = QLabel("Proposta destino")
         caption = QLabel(
-            "Escolha a proposta que recebera o material pronto. Depois de avançar, o sistema "
+            "Escolha a proposta que receberá o material pronto. Depois de avançar, o sistema "
             "descobre automaticamente quais propostas podem fornecer esse material."
         )
-        caption.setObjectName("Caption")
-        caption.setWordWrap(True)
-        root.addWidget(title)
-        root.addWidget(caption)
+        root.addWidget(dialog_header(title, caption))
 
         self.search = QLineEdit()
         self.search.setPlaceholderText("Buscar proposta, cliente ou obra/site...")
@@ -70,7 +67,7 @@ class RemanagementDestinationStepDialog(QDialog):
         root.addWidget(self.table, 1)
 
         self.summary = QFrame()
-        self.summary.setObjectName("Card")
+        self.summary.setObjectName("DetailPanel")
         summary_layout = QVBoxLayout(self.summary)
         summary_layout.setContentsMargins(14, 12, 14, 12)
         self.summary_label = QLabel("Nenhuma proposta selecionada.")
@@ -79,16 +76,12 @@ class RemanagementDestinationStepDialog(QDialog):
         summary_layout.addWidget(self.summary_label)
         root.addWidget(self.summary)
 
-        footer = QHBoxLayout()
         cancel = ModernButton("Cancelar", "clear", variant="ghost")
-        self.advance_button = ModernButton("Avançar para selecionar itens", "status", accent=True)
+        self.advance_button = ModernButton("Avançar para selecionar itens", "next", accent=True)
         self.advance_button.setEnabled(False)
         cancel.clicked.connect(self.reject)
         self.advance_button.clicked.connect(self._advance)
-        footer.addStretch()
-        footer.addWidget(cancel)
-        footer.addWidget(self.advance_button)
-        root.addLayout(footer)
+        root.addWidget(dialog_footer(left=[StepIndicator(1, 5)], right=[cancel, self.advance_button]))
 
     def _load_candidates(self):
         selected_id = self._selected_id()

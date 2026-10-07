@@ -7,8 +7,6 @@ from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QDialog,
-    QFrame,
-    QHBoxLayout,
     QLabel,
     QLineEdit,
     QMessageBox,
@@ -17,6 +15,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from app.ui.components.dialog_shell import dialog_footer, dialog_header
 from app.ui.components.modern_button import ModernButton
 from app.ui.background_worker import start_worker
 from app.ui.dialog_utils import apply_large_dialog_geometry, style_dialog_from_parent
@@ -50,11 +49,9 @@ class ProductionReviewDialog(QDialog):
         style_dialog_from_parent(self, parent)
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(22, 20, 22, 18)
-        root.setSpacing(12)
+        root.setContentsMargins(16, 14, 16, 14)
+        root.setSpacing(10)
         title = QLabel("Revisar e registrar produção")
-        title.setObjectName("DetailTitle")
-        root.addWidget(title)
 
         total_items = sum(len(group["selected"]) for group in groups)
         total_weight = sum((row["_weight"] for group in groups for row in group["selected"]), Decimal("0"))
@@ -65,10 +62,10 @@ class ProductionReviewDialog(QDialog):
             + (f" | {missing_weight} sem peso" if missing_weight else "")
         )
         summary.setObjectName("ValueLabel")
-        root.addWidget(summary)
+        root.addWidget(dialog_header(title, "Confira o que será registrado antes de confirmar.", status=[summary]))
 
         tree = QTreeWidget()
-        tree.setHeaderLabels(["Proposta", "Itens", "Classificacao", "Peso"])
+        tree.setHeaderLabels(["Proposta", "Itens", "Classificação", "Peso"])
         tree.setRootIsDecorated(True)
         tree.setAlternatingRowColors(True)
         tree.setEditTriggers(QAbstractItemView.NoEditTriggers)
@@ -89,7 +86,7 @@ class ProductionReviewDialog(QDialog):
                     f"{row.get('codigo_produto') or row.get('numero_item') or row['id']}",
                     row.get("descricao") or "-",
                     "Item selecionado",
-                    f"{format_decimal(row['_weight'])} kg" if row["_weight"] > 0 else "Nao informado",
+                    f"{format_decimal(row['_weight'])} kg" if row["_weight"] > 0 else "Não informado",
                 ])
             top.setExpanded(True)
         tree.expandAll()
@@ -101,15 +98,11 @@ class ProductionReviewDialog(QDialog):
             note.setObjectName("Caption")
             root.addWidget(note)
 
-        footer = QHBoxLayout()
-        footer.addStretch()
-        back = ModernButton("Voltar", "back")
+        back = ModernButton("Voltar", "previous")
         confirm = ModernButton("Confirmar produção", "status", accent=True)
         back.clicked.connect(self.reject)
         confirm.clicked.connect(self._confirm)
-        footer.addWidget(back)
-        footer.addWidget(confirm)
-        root.addLayout(footer)
+        root.addWidget(dialog_footer(right=[back, confirm]))
 
     def _confirm(self):
         self.confirmed = True
@@ -148,15 +141,24 @@ class ProductionRegistrationDialog(QDialog):
         apply_large_dialog_geometry(self, self.parentWidget(), minimum_width=1120, minimum_height=680)
         style_dialog_from_parent(self, self.parentWidget())
         root = QVBoxLayout(self)
-        root.setContentsMargins(22, 20, 22, 18)
+        root.setContentsMargins(16, 14, 16, 14)
         root.setSpacing(10)
 
         title = QLabel("Registrar produção")
-        title.setStyleSheet("font-size: 20px; font-weight: 800;")
-        root.addWidget(title)
         self.header_summary = QLabel()
         self.header_summary.setObjectName("ValueLabel")
-        root.addWidget(self.header_summary)
+        select_all = ModernButton("Selecionar todos", "status")
+        clear = ModernButton("Limpar seleção", "clear")
+        select_all.clicked.connect(lambda: self._set_all(True))
+        clear.clicked.connect(lambda: self._set_all(False))
+        root.addWidget(
+            dialog_header(
+                title,
+                "Marque os itens produzidos; a gravação só acontece depois da revisão.",
+                status=[self.header_summary],
+                actions=[select_all, clear],
+            )
+        )
 
         self.search = QLineEdit()
         self.search.setPlaceholderText("Buscar proposta, cliente, código ou descrição do item...")
@@ -166,7 +168,7 @@ class ProductionRegistrationDialog(QDialog):
         self.tree = QTreeWidget()
         self.tree.setColumnCount(8)
         self.tree.setHeaderLabels([
-            "Proposta / Item", "Codigo", "Descricao", "Total", "Produzido", "Pendente", "Peso", "Status",
+            "Proposta / Item", "Código", "Descrição", "Total", "Produzido", "Pendente", "Peso", "Status",
         ])
         self.tree.setRootIsDecorated(True)
         self.tree.setAlternatingRowColors(True)
@@ -182,36 +184,18 @@ class ProductionRegistrationDialog(QDialog):
         self.tree.setColumnWidth(6, 100)
         root.addWidget(self.tree, 1)
 
-        controls = QHBoxLayout()
-        select_all = ModernButton("Selecionar todos", "status")
-        clear = ModernButton("Limpar seleção", "clear")
-        select_all.clicked.connect(lambda: self._set_all(True))
-        clear.clicked.connect(lambda: self._set_all(False))
-        controls.addWidget(select_all)
-        controls.addWidget(clear)
-        controls.addStretch()
-        root.addLayout(controls)
-
         self.observation_input = QLineEdit()
         self.observation_input.setPlaceholderText("Observação (opcional)")
         self.observation_input.setText(self.observation)
         root.addWidget(self.observation_input)
 
-        footer_frame = QFrame()
-        footer_frame.setObjectName("Panel")
-        footer = QHBoxLayout(footer_frame)
-        footer.setContentsMargins(12, 8, 12, 8)
         self.footer_summary = QLabel()
         self.footer_summary.setObjectName("ValueLabel")
-        footer.addWidget(self.footer_summary)
-        footer.addStretch()
         cancel = ModernButton("Cancelar", "clear", variant="ghost")
         self.review_button = ModernButton("Confirmar produção", "status", accent=True)
         cancel.clicked.connect(self.reject)
         self.review_button.clicked.connect(self._review)
-        footer.addWidget(cancel)
-        footer.addWidget(self.review_button)
-        root.addWidget(footer_frame)
+        root.addWidget(dialog_footer(left=[self.footer_summary], right=[cancel, self.review_button]))
 
         QShortcut(QKeySequence("Ctrl+A"), self, activated=lambda: self._set_all(True))
         QShortcut(QKeySequence("Escape"), self, activated=self.reject)
@@ -288,7 +272,7 @@ class ProductionRegistrationDialog(QDialog):
                     format_decimal(total),
                     format_decimal(produced),
                     format_decimal(pending),
-                    f"{format_decimal(row['_weight'])} kg" if row["_weight"] > 0 else "Nao informado",
+                    f"{format_decimal(row['_weight'])} kg" if row["_weight"] > 0 else "Não informado",
                     status,
                 ])
                 child.setData(0, _ITEM_ROLE, item_id)

@@ -4,8 +4,9 @@ from decimal import Decimal, InvalidOperation
 from uuid import uuid4
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QDialog, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QTableWidget, QTableWidgetItem, QTextEdit, QVBoxLayout
+from PySide6.QtWidgets import QDialog, QGridLayout, QLabel, QLineEdit, QMessageBox, QTableWidget, QTableWidgetItem, QTextEdit, QVBoxLayout
 
+from app.ui.components.dialog_shell import dialog_footer, dialog_header
 from app.ui.components.modern_button import ModernButton
 from app.ui.dialog_utils import apply_large_dialog_geometry, style_dialog_from_parent
 from app.ui.numeric_utils import format_decimal
@@ -42,21 +43,17 @@ class EarlyRemanagementDeliveryDialog(QDialog):
 
     def _build(self):
         root = QVBoxLayout(self)
-        root.setContentsMargins(22, 20, 22, 18)
-        root.setSpacing(12)
+        root.setContentsMargins(16, 14, 16, 14)
+        root.setSpacing(10)
         title = QLabel("Remanejamento compensado entre propostas")
-        title.setObjectName("DetailTitle")
         caption = QLabel("O material pronto da origem fica disponível no destino. A mesma quantidade da produção pendente do destino passa a atender a origem. Isto não registra entrega ao cliente.")
-        caption.setObjectName("Caption")
-        caption.setWordWrap(True)
-        root.addWidget(title)
-        root.addWidget(caption)
+        root.addWidget(dialog_header(title, caption))
 
         selectors = QGridLayout()
         self.dest_search = QLineEdit(); self.dest_search.setPlaceholderText("Buscar proposta destino")
         self.source_search = QLineEdit(); self.source_search.setPlaceholderText("Buscar proposta origem")
-        selectors.addWidget(QLabel("Destino que recebera o material pronto"), 0, 0)
-        selectors.addWidget(QLabel("Origem que fornecera o material pronto"), 0, 1)
+        selectors.addWidget(QLabel("Destino que receberá o material pronto"), 0, 0)
+        selectors.addWidget(QLabel("Origem que fornecerá o material pronto"), 0, 1)
         selectors.addWidget(self.dest_search, 1, 0); selectors.addWidget(self.source_search, 1, 1)
         self.dest_table = self._proposal_table(); self.source_table = self._proposal_table()
         selectors.addWidget(self.dest_table, 2, 0); selectors.addWidget(self.source_table, 2, 1)
@@ -75,17 +72,16 @@ class EarlyRemanagementDeliveryDialog(QDialog):
         self.reason.setMaximumHeight(72)
         root.addWidget(self.reason)
 
-        footer = QHBoxLayout()
         cancel = ModernButton("Cancelar", "clear", variant="ghost")
         confirm = ModernButton("Simular e confirmar", "save", accent=True)
         cancel.clicked.connect(self.reject); confirm.clicked.connect(self.apply)
-        footer.addStretch()
+        footer_buttons = [cancel]
         if self.preselected_destination_id is not None:
-            back = ModernButton("Voltar", "clear")
+            back = ModernButton("Voltar", "previous")
             back.clicked.connect(lambda: self.done(self.RESULT_BACK))
-            footer.addWidget(back)
-        footer.addWidget(cancel); footer.addWidget(confirm)
-        root.addLayout(footer)
+            footer_buttons.append(back)
+        footer_buttons.append(confirm)
+        root.addWidget(dialog_footer(right=footer_buttons))
 
         self.dest_search.textChanged.connect(self.load_destinations)
         self.source_search.textChanged.connect(self.load_sources)

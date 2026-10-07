@@ -13,6 +13,7 @@ from app.services.remanagement_allocation import AllocationCandidate, suggest_al
 from app.services.remanagement_flow_state import (
     RemanagementFlowState, RemanagementItemAllocation, RemanagementSourceAllocation, availability_from_api,
 )
+from app.ui.components.dialog_shell import StepIndicator, dialog_footer, dialog_header
 from app.ui.components.modern_button import ModernButton
 from app.ui.dialog_utils import style_dialog_from_parent
 from app.ui.numeric_utils import format_decimal, parse_decimal
@@ -61,15 +62,22 @@ class RemanagementAllocationStepDialog(QDialog):
 
     def _build(self):
         root = QVBoxLayout(self)
-        root.setContentsMargins(22, 20, 22, 18)
-        root.setSpacing(12)
+        root.setContentsMargins(16, 14, 16, 14)
+        root.setSpacing(10)
 
-        title = QLabel("4. Defina de onde retirar os materiais")
-        title.setObjectName("DetailTitle")
-        root.addWidget(title)
+        title = QLabel("De onde retirar os materiais")
+        refresh = ModernButton("Atualizar disponibilidade", "refresh")
+        clear_all = ModernButton("Limpar alocações", "clear")
+        root.addWidget(
+            dialog_header(
+                title,
+                "Distribua, por produto, a quantidade que cada proposta de origem vai ceder.",
+                actions=[refresh, clear_all],
+            )
+        )
 
         self.destination_frame = QFrame()
-        self.destination_frame.setObjectName("Card")
+        self.destination_frame.setObjectName("DetailPanel")
         destination_layout = QVBoxLayout(self.destination_frame)
         destination_layout.setContentsMargins(14, 12, 14, 12)
         self.destination_label = QLabel("Destino")
@@ -90,24 +98,20 @@ class RemanagementAllocationStepDialog(QDialog):
 
         self.summary_label = QLabel("0 produto(s)")
         self.summary_label.setObjectName("ValueLabel")
-        root.addWidget(self.summary_label)
 
-        footer = QHBoxLayout()
-        refresh = ModernButton("Atualizar disponibilidade", "status")
-        clear_all = ModernButton("Limpar alocações", "clear")
-        back = ModernButton("Voltar", "clear")
-        self.advance_button = ModernButton("Avançar para compensação", "status", accent=True)
+        back = ModernButton("Voltar", "previous")
+        self.advance_button = ModernButton("Avançar para revisão", "next", accent=True)
         self.advance_button.setEnabled(False)
         refresh.clicked.connect(self._refresh_clicked)
         clear_all.clicked.connect(self._clear_all)
         back.clicked.connect(lambda: self.done(self.RESULT_BACK))
         self.advance_button.clicked.connect(self._advance)
-        footer.addWidget(refresh)
-        footer.addWidget(clear_all)
-        footer.addStretch()
-        footer.addWidget(back)
-        footer.addWidget(self.advance_button)
-        root.addLayout(footer)
+        root.addWidget(
+            dialog_footer(
+                left=[StepIndicator(4, 5), self.summary_label],
+                right=[back, self.advance_button],
+            )
+        )
 
     # -- carregamento / revalidacao ------------------------------------------------
 
