@@ -16,7 +16,7 @@ class TabelaPrazos(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(12)
         total = sum(values.values())
-        summary = QLabel(f"Visao consolidada de {total} processo(s)")
+        summary = QLabel(f"Visão consolidada de {total} processo(s)")
         summary.setStyleSheet(f"color: {palette['muted']}; font-size: 10px;")
         root.addWidget(summary)
         grid = QGridLayout()

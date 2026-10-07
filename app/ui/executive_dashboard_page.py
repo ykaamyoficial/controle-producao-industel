@@ -158,7 +158,7 @@ class ExecutiveDashboardPage(QWidget):
         header.addStretch()
         self.reliability_badge = QLabel("Confiabilidade: -")
         self.reliability_badge.setObjectName("TopInfoChip")
-        self.updated_at = QLabel("Ultima atualizacao: -")
+        self.updated_at = QLabel("Última atualização: -")
         self.updated_at.setObjectName("TopInfoChip")
         self.refresh_btn = ModernButton("Atualizar", "refresh", accent=True)
         self.refresh_btn.setMinimumHeight(28)
@@ -195,7 +195,9 @@ class ExecutiveDashboardPage(QWidget):
         self.status = QLineEdit()
         self.status.setPlaceholderText("Status")
         self.reliability_filter = QComboBox()
-        self.reliability_filter.addItems(["Todas", "Alta", "Media", "Baixa"])
+        # O rotulo e so apresentacao; o valor do filtro vai no itemData.
+        for label, value in (("Todas", "todas"), ("Alta", "alta"), ("Média", "media"), ("Baixa", "baixa")):
+            self.reliability_filter.addItem(label, value)
         self.include_partials = QCheckBox("Incluir parciais")
         self.include_partials.setChecked(True)
         self.more_filters_btn = ModernButton("Mais filtros", "filter")
@@ -203,7 +205,7 @@ class ExecutiveDashboardPage(QWidget):
         self.more_filters_btn.setMaximumHeight(28)
         self.more_filters_btn.setCheckable(True)
         self.more_filters_btn.toggled.connect(self._toggle_more_filters)
-        self.clear_btn = ModernButton("Limpar", "clear")
+        self.clear_btn = ModernButton("Limpar", "clear", variant="ghost")
         self.clear_btn.setMinimumHeight(28)
         self.clear_btn.setMaximumHeight(28)
         self.clear_btn.clicked.connect(self.clear_filters)
@@ -283,7 +285,7 @@ class ExecutiveDashboardPage(QWidget):
         self.more_filters_btn.setText("Menos filtros" if checked else "Mais filtros")
 
     def filters(self) -> dict[str, Any]:
-        reliability = self.reliability_filter.currentText().lower()
+        reliability = str(self.reliability_filter.currentData() or "todas")
         return {
             "data_inicial": self.start.text().strip(),
             "data_final": self.end.text().strip(),
@@ -320,14 +322,14 @@ class ExecutiveDashboardPage(QWidget):
     def _refresh_error(self, exc):
         self._refreshing = False
         self.refresh_btn.rotate_while(False)
-        ToastNotification(self.window(), f"Nao foi possivel atualizar o dashboard executivo: {exc}", "error")
+        ToastNotification(self.window(), f"Não foi possível atualizar o dashboard executivo: {exc}", "error")
 
     def _refresh_success(self, data: dict) -> None:
         self._refreshing = False
         self.refresh_btn.rotate_while(False)
         self.current_data = data or {}
         self.reliability_badge.setText(f"Confiabilidade: {str(self.current_data.get('confiabilidade') or '-').title()}")
-        self.updated_at.setText("Ultima atualizacao: " + datetime.now().strftime("%d/%m/%Y %H:%M"))
+        self.updated_at.setText("Última atualização: " + datetime.now().strftime("%d/%m/%Y %H:%M"))
         self.focus_label.setText(self._focus_text())
         self._render_cards(self.operational_layout, self.current_data.get("cards_operacionais") or [], "operacional")
         self._render_cards(self.fiscal_layout, self.current_data.get("cards_fiscais") or [], "fiscal")
@@ -574,9 +576,9 @@ class ExecutiveDashboardPage(QWidget):
         title.setStyleSheet(f"font-size: 20px; font-weight: 900; color: {area_color(area.upper(), self.service.palette)};")
         count = QLabel(f"{quantity} proposta(s) na fila")
         count.setObjectName("Caption")
-        weight_label = QLabel(_number_display(weight, "kg") + " pendentes" if weight else "Peso pendente indisponivel")
+        weight_label = QLabel(_number_display(weight, "kg") + " pendentes" if weight else "Peso pendente indisponível")
         weight_label.setObjectName("Caption")
-        action = QLabel("Acao sugerida: " + self._suggested_action(area))
+        action = QLabel("Ação sugerida: " + self._suggested_action(area))
         action.setObjectName("Caption")
         action.setWordWrap(True)
         layout.addWidget(title)
@@ -704,7 +706,7 @@ class ExecutiveDashboardPage(QWidget):
         layout = QHBoxLayout(box)
         layout.setContentsMargins(10, 6, 10, 6)
         layout.setSpacing(8)
-        badge = QLabel("Critico" if severity == "critica" else "Atencao" if severity == "atencao" else "Info")
+        badge = QLabel("Crítico" if severity == "critica" else "Atenção" if severity == "atencao" else "Info")
         badge.setStyleSheet(f"background: {accent}; color: {self.service.palette['accent_text']}; border-radius: 8px; padding: 3px 8px; font-weight: 900;")
         main = QLabel(f"{row.get('proposta') or '-'} | {row.get('cliente') or '-'} | {row.get('mensagem') or '-'}")
         main.setObjectName("Caption")
@@ -720,7 +722,7 @@ class ExecutiveDashboardPage(QWidget):
         return box
 
     def _render_warnings(self, warnings: list[str]) -> None:
-        self.warning_box.setText("\n".join(f"- {warning}" for warning in warnings) if warnings else "Sem avisos tecnicos para os filtros atuais.")
+        self.warning_box.setText("\n".join(f"- {warning}" for warning in warnings) if warnings else "Sem avisos técnicos para os filtros atuais.")
 
     def _empty_label(self, text: str) -> QLabel:
         label = QLabel(text)

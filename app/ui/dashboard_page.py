@@ -131,7 +131,7 @@ class DashboardPage(QWidget):
             area_layout.addWidget(
                 EmptyState(
                     "Sem filas operacionais",
-                    "As areas aparecerao aqui quando houver processos ativos.",
+                    "As áreas aparecerão aqui quando houver processos ativos.",
                     self.service.palette,
                 )
             )

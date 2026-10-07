@@ -83,7 +83,7 @@ class GraficoStatus(QWidget):
         normalized = [(str(row["label"] if isinstance(row, dict) else row[0]), int(row["total"] if isinstance(row, dict) else row[1])) for row in rows]
         normalized = [(label, value) for label, value in normalized if value > 0]
         if not normalized:
-            root.addWidget(EmptyState("Sem dados de status", "Os indicadores aparecerao assim que houver processos ativos.", palette))
+            root.addWidget(EmptyState("Sem dados de status", "Os indicadores aparecerão assim que houver processos ativos.", palette))
             return
         donut = DonutCanvas(normalized, colors, palette)
         donut.segment_clicked.connect(self.item_clicked)
@@ -101,7 +101,7 @@ class GraficoStatus(QWidget):
             name.setCursor(Qt.PointingHandCursor)
             name.mouseReleaseEvent = lambda event, key=label: self.item_clicked.emit(key)
             number = QLabel(str(value))
-            number.setStyleSheet("font-weight: 800;")
+            number.setObjectName("ValueLabel")
             line.addWidget(dot)
             line.addWidget(name, 1)
             line.addWidget(number)

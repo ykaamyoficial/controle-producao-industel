@@ -160,11 +160,11 @@ class OperationalReportsPage(QWidget):
         )
 
         header = QHBoxLayout()
-        title = QLabel("Relatorios Operacionais")
+        title = QLabel("Relatórios Operacionais")
         title.setObjectName("FilterTitle")
         self.title_label = title
         style_area_title(title, "PRODUCAO", self.service.palette)
-        subtitle = QLabel("Consultas por area para acompanhar producao, galvanizacao, expedicao, almoxarifado e remanejamentos.")
+        subtitle = QLabel("Consultas por área para acompanhar produção, galvanização, expedição, almoxarifado e remanejamentos.")
         subtitle.setObjectName("Caption")
         subtitle.setWordWrap(True)
         header.addWidget(title)
@@ -194,12 +194,12 @@ class OperationalReportsPage(QWidget):
         self.status = QLineEdit()
         self.status.setPlaceholderText("Status")
 
-        self.generate_btn = ModernButton("Gerar relatorio", "search", accent=True)
-        self.clear_btn = ModernButton("Limpar filtros", "clear")
+        self.generate_btn = ModernButton("Gerar relatório", "search", accent=True)
+        self.clear_btn = ModernButton("Limpar filtros", "clear", variant="ghost")
         self.export_csv_btn = ModernButton("Exportar CSV", "excel", accent=True)
         self.export_pdf_btn = ModernButton("Exportar PDF", "pdf")
         self.export_pdf_btn.setEnabled(False)
-        self.export_pdf_btn.setToolTip("Planejado para versao futura")
+        self.export_pdf_btn.setToolTip("Planejado para versão futura")
         self.generate_btn.clicked.connect(self.refresh)
         self.clear_btn.clicked.connect(self.clear_filters)
         self.export_csv_btn.clicked.connect(self.export_csv)
@@ -244,7 +244,7 @@ class OperationalReportsPage(QWidget):
         warning_layout.setContentsMargins(14, 10, 14, 10)
         warning_title = QLabel("Avisos e confiabilidade")
         warning_title.setObjectName("FilterTitle")
-        self.warning_text = QLabel("Gere um relatorio para visualizar os avisos tecnicos.")
+        self.warning_text = QLabel("Gere um relatório para visualizar os avisos técnicos.")
         self.warning_text.setObjectName("Caption")
         self.warning_text.setWordWrap(True)
         warning_layout.addWidget(warning_title)
@@ -407,16 +407,16 @@ class OperationalReportsPage(QWidget):
         menu = QMenu(self)
         menu.addAction(QAction("Ver detalhes da proposta", self, triggered=lambda: self.show_process_details(row)))
         menu.addAction(QAction("Ver itens", self, triggered=lambda: self.show_items(row)))
-        menu.addAction(QAction("Ver historico", self, triggered=lambda: self.show_history(row)))
+        menu.addAction(QAction("Ver histórico", self, triggered=lambda: self.show_history(row)))
         menu.addAction(QAction("Ver remanejamentos", self, triggered=lambda: self.show_remanagements(row)))
-        menu.addAction(QAction("Ver carga de galvanizacao", self, triggered=lambda: self.show_load(row)))
-        menu.addAction(QAction("Ver situacao da expedicao", self, triggered=lambda: self.show_expedition(row)))
+        menu.addAction(QAction("Ver carga de galvanização", self, triggered=lambda: self.show_load(row)))
+        menu.addAction(QAction("Ver situação da expedição", self, triggered=lambda: self.show_expedition(row)))
         if (self.area.currentData() or "") == "REMANEJAMENTOS":
             menu.addSeparator()
             menu.addAction(QAction("Abrir proposta origem", self, triggered=lambda: self.show_related_process(row, "processo_origem_id")))
             menu.addAction(QAction("Abrir proposta destino", self, triggered=lambda: self.show_related_process(row, "processo_destino_id")))
         menu.addSeparator()
-        menu.addAction(QAction("Copiar numero da proposta", self, triggered=lambda: self.copy_proposal(row)))
+        menu.addAction(QAction("Copiar número da proposta", self, triggered=lambda: self.copy_proposal(row)))
         menu.exec(self.table.viewport().mapToGlobal(point))
 
     def open_selected_details(self, _index=None) -> None:
@@ -427,21 +427,21 @@ class OperationalReportsPage(QWidget):
     def show_related_process(self, row: dict[str, Any], key: str) -> None:
         process_id = _row_process_id(row, preferred_key=key)
         if not process_id:
-            QMessageBox.information(self, "Relatorios Operacionais", "Nao foi possivel localizar esta proposta.")
+            QMessageBox.information(self, "Relatórios Operacionais", "Não foi possível localizar esta proposta.")
             return
         OperationalProcessReadOnlyDialog(self.service, process_id, self).exec()
 
     def show_process_details(self, row: dict[str, Any]) -> None:
         process_id = _row_process_id(row)
         if not process_id:
-            QMessageBox.information(self, "Relatorios Operacionais", "Nao foi possivel localizar a proposta.")
+            QMessageBox.information(self, "Relatórios Operacionais", "Não foi possível localizar a proposta.")
             return
         OperationalProcessReadOnlyDialog(self.service, process_id, self).exec()
 
     def show_items(self, row: dict[str, Any]) -> None:
         process_id = _row_process_id(row)
         if not process_id:
-            QMessageBox.information(self, "Relatorios Operacionais", "Nao foi possivel localizar os itens.")
+            QMessageBox.information(self, "Relatórios Operacionais", "Não foi possível localizar os itens.")
             return
         items = self.service.proposal_items(process_id)
         self._show_table_dialog(
@@ -462,7 +462,7 @@ class OperationalReportsPage(QWidget):
     def show_history(self, row: dict[str, Any]) -> None:
         process_id = _row_process_id(row)
         if not process_id:
-            QMessageBox.information(self, "Relatorios Operacionais", "Nao foi possivel localizar o historico.")
+            QMessageBox.information(self, "Relatórios Operacionais", "Não foi possível localizar o histórico.")
             return
         self._show_table_dialog(
             "Historico resumido",
@@ -517,7 +517,7 @@ class OperationalReportsPage(QWidget):
             loads = self.service.process_loads(process_id) if process_id else []
             load_id = int(loads[0]["id"]) if loads else 0
         if not load_id:
-            QMessageBox.information(self, "Relatorios Operacionais", "Esta linha nao possui carga de galvanizacao vinculada.")
+            QMessageBox.information(self, "Relatórios Operacionais", "Esta linha não possui carga de galvanização vinculada.")
             return
         OperationalLoadReadOnlyDialog(self.service, load_id, self).exec()
 
@@ -525,7 +525,7 @@ class OperationalReportsPage(QWidget):
         process_id = _row_process_id(row)
         process = self.service.get_process_dict(process_id) if process_id else {}
         if not process:
-            QMessageBox.information(self, "Relatorios Operacionais", "Nao foi possivel localizar a proposta.")
+            QMessageBox.information(self, "Relatórios Operacionais", "Não foi possível localizar a proposta.")
             return
         lines = [
             ("Proposta", process.get("proposta")),
@@ -536,7 +536,7 @@ class OperationalReportsPage(QWidget):
             ("Situacao fluxo", self.service.status_label(process.get("situacao_fluxo") or "")),
         ]
         text = "\n".join(f"{label}: {value or '-'}" for label, value in lines)
-        QMessageBox.information(self, "Situacao da expedicao", text)
+        QMessageBox.information(self, "Situação da expedição", text)
 
     def copy_proposal(self, row: dict[str, Any]) -> None:
         proposal = row.get("proposta") or row.get("proposta_destino") or row.get("proposta_origem") or ""
@@ -553,7 +553,7 @@ class OperationalReportsPage(QWidget):
         if warnings:
             self.warning_text.setText("\n".join(f"- {warning}" for warning in warnings))
         else:
-            self.warning_text.setText("Nenhum aviso tecnico para este relatorio.")
+            self.warning_text.setText("Nenhum aviso técnico para este relatório.")
 
     def _columns_from_rows(self, rows: list[dict[str, Any]]) -> list[tuple[str, str]]:
         if not rows:
@@ -562,7 +562,7 @@ class OperationalReportsPage(QWidget):
 
     def export_csv(self) -> None:
         if not self.current_report or not self.model.rows:
-            QMessageBox.information(self, "Relatorios Operacionais", "Nao ha dados para exportar.")
+            QMessageBox.information(self, "Relatórios Operacionais", "Não há dados para exportar.")
             return
         path, _ = QFileDialog.getSaveFileName(
             self,
@@ -573,7 +573,7 @@ class OperationalReportsPage(QWidget):
         if not path:
             return
         self.write_csv(Path(path))
-        QMessageBox.information(self, "Relatorios Operacionais", "CSV gerado com sucesso.")
+        QMessageBox.information(self, "Relatórios Operacionais", "CSV gerado com sucesso.")
 
     def write_csv(self, path: Path) -> None:
         safe_columns = [
@@ -607,7 +607,7 @@ class OperationalRowsDialog(QDialog):
         root.setContentsMargins(16, 16, 16, 16)
         root.setSpacing(10)
         heading = QLabel(title)
-        heading.setStyleSheet("font-size: 18px; font-weight: 800;")
+        heading.setObjectName("DetailTitle")
         summary = QLabel(f"{len(rows)} registro(s) relacionado(s)")
         summary.setObjectName("Caption")
         root.addWidget(heading)
@@ -648,7 +648,7 @@ class OperationalRowsDialog(QDialog):
         resize_rows_to_contents(table)
         table.resizeColumnsToContents()
         root.addWidget(table, 1)
-        close = ModernButton("Fechar", "clear")
+        close = ModernButton("Fechar", "clear", variant="ghost")
         close.clicked.connect(self.accept)
         root.addWidget(close, 0, Qt.AlignRight)
         style_dialog_from_parent(self, parent)
@@ -674,7 +674,7 @@ class OperationalProcessReadOnlyDialog(QDialog):
         hl = QVBoxLayout(header)
         hl.setContentsMargins(16, 12, 16, 12)
         title = QLabel(f"{self.process.get('proposta') or '-'} | {self.process.get('cliente') or '-'}")
-        title.setStyleSheet("font-size: 18px; font-weight: 800;")
+        title.setObjectName("DetailTitle")
         subtitle = QLabel(
             f"Obra/Site: {self.process.get('obra_site') or '-'} | Lote: {self.process.get('lote') or '-'} | "
             f"Peso: {self.process.get('peso') or '-'} | Prazo: {self.process.get('prazo_entrega') or '-'}"
@@ -691,7 +691,7 @@ class OperationalProcessReadOnlyDialog(QDialog):
         root.addLayout(body)
         root.addWidget(self._items_panel(), 1)
         root.addWidget(self._history_panel(), 1)
-        close = ModernButton("Fechar", "clear")
+        close = ModernButton("Fechar", "clear", variant="ghost")
         close.clicked.connect(self.accept)
         root.addWidget(close, 0, Qt.AlignRight)
 
@@ -701,7 +701,7 @@ class OperationalProcessReadOnlyDialog(QDialog):
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(14, 12, 14, 12)
         label = QLabel(title)
-        label.setStyleSheet("font-size: 14px; font-weight: 800;")
+        label.setObjectName("PanelTitle")
         layout.addWidget(label)
         return panel
 
@@ -744,7 +744,7 @@ class OperationalProcessReadOnlyDialog(QDialog):
         items = self.service.proposal_items(self.process_id)
         panel = self._panel(f"Itens da proposta ({len(items)})")
         table = QTableWidget(len(items), 8)
-        table.setHorizontalHeaderLabels(["Item", "Codigo", "Descricao", "Qtd.", "Peso", "Produzido", "Galvanizado", "Entregue"])
+        table.setHorizontalHeaderLabels(["Item", "Código", "Descrição", "Qtd.", "Peso", "Produzido", "Galvanizado", "Entregue"])
         table.setAlternatingRowColors(True)
         table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         table.verticalHeader().setVisible(False)
@@ -773,7 +773,7 @@ class OperationalProcessReadOnlyDialog(QDialog):
         history = self.service.process_history_rows(self.process_id)[:20]
         panel = self._panel(f"Historico resumido ({len(history)})")
         table = QTableWidget(len(history), 5)
-        table.setHorizontalHeaderLabels(["Area", "Anterior", "Novo", "Quando", "Usuario"])
+        table.setHorizontalHeaderLabels(["Área", "Anterior", "Novo", "Quando", "Usuário"])
         table.setAlternatingRowColors(True)
         table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         table.verticalHeader().setVisible(False)
@@ -792,7 +792,7 @@ class OperationalLoadReadOnlyDialog(QDialog):
         self.service = service
         self.load_id = load_id
         self.load = service.get_galvanization_load_dict(load_id)
-        self.setWindowTitle(f"Carga de galvanizacao {load_id}")
+        self.setWindowTitle(f"Carga de galvanização {load_id}")
         apply_large_dialog_geometry(self, parent)
         self._build()
         style_dialog_from_parent(self, parent)
@@ -804,7 +804,7 @@ class OperationalLoadReadOnlyDialog(QDialog):
             f"Carga {self.load_id} | {self.service.load_status_label(self.load.get('status') or '')} | "
             f"Motorista: {self.load.get('motorista') or '-'}"
         )
-        title.setStyleSheet("font-size: 18px; font-weight: 800;")
+        title.setObjectName("DetailTitle")
         root.addWidget(title)
         proposals = self.service.galvanization_load_items(self.load_id)
         table = QTableWidget(len(proposals), 6)
@@ -827,7 +827,7 @@ class OperationalLoadReadOnlyDialog(QDialog):
             for col, value in enumerate(values):
                 table.setItem(row, col, QTableWidgetItem(str(value or "-")))
         root.addWidget(table, 1)
-        close = ModernButton("Fechar", "clear")
+        close = ModernButton("Fechar", "clear", variant="ghost")
         close.clicked.connect(self.accept)
         root.addWidget(close, 0, Qt.AlignRight)
 

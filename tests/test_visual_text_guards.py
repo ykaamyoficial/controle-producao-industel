@@ -39,6 +39,22 @@ class DisplayOnlyAccentGuardTests(unittest.TestCase):
             self.assertIn(f'"situacao:{code}"', source)
         self.assertIn('raw_status.startswith("situacao:")', source)
 
+    def test_reliability_filter_sends_data_value_not_the_accented_label(self):
+        # O filtro mandava `currentText().lower()`; com o rotulo "Média" isso
+        # viraria "média" e deixaria de casar com a confiabilidade "media".
+        source = (APP_DIR / "ui" / "executive_dashboard_page.py").read_text(encoding="utf-8")
+        self.assertIn('("Média", "media")', source)
+        self.assertIn("self.reliability_filter.currentData()", source)
+        self.assertNotIn("reliability_filter.currentText()", source)
+
+    def test_no_combo_text_is_lowercased_into_a_filter_value(self):
+        offenders = [
+            str(path.relative_to(APP_DIR.parent))
+            for path in sorted((APP_DIR / "ui").rglob("*.py"))
+            if re.search(r"currentText\(\)\.(lower|upper|casefold)\(\)", path.read_text(encoding="utf-8"))
+        ]
+        self.assertEqual(offenders, [], "use itemData/currentData para o valor do filtro")
+
     def test_status_label_keys_stay_ascii(self):
         from app.models.fiscal_table_model import FISCAL_STATUS_LABELS
         from app.services import backend_adapter as backend

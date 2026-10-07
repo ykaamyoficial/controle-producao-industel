@@ -21,7 +21,7 @@ class BarraProgressoArea(QWidget):
         root.setSpacing(5)
         line = QHBoxLayout()
         name = QLabel(label)
-        name.setStyleSheet("font-weight: 700;")
+        name.setObjectName("ValueLabel")
         metric = QLabel(f"{value}  |  {percent}%")
         metric.setStyleSheet(f"color: {tokens['muted']}; font-size: 10px; font-weight: 700;")
         line.addWidget(name)
