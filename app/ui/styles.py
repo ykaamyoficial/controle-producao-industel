@@ -483,6 +483,64 @@ def app_stylesheet(palette: dict) -> str:
         font-size: 20px;
         font-weight: 700;
     }}
+    QLabel#FilterTitle[tone="accent"] {{
+        color: {accent};
+    }}
+    QFrame#IndicatorCard {{
+        background: {surface};
+        border: 1px solid {border};
+        {radius(14)}
+    }}
+    QFrame#IndicatorCard:hover {{
+        background: {surface_alt};
+        border: 1px solid {accent};
+    }}
+    QFrame#IndicatorCard:focus {{
+        border: 2px solid {ring};
+    }}
+    QFrame#IndicatorCard QLabel {{
+        background: transparent;
+    }}
+    QLabel#IndicatorLabel {{
+        color: {muted};
+        font-size: 12px;
+        font-weight: 600;
+    }}
+    QLabel#IndicatorValue {{
+        font-size: 28px;
+        font-weight: 700;
+    }}
+    QLabel#MetricCaption {{
+        color: {muted};
+        font-size: 11px;
+    }}
+    QLabel#MetricValue {{
+        font-size: 16px;
+        font-weight: 700;
+    }}
+    QWidget#AreaBarRow:hover, QWidget#LegendRow:hover {{
+        background: {surface_alt};
+        border-radius: 8px;
+    }}
+    QFrame#SoftPanel {{
+        background: {surface_alt};
+        border: 0;
+        {radius(12)}
+    }}
+    QFrame#SoftPanel QLabel {{
+        background: transparent;
+    }}
+    QFrame#AlertRow {{
+        background: {surface};
+        border: 1px solid {border};
+        border-left: 4px solid {accent};
+        {radius(10)}
+    }}
+    QFrame#AlertRow[kind="danger"] {{ border-left-color: {danger}; }}
+    QFrame#AlertRow[kind="warning"] {{ border-left-color: {palette["warning"]}; }}
+    QFrame#AlertRow QLabel {{
+        background: transparent;
+    }}
     QLabel#DeadlineText {{
         font-size: 13px;
         font-weight: 500;
@@ -508,6 +566,7 @@ def app_stylesheet(palette: dict) -> str:
     }}
     QLabel#InlineNotice[kind="danger"] {{ color: {danger}; font-weight: 600; }}
     QLabel#InlineNotice[kind="warning"] {{ color: {palette["warning"]}; font-weight: 600; }}
+    QLabel#InlineNotice[kind="success"] {{ color: {palette["success"]}; font-weight: 600; }}
     QGroupBox {{
         background: {surface};
         border: 1px solid {border};

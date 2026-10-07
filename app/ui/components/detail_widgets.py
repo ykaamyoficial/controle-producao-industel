@@ -156,11 +156,14 @@ def note_box(text: str, palette: dict | None = None) -> QFrame:
 class ThinProgressBar(QWidget):
     """Barra de progresso fina (6 px); enche ao aparecer."""
 
-    def __init__(self, fraction: float = 0.0, parent=None):
+    def __init__(self, fraction: float = 0.0, parent=None, *, color: str | None = None, height: int = 6):
         super().__init__(parent)
         self._target = 0.0
         self._value = 0.0
-        self.setFixedHeight(6)
+        # `color` e uma cor de token (cor de area, status); sem ela vale o destaque.
+        self._color = color
+        self._height = height
+        self.setFixedHeight(height)
         self.setMinimumWidth(120)
         self.set_fraction(fraction)
 
@@ -182,22 +185,25 @@ class ThinProgressBar(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
         painter.setPen(Qt.NoPen)
+        radius = self._height / 2
         painter.setBrush(QColor(tokens["surface_alt"]))
-        painter.drawRoundedRect(QRectF(self.rect()), 3, 3)
+        painter.drawRoundedRect(QRectF(self.rect()), radius, radius)
         if self._value > 0:
-            painter.setBrush(QColor(tokens["accent"]))
-            painter.drawRoundedRect(QRectF(0, 0, max(6.0, self.width() * self._value), 6), 3, 3)
+            painter.setBrush(QColor(self._color or tokens["accent"]))
+            width = max(float(self._height), self.width() * self._value)
+            painter.drawRoundedRect(QRectF(0, 0, width, self._height), radius, radius)
         painter.end()
 
 
 class IconChip(QWidget):
     """Icone dentro de um circulo, a esquerda do titulo de um painel."""
 
-    def __init__(self, icon_name: str, color: str, parent=None):
+    def __init__(self, icon_name: str, color: str, parent=None, *, size: int = 32):
         super().__init__(parent)
         self._icon_name = icon_name
         self._color = color
-        self.setFixedSize(32, 32)
+        self._size = size
+        self.setFixedSize(size, size)
 
     def paintEvent(self, _event) -> None:  # noqa: N802 (Qt override)
         tokens = active_tokens()
@@ -206,7 +212,9 @@ class IconChip(QWidget):
         painter.setPen(QPen(QColor(tokens["border"]), 1))
         painter.setBrush(QColor(tokens["surface_alt"]))
         painter.drawEllipse(QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5))
-        painter.drawPixmap(8, 8, make_icon(self._icon_name, self._color, 16).pixmap(16, 16))
+        icon = self._size // 2
+        offset = (self._size - icon) // 2
+        painter.drawPixmap(offset, offset, make_icon(self._icon_name, self._color, icon).pixmap(icon, icon))
         painter.end()
 
 
