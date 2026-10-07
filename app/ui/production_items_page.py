@@ -28,7 +28,7 @@ from app.ui.refresh_coordinator import RefreshCoordinator
 from app.ui.components.area_identity import style_area_title
 from app.ui.components.empty_state import EmptyState
 from app.ui.components.modern_button import ModernButton
-from app.ui.components.modern_table import ModernTable
+from app.ui.components.modern_table import TABLE_HEADER_HEIGHT, ModernTable
 from app.ui.components.operational_layout import (
     OPERATIONAL_ACTION_SPACING,
     OPERATIONAL_PAGE_MARGINS,
@@ -85,7 +85,7 @@ def _group_by_product(rows: list[dict]) -> list[dict]:
         if len(statuses) == 1:
             status_value = next(iter(statuses))
         else:
-            status_value = f"Em producao ({produced_count}/{len(items)} produzidos)"
+            status_value = f"Em produção ({produced_count}/{len(items)} produzidos)"
         grouped_rows.append(
             {
                 "id": None,
@@ -140,7 +140,7 @@ class ProductionItemsPage(QWidget):
             area="PRODUCAO",
             palette=self.service.palette,
         )
-        title = QLabel("Itens em producao")
+        title = QLabel("Itens em produção")
         title.setObjectName("FilterTitle")
         style_area_title(title, "PRODUCAO", self.service.palette)
         self.search = QLineEdit()
@@ -151,8 +151,8 @@ class ProductionItemsPage(QWidget):
         self.group_by_product = QCheckBox("Agrupar por produto")
         self.group_by_product.setChecked(True)
         self.group_by_product.stateChanged.connect(self._apply_grouping)
-        apply_btn = ModernButton("Aplicar", "search", accent=True)
-        clear_btn = ModernButton("Limpar", "clear")
+        apply_btn = ModernButton("Aplicar", "search")
+        clear_btn = ModernButton("Limpar", "clear", variant="ghost")
         apply_btn.clicked.connect(self.refresh)
         clear_btn.clicked.connect(self.clear)
         fl.addWidget(title)
@@ -166,11 +166,11 @@ class ProductionItemsPage(QWidget):
 
         actions = QHBoxLayout()
         actions.setSpacing(OPERATIONAL_ACTION_SPACING)
-        self.actions_button = ModernButton("Acoes", "status", accent=True)
+        self.actions_button = ModernButton("Ações", "status", accent=True)
         self.actions_button.clicked.connect(self.open_action_center)
-        self.batch_actions_button = ModernButton("Acoes em lote", "batch", accent=True)
+        self.batch_actions_button = ModernButton("Ações em lote", "batch")
         self.batch_actions_button.clicked.connect(self._on_batch_actions_button_clicked)
-        self.cancel_batch_button = ModernButton("Cancelar selecao", "close")
+        self.cancel_batch_button = ModernButton("Cancelar seleção", "close", variant="ghost")
         self.cancel_batch_button.clicked.connect(self.cancel_batch_selection)
         self.batch_count_label = QLabel("0 itens selecionados")
         self.batch_count_label.setObjectName("Caption")
@@ -191,7 +191,8 @@ class ProductionItemsPage(QWidget):
         self.table = ModernTable(self.service)
         self.batch_header = BatchSelectionHeader(Qt.Horizontal, self.table)
         self.table.setHorizontalHeader(self.batch_header)
-        self.batch_header.setFixedHeight(28)
+        self.batch_header.setFixedHeight(TABLE_HEADER_HEIGHT)
+        self.batch_header.setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         self.batch_header.setSectionResizeMode(QHeaderView.Interactive)
         self.batch_header.toggle_visible_requested.connect(self._toggle_visible_batch_rows)
         self.table.status_shortcut_enabled = False
@@ -203,7 +204,7 @@ class ProductionItemsPage(QWidget):
         self.table.clicked.connect(self._handle_table_click)
         self.table.doubleClicked.connect(self._on_row_double_clicked)
         self.empty_state = EmptyState(
-            "Nenhum item em producao",
+            "Nenhum item em produção",
             "Quando houver itens pendentes ou produzidos, eles aparecerao aqui.",
             self.service.palette,
             icon="production",
@@ -299,7 +300,7 @@ class ProductionItemsPage(QWidget):
         layout.addWidget(table)
         footer = QHBoxLayout()
         footer.addStretch()
-        close_btn = ModernButton("Fechar", "clear")
+        close_btn = ModernButton("Fechar", "clear", variant="ghost")
         close_btn.clicked.connect(dialog.accept)
         footer.addWidget(close_btn)
         layout.addLayout(footer)
@@ -400,7 +401,7 @@ class ProductionItemsPage(QWidget):
 
     def activate_batch_selection(self):
         if not (self.service.can_edit("PRODUCAO") or self._can_mount_load()):
-            ToastNotification(self.window(), "Seu usuario tem apenas visualizacao nesta area.", "error")
+            ToastNotification(self.window(), "Seu usuário tem apenas visualização nesta área.", "error")
             return
         if self._batch_mode:
             return
@@ -414,7 +415,8 @@ class ProductionItemsPage(QWidget):
         self.table.clearSelection()
         self.table.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.actions_button.setVisible(False)
-        self.batch_actions_button.setText("Acoes")
+        self.batch_actions_button.setText("Ações")
+        self.batch_actions_button.set_variant("primary")
         self.batch_count_label.setVisible(True)
         self.cancel_batch_button.setVisible(True)
         self._update_batch_controls()
@@ -430,7 +432,8 @@ class ProductionItemsPage(QWidget):
         self.table.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.table.clearSelection()
         self.batch_header.set_batch_state(False)
-        self.batch_actions_button.setText("Acoes em lote")
+        self.batch_actions_button.setText("Ações em lote")
+        self.batch_actions_button.set_variant("secondary")
         self.batch_count_label.setVisible(False)
         self.cancel_batch_button.setVisible(False)
         self.actions_button.setVisible(self.service.can_edit("PRODUCAO") or self._can_mount_load())
@@ -512,7 +515,7 @@ class ProductionItemsPage(QWidget):
 
     def open_flow_review(self, rows: list[dict] | None = None):
         if not self.service.can_edit("PRODUCAO"):
-            ToastNotification(self.window(), "Seu usuario nao pode definir o fluxo dos itens.", "error")
+            ToastNotification(self.window(), "Seu usuário não pode definir o fluxo dos itens.", "error")
             return
         rows = rows or self.selected_rows()
         proposal_ids = list(dict.fromkeys(
@@ -537,17 +540,17 @@ class ProductionItemsPage(QWidget):
             return
         menu = QMenu(self)
         if self.service.can_edit("PRODUCAO") or self._can_mount_load():
-            menu.addAction(QAction("Acoes", self, triggered=self.open_action_center))
+            menu.addAction(QAction("Ações", self, triggered=self.open_action_center))
         if (self.service.can_edit("PRODUCAO") or self._can_mount_load()) and any(
             str(row.get("status_producao") or "").strip().upper() != "PARADO"
             for row in self.selected_rows()
         ):
-            menu.addAction(QAction("Acoes em lote", self, triggered=self.open_action_center))
+            menu.addAction(QAction("Ações em lote", self, triggered=self.open_action_center))
         menu.exec(self.table.viewport().mapToGlobal(position))
 
     def register_selected(self, rows: list[dict] | None = None):
         if not self.service.can_edit("PRODUCAO"):
-            ToastNotification(self.window(), "Seu usuario tem apenas visualizacao nesta area.", "error")
+            ToastNotification(self.window(), "Seu usuário tem apenas visualização nesta área.", "error")
             return
         rows = rows or self.selected_rows()
         if not rows:
@@ -597,7 +600,7 @@ class ProductionItemsPage(QWidget):
             if failures:
                 QMessageBox.warning(self, "Iniciar producao", "Nao foi possivel iniciar toda a selecao:\n\n" + "\n".join(failures))
             else:
-                ToastNotification(self.window(), "Producao iniciada para as propostas selecionadas.", "success")
+                ToastNotification(self.window(), "Produção iniciada para as propostas selecionadas.", "success")
             self.refresh()
 
         def error(exc):
@@ -615,7 +618,7 @@ class ProductionItemsPage(QWidget):
             return
 
         if not self._can_mount_load():
-            ToastNotification(self.window(), "Seu usuario tem apenas visualizacao nesta area.", "error")
+            ToastNotification(self.window(), "Seu usuário tem apenas visualização nesta área.", "error")
             return
 
         if any(not row.get("fluxo_definido") for row in rows):
@@ -666,7 +669,7 @@ class ProductionItemsPage(QWidget):
         if skipped_count:
             ToastNotification(
                 self.window(),
-                f"{len(produced_rows)} item(ns) produzido(s) — {skipped_count} nao precisam de galvanizacao e seguem direto para Expedicao.",
+                f"{len(produced_rows)} item(ns) produzido(s) — {skipped_count} não precisam de galvanização e seguem direto para Expedição.",
                 "success",
             )
         if not galvanization_rows:
@@ -697,7 +700,7 @@ class ProductionItemsPage(QWidget):
         if skipped_count:
             ToastNotification(
                 self.window(),
-                f"{len(produced_rows)} item(ns) produzido(s) — {skipped_count} nao precisam de galvanizacao e seguem direto para Expedicao.",
+                f"{len(produced_rows)} item(ns) produzido(s) — {skipped_count} não precisam de galvanização e seguem direto para Expedição.",
                 "success",
             )
 
@@ -707,7 +710,7 @@ class ProductionItemsPage(QWidget):
             parent=self,
         )
         if dialog.exec():
-            ToastNotification(self.window(), "Carga de galvanizacao salva.", "success")
+            ToastNotification(self.window(), "Carga de galvanização salva.", "success")
         self.refresh()
 
     def _show_load_addition_summary(self, detail: dict):
@@ -737,10 +740,10 @@ class ProductionAreaPage(QWidget):
         layout.setContentsMargins(*OPERATIONAL_PAGE_MARGINS)
         self.tabs = QTabWidget()
         configure_operational_tabs(self.tabs, area="PRODUCAO", palette=self.service.palette)
-        self.proposals_page = ProcessPage(service, "PRODUCAO", "Producao")
+        self.proposals_page = ProcessPage(service, "PRODUCAO", "Produção")
         self.items_page = ProductionItemsPage(service)
         self.tabs.addTab(self.proposals_page, "Propostas")
-        self.tabs.addTab(self.items_page, "Itens em producao")
+        self.tabs.addTab(self.items_page, "Itens em produção")
         self.tabs.currentChanged.connect(self._on_tab_changed)
         layout.addWidget(self.tabs)
 

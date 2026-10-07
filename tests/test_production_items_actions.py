@@ -220,7 +220,7 @@ class ProductionItemsSelectionTests(unittest.TestCase):
         page = self._page(rows)
         page.batch_actions_button.click()
         self.assertTrue(page._batch_mode)
-        self.assertEqual(page.batch_actions_button.text(), "Acoes")
+        self.assertEqual(page.batch_actions_button.text(), "Ações")
         page.batch_selection.select_many(rows)
         fake_dialog = MagicMock()
         fake_dialog.exec.return_value = 0

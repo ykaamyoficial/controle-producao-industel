@@ -32,7 +32,7 @@ from app.ui.process_page import ProcessPage
 from app.ui.production_items_page import ProductionAreaPage
 from app.ui.galvanization_items_page import GalvanizationAreaPage
 from app.ui.settings_dialog import SettingsDialog
-from app.ui.sidebar import Sidebar
+from app.ui.sidebar import NAV_LABELS, Sidebar
 from app.ui.icons import icon_cache
 from app.ui.styles import app_stylesheet, chrome_bg_color
 from app.version import APP_DISPLAY_NAME, APP_VERSION
@@ -425,11 +425,11 @@ class MainWindow(FramelessHitTestMixin, QMainWindow):
             elif area == "GALVANIZACAO":
                 self.pages[area] = GalvanizationAreaPage(self.service)
             else:
-                self.pages[area] = ProcessPage(self.service, area, area.title())
+                self.pages[area] = ProcessPage(self.service, area, NAV_LABELS.get(area, area.title()))
             self.stack.addWidget(self.pages[area])
 
         if self._can_view("partials", "PARCIAIS"):
-            self.pages["PARCIAIS"] = ProcessPage(self.service, "PARCIAIS", "Parciais e pendencias")
+            self.pages["PARCIAIS"] = ProcessPage(self.service, "PARCIAIS", "Parciais e pendências")
             self.stack.addWidget(self.pages["PARCIAIS"])
 
         if self._can_view("fiscal", "FISCAL"):
@@ -442,11 +442,11 @@ class MainWindow(FramelessHitTestMixin, QMainWindow):
 
         if self._can_view("history", "HISTORICO"):
             self.pages["HISTORICO"] = DataPage(
-                "Historico",
+                "Histórico",
                 [
-                    ("proposta", "Proposta"), ("area", "Area"), ("status_anterior", "Anterior"),
-                    ("status_novo", "Novo"), ("data_hora", "Quando"), ("usuario", "Usuario"),
-                    ("computador", "Computador"), ("observacao", "Observacao"),
+                    ("proposta", "Proposta"), ("area", "Área"), ("status_anterior", "Anterior"),
+                    ("status_novo", "Novo"), ("data_hora", "Quando"), ("usuario", "Usuário"),
+                    ("computador", "Computador"), ("observacao", "Observação"),
                 ],
                 self.service.history_rows,
             )
@@ -456,16 +456,16 @@ class MainWindow(FramelessHitTestMixin, QMainWindow):
             self.pages["AUDITORIA"] = DataPage(
                 "Auditoria",
                 [
-                    ("acao", "Acao"), ("entidade", "Entidade"), ("entidade_id", "ID"),
+                    ("acao", "Ação"), ("entidade", "Entidade"), ("entidade_id", "ID"),
                     ("campo", "Campo"), ("valor_anterior", "Anterior"), ("valor_novo", "Novo"),
-                    ("data_hora", "Quando"), ("usuario", "Usuario"),
+                    ("data_hora", "Quando"), ("usuario", "Usuário"),
                 ],
                 self.service.audit_rows,
             )
             self.stack.addWidget(self.pages["AUDITORIA"])
 
         self.pages["RELATORIOS"] = DataPage(
-            "Relatorios salvos",
+            "Relatórios salvos",
             [("name", "Nome"), ("source", "Base"), ("fields", "Campos")],
             lambda: [
                 {
