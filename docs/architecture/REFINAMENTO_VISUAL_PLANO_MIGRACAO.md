@@ -148,6 +148,21 @@ Cuidado: contadores da barra lateral e do sino são pintados em `paintEvent` e o
 
 Detalhes da proposta é o segundo protótipo aprovado. Central de ações: a ordem e as categorias (destructive > warning > primary > normal) não mudam; revisar com o agente `action-center-reviewer`.
 
+**Andamento (07/10/2026):**
+
+| Entrega | Situação |
+|---|---|
+| Peças reutilizáveis das telas sobrepostas: painel, grades chave/valor e em blocos, número de resumo, nota, barra de progresso, trilha do fluxo, abas com contagem | Feito - `components/detail_widgets.py` |
+| Selo de status pintado (`StatusBadge`), com `area_badge()` e `neutral_badge()`; selo em coluna de tabela | Feito - `components/status_badge.py`, `components/badge_delegate.py` |
+| Detalhes da proposta: cabeçalho-cartão com selo e aviso de prazo, abas com contagem, esqueleto na primeira carga, erro com "Tentar de novo" (antes a janela fechava em silêncio) | Feito - `process_detail_dialog.py` |
+| Abas Resumo (trilha do fluxo, barra de peso, atalhos "Ver itens"/"Ver cargas"), Itens, Fluxo (um painel por área, em duas colunas), Cargas, Fiscal/Entrega, Histórico | Feito - `process_detail/*.py` |
+| Descrição longa de item quebra linha, com altura mínima de 40 px | Feito, conforme decidido |
+| Rótulos de status acentuados na origem ("Em produção", "Liberado para produção", "Aguardando separação"...) | Feito - `STATUS_LABELS`, `AREA_STATUS_LABEL_OVERRIDES`, `LOAD_STATUS_LABELS`, `PERMISSION_AREAS` em `backend_adapter.py` e `FISCAL_STATUS_LABELS`; só os rótulos exibidos, as chaves não mudaram |
+| "Não informado" para peso ausente | Feito - `format_weight_or_missing()` |
+| Centrais de ação (proposta, lote, carga, fiscal), correção administrativa, ações em lote antigas, detalhes do painel e revisão de seleção: selos sólidos, títulos pela folha de estilo, Fechar/Cancelar fantasma, textos acentuados | Feito - cartões de ação (`action_card_button.py`) não mudaram, já seguiam a hierarquia |
+| Cabeçalho-cartão e rodapé de ações como componentes próprios | Não criado - o cabeçalho de Detalhes é montado no próprio diálogo; extrair quando a Onda 4 precisar do segundo uso |
+| Prévia sem login | `python scripts/ui_gallery.py --moldura --detalhes 0..5` |
+
 ### Onda 4 — Formulários e assistentes de produção (G)
 
 `process_form_dialog.py`, `item_flow_dialog.py`, `item_selection_dialog.py`, `item_weight_dialog.py`, `production_registration_dialog.py`, `flow_review_dialog.py`, `galvanization_load_dialog.py` (1.904 linhas), `galvanization_load_details_dialog.py`, `early_remanagement_dialog.py` e os cinco passos de remanejamento (`remanagement_*_dialog.py`).

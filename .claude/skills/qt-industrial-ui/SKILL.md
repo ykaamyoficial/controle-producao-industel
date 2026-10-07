@@ -41,7 +41,19 @@ Em dúvida entre "mais bonito" e "mais parecido com hoje", escolha o parecido co
 
 ## Componentes
 
-Já existem em `app/ui/components/` (confira com `python scripts/ui_gallery.py`, que mostra todos nos dois temas sem precisar logar): `ModernButton(texto, icone, accent=..., variant="primary|secondary|ghost|danger")`, `SegmentedControl`, `CountTabs`, `SkeletonRows` e o véu de diálogo (`dialog_scrim.py`, ligado sozinho por `style_dialog_from_parent()`). Animação de atributo pintado: `animate_value()` em `app/ui/animations.py`.
+Já existem em `app/ui/components/` (confira com `python scripts/ui_gallery.py`, que mostra todos nos dois temas sem precisar logar; `--moldura` mostra a página Controle Geral real e `--moldura --detalhes N` abre Detalhes da proposta por cima):
+
+- `ModernButton(texto, icone, accent=..., variant="primary|secondary|ghost|danger")`.
+- `SegmentedControl`, `CountTabs`, `SkeletonRows`, `EmptyState(..., action=botao)`.
+- `ModernTable` (tabela operacional: linha de 40 px, hover/seleção na linha inteira, selo, aviso de prazo via `deadline_alert()`).
+- `StatusBadge(texto, fundo, texto_cor)`, `area_badge(texto, cor)`, `neutral_badge(texto, palette)`; em `QTableWidget`, `BadgeColumnDelegate` + `set_status_badge(item, status, palette)`.
+- `detail_widgets.py`: `make_panel()`, `kv_grid()`, `block_grid()`, `stat_block()`, `note_box()`, `ThinProgressBar`, `IconChip`, `FlowTrail`, `CountTabWidget` (abas + páginas com a API do `QTabWidget`).
+- Véu de diálogo (`dialog_scrim.py`), ligado sozinho por `style_dialog_from_parent()`.
+- Animação de atributo pintado: `animate_value()` em `app/ui/animations.py`.
+
+Tela de referência no código real: `app/ui/process_detail_dialog.py` e `app/ui/process_detail/`.
+
+Painel de conteúdo usa `objectName` `DetailPanel` (ou `make_panel()`), não `Panel`: `Panel` muda de cor no hover, o que só faz sentido para cartão clicável.
 
 | Componente | Regra |
 |---|---|
