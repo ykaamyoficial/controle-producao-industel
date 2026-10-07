@@ -177,7 +177,7 @@ Aqui entra o rodapé de ações (Cancelar, Voltar, confirmar) e o indicador de p
 | Cancelar/Fechar/Limpar como botão fantasma; títulos e destaques pela folha de estilo em vez de estilo inline | Feito |
 | Um único botão primário por diálogo | Feito - só dois tinham dois ("Adicionar item" no cadastro de proposta e "Aplicar" na lista de cargas viraram secundários) |
 | Véu, cantos e botões animados | Já vinham da Onda 0 |
-| **Layout dos diálogos (cabeçalho-cartão, painéis, rodapé de ações padronizado, indicador de passo)** | **Não feito** - os diálogos continuam com a disposição de antes; só a "pele" mudou. Refazer cada um pede protótipo e conferência no sistema real, como foi com Detalhes da proposta |
+| Layout dos diálogos (cabeçalho-cartão, rodapé de ações, indicador de passo) | Feito em 07/10/2026, na fase de layout - ver o bloco "Layout dos diálogos" abaixo |
 | Estilos inline restantes nesses arquivos | Não removidos (cores de alerta e destaques específicos) |
 
 A passada foi mecânica (ferramenta que só toca texto exibido, nunca chaves ou códigos) e conferida pela suíte: 6 testes que comparavam os textos antigos foram atualizados.
@@ -196,7 +196,7 @@ Só aparência; conferir contra `NOMUS_FISCAL_INTEGRATION_CONTRACT.md` com o age
 | Mensagens e avisos que tinham ficado para trás nas páginas (Fiscal, itens de Produção e de Galvanização) | Feito |
 | Revisão contra o contrato Nomus/fiscal pelo agente `nomus-integration-guide` | Feita - nenhuma violação; apontou um teste que tinha ficado sem efeito, já corrigido |
 | Guarda contra acento em valor interno | Feito - `tests/test_visual_text_guards.py` |
-| Layout dos diálogos | **Não feito** - mesma situação da Onda 4 |
+| Layout dos diálogos | Feito - ver o bloco "Layout dos diálogos" |
 | Mensagens vindas dos serviços `app/services/nomus_*` | Não alteradas - são texto da camada de serviço e parte delas é comparada em testes |
 
 **Erro encontrado e corrigido nesta onda:** a ferramenta de acentuação transformou o valor interno do filtro de status fiscal (`situacao:CP_EM_PROCESSAMENTO` e outros três) em `situação:...`, o que quebraria o filtro. Foi revertido antes de qualquer commit, a regra da ferramenta foi endurecida (literal sem espaço e com separador nunca é tocado) e todo o código já alterado foi varrido atrás do mesmo padrão, sem outras ocorrências.
@@ -241,8 +241,20 @@ Login, atualização e manutenção abrem **sem** janela principal por trás: n�
 |---|---|
 | Os 13 diálogos e páginas de sistema: textos exibidos acentuados, Cancelar/Fechar como botão fantasma, títulos pela folha de estilo | Feito |
 | Botão "Reduzir animações" em Configurações | **Não feito** - a opção existe só pela chave `reduce_motion` da configuração |
-| Layout dessas telas | **Não feito** - mesma situação da Onda 4 |
+| Layout dessas telas | Feito para os diálogos de janela (usuários, perfil, Sobre, Configurações, Nomus); login, primeiro acesso, atualização, manutenção e compatibilidade **não** mudaram: abrem sem janela principal e ficam com a barra de título nativa |
 | Vários botões primários em Configurações | Mantidos - cada um é a ação principal de uma seção diferente da página |
+
+## Layout dos diálogos (07/10/2026)
+
+Peças novas em `app/ui/components/dialog_shell.py`: `dialog_header()` (cabeçalho-cartão), `dialog_footer()` (rodapé de ações com resumo à esquerda), `StepIndicator` ("Passo N de M"), `set_notice_kind()` / `set_validation_state()` (aviso e erro de campo por propriedade, sem estilo inline) e `standardize_tables()`.
+
+**Casca central.** `style_dialog_from_parent()` agora instala em todo diálogo, de uma vez: sem moldura do Windows com cantos de 16 px (só quando existe janela principal por trás; sem ela a barra de título nativa fica, porque é a única forma garantida de fechar), véu atrás e tabelas padronizadas (sem grade, zebra, título à esquerda, linha de pelo menos 40 px). Regras de estilo corrigidas junto: o fundo de todo `QWidget` dentro de diálogo deixou de ser pintado (criava faixas cinzas dentro dos painéis) e só cartão clicável muda de cor no hover.
+
+**Diálogos com layout refeito (cabeçalho-cartão e rodapé):** cadastro de proposta; fluxo, seleção e peso de itens; registro e revisão de produção; revisão de fluxo (passos 1 e 2); remanejamento (passos 1 a 5 e a tela única); montar/editar carga, alocação, revisões, retorno, gerenciador e detalhes da carga; emissão fiscal (passos 1 a 3 e a simples); importar do Nomus (busca, lote, conferência) e conferência de PDF; consulta pela API; centrais de ação (proposta, lote, carga, fiscal); correção administrativa; propostas selecionadas; detalhes do painel; usuários (editor e gerenciador); meu perfil; Sobre; Configurações.
+
+**Abas** de `QTabWidget` trocadas por `CountTabWidget` nos diálogos de carga (montar, retorno, detalhes) e na conferência do Nomus.
+
+**Não refeitos:** diálogo de progresso do Nomus (visual próprio, com cerca de 13 estilos inline dependentes do tema), diagnóstico da API (linha de botões muito larga, pede redesenho), diálogo antigo de ações em lote (`batch_status_dialog`, picker legado) e os de inicialização citados acima.
 
 ## Situação geral (07/10/2026)
 

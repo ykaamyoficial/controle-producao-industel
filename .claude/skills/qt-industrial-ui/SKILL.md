@@ -48,7 +48,8 @@ Já existem em `app/ui/components/` (confira com `python scripts/ui_gallery.py`,
 - `ModernTable` (tabela operacional: linha de 40 px, hover/seleção na linha inteira, selo, aviso de prazo via `deadline_alert()`).
 - `StatusBadge(texto, fundo, texto_cor)`, `area_badge(texto, cor)`, `neutral_badge(texto, palette)`; em `QTableWidget`, `BadgeColumnDelegate` + `set_status_badge(item, status, palette)`.
 - `detail_widgets.py`: `make_panel()`, `kv_grid()`, `block_grid()`, `stat_block()`, `note_box()`, `ThinProgressBar`, `IconChip`, `FlowTrail`, `CountTabWidget` (abas + páginas com a API do `QTabWidget`).
-- Véu de diálogo (`dialog_scrim.py`), ligado sozinho por `style_dialog_from_parent()`.
+- `dialog_shell.py`: `dialog_header(titulo, subtitulo, status=[...], actions=[...])`, `dialog_footer(left=[...], right=[...])`, `StepIndicator(passo, total)`, `set_notice_kind()`, `set_validation_state()`, `standardize_tables()`. **Todo diálogo novo monta o topo com `dialog_header` e o rodapé com `dialog_footer`**; `dialog_header` aceita o `QLabel` que a tela já tinha, então atributos que testes consultam continuam existindo.
+- Casca e véu de diálogo (`dialog_scrim.py`, `install_dialog_shell`), ligados sozinhos por `style_dialog_from_parent()`: sem moldura nativa (só com janela principal por trás), cantos de 16 px e tabelas padronizadas. Não chame `apply_frameless_rounded_dialog` à mão.
 - Animação de atributo pintado: `animate_value()` em `app/ui/animations.py`.
 
 Tela de referência no código real: `app/ui/process_detail_dialog.py` e `app/ui/process_detail/`.
