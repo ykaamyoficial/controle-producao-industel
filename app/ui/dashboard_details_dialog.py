@@ -19,14 +19,14 @@ class DashboardDetailsDialog(QDialog):
         root.setSpacing(12)
 
         heading = QLabel(title)
-        heading.setStyleSheet("font-size: 18px; font-weight: 800;")
+        heading.setObjectName("DetailTitle")
         summary = QLabel(f"{len(rows)} proposta(s) relacionada(s)")
         summary.setObjectName("Caption")
         root.addWidget(heading)
         root.addWidget(summary)
 
         table = QTableWidget(0, 6)
-        table.setHorizontalHeaderLabels(["Proposta", "Cliente", "Obra/Site", "Localizacao", "Status", "Prazo"])
+        table.setHorizontalHeaderLabels(["Proposta", "Cliente", "Obra/Site", "Localização", "Status", "Prazo"])
         table.setAlternatingRowColors(True)
         table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         table.setSelectionBehavior(QAbstractItemView.SelectRows)
@@ -63,6 +63,6 @@ class DashboardDetailsDialog(QDialog):
                 table.setItem(row, column, item)
         root.addWidget(table, 1)
 
-        close = ModernButton("Fechar", "clear")
+        close = ModernButton("Fechar", "clear", variant="ghost")
         close.clicked.connect(self.accept)
         root.addWidget(close, 0, Qt.AlignRight)

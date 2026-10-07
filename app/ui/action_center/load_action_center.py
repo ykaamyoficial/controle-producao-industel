@@ -18,10 +18,9 @@ from app.ui.action_center.descriptor import ActionCategory, ActionDescriptor
 from app.ui.action_center.provider import CATEGORY_TO_CARD_TYPE
 from app.ui.components.action_card_button import ActionCardButton
 from app.ui.components.modern_button import ModernButton
-from app.ui.components.status_badge import StatusBadge
+from app.ui.components.status_badge import area_badge, neutral_badge
 from app.ui.dialog_utils import style_dialog_from_parent
 from app.ui.icons import AppIcons
-from app.ui.theme_tokens import with_alpha
 
 
 class GalvanizationLoadActionCenter(QDialog):
@@ -45,7 +44,7 @@ class GalvanizationLoadActionCenter(QDialog):
         self.load = dict(load)
         self.handlers = handlers
         self._buttons: list[ActionCardButton] = []
-        self.setWindowTitle("Acoes da carga")
+        self.setWindowTitle("Ações da carga")
         style_dialog_from_parent(self, parent)
         self.setMinimumWidth(720)
         self.resize(760, 560)
@@ -67,8 +66,8 @@ class GalvanizationLoadActionCenter(QDialog):
         root.setSpacing(12)
         root.addLayout(self._header(palette))
 
-        title = QLabel("Acoes disponiveis")
-        title.setStyleSheet("font-weight: 700; font-size: 13px;")
+        title = QLabel("Ações disponíveis")
+        title.setObjectName("PanelTitle")
         root.addWidget(title)
 
         cards = QWidget()
@@ -88,20 +87,20 @@ class GalvanizationLoadActionCenter(QDialog):
         scroll.setWidget(cards)
         root.addWidget(scroll, 1)
 
-        root.addWidget(QLabel("Observacao (opcional)"))
+        root.addWidget(QLabel("Observação (opcional)"))
         self.observation = QTextEdit()
-        self.observation.setPlaceholderText("Acrescente uma informacao importante sobre esta operacao")
+        self.observation.setPlaceholderText("Acrescente uma informação importante sobre esta operação")
         self.observation.setFixedHeight(68)
         root.addWidget(self.observation)
 
         divider = QFrame()
         divider.setFixedHeight(1)
-        divider.setStyleSheet(f"background: {palette['border']}; border: 0;")
+        divider.setObjectName("Divider")
         root.addWidget(divider)
 
         footer = QHBoxLayout()
         footer.addStretch()
-        close = ModernButton("Fechar", AppIcons.CLOSE)
+        close = ModernButton("Fechar", AppIcons.CLOSE, variant="ghost")
         close.clicked.connect(self.reject)
         footer.addWidget(close)
         root.addLayout(footer)
@@ -112,18 +111,18 @@ class GalvanizationLoadActionCenter(QDialog):
         load_id = self.load.get("id") or "-"
         driver = str(self.load.get("motorista") or "").strip()
         title = QLabel(f"Carga #{load_id}" + (f" — {driver}" if driver else ""))
-        title.setStyleSheet("font-size: 16px; font-weight: 800;")
+        title.setObjectName("DetailTitle")
         title.setWordWrap(True)
         header.addWidget(title)
 
         badges = QHBoxLayout()
         badges.setContentsMargins(0, 0, 0, 0)
-        area = StatusBadge("Galvanizacao", with_alpha(palette.get("area_galvanization", palette["accent"]), 34), palette.get("area_galvanization", palette["accent"]))
+        area = area_badge("Galvanização", palette.get("area_galvanization", palette["accent"]))
         badges.addWidget(area)
         status = str(self.load.get("status") or "").strip()
         status_label = self.service.load_status_label(status) if hasattr(self.service, "load_status_label") else status
         if status_label:
-            badges.addWidget(StatusBadge(status_label, with_alpha(palette["muted"], 30), palette["text"]))
+            badges.addWidget(neutral_badge(status_label, palette))
         badges.addStretch()
         header.addLayout(badges)
         return header
@@ -133,7 +132,7 @@ class GalvanizationLoadActionCenter(QDialog):
             ActionDescriptor(
                 id="OPEN_LOAD_DETAILS",
                 label=f"Abrir carga #{self.load.get('id') or '-'}",
-                description="Consulte situacao, itens, propostas e retorno desta carga.",
+                description="Consulte situação, itens, propostas e retorno desta carga.",
                 icon=AppIcons.CARGO,
                 category=ActionCategory.NORMAL,
                 area="GALVANIZACAO",
@@ -143,8 +142,8 @@ class GalvanizationLoadActionCenter(QDialog):
         allowed = set(self.service.galvanization_load_actions(self.load)) if hasattr(self.service, "galvanization_load_actions") else set()
         definitions = (
             ("EDIT", "EDIT_LOAD", "Editar carga", "Altere motorista, peso, prazo ou itens enquanto a carga estiver aberta.", AppIcons.EDIT, ActionCategory.NORMAL),
-            ("RELEASE", "RELEASE_LOAD", "Liberar carga", "Envie a carga para a etapa de galvanizacao.", AppIcons.STATUS, ActionCategory.PRIMARY),
-            ("RETURN", "REGISTER_RETURN", "Registrar retorno da galvanizacao", "Informe a devolucao desta carga e atualize as propostas relacionadas.", AppIcons.CARGO, ActionCategory.PRIMARY),
+            ("RELEASE", "RELEASE_LOAD", "Liberar carga", "Envie a carga para a etapa de galvanização.", AppIcons.STATUS, ActionCategory.PRIMARY),
+            ("RETURN", "REGISTER_RETURN", "Registrar retorno da galvanização", "Informe a devolução desta carga e atualize as propostas relacionadas.", AppIcons.CARGO, ActionCategory.PRIMARY),
         )
         for permission, action_id, label, description, icon, category in definitions:
             if permission in allowed:

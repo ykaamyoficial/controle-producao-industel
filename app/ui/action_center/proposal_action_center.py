@@ -15,10 +15,10 @@ from app.ui.action_center.registry import ActionRegistry
 from app.ui.background_worker import start_worker
 from app.ui.components.action_card_button import ActionCardButton
 from app.ui.components.modern_button import ModernButton
-from app.ui.components.status_badge import StatusBadge
+from app.ui.components.status_badge import area_badge, neutral_badge
 from app.ui.dialog_utils import style_dialog_from_parent
 from app.ui.icons import AppIcons
-from app.ui.theme_tokens import with_alpha
+from app.ui.sidebar import NAV_LABELS
 
 log = get_logger("action_center")
 
@@ -57,7 +57,7 @@ class ProposalActionCenter(QDialog):
         base_process = service.get_process_dict(process_id)
         self.area = area or service.current_location(base_process)[0] or "CONTROLE GERAL"
         self.context = self._load_context()
-        self.setWindowTitle("Acoes da proposta")
+        self.setWindowTitle("Ações da proposta")
         style_dialog_from_parent(self, parent)
         self._build()
         self.setMinimumWidth(720)
@@ -111,8 +111,8 @@ class ProposalActionCenter(QDialog):
 
         root.addLayout(self._build_header(palette))
 
-        instruction = QLabel("Acoes disponiveis")
-        instruction.setStyleSheet("font-weight: 700; font-size: 13px;")
+        instruction = QLabel("Ações disponíveis")
+        instruction.setObjectName("PanelTitle")
         root.addWidget(instruction)
 
         self._actions_container = QWidget()
@@ -122,15 +122,15 @@ class ProposalActionCenter(QDialog):
         root.addWidget(self._actions_container, 1)
         self._populate_actions(self._actions_layout, palette)
 
-        root.addWidget(QLabel("Observacao (opcional)"))
+        root.addWidget(QLabel("Observação (opcional)"))
         self.observation = QTextEdit()
-        self.observation.setPlaceholderText("Acrescente uma informacao importante sobre esta operacao")
+        self.observation.setPlaceholderText("Acrescente uma informação importante sobre esta operação")
         self.observation.setFixedHeight(68)
         root.addWidget(self.observation)
 
         divider = QFrame()
         divider.setFixedHeight(1)
-        divider.setStyleSheet(f"background: {palette['border']}; border: 0;")
+        divider.setObjectName("Divider")
         root.addWidget(divider)
 
         root.addLayout(self._build_footer())
@@ -139,7 +139,7 @@ class ProposalActionCenter(QDialog):
         header = QVBoxLayout()
         header.setSpacing(4)
         self._title_label = QLabel()
-        self._title_label.setStyleSheet("font-size: 16px; font-weight: 800;")
+        self._title_label.setObjectName("DetailTitle")
         self._title_label.setWordWrap(True)
         header.addWidget(self._title_label)
 
@@ -155,12 +155,12 @@ class ProposalActionCenter(QDialog):
     def _update_header(self, palette):
         self._title_label.setText(f"{self.process.get('proposta', '')} — {self.process.get('cliente', '')}")
         self._clear_layout(self._badges_layout)
-        area_label = self.area.title()
+        area_label = NAV_LABELS.get(self.area, self.area.title())
         stage_color = palette.get(AREA_COLOR_KEYS.get(self.area, ""), palette["accent"])
-        self._badges_layout.addWidget(StatusBadge(area_label or "-", with_alpha(stage_color, 34), stage_color))
+        self._badges_layout.addWidget(area_badge(area_label or "-", stage_color))
         if self.context.current_status:
             status_text = self.service.area_status_label(self.area, self.context.current_status)
-            self._badges_layout.addWidget(StatusBadge(status_text, with_alpha(palette["muted"], 30), palette["text"]))
+            self._badges_layout.addWidget(neutral_badge(status_text, palette))
         self._badges_layout.addStretch()
 
     def _populate_actions(self, layout: QVBoxLayout, palette):
@@ -168,9 +168,9 @@ class ProposalActionCenter(QDialog):
         self._action_buttons = []
         actions = self.context.available_actions
         if not actions:
-            message = "Nao ha nenhuma acao disponivel nesta etapa."
+            message = "Não há nenhuma ação disponível nesta etapa."
             if self.area == "GALVANIZACAO":
-                message = "Esta movimentacao e controlada pela tela Cargas."
+                message = "Esta movimentação é controlada pela tela Cargas."
             empty = QLabel(message)
             empty.setObjectName("Caption")
             layout.addWidget(empty)
@@ -223,11 +223,11 @@ class ProposalActionCenter(QDialog):
     def _build_footer(self) -> QHBoxLayout:
         footer = QHBoxLayout()
         if self.service.can_admin():
-            manual = ModernButton("Correcao administrativa", AppIcons.ADMIN_CORRECTION)
+            manual = ModernButton("Correção administrativa", AppIcons.ADMIN_CORRECTION)
             manual.clicked.connect(self.open_manual_correction)
             footer.addWidget(manual)
         footer.addStretch()
-        close = ModernButton("Fechar", AppIcons.CLOSE)
+        close = ModernButton("Fechar", AppIcons.CLOSE, variant="ghost")
         close.clicked.connect(self.reject)
         footer.addWidget(close)
         return footer
@@ -254,13 +254,13 @@ class ProposalActionCenter(QDialog):
         handler = self.registry.resolve(action.id, action.area)
         if handler is None:
             log.error("Acao sem handler registrado: id=%s area=%s", action.id, action.area)
-            QMessageBox.warning(self, "Acao da proposta", "Esta acao nao esta disponivel nesta versao.")
+            QMessageBox.warning(self, "Ação da proposta", "Esta ação não está disponível nesta versão.")
             return
         try:
             handler.execute(self.context, action, self)
         except Exception as exc:
             log.exception("Falha ao executar acao da proposta: id=%s", action.id)
-            QMessageBox.warning(self, "Acao da proposta", str(exc))
+            QMessageBox.warning(self, "Ação da proposta", str(exc))
 
     def _run_background_action(self, operation, reload_on_success: bool = False):
         self._reload_on_success = reload_on_success
@@ -282,7 +282,7 @@ class ProposalActionCenter(QDialog):
         self._reload_on_success = False
         self._set_action_running(False)
         self.success_message = ""
-        QMessageBox.warning(self, "Acao da proposta", str(exc))
+        QMessageBox.warning(self, "Ação da proposta", str(exc))
         try:
             self.reload_context()
         except Exception:
@@ -311,4 +311,4 @@ class ProposalActionCenter(QDialog):
             if dialog.exec():
                 self.accept()
         except Exception as exc:
-            QMessageBox.warning(self, "Correcao administrativa", str(exc))
+            QMessageBox.warning(self, "Correção administrativa", str(exc))

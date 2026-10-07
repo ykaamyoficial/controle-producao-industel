@@ -17,14 +17,14 @@ from app.ui.action_center.handlers.galvanization import (
 from app.ui.background_worker import start_worker
 from app.ui.components.action_card_button import ActionCardButton
 from app.ui.components.modern_button import ModernButton
-from app.ui.components.status_badge import StatusBadge
+from app.ui.components.status_badge import area_badge, neutral_badge
 from app.ui.dialog_utils import style_dialog_from_parent
 from app.ui.flow_review_dialog import FlowReviewDialog
 from app.ui.galvanization_load_dialog import GalvanizationLoadDialog, GalvanizationReturnDialog
 from app.ui.icons import AppIcons
+from app.ui.sidebar import NAV_LABELS
 from app.ui.item_selection_dialog import ItemSelectionDialog
 from app.ui.production_registration_dialog import ProductionRegistrationDialog
-from app.ui.theme_tokens import with_alpha
 
 log = get_logger("batch_action_center")
 
@@ -73,7 +73,7 @@ class BatchProposalActionCenter(QDialog):
         self._action_thread = None
         self._action_buttons: list[ActionCardButton] = []
         self.actions = self._load_actions()
-        self.setWindowTitle("Acoes dos itens selecionados" if self.item_rows else "Acoes em lote")
+        self.setWindowTitle("Ações dos itens selecionados" if self.item_rows else "Ações em lote")
         style_dialog_from_parent(self, parent)
         self._build()
         self.setMinimumWidth(720)
@@ -360,8 +360,8 @@ class BatchProposalActionCenter(QDialog):
 
         root.addLayout(self._build_header(palette))
 
-        instruction = QLabel("Acoes disponiveis")
-        instruction.setStyleSheet("font-weight: 700; font-size: 13px;")
+        instruction = QLabel("Ações disponíveis")
+        instruction.setObjectName("PanelTitle")
         root.addWidget(instruction)
 
         actions_container = QWidget()
@@ -371,15 +371,15 @@ class BatchProposalActionCenter(QDialog):
         root.addWidget(actions_container, 1)
         self._populate_actions(actions_layout, palette)
 
-        root.addWidget(QLabel("Observacao (opcional)"))
+        root.addWidget(QLabel("Observação (opcional)"))
         self.observation = QTextEdit()
-        self.observation.setPlaceholderText("Acrescente uma informacao importante sobre esta operacao")
+        self.observation.setPlaceholderText("Acrescente uma informação importante sobre esta operação")
         self.observation.setFixedHeight(68)
         root.addWidget(self.observation)
 
         divider = QFrame()
         divider.setFixedHeight(1)
-        divider.setStyleSheet(f"background: {palette['border']}; border: 0;")
+        divider.setObjectName("Divider")
         root.addWidget(divider)
 
         root.addLayout(self._build_footer())
@@ -393,24 +393,20 @@ class BatchProposalActionCenter(QDialog):
         else:
             title = f"{count} proposta{'s' if count != 1 else ''} selecionada{'s' if count != 1 else ''}"
         self._title_label = QLabel(title)
-        self._title_label.setStyleSheet("font-size: 16px; font-weight: 800;")
+        self._title_label.setObjectName("DetailTitle")
         self._title_label.setWordWrap(True)
         header.addWidget(self._title_label)
 
         badges = QHBoxLayout()
         badges.setContentsMargins(0, 0, 0, 0)
         badges.setSpacing(6)
-        area_label = self.area.title()
+        area_label = NAV_LABELS.get(self.area, self.area.title())
         stage_color = palette.get(AREA_COLOR_KEYS.get(self.area, ""), palette["accent"])
-        badges.addWidget(StatusBadge(area_label or "-", with_alpha(stage_color, 34), stage_color))
+        badges.addWidget(area_badge(area_label or "-", stage_color))
         if self.item_rows:
             proposals = len(self.process_ids)
             badges.addWidget(
-                StatusBadge(
-                    f"{proposals} proposta{'s' if proposals != 1 else ''}",
-                    with_alpha(palette["muted"], 30),
-                    palette["text"],
-                )
+                neutral_badge(f"{proposals} proposta{'s' if proposals != 1 else ''}", palette)
             )
         badges.addStretch()
         header.addLayout(badges)
@@ -418,7 +414,7 @@ class BatchProposalActionCenter(QDialog):
 
     def _populate_actions(self, layout: QVBoxLayout, palette):
         if not self.actions:
-            message = "Nenhuma acao em lote disponivel para esta selecao neste momento."
+            message = "Nenhuma ação em lote disponível para esta seleção neste momento."
             empty = QLabel(message)
             empty.setObjectName("Caption")
             layout.addWidget(empty)
@@ -466,7 +462,7 @@ class BatchProposalActionCenter(QDialog):
     def _build_footer(self) -> QHBoxLayout:
         footer = QHBoxLayout()
         footer.addStretch()
-        close = ModernButton("Cancelar", AppIcons.CLOSE)
+        close = ModernButton("Cancelar", AppIcons.CLOSE, variant="ghost")
         close.clicked.connect(self.reject)
         footer.addWidget(close)
         return footer
@@ -495,11 +491,11 @@ class BatchProposalActionCenter(QDialog):
             self._open_register_return()
         else:
             log.error("Acao de lote sem rota: id=%s area=%s", descriptor.id, self.area)
-            QMessageBox.warning(self, "Acoes em lote", "Esta acao nao esta disponivel nesta versao.")
+            QMessageBox.warning(self, "Ações em lote", "Esta ação não está disponível nesta versão.")
 
     def _run_item_action(self, descriptor: ActionDescriptor) -> None:
         if self.item_action_host is None:
-            QMessageBox.warning(self, "Acoes dos itens", "O contexto da tela de itens nao esta disponivel.")
+            QMessageBox.warning(self, "Ações dos itens", "O contexto da tela de itens não está disponível.")
             return
         observation = self.observation.toPlainText().strip()
         if descriptor.id == "MANAGE_LOAD_EXISTING":
@@ -558,7 +554,7 @@ class BatchProposalActionCenter(QDialog):
                 message += f"\n\n{global_reason}"
             if lines:
                 message += "\n\nIncompatíveis:\n" + "\n".join(lines[:20])
-            QMessageBox.warning(self, "Acoes em lote", message)
+            QMessageBox.warning(self, "Ações em lote", message)
             return None
         valid_ids = [int(value) for value in result.get("valid_ids") or []]
         return valid_ids if len(valid_ids) == len(self.process_ids) else None
@@ -569,9 +565,9 @@ class BatchProposalActionCenter(QDialog):
         label = self.service.action_label(self.area, status)
         observation = self.observation.toPlainText().strip()
         if self.area == "PRODUCAO" and status == "PARADO" and not observation:
-            QMessageBox.warning(self, "Pausar producao", "Informe o motivo da pausa na observacao.")
+            QMessageBox.warning(self, "Pausar produção", "Informe o motivo da pausa na observação.")
             return
-        if QMessageBox.question(self, "Acoes em lote", self._confirmation_text(label)) != QMessageBox.Yes:
+        if QMessageBox.question(self, "Ações em lote", self._confirmation_text(label)) != QMessageBox.Yes:
             return
         self._run_background_action(lambda: self._apply_status_to_all(status, observation))
 
@@ -699,14 +695,14 @@ class BatchProposalActionCenter(QDialog):
         if failures:
             QMessageBox.warning(
                 self, "Acoes em lote",
-                f"{changed} proposta(s) alterada(s).\n\nNao alteradas:\n" + "\n".join(failures[:12]),
+                f"{changed} proposta(s) alterada(s).\n\nNão alteradas:\n" + "\n".join(failures[:12]),
             )
         self.changed = True
         self.accept()
 
     def _on_action_error(self, exc):
         self._set_running(False)
-        QMessageBox.warning(self, "Acoes em lote", str(exc))
+        QMessageBox.warning(self, "Ações em lote", str(exc))
 
     def _set_running(self, running: bool):
         self._running_action = running

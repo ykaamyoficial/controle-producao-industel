@@ -556,8 +556,8 @@ class ControlGeneralActionCenterTests(unittest.TestCase):
 
         hidden = StatusDialog(FakeControlGeneralService("AGUARDANDO_LIBERACAO", admin=False), 1, "CONTROLE GERAL")
         visible = StatusDialog(FakeControlGeneralService("AGUARDANDO_LIBERACAO", admin=True), 1, "CONTROLE GERAL")
-        self.assertNotIn("Correcao administrativa", [b.text() for b in hidden.findChildren(QPushButton)])
-        self.assertIn("Correcao administrativa", [b.text() for b in visible.findChildren(QPushButton)])
+        self.assertNotIn("Correção administrativa", [b.text() for b in hidden.findChildren(QPushButton)])
+        self.assertIn("Correção administrativa", [b.text() for b in visible.findChildren(QPushButton)])
 
     # 22-23: temas claro e escuro
     def test_light_and_dark_theme_render_without_crash(self):
@@ -719,8 +719,8 @@ class WarehouseActionCenterTests(unittest.TestCase):
 
         hidden = StatusDialog(FakeWarehouseService("", admin=False), 1, "ALMOXARIFADO")
         visible = StatusDialog(FakeWarehouseService("", admin=True), 1, "ALMOXARIFADO")
-        self.assertNotIn("Correcao administrativa", [b.text() for b in hidden.findChildren(QPushButton)])
-        self.assertIn("Correcao administrativa", [b.text() for b in visible.findChildren(QPushButton)])
+        self.assertNotIn("Correção administrativa", [b.text() for b in hidden.findChildren(QPushButton)])
+        self.assertIn("Correção administrativa", [b.text() for b in visible.findChildren(QPushButton)])
 
     # 15: handler inexistente gera erro controlado (nao crasha)
     def test_unregistered_area_for_a_known_action_id_does_not_crash(self):
@@ -929,8 +929,8 @@ class ExpeditionActionCenterTests(unittest.TestCase):
 
         hidden = StatusDialog(FakeExpeditionService("EM_SEPARACAO", admin=False), 1, "EXPEDICAO")
         visible = StatusDialog(FakeExpeditionService("EM_SEPARACAO", admin=True), 1, "EXPEDICAO")
-        self.assertNotIn("Correcao administrativa", [b.text() for b in hidden.findChildren(QPushButton)])
-        self.assertIn("Correcao administrativa", [b.text() for b in visible.findChildren(QPushButton)])
+        self.assertNotIn("Correção administrativa", [b.text() for b in hidden.findChildren(QPushButton)])
+        self.assertIn("Correção administrativa", [b.text() for b in visible.findChildren(QPushButton)])
 
     # 22-23: digitar observacao/abrir/fechar nao grava nada
     def test_typing_observation_and_closing_does_not_touch_the_service(self):

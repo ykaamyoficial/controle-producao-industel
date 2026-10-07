@@ -45,7 +45,7 @@ class BatchSelectionReviewDialog(QDialog):
         root.addWidget(self.empty_label)
         footer = QHBoxLayout()
         footer.addStretch()
-        close_button = ModernButton("Fechar", "close")
+        close_button = ModernButton("Fechar", "close", variant="ghost")
         close_button.clicked.connect(self.accept)
         footer.addWidget(close_button)
         root.addLayout(footer)
