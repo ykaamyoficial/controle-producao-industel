@@ -10,7 +10,7 @@ from app.ui.components.app_icon_button import AppIconButton
 from app.ui.components.notification_bell import NotificationBell
 from app.ui.components.user_profile_popover import UserProfilePopover
 from app.ui.icons import AppIcons, IconColorRole, icon_motion
-from app.version import APP_NAME
+from app.version import APP_DISPLAY_NAME
 
 
 TOP_BAR_HEIGHT = 40
@@ -61,7 +61,7 @@ class TitleBar(QFrame):
         icon_label.setPixmap(app_icon().pixmap(18, 18))
         layout.addWidget(icon_label)
 
-        title_label = QLabel(APP_NAME)
+        title_label = QLabel(APP_DISPLAY_NAME)
         title_label.setObjectName("TitleBarAppName")
         layout.addWidget(title_label)
 
@@ -78,12 +78,12 @@ class TitleBar(QFrame):
             on_open_deep_link=self._on_open_deep_link,
         )
         self.notification_bell.setFixedSize(ACTION_BUTTON_SIZE, ACTION_BUTTON_SIZE)
-        self.notification_bell.setAccessibleName("Notificacoes")
+        self.notification_bell.setAccessibleName("Notificações")
         self._register_interactive(self.notification_bell)
         layout.addWidget(self.notification_bell)
 
-        self.pending_btn = self._create_action_button(AppIcons.WARNING, "Pendencias")
-        self.pending_btn.setAccessibleName("Pendencias")
+        self.pending_btn = self._create_action_button(AppIcons.WARNING, "Pendências")
+        self.pending_btn.setAccessibleName("Pendências")
         layout.addWidget(self.pending_btn)
 
         self.theme_btn = self._create_action_button(AppIcons.MOON, "Alternar tema")
@@ -91,20 +91,20 @@ class TitleBar(QFrame):
         self.theme_btn.clicked.connect(self.theme_toggle_requested.emit)
         layout.addWidget(self.theme_btn)
 
-        self.settings_btn = self._create_action_button(AppIcons.SETTINGS, "Abrir configuracoes")
-        self.settings_btn.setAccessibleName("Configuracoes")
+        self.settings_btn = self._create_action_button(AppIcons.SETTINGS, "Abrir configurações")
+        self.settings_btn.setAccessibleName("Configurações")
         self.settings_btn.clicked.connect(self.settings_requested.emit)
         layout.addWidget(self.settings_btn)
 
-        self.profile_btn = self._create_action_button(AppIcons.USERS, "Menu do usuario")
-        self.profile_btn.setAccessibleName("Usuario")
+        self.profile_btn = self._create_action_button(AppIcons.USERS, "Menu do usuário")
+        self.profile_btn.setAccessibleName("Usuário")
         self.profile_btn.clicked.connect(self._toggle_profile_popover)
         self.refresh_profile_avatar()
         layout.addWidget(self.profile_btn)
 
         separator = QFrame()
-        separator.setFrameShape(QFrame.VLine)
-        separator.setFixedHeight(20)
+        separator.setObjectName("TitleBarSeparator")
+        separator.setFixedSize(1, 20)
         layout.addSpacing(ELEMENT_SPACING)
         layout.addWidget(separator)
         layout.addSpacing(ELEMENT_SPACING)
@@ -163,9 +163,9 @@ class TitleBar(QFrame):
         self._last_chat_unread = count
         self.chat_btn.set_badge_count(count)
         if count == 1:
-            description = "1 mensagem nao lida"
+            description = "1 mensagem não lida"
         elif count > 1:
-            description = f"{count} mensagens nao lidas"
+            description = f"{count} mensagens não lidas"
         else:
             description = "Abrir chat"
         self.chat_btn.setToolTip(description)
@@ -179,11 +179,11 @@ class TitleBar(QFrame):
         este numero ao badge do sino."""
         self.pending_btn.set_badge_count(count)
         if count == 1:
-            description = "1 pendencia aberta"
+            description = "1 pendência aberta"
         elif count > 1:
-            description = f"{count} pendencias abertas"
+            description = f"{count} pendências abertas"
         else:
-            description = "Pendencias"
+            description = "Pendências"
         self.pending_btn.setToolTip(description)
         self.pending_btn.setAccessibleName(description)
         self.pending_btn.setAccessibleDescription(description)

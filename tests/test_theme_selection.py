@@ -79,8 +79,8 @@ class ThemeSelectionTests(unittest.TestCase):
         button = sidebar.buttons["PAINEL GERAL"]
 
         self.assertEqual(button.iconSize().width(), 26)
-        self.assertEqual(button.minimumHeight(), 34)
-        self.assertEqual(button.maximumHeight(), 34)
+        self.assertEqual(button.minimumHeight(), 40)
+        self.assertEqual(button.maximumHeight(), 40)
 
         sidebar.set_collapsed(True)
 

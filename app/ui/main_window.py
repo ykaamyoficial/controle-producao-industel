@@ -6,7 +6,7 @@ from PySide6.QtWidgets import QApplication, QFrame, QHBoxLayout, QLabel, QMainWi
 
 from app.services.backend_adapter import BackendService
 from app.services.session_sync_service import SessionSyncService
-from app.ui.animations import animate_width, fade_in
+from app.ui.animations import animate_width, fade_in, set_reduced_motion
 from app.ui.app_icon import app_icon
 from app.ui.background_worker import start_worker
 from app.ui.chat_center_page import ChatCenterDialog
@@ -35,7 +35,7 @@ from app.ui.settings_dialog import SettingsDialog
 from app.ui.sidebar import Sidebar
 from app.ui.icons import icon_cache
 from app.ui.styles import app_stylesheet, chrome_bg_color
-from app.version import APP_NAME, APP_VERSION
+from app.version import APP_DISPLAY_NAME, APP_VERSION
 from app.services.update_distribution_client import check_for_updates
 from app.services.app_logging import get_logger
 from app.ui.update_dialog import UpdateDialog
@@ -131,10 +131,11 @@ class MainWindow(FramelessHitTestMixin, QMainWindow):
         self._update_available_notice = update_available_notice
         self._update_available_notice_shown = False
         self.pages: dict[str, QWidget] = {}
-        self.setWindowTitle(f"{APP_NAME} {APP_VERSION}")
+        self.setWindowTitle(f"{APP_DISPLAY_NAME} {APP_VERSION}")
         self.setWindowIcon(app_icon())
         self.resize(1380, 820)
         self.setMinimumSize(1120, 680)
+        set_reduced_motion(bool((getattr(self.service, "config", None) or {}).get("reduce_motion", False)))
         self.setStyleSheet(app_stylesheet(self.service.palette))
 
     def start(self) -> bool:

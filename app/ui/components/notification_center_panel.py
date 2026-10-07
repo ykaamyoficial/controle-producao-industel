@@ -54,11 +54,11 @@ def _format_relative(value: str | None) -> str:
     delta = now - parsed
     seconds = delta.total_seconds()
     if seconds < 60:
-        return "Agora ha pouco"
+        return "Agora há pouco"
     if seconds < 3600:
-        return f"Ha {int(seconds // 60)} min"
+        return f"Há {int(seconds // 60)} min"
     if seconds < 86400:
-        return f"Ha {int(seconds // 3600)} h"
+        return f"Há {int(seconds // 3600)} h"
     return parsed.strftime("%d/%m/%Y %H:%M")
 
 
@@ -107,30 +107,12 @@ class NotificationCenterPanel(QFrame):
         self._load_more_thread = None
         self._worker_threads = []
         self.setObjectName("NotificationCenterPanel")
-        self._apply_panel_style()
         self.setFixedWidth(PANEL_WIDTH)
         self.setMinimumHeight(PANEL_MIN_HEIGHT)
         self.setMaximumHeight(PANEL_MAX_HEIGHT)
         self._build()
         self.refresh()
 
-    def _apply_panel_style(self):
-        palette = self.service.palette
-        background = palette.get("surface", "#ffffff")
-        border = palette.get("border", "#cbd5e1")
-        self.setStyleSheet(
-            "QFrame#NotificationCenterPanel {"
-            f"background: {background};"
-            f"border: 1px solid {border};"
-            "border-radius: 16px;"
-            "}"
-            "QScrollArea#NotificationScrollArea, QScrollArea#NotificationScrollArea > QWidget, "
-            "QScrollArea#NotificationScrollArea > QWidget > QWidget {"
-            "background: transparent;"
-            "border: 0;"
-            "border-radius: 0;"
-            "}"
-        )
 
     def _build(self):
         layout = QVBoxLayout(self)
@@ -138,11 +120,11 @@ class NotificationCenterPanel(QFrame):
         layout.setSpacing(8)
 
         header = QHBoxLayout()
-        title = QLabel("Notificacoes nao lidas")
-        title.setStyleSheet("font-size: 15px; font-weight: 800;")
+        title = QLabel("Notificações não lidas")
+        title.setObjectName("NotificationPanelTitle")
         header.addWidget(title)
         header.addStretch()
-        mark_all_btn = ModernButton("Marcar todas como lidas", "status")
+        mark_all_btn = ModernButton("Marcar todas como lidas", "status", variant="ghost")
         mark_all_btn.clicked.connect(self._mark_all_read)
         header.addWidget(mark_all_btn)
         layout.addLayout(header)
@@ -152,8 +134,7 @@ class NotificationCenterPanel(QFrame):
         self.loading_label.setVisible(False)
         layout.addWidget(self.loading_label)
 
-        self.new_items_banner = ModernButton("Novas notificacoes — toque para atualizar", "status")
-        self.new_items_banner.setStyleSheet("padding: 4px 10px; font-size: 11px;")
+        self.new_items_banner = ModernButton("Novas notificações — toque para atualizar", "status")
         self.new_items_banner.setVisible(False)
         self.new_items_banner.clicked.connect(self._on_banner_clicked)
         layout.addWidget(self.new_items_banner)
@@ -180,11 +161,11 @@ class NotificationCenterPanel(QFrame):
         col = QVBoxLayout(container)
         col.setContentsMargins(0, 12, 0, 12)
         col.setSpacing(8)
-        message = QLabel("Nao foi possivel carregar as notificacoes.")
+        message = QLabel("Não foi possível carregar as notificações.")
         message.setObjectName("Caption")
         message.setAlignment(Qt.AlignCenter)
         col.addWidget(message)
-        retry_btn = ModernButton("Tentar novamente", "status")
+        retry_btn = ModernButton("Tentar novamente", "status", accent=True)
         retry_btn.clicked.connect(self.refresh)
         retry_row = QHBoxLayout()
         retry_row.addStretch()
@@ -225,7 +206,7 @@ class NotificationCenterPanel(QFrame):
         if not self.notifications:
             self.error_state.setVisible(True)
         else:
-            self.new_items_banner.setText("Nao foi possivel atualizar — toque para tentar de novo")
+            self.new_items_banner.setText("Não foi possível atualizar — toque para tentar de novo")
             self.new_items_banner.setVisible(True)
 
     def _load_more(self):
@@ -271,7 +252,7 @@ class NotificationCenterPanel(QFrame):
         if self._is_scrolled_to_top():
             self.refresh()
         else:
-            self.new_items_banner.setText("Novas notificacoes — toque para atualizar")
+            self.new_items_banner.setText("Novas notificações — toque para atualizar")
             self.new_items_banner.setVisible(True)
 
     def _is_scrolled_to_top(self) -> bool:
@@ -295,7 +276,7 @@ class NotificationCenterPanel(QFrame):
                 widget.deleteLater()
 
         if not self.notifications:
-            empty = QLabel("Nenhuma notificacao nao lida.")
+            empty = QLabel("Nenhuma notificação não lida.")
             empty.setObjectName("Caption")
             self.list_layout.insertWidget(0, empty)
             return
@@ -307,8 +288,7 @@ class NotificationCenterPanel(QFrame):
             if day != last_day:
                 last_day = day
                 header = QLabel(_day_label(day) if day else "")
-                header.setObjectName("Caption")
-                header.setStyleSheet("font-weight: 700; font-size: 10px; margin-top: 4px;")
+                header.setObjectName("NotificationDayLabel")
                 self.list_layout.insertWidget(index, header)
                 index += 1
             self.list_layout.insertWidget(index, self._build_row(notification))
@@ -338,13 +318,14 @@ class NotificationCenterPanel(QFrame):
         icon_label = QLabel()
         icon_label.setPixmap(make_icon(_CATEGORY_ICON.get(category, "bell"), color, 15).pixmap(15, 15))
         header.addWidget(icon_label)
-        title_label = QLabel(notification.get("title") or "Notificacao")
+        title_label = QLabel(notification.get("title") or "Notificação")
         title_label.setWordWrap(True)
-        title_label.setStyleSheet(f"font-weight: 700; font-size: 12px; color: {color};" if unread else "font-weight: 600; font-size: 12px;")
+        title_label.setObjectName("NotificationTitle")
+        if unread:
+            title_label.setProperty("severity", severity_token)
         header.addWidget(title_label, 1)
         time_label = QLabel(_format_relative(notification.get("created_at")))
-        time_label.setObjectName("Caption")
-        time_label.setStyleSheet("font-size: 9px;")
+        time_label.setObjectName("NotificationTime")
         header.addWidget(time_label)
         layout.addLayout(header)
 
@@ -354,7 +335,7 @@ class NotificationCenterPanel(QFrame):
         if body:
             body_label = QLabel(body)
             body_label.setWordWrap(True)
-            body_label.setStyleSheet("font-size: 11px;")
+            body_label.setObjectName("NotificationBody")
             layout.addWidget(body_label)
 
         card.setCursor(Qt.PointingHandCursor)
@@ -380,7 +361,7 @@ class NotificationCenterPanel(QFrame):
         try:
             self.service.notifications_mark_all_read()
         except Exception:
-            self.new_items_banner.setText("Nao foi possivel marcar todas como lidas — toque pra tentar de novo")
+            self.new_items_banner.setText("Não foi possível marcar todas como lidas — toque para tentar de novo")
             self.new_items_banner.setVisible(True)
             return
         self.refresh()

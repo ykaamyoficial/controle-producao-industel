@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QObject, Qt, QTimer, Signal
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
+from app.ui.animations import fade_in
+from app.ui.components.app_icon_button import AppIconButton
 from app.ui.components.modern_button import ModernButton
+from app.ui.icons import IconColorRole
 
 
 TOAST_DURATION_MS = 7000
@@ -23,26 +26,21 @@ class InAppToast(QFrame):
     def __init__(self, service, parent: QWidget, title: str, body: str, payload: dict):
         super().__init__(parent)
         self.payload = payload
-        self.setObjectName("Panel")
+        self.setObjectName("Toast")
         self.setFixedWidth(TOAST_WIDTH)
         self.setAttribute(Qt.WA_StyledBackground, True)
-        palette = service.palette
-        self.setStyleSheet(
-            f"QFrame#Panel {{ background: {palette.get('surface', '#ffffff')}; "
-            f"border: 1px solid {palette.get('border', '#cbd5e1')}; border-radius: 10px; }}"
-        )
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 10, 12, 10)
         layout.setSpacing(4)
 
         header = QHBoxLayout()
         title_label = QLabel(title)
-        title_label.setStyleSheet("font-weight: 800; font-size: 12px;")
+        title_label.setObjectName("ToastTitle")
+        title_label.setWordWrap(True)
         header.addWidget(title_label, 1)
-        close_btn = QPushButton("x")
-        close_btn.setObjectName("GhostButton")
-        close_btn.setFixedSize(18, 18)
-        close_btn.setCursor(Qt.PointingHandCursor)
+        close_btn = AppIconButton("clear", palette=service.palette, color_role=IconColorRole.MUTED, size=14, tooltip="Fechar aviso")
+        close_btn.setObjectName("CloseIconButton")
+        close_btn.setFixedSize(22, 22)
         close_btn.clicked.connect(self._dismiss)
         header.addWidget(close_btn)
         layout.addLayout(header)
@@ -50,10 +48,10 @@ class InAppToast(QFrame):
         if body:
             body_label = QLabel(body)
             body_label.setWordWrap(True)
-            body_label.setStyleSheet("font-size: 11px;")
+            body_label.setObjectName("ToastBody")
             layout.addWidget(body_label)
 
-        open_btn = ModernButton("Abrir conversa", "chat")
+        open_btn = ModernButton("Abrir conversa", "chat", accent=True)
         open_btn.clicked.connect(self._open)
         layout.addWidget(open_btn)
 
@@ -137,14 +135,14 @@ class InAppToastManager(QObject):
 
     def _show_toast(self, group: list[dict]) -> None:
         first = group[0]
-        who = first.get("author_name") or "Alguem"
+        who = first.get("author_name") or "Alguém"
         proposal_number = first.get("proposal_number")
         where = proposal_number or ("Chat Geral" if first.get("kind") == "GERAL" else "")
         title = f"{who} - {where}" if where else who
         if len(group) == 1:
             body = (first.get("message_body") or "").strip()
         else:
-            body = f"{len(group)} notificacoes novas nesta conversa"
+            body = f"{len(group)} notificações novas nesta conversa"
 
         toast = InAppToast(self.service, self.parent_widget, title, body, first)
         toast.opened.connect(lambda payload_toast: self._on_toast_opened(payload_toast))
@@ -152,6 +150,7 @@ class InAppToastManager(QObject):
         self._active_toasts.append(toast)
         self._reposition()
         toast.show()
+        toast._entrance = fade_in(toast, duration=200)
 
     def _on_toast_opened(self, toast: InAppToast) -> None:
         notification = toast.payload

@@ -35,7 +35,7 @@ class UserProfilePopover(QFrame):
 
         user = self.service.user or {}
         name = user.get("nome") or user.get("login") or "-"
-        role = "Administrador" if user.get("perfil") == "admin" else "Usuario"
+        role = "Administrador" if user.get("perfil") == "admin" else "Usuário"
 
         header = QHBoxLayout()
         header.setSpacing(10)
@@ -45,7 +45,7 @@ class UserProfilePopover(QFrame):
         text_col = QVBoxLayout()
         text_col.setSpacing(0)
         name_label = QLabel(name)
-        name_label.setStyleSheet("font-weight: 700;")
+        name_label.setObjectName("PopoverName")
         text_col.addWidget(name_label)
         role_label = QLabel(role)
         role_label.setObjectName("Caption")
@@ -60,7 +60,7 @@ class UserProfilePopover(QFrame):
         password_btn.clicked.connect(lambda: (self.close(), self.password_requested.emit()))
         layout.addWidget(password_btn)
 
-        logout_btn = ModernButton("Sair")
+        logout_btn = ModernButton("Sair", "close", variant="ghost")
         logout_btn.clicked.connect(self._on_logout)
         layout.addWidget(logout_btn)
 
