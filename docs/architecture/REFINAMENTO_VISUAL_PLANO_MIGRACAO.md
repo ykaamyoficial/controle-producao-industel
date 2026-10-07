@@ -188,6 +188,19 @@ A passada foi mecânica (ferramenta que só toca texto exibido, nunca chaves ou 
 
 Só aparência; conferir contra `NOMUS_FISCAL_INTEGRATION_CONTRACT.md` com o agente `nomus-integration-guide`.
 
+**Andamento (07/10/2026):**
+
+| Entrega | Situação |
+|---|---|
+| Os 11 diálogos fiscais e do Nomus: textos exibidos acentuados, Cancelar/Fechar/Limpar como botão fantasma, títulos pela folha de estilo | Feito |
+| Mensagens e avisos que tinham ficado para trás nas páginas (Fiscal, itens de Produção e de Galvanização) | Feito |
+| Revisão contra o contrato Nomus/fiscal pelo agente `nomus-integration-guide` | Feita - nenhuma violação; apontou um teste que tinha ficado sem efeito, já corrigido |
+| Guarda contra acento em valor interno | Feito - `tests/test_visual_text_guards.py` |
+| Layout dos diálogos | **Não feito** - mesma situação da Onda 4 |
+| Mensagens vindas dos serviços `app/services/nomus_*` | Não alteradas - são texto da camada de serviço e parte delas é comparada em testes |
+
+**Erro encontrado e corrigido nesta onda:** a ferramenta de acentuação transformou o valor interno do filtro de status fiscal (`situacao:CP_EM_PROCESSAMENTO` e outros três) em `situação:...`, o que quebraria o filtro. Foi revertido antes de qualquer commit, a regra da ferramenta foi endurecida (literal sem espaço e com separador nunca é tocado) e todo o código já alterado foi varrido atrás do mesmo padrão, sem outras ocorrências.
+
 ### Onda 6 — Painéis e relatórios (M)
 
 `dashboard_page.py`, `executive_dashboard_page.py`, `operational_reports_page.py` e os componentes `kpi_card.py`, `card_indicador.py`, `grafico_status.py`, `header_dashboard.py`, `tabela_prazos.py`, `barra_progresso_area.py`.
@@ -205,6 +218,15 @@ Ainda não há protótipo aprovado para painéis; fazer um antes (mesmo método 
 `login_dialog.py`, `first_access_dialog.py`, `settings_page.py`, `settings_dialog.py`, `notification_preferences_widget.py`, `user_dialog.py`, `user_profile_dialog.py`, `about_dialog.py`, `update_dialog.py`, `update_audit_dialog.py`, `maintenance_mode_dialog.py`, `compatibility_gate_dialog.py`, `api_diagnostic_dialog.py`.
 
 Login, atualização e manutenção abrem **sem** janela principal por trás: não há véu; a janela usa o mesmo cabeçalho-cartão e botões.
+
+**Andamento (07/10/2026):**
+
+| Entrega | Situação |
+|---|---|
+| Os 13 diálogos e páginas de sistema: textos exibidos acentuados, Cancelar/Fechar como botão fantasma, títulos pela folha de estilo | Feito |
+| Botão "Reduzir animações" em Configurações | **Não feito** - a opção existe só pela chave `reduce_motion` da configuração |
+| Layout dessas telas | **Não feito** - mesma situação da Onda 4 |
+| Vários botões primários em Configurações | Mantidos - cada um é a ação principal de uma seção diferente da página |
 
 ## Ordem e dependências
 
