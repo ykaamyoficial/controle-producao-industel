@@ -119,6 +119,22 @@ Cuidado: contadores da barra lateral e do sino são pintados em `paintEvent` e o
 
 `process_page.py` é o protótipo aprovado: filtros, segmentado de status com contagem, tabela, modo lote, paginação. É a tela mais coberta por testes (ordem de colunas, lote, refresh).
 
+**Andamento (07/10/2026, branch `refinamento-visual-onda-0`; Ondas 0 e 1 commitadas, Onda 2 ainda sem commit):**
+
+| Entrega | Situação |
+|---|---|
+| `process_page.py`: título e ações na mesma linha, filtros sem rótulo na linha de baixo, um único botão primário ("Novo processo" no Controle Geral, "Ações" nas demais áreas e no modo lote) | Feito |
+| Filtro de status segmentado quando a área tem até 4 status; combo nas demais | Feito - **sem contagem**: o Controle Geral é paginado pela API e o total por status não vem na resposta; contar exigiria mudar a API |
+| Tabela (`modern_table.py`): linha de 40 px, cabeçalho de 34 px, hover e seleção na linha inteira, ícone de status em círculo, selo de 22 px, proposta em negrito | Feito - vale para toda tela que usa `ModernTable` |
+| Aviso de prazo ao lado da data ("vencido há X d", "em X d") | Feito - `deadline_alert()`; só apresentação, sem aviso para proposta cancelada ou entregue |
+| Esqueleto na primeira carga; estado vazio com ícone em círculo e "Limpar filtros" quando há filtro ativo | Feito |
+| Filtro de prazo com rótulos legíveis ("Vencidos", "Próximos 7 dias") | Feito - o valor enviado à API não mudou |
+| Itens de produção, itens e cargas de galvanização, Fiscal, Histórico/Auditoria: hierarquia de botões, acentuação e altura de cabeçalho | Feito - **layout dos filtros não foi refeito** nessas telas (continuam com rótulo ao lado do campo) |
+| Títulos de página acentuados ("Expedição", "Parciais e pendências", "Histórico") | Feito - `main_window.py` usa os rótulos da barra lateral |
+| Mensagens de `QMessageBox` e de erro do Fiscal/Produção | **Não alteradas** - continuam sem acento; ficam para as Ondas 4 e 5, junto com os diálogos dessas áreas |
+| Abas por área (`top_tabs.py`) | Sem mudança |
+| Prévia sem login | `python scripts/ui_gallery.py --moldura --estado normal|lote|vazio|carregando` |
+
 ### Onda 3 — Detalhes e centrais de ação (G)
 
 | Tela | Arquivo |

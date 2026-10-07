@@ -50,7 +50,7 @@ Já existem em `app/ui/components/` (confira com `python scripts/ui_gallery.py`,
 | Botão fantasma | Sem fundo, ícone na cor de destaque. Para Limpar, Cancelar, Fechar, paginação. |
 | Botão destrutivo | Só em confirmação de ação irreversível; cor `danger`. |
 | Campo | Altura 34, raio 10, borda `input_border` (>= 3:1); foco = borda de 2 px na cor `ring`. |
-| Filtro de status | Controle segmentado com contagem por opção; o marcador desliza. |
+| Filtro de status | Controle segmentado quando há até 4 status (o marcador desliza); combo acima disso. A contagem por opção só entra onde a tela tem o total de cada status - a lista paginada do Controle Geral não tem, então lá o segmentado fica sem número. O `QComboBox` continua sendo a fonte da verdade e o segmentado só o espelha (ver `ProcessPage._sync_status_segments`). |
 | Tabela | Linha 40, cabeçalho 34, zebra, hover, linha selecionada com barra de 4 px à esquerda. Título de coluna alinhado à esquerda; números com algarismos tabulares, alinhados à direita. Descrição longa **quebra em várias linhas** (a linha cresce), como hoje - o protótipo de Detalhes corta com "..." na aba Itens e nesse ponto não deve ser seguido. |
 | Filtros de página | Sem rótulo ao lado do campo; o placeholder e as opções explicam o filtro. Cada campo tem nome acessível (`setAccessibleName`). |
 | Selo de status | Sólido, raio 11, altura 22, texto `status_text`, largura fixa da coluna. Fora de tabela, largura do texto + 28. |
