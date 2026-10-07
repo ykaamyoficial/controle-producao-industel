@@ -675,7 +675,7 @@ class MainWindow(FramelessHitTestMixin, QMainWindow):
         if self.session_sync is not None:
             self.session_sync.sync("+".join(reasons))
         if with_notifications and self.notification_bell is not None and hasattr(self.service, "chat_notifications"):
-            if self._notification_poll_thread is None or not self._notification_poll_thread.isRunning():
+            if not self._worker_running("_notification_poll_thread"):
                 # lista curta so pros toasts in-app de notificacao nova, nunca pra contar.
                 thread = start_worker(
                     self, lambda: self.service.chat_notifications(limit=50), self._apply_notifications_summary, lambda _exc: None
@@ -685,7 +685,7 @@ class MainWindow(FramelessHitTestMixin, QMainWindow):
         # Fase 10: o badge do sino vem da camada generica de notificacoes
         # (total_unread de TODAS as categorias, nao so chat).
         if self.notification_bell is not None and hasattr(self.service, "notifications_unread_summary"):
-            if self._notifications_summary_thread is None or not self._notifications_summary_thread.isRunning():
+            if not self._worker_running("_notifications_summary_thread"):
                 summary_thread = start_worker(
                     self, self.service.notifications_unread_summary, self._apply_notifications_unread_summary, lambda _exc: None
                 )
@@ -699,6 +699,22 @@ class MainWindow(FramelessHitTestMixin, QMainWindow):
     def _apply_notifications_unread_summary(self, summary: dict):
         if self.notification_bell is not None:
             self.notification_bell.set_unread_count(int((summary or {}).get("total_unread") or 0))
+
+    def _worker_running(self, attribute: str) -> bool:
+        """`isRunning()` de um worker guardado em atributo, tolerando QThread ja destruido.
+
+        `start_worker` agenda `deleteLater` no `finished`; se o callback que zera
+        o atributo nao rodar, sobra a referencia Python a um objeto C++ morto e
+        `isRunning()` levanta RuntimeError a cada chamada -- o que abortava o
+        sync de chat/notificacoes pelo resto da sessao."""
+        thread = getattr(self, attribute, None)
+        if thread is None:
+            return False
+        try:
+            return thread.isRunning()
+        except RuntimeError:
+            setattr(self, attribute, None)
+            return False
 
     def _clear_notification_poll(self, thread) -> None:
         if self._notification_poll_thread is thread:
