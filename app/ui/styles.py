@@ -3,6 +3,7 @@ from __future__ import annotations
 import colorsys
 
 from app.services.backend_adapter import legacy
+from app.ui.theme_tokens import contrast_ratio, set_active_palette, ui_tokens, with_alpha
 
 
 def radius(value: int = 10) -> str:
@@ -39,10 +40,22 @@ def app_stylesheet(palette: dict) -> str:
     accent_text = palette["accent_text"]
     danger = palette["danger"]
     chrome_bg = chrome_bg_color(palette)
+    # Ponto unico por onde um tema e aplicado: registra a paleta ativa para os
+    # componentes pintados a mao (ver theme_tokens.active_tokens()).
+    set_active_palette(palette)
+    tokens = ui_tokens(palette)
+    zebra = tokens["zebra"]
+    table_header = tokens["table_header"]
+    selected = tokens["selected"]
+    subtle = tokens["subtle"]
+    input_border = tokens["input_border"]
+    ring = tokens["ring"]
+    # Hover da barra lateral: a superficie clareando a moldura, sem borda.
+    nav_hover = with_alpha(surface, 150)
 
     return f"""
     * {{
-        font-family: "Segoe UI", "Arial";
+        font-family: "Inter", "Segoe UI", "Arial";
         font-size: 12px;
         color: {text};
     }}
@@ -189,8 +202,8 @@ def app_stylesheet(palette: dict) -> str:
     }}
     QLabel#SidebarGroupLabel {{
         color: {muted};
-        font-size: 10px;
-        font-weight: 800;
+        font-size: 11px;
+        font-weight: 700;
         letter-spacing: 0px;
         padding: 10px 4px 2px 4px;
     }}
@@ -237,16 +250,19 @@ def app_stylesheet(palette: dict) -> str:
         background: transparent;
         border: 1px solid transparent;
         text-align: left;
-        padding: 2px 8px;
-        {radius(12)}
+        padding: 2px 10px;
+        font-weight: 600;
+        {radius(10)}
     }}
     QPushButton#NavButton[collapsed="true"] {{
         text-align: center;
         padding: 1px 0px;
     }}
     QPushButton#NavButton:hover {{
-        background: {surface_alt};
-        border-color: {border};
+        background: {nav_hover};
+    }}
+    QPushButton#NavButton:focus {{
+        border-color: {ring};
     }}
     QPushButton#NavButton[active="true"] {{
         background: {accent};
@@ -438,14 +454,16 @@ def app_stylesheet(palette: dict) -> str:
     }}
     QLineEdit, QComboBox, QTextEdit, QSpinBox, QDoubleSpinBox {{
         background: {surface};
-        border: 1px solid {border};
+        border: 1px solid {input_border};
         {radius(10)}
         padding: 6px 10px;
         selection-background-color: {accent};
         selection-color: {accent_text};
+        placeholder-text-color: {subtle};
     }}
     QLineEdit:focus, QComboBox:focus, QTextEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus {{
-        border: 1px solid {accent};
+        border: 2px solid {ring};
+        padding: 5px 9px;
     }}
     QLineEdit[validationState="error"], QTextEdit[validationState="error"], QTableWidget[validationState="error"] {{
         border: 2px solid {danger};
@@ -514,7 +532,7 @@ def app_stylesheet(palette: dict) -> str:
     QCheckBox::indicator {{
         width: 15px;
         height: 15px;
-        border: 1px solid {border};
+        border: 1px solid {input_border};
         border-radius: 4px;
         background: {surface};
     }}
@@ -525,12 +543,12 @@ def app_stylesheet(palette: dict) -> str:
     QTableView, QTableWidget {{
         background: {surface};
         color: {text};
-        alternate-background-color: {surface_alt};
+        alternate-background-color: {zebra};
         gridline-color: transparent;
         border: 1px solid {border};
         {radius(14)}
-        selection-background-color: {accent};
-        selection-color: {accent_text};
+        selection-background-color: {selected};
+        selection-color: {text};
         outline: 0;
     }}
     QTableView::viewport, QTableWidget::viewport {{
@@ -571,8 +589,12 @@ def app_stylesheet(palette: dict) -> str:
     QTableView::item:hover, QTableWidget::item:hover {{
         background: {surface_alt};
     }}
+    QTableView::item:selected, QTableWidget::item:selected {{
+        background: {selected};
+        color: {text};
+    }}
     QHeaderView::section {{
-        background: {surface_alt};
+        background: {table_header};
         color: {text};
         padding: 3px 8px;
         border: 0;
@@ -631,7 +653,7 @@ def app_stylesheet(palette: dict) -> str:
         min-width: 24px;
     }}
     QScrollBar::handle:hover {{
-        background: {muted};
+        background: {input_border};
     }}
     QScrollBar::add-line, QScrollBar::sub-line {{
         background: transparent;
@@ -656,6 +678,81 @@ def app_stylesheet(palette: dict) -> str:
     QLabel#ErrorText {{
         color: {danger};
         font-weight: 600;
+    }}
+    QPushButton#CloseIconButton {{
+        background: transparent;
+        border: 0;
+        padding: 0;
+        {radius(6)}
+    }}
+    QPushButton#CloseIconButton:hover {{
+        background: {surface_alt};
+    }}
+    QFrame#Toast, QFrame#LoginSummaryBanner {{
+        background: {surface};
+        border: 1px solid {border};
+        {radius(12)}
+    }}
+    QFrame#Toast QLabel, QFrame#LoginSummaryBanner QLabel {{
+        background: transparent;
+    }}
+    QLabel#ToastTitle {{
+        font-size: 12px;
+        font-weight: 700;
+    }}
+    QLabel#ToastBody {{
+        font-size: 11px;
+    }}
+    QLabel#BannerTitle {{
+        font-size: 14px;
+        font-weight: 800;
+    }}
+    QLabel#IndicatorText {{
+        font-size: 12px;
+        font-weight: 600;
+    }}
+    QLabel#PopoverName {{
+        font-weight: 700;
+    }}
+    QFrame#NotificationCenterPanel {{
+        background: {surface};
+        border: 1px solid {border};
+        {radius(16)}
+    }}
+    QScrollArea#NotificationScrollArea, QScrollArea#NotificationScrollArea > QWidget,
+    QScrollArea#NotificationScrollArea > QWidget > QWidget {{
+        background: transparent;
+        border: 0;
+        border-radius: 0;
+    }}
+    QLabel#NotificationPanelTitle {{
+        font-size: 15px;
+        font-weight: 800;
+    }}
+    QLabel#NotificationDayLabel {{
+        color: {muted};
+        font-size: 11px;
+        font-weight: 700;
+        margin-top: 4px;
+    }}
+    QLabel#NotificationTitle {{
+        font-size: 12px;
+        font-weight: 600;
+    }}
+    QLabel#NotificationTitle[severity="accent"] {{ color: {accent}; font-weight: 700; }}
+    QLabel#NotificationTitle[severity="danger"] {{ color: {danger}; font-weight: 700; }}
+    QLabel#NotificationTitle[severity="warning"] {{ color: {palette["warning"]}; font-weight: 700; }}
+    QLabel#NotificationTitle[severity="muted"] {{ color: {muted}; font-weight: 700; }}
+    QLabel#NotificationTime {{
+        color: {muted};
+        font-size: 10px;
+    }}
+    QLabel#NotificationBody {{
+        font-size: 11px;
+    }}
+    QFrame#TitleBarSeparator {{
+        background: {input_border};
+        border: 0;
     }}
     QFrame#TitleBar {{
         background: {chrome_bg};
@@ -706,10 +803,13 @@ STATUS_BADGE_COLORS = {
     "claro": {
         "neutral": "#64748B",
         "waiting": "#2563EB",
-        "progress": "#EA580C",
-        "attention": "#CA8A04",
-        "warning": "#CA8A04",
-        "done": "#16A34A",
+        # progress/attention/warning/done ficaram mais escuros que os
+        # originais (#EA580C, #CA8A04, #16A34A) para o texto branco do selo
+        # solido passar de 4.5:1 - conferido por scripts/check_contrast.py.
+        "progress": "#C2410C",
+        "attention": "#A16207",
+        "warning": "#A16207",
+        "done": "#15803D",
         "final_done": "#0F766E",
         "danger": "#DC2626",
         "blocked": "#DC2626",
@@ -806,14 +906,14 @@ def status_color(status: str, palette: dict, area: str = "") -> tuple[str, str]:
 
 
 def _contrast_text(hex_color: str) -> str:
-    color = hex_color.strip().lstrip("#")
-    if len(color) < 6:
+    """Texto escuro ou branco, o que der mais contraste (WCAG) sobre a cor.
+    O corte antigo por luminancia fixa escolhia branco sobre o vermelho do
+    tema escuro (#FB7185), que ficava em 2.7:1."""
+    color = hex_color.strip()
+    if len(color.lstrip("#")) < 6:
         return "#ffffff"
-    r = int(color[0:2], 16)
-    g = int(color[2:4], 16)
-    b = int(color[4:6], 16)
-    luminance = (0.2126 * r + 0.7152 * g + 0.0722 * b)
-    return "#111827" if luminance >= 150 else "#ffffff"
+    dark, light = "#111827", "#ffffff"
+    return dark if contrast_ratio(dark, color) >= contrast_ratio(light, color) else light
 
 
 def chart_colors(palette: dict) -> list[str]:

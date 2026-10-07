@@ -6,6 +6,7 @@ from PySide6.QtWidgets import QAbstractItemView, QHeaderView, QStyledItemDelegat
 
 from app.ui.components.operational_table import configure_operational_table
 from app.ui.styles import area_color, status_color
+from app.ui.theme_tokens import ui_tokens
 from app.ui.icons import IconSize, make_icon, status_icon
 
 
@@ -24,6 +25,21 @@ class StatusBadgeDelegate(QStyledItemDelegate):
     def __init__(self, service, parent=None):
         super().__init__(parent)
         self.service = service
+        self._tokens_source: dict | None = None
+        self._tokens_cache: dict = {}
+
+    def _tokens(self) -> dict:
+        """Tokens derivados da paleta ativa, recalculados so quando ela muda
+        (paint() roda por celula)."""
+        palette = self.service.palette
+        if palette is not self._tokens_source:
+            try:
+                self._tokens_cache = ui_tokens(palette)
+            except KeyError:
+                # Paleta parcial (dubles de teste): a selecao cai no tom alternativo.
+                self._tokens_cache = {**palette, "selected": palette.get("surface_alt", "#e8f1ff")}
+            self._tokens_source = palette
+        return self._tokens_cache
 
     def paint(self, painter: QPainter, option: QStyleOptionViewItem, index):
         key = index.data(Qt.UserRole + 1)
@@ -37,7 +53,7 @@ class StatusBadgeDelegate(QStyledItemDelegate):
             has_messages = bool(index.data(Qt.UserRole + 3))
             painter.save()
             if option.state & QStyle.State_Selected:
-                painter.fillRect(option.rect, QColor(self.service.palette["accent"]))
+                painter.fillRect(option.rect, QColor(self._tokens()["selected"]))
             if unread > 0:
                 color = self.service.palette.get("danger", "#dc2626")
             elif has_messages:
@@ -70,7 +86,7 @@ class StatusBadgeDelegate(QStyledItemDelegate):
             area = index.data(Qt.UserRole + 3) or None
             painter.save()
             if option.state & QStyle.State_Selected:
-                painter.fillRect(option.rect, QColor(self.service.palette["accent"]))
+                painter.fillRect(option.rect, QColor(self._tokens()["selected"]))
             size = int(IconSize.TABLE_STATUS)
             icon = status_icon(str(raw), area=area, palette=self.service.palette, size=size)
             pix = icon.pixmap(size, size)
@@ -94,7 +110,7 @@ class StatusBadgeDelegate(QStyledItemDelegate):
                 bg, fg = status_color(str(raw), self.service.palette, str(area))
             painter.save()
             if option.state & QStyle.State_Selected:
-                painter.fillRect(option.rect, QColor(self.service.palette["accent"]))
+                painter.fillRect(option.rect, QColor(self._tokens()["selected"]))
             rect = option.rect.adjusted(8, 6, -8, -6)
             painter.setRenderHint(QPainter.Antialiasing)
             painter.setPen(Qt.NoPen)
@@ -128,6 +144,7 @@ class ModernTable(QTableView):
         self.horizontalHeader().setFixedHeight(28)
         self.horizontalHeader().setStretchLastSection(True)
         self.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+        self.horizontalHeader().setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         self.setItemDelegate(StatusBadgeDelegate(service, self))
         self.setWordWrap(True)
         self.setToolTip("Clique no icone de status para abrir as acoes da proposta, ou no icone de chat para abrir a conversa.")

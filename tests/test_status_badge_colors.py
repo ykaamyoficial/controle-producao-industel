@@ -15,19 +15,19 @@ class StatusBadgeColorTests(unittest.TestCase):
         self.assert_status_colors("EM_SEPARACAO", "#2563EB", "#60A5FA")
 
     def test_in_progress_statuses_use_orange(self):
-        self.assert_status_colors("INICIADO", "#EA580C", "#FB923C")
-        self.assert_status_colors("EM_CARGA", "#EA580C", "#FB923C")
-        self.assert_status_colors("SEPARACAO_INICIADA", "#EA580C", "#FB923C")
+        self.assert_status_colors("INICIADO", "#C2410C", "#FB923C")
+        self.assert_status_colors("EM_CARGA", "#C2410C", "#FB923C")
+        self.assert_status_colors("SEPARACAO_INICIADA", "#C2410C", "#FB923C")
 
     def test_partial_and_pending_statuses_use_yellow(self):
-        self.assert_status_colors("FINALIZADO_PARCIAL", "#CA8A04", "#FACC15")
-        self.assert_status_colors("ITEM_PENDENTE_FABRICACAO", "#CA8A04", "#FACC15")
-        self.assert_status_colors("NOTA_FISCAL_PARCIAL", "#CA8A04", "#FACC15")
-        self.assert_status_colors("PARADO", "#CA8A04", "#FACC15")
+        self.assert_status_colors("FINALIZADO_PARCIAL", "#A16207", "#FACC15")
+        self.assert_status_colors("ITEM_PENDENTE_FABRICACAO", "#A16207", "#FACC15")
+        self.assert_status_colors("NOTA_FISCAL_PARCIAL", "#A16207", "#FACC15")
+        self.assert_status_colors("PARADO", "#A16207", "#FACC15")
 
     def test_completed_statuses_use_green(self):
-        self.assert_status_colors("FINALIZADO", "#16A34A", "#4ADE80")
-        self.assert_status_colors("FATURADO", "#16A34A", "#4ADE80")
+        self.assert_status_colors("FINALIZADO", "#15803D", "#4ADE80")
+        self.assert_status_colors("FATURADO", "#15803D", "#4ADE80")
 
     def test_final_delivered_statuses_use_teal(self):
         self.assert_status_colors("ENTREGUE", "#0F766E", "#2DD4BF")
