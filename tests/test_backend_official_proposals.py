@@ -372,7 +372,8 @@ class BackendOfficialProposalTests(unittest.TestCase):
 
         self.assertIn(("user_rows",), storage.calls)
         self.assertIn(("get_user", 7), storage.calls)
-        self.assertIn(("save_user", {"nome": "Novo", "login": "novo", "password": "Senha123456", "perfil": "admin", "ativo": True, "permissions": {}}, None), storage.calls)
+        # Desde a 2.7.1 (0befc0a) o adapter sempre propaga "email" (opcional, "" quando ausente).
+        self.assertIn(("save_user", {"nome": "Novo", "login": "novo", "email": "", "password": "Senha123456", "perfil": "admin", "ativo": True, "permissions": {}}, None), storage.calls)
         self.assertIn(("toggle_user", 7), storage.calls)
 
     def test_official_save_uses_api_storage_without_legacy_sqlite_repo(self):

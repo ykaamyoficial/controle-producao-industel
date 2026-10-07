@@ -94,10 +94,14 @@ class UpdateDialogOrchestratorFlowTests(unittest.TestCase):
         )
         dialog.show()
 
-        with self._confirm_yes(), self._suppress_warning_box():
+        # O aviso de falha (QMessageBox.warning) so e emitido quando o resultado
+        # do worker chega pela fila de eventos, ou seja, durante o _pump_until.
+        # O patch precisa continuar ativo ate la; senao abre o dialogo real e trava.
+        with self._confirm_yes(), self._suppress_warning_box() as warning_box:
             dialog.download_update()
-        _pump_until(lambda: dialog.download_button.isEnabled())
+            _pump_until(lambda: warning_box.called)
 
+        warning_box.assert_called_once()
         self.assertFalse(dialog.update_launched)
         self.assertTrue(dialog.isVisible())
         self.assertTrue(dialog.download_button.isEnabled())
@@ -111,10 +115,14 @@ class UpdateDialogOrchestratorFlowTests(unittest.TestCase):
         dialog = UpdateDialog(_UPDATE_INFO, update_coordinator_factory=_RaisingCoordinator)
         dialog.show()
 
-        with self._confirm_yes(), self._suppress_warning_box():
+        # Idem: _update_failed roda via fila de eventos dentro do _pump_until,
+        # entao o patch do QMessageBox.warning tem de cobrir o pump.
+        with self._confirm_yes(), self._suppress_warning_box() as warning_box:
             dialog.download_update()
-        _pump_until(lambda: dialog.download_button.isEnabled())
+            _pump_until(lambda: warning_box.called)
 
+        warning_box.assert_called_once()
+        self.assertTrue(dialog.download_button.isEnabled())
         self.assertFalse(dialog.update_launched)
         self.assertTrue(dialog.isVisible())
 
