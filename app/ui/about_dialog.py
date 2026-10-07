@@ -6,7 +6,7 @@ from PySide6.QtWidgets import QDialog, QLabel, QVBoxLayout
 from app.ui.app_icon import app_icon
 from app.ui.components.modern_button import ModernButton
 from app.ui.dialog_utils import style_dialog_from_parent
-from app.version import APP_BUILD, APP_NAME, APP_PUBLISHER, APP_VERSION
+from app.version import APP_BUILD, APP_DISPLAY_NAME, APP_PUBLISHER, APP_VERSION
 
 
 class AboutDialog(QDialog):
@@ -21,7 +21,7 @@ class AboutDialog(QDialog):
         layout.setContentsMargins(24, 24, 24, 20)
         layout.setSpacing(6)
 
-        name = QLabel(APP_NAME)
+        name = QLabel(APP_DISPLAY_NAME)
         name.setStyleSheet("font-size: 16px; font-weight: 800;")
         layout.addWidget(name)
 

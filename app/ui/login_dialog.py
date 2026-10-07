@@ -6,6 +6,7 @@ from PySide6.QtWidgets import QCheckBox, QDialog, QLabel, QLineEdit, QVBoxLayout
 from app.services.login_preferences import load_login_preferences, save_login_preferences
 from app.ui.app_icon import app_icon
 from app.ui.components.modern_button import ModernButton
+from app.version import APP_DISPLAY_NAME
 
 
 class LoginDialog(QDialog):
@@ -22,7 +23,7 @@ class LoginDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(28, 26, 28, 24)
         layout.setSpacing(12)
-        title = QLabel("Controle de Producao Industel")
+        title = QLabel(APP_DISPLAY_NAME)
         title.setStyleSheet("font-size: 21px; font-weight: 800;")
         subtitle = QLabel("Acesse o painel operacional")
         subtitle.setObjectName("Caption")

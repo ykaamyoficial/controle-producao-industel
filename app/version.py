@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 APP_NAME = "Controle de Producao Industel"
+# Nome mostrado ao usuario (titulo da janela, barra superior, login, Sobre).
+# APP_NAME fica sem acento de proposito: entra nos arquivos de release
+# (scripts/create_release_files.py) e precisa bater com o instalador.
+APP_DISPLAY_NAME = "Controle de Produção Industel"
 APP_VERSION = "2.8.0"
 APP_BUILD = "2026.10.07"
 APP_PUBLISHER = "Industel"
