@@ -242,12 +242,13 @@ async def list_production_items(
 @router.get("/partials/proposals", response_model=PaginatedPartialProposalResponse)
 async def list_partial_proposals(
     search: str | None = Query(default=None, max_length=180),
+    proposal_id: int | None = Query(default=None, ge=1),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     session: AsyncSession = Depends(get_db_session),
     _actor: User = Depends(require_permission(PROPOSALS_VIEW)),
 ):
-    return await service.list_partial_proposals(session, search=search, limit=limit, offset=offset)
+    return await service.list_partial_proposals(session, search=search, limit=limit, offset=offset, proposal_id=proposal_id)
 
 
 @router.get("/warehouse/proposals", response_model=PaginatedWarehouseProposalResponse)

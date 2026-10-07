@@ -396,7 +396,9 @@ async def list_production_items(session: AsyncSession, *, search: str | None, pe
     return PaginatedProductionItemResponse(items=result[offset:offset + limit], total=len(result), limit=limit, offset=offset)
 
 
-async def list_partial_proposals(session: AsyncSession, *, search: str | None, limit: int, offset: int) -> PaginatedPartialProposalResponse:
+async def list_partial_proposals(
+    session: AsyncSession, *, search: str | None, limit: int, offset: int, proposal_id: int | None = None
+) -> PaginatedPartialProposalResponse:
     stmt = (
         select(Proposal)
         .options(
@@ -409,16 +411,16 @@ async def list_partial_proposals(session: AsyncSession, *, search: str | None, l
         .where(Proposal.active.is_(True))
         .where(_proposal_operational_clause())
     )
+    # Busca e proposta especifica filtram no SQL, antes de carregar as cinco
+    # relacoes: o Detalhe de uma proposta chama este endpoint so para achar a
+    # propria linha e pagava a carga de TODAS as propostas ativas.
+    search_clause = _proposal_search_clause(search)
+    if search_clause is not None:
+        stmt = stmt.where(search_clause)
+    if proposal_id is not None:
+        stmt = stmt.where(Proposal.id == proposal_id)
     rows = (await session.execute(stmt)).scalars().unique().all()
-    needle = (search or "").strip().lower()
-    filtered = []
-    for proposal in rows:
-        if not _proposal_has_partial_movement(proposal):
-            continue
-        text = " ".join([proposal.proposal_number, proposal.customer_name, proposal.project_name or "", proposal.lot or ""]).lower()
-        if needle and needle not in text:
-            continue
-        filtered.append(proposal)
+    filtered = [proposal for proposal in rows if _proposal_has_partial_movement(proposal)]
     filtered.sort(key=lambda row: (-(row.updated_at.timestamp() if row.updated_at else 0), row.proposal_number, row.id))
     paged = filtered[offset:offset + limit]
     return PaginatedPartialProposalResponse(items=[_partial_proposal_summary(row) for row in paged], total=len(filtered), limit=limit, offset=offset)
