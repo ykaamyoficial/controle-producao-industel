@@ -11,7 +11,7 @@ from typing import Any, Callable
 from app.integrations.api.auth_client import AuthApiClient
 from app.integrations.api.client import DesktopApiClient
 from app.integrations.api.config import DesktopApiConfigStore
-from app.integrations.api.exceptions import ApiClientError
+from app.integrations.api.exceptions import ApiAuthenticationError, ApiClientError
 from app.integrations.api.notifications_client import NotificationsApiClient
 from app.integrations.api.token_store import ApiTokenStore
 from app.services.app_logging import get_logger
@@ -153,6 +153,26 @@ def consume_pending_deep_link(*, max_age_seconds: float = 600.0) -> str | None:
 
 # --------------------------------------------------------------- rede/API
 
+def _refresh_or_forget(client: DesktopApiClient, token_store: ApiTokenStore, refresh_token: str):
+    """Renova o login; se o servidor recusar o token (expirado, revogado ou
+    reutilizado), apaga-o do armazenamento local e repassa o erro.
+
+    Antes o agente guardava o token morto e o reapresentava a cada ciclo de 60 s
+    e a cada reconexao do websocket (a cada 1-30 s): na producao isso gerou 5 a
+    6,6 mil eventos TOKEN_REUSE_DETECTED por dia, de poucos usuarios, 24 h por
+    dia. Sem token guardado o agente fica quieto ate o proximo login no app.
+    Falhas de rede/servidor NAO apagam nada: o token continua valido.
+    """
+    try:
+        pair = AuthApiClient(client).refresh(refresh_token)
+    except ApiAuthenticationError as exc:
+        token_store.clear()
+        log.warning("notifier_sessao_invalida | token_local_apagado=true | detalhe=%s", exc)
+        raise
+    token_store.save_refresh_token(pair.refresh_token)
+    return pair
+
+
 def _fetch_notifications(since_id: int) -> tuple[list[dict[str, Any]], dict[str, Any]] | None:
     """Renova o token e busca (catch-up + resumo de nao lidas). Retorna
     (novos_itens, resumo) ou None se nao ha sessao/servidor."""
@@ -167,8 +187,7 @@ def _fetch_notifications(since_id: int) -> tuple[list[dict[str, Any]], dict[str,
         return None
     client = DesktopApiClient(settings)
     try:
-        pair = AuthApiClient(client).refresh(refresh_token)
-        token_store.save_refresh_token(pair.refresh_token)
+        pair = _refresh_or_forget(client, token_store, refresh_token)
         api = NotificationsApiClient(client)
         catch_up = api.catch_up(pair.access_token, since_id=since_id, limit=50)
         summary = api.unread_summary(pair.access_token)
@@ -192,8 +211,7 @@ def _mark_all_read_remote() -> bool:
         return False
     client = DesktopApiClient(settings)
     try:
-        pair = AuthApiClient(client).refresh(refresh_token)
-        token_store.save_refresh_token(pair.refresh_token)
+        pair = _refresh_or_forget(client, token_store, refresh_token)
         NotificationsApiClient(client).mark_all_read(pair.access_token)
         return True
     except ApiClientError as exc:
@@ -463,11 +481,13 @@ class _NotifierRealtime:
             token_store = ApiTokenStore()
             refresh_token = token_store.get_refresh_token()
             if not refresh_token:
+                # Sem login guardado (ou apagado por token morto): volta a olhar
+                # mais tarde, sem rede, para reconectar depois do proximo login.
+                self._schedule_reconnect()
                 return
             client = DesktopApiClient(settings)
             try:
-                pair = AuthApiClient(client).refresh(refresh_token)
-                token_store.save_refresh_token(pair.refresh_token)
+                pair = _refresh_or_forget(client, token_store, refresh_token)
             finally:
                 client.close()
             from app.integrations.api.config import normalize_api_base_url
