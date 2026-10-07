@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 from app.replica.read_gate import ReplicaReadGate
 from app.replica.replica_db import META_CURSOR, META_ENTITIES, ReplicaDatabase
-from app.services.api_proposal_storage import OfficialProposalApiStorage, _BorrowedApiClient
+from app.services.api_proposal_storage import _BorrowedApiClient
 
 ENTITIES = ("proposals", "expedition_items")
 
@@ -131,69 +131,6 @@ class BorrowedClientGateTests(_GateCase):
         http = _FakeHttpClient()
         _BorrowedApiClient(SimpleNamespace(), http).post("/api/v1/proposals", json_payload={}, access_token="t")
         self.assertEqual(http.calls, [("POST", "/api/v1/proposals")])
-
-
-class StorageExpeditionReadTests(_GateCase):
-    def setUp(self):
-        super().setUp()
-        self.storage = OfficialProposalApiStorage()
-        self.api_rows = [{"id": 77, "proposal_number": "DA-API"}]
-        self.api_calls = 0
-
-        def fake_client():
-            self.api_calls += 1
-            proposals = SimpleNamespace(list_expedition_proposals=lambda token, **filters: {"items": self.api_rows, "total": 1})
-            return SimpleNamespace(close=lambda: None), proposals, "token"
-
-        self.storage._client = fake_client
-
-    def _load_expedition(self):
-        proposal = {
-            "id": 5, "proposal_number": "DA-REPLICA", "customer_name": "Cliente", "active": True, "is_cancelled": False,
-            "current_status": "EM_SEPARACAO", "general_status": "EM_EXPEDICAO", "shipping_status": "EM_SEPARACAO", "version": 1,
-        }
-        item = {
-            "id": 50, "proposal_id": 5, "active": True, "status": "EM_SEPARACAO", "origin": "PRODUCAO",
-            "available_quantity": "2.0000", "separated_quantity": "0.0000", "delivered_quantity": "0.0000", "remanaged_quantity": "0.0000",
-        }
-        self._load(tables={"proposals": [proposal], "expedition_items": [item]})
-
-    def _numbers(self, **filters):
-        page = self.storage.list_expedition_proposals_page(**filters)
-        return [row.get("proposta") or row.get("proposal_number") for row in page["items"]], page["total"]
-
-    def test_without_gate_reads_from_the_api(self):
-        self._load_expedition()
-        self._numbers(limit=50, offset=0)
-        self.assertEqual(self.api_calls, 1)
-
-    def test_open_gate_reads_from_the_replica_without_calling_the_api(self):
-        self._load_expedition()
-        self._sync()
-        self.storage.replica_gate = self.gate
-        numbers, total = self._numbers(limit=50, offset=0, search=None)
-        self.assertEqual((numbers, total), (["DA-REPLICA"], 1))
-        self.assertEqual(self.api_calls, 0)
-        self.assertEqual(self.storage.list_expedition_proposals(limit=200, offset=0)[0]["id"], 5)
-
-    def test_closed_gate_falls_back_to_the_api(self):
-        self._load_expedition()
-        self._sync()
-        self.storage.replica_gate = self.gate
-        self.gate.write_started()
-        self.gate.write_finished()
-        numbers, _total = self._numbers(limit=50, offset=0)
-        self.assertEqual(numbers, ["DA-API"])
-        self.assertEqual(self.api_calls, 1)
-
-    def test_replica_error_falls_back_to_the_api(self):
-        self._load_expedition()
-        self._sync()
-        self.storage.replica_gate = self.gate
-        self.db.apply_changes([{"entity": "expedition_items", "id": 51, "op": "upsert", "row": {"id": 51, "proposal_id": 5, "active": True, "status": "X", "available_quantity": "nao-e-numero"}}], cursor=2)
-        numbers, _total = self._numbers(limit=50, offset=0)
-        self.assertEqual(numbers, ["DA-API"])
-        self.assertEqual(self.api_calls, 1)
 
 
 if __name__ == "__main__":

@@ -4,7 +4,8 @@ Desligada por padrao. No arquivo de configuracao:
 
 * `"local_replica": {"enabled": true}` mantem o arquivo sincronizado;
 * `"local_replica": {"enabled": true, "read": true}` tambem faz as telas ja
-  migradas lerem dele (hoje: lista de Expedicao, lista e indicadores do Fiscal).
+  migradas lerem dele (hoje: Controle Geral). So listagens sem regra de negocio
+  sao lidas da replica; status, acoes e calculos continuam vindo da API.
 """
 
 from __future__ import annotations
