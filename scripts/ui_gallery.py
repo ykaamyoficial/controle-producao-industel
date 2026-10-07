@@ -282,6 +282,124 @@ class _FrameService:
         return rows
 
 
+class _DetailService(_FrameService):
+    """Acrescenta o que ProcessDetailDialog pede, com rotulos reais do sistema."""
+
+    PROCESS = {
+        "id": 103,
+        "proposta": "CP 05672",
+        "cliente": "Torres Norte Telecom",
+        "obra_site": "SP-CAMP-014 - Torre autoportante 40 m",
+        "pedido_compra": "PEDIDO COMPRA 7000056167",
+        "lote": "",
+        "tipo_processo": "PRINCIPAL",
+        "situacao_fluxo": "EM_PRODUCAO",
+        "status_geral": "LIBERADO_PRODUCAO",
+        "status_producao": "INICIADO",
+        "status_galvanizacao": "RETORNOU_PARCIAL",
+        "status_expedicao": "ENTREGUE_PARCIAL",
+        "status_almoxarifado": "AGUARDANDO_CONFIRMACAO",
+        "necessita_almoxarifado": "SIM",
+        "peso": "3812.40",
+        "peso_parcial": "1240",
+        "saldo_pendente": "96",
+        "quantidade_itens": 148,
+        "quantidade_entregue": "52",
+        "itens_produzidos": 88,
+        "itens_pendentes": 60,
+        "peso_produzido": "2290",
+        "peso_enviado_galv": "1915",
+        "peso_retornado_galv": "1465",
+        "peso_pendente_galv": "450",
+        "quantidade_disponivel": 32,
+        "quantidade_separada": 12,
+        "data_entrada": "12/09/2026",
+        "atualizado_por": "marcos.s",
+        "atualizado_em": "06/10/2026 14:12",
+    }
+
+    def _process(self):
+        from datetime import date, timedelta
+
+        return {**self.PROCESS, "prazo_entrega": (date.today() + timedelta(days=5)).strftime("%d/%m/%Y")}
+
+    def get_process_dict(self, _process_id):
+        return self._process()
+
+    def get_process_area_dict(self, _process_id, _area):
+        return self._process()
+
+    def current_location(self, _row):
+        return "PRODUCAO", "Producao", "INICIADO"
+
+    def area_status_label(self, area, status):
+        from app.services.backend_adapter import legacy
+
+        return legacy.area_status_label(area, status)
+
+    def status_label(self, status):
+        from app.services.backend_adapter import legacy
+
+        return legacy.status_label(status)
+
+    def load_status_label(self, status):
+        from app.services.backend_adapter import legacy
+
+        return legacy.load_status_label(status)
+
+    def weight_progress_text(self, _process_id):
+        return "1240/3812 kg"
+
+    def process_partials(self, _process_id):
+        return [dict(self.PROCESS), {**self.PROCESS, "id": 104}]
+
+    def process_loads(self, _process_id):
+        return [
+            {"id": 412, "codigo": "CG-0412", "status": "RETORNOU_GALVANIZACAO", "data_envio": "28/09/2026", "data_retorno": "03/10/2026",
+             "motorista": "Carlos M.", "item_count": 32, "proposal_count": 3, "observacao": "Retorno completo, sem avarias."},
+            {"id": 431, "codigo": "CG-0431", "status": "ENVIADO_GALVANIZACAO", "data_envio": "05/10/2026",
+             "motorista": "Rogério S.", "item_count": 24, "proposal_count": 2, "observacao": "Previsão de retorno em 4 dias úteis."},
+        ]
+
+    def proposal_items(self, _process_id):
+        def item(i, code, text, qty, weight, **flags):
+            base = {"produzir_internamente": "sim", "precisa_galvanizacao": "sim", "produzido": False, "galvanizado": False,
+                    "enviado_galvanizacao": False, "entregue": False}
+            return {"id": i, "numero_item": i, "codigo_produto": code, "descricao": text, "quantidade": qty, "peso": weight, **base, **flags}
+
+        return [
+            item(1, "MT-40-001", "Montante principal L 100x100x8 - módulo 1", 8, "86.4", produzido=True, galvanizado=True, entregue=True),
+            item(2, "MT-40-002", "Montante principal L 100x100x8 - módulo 2, com furação especial para emenda de topo e reforço de cantoneira conforme revisão C do projeto", 8, "84.1", produzido=True, galvanizado=True, entregue=True),
+            item(3, "DG-40-010", "Diagonal L 60x60x5 - face A/B", 24, "18.75", produzido=True, galvanizado=True),
+            item(4, "DG-40-011", "Diagonal L 60x60x5 - face C/D", 24, "18.75", produzido=True, enviado_galvanizacao=True),
+            item(5, "HZ-40-020", "Horizontal L 50x50x5", 16, "12.3", produzido=True),
+            item(6, "CH-40-031", "Chapa de ligação 3/8 - conjunto", 20, "6.85"),
+            item(7, "ES-40-040", "Escada tipo marinheiro com guarda-corpo", 4, "58"),
+            item(8, "SU-40-060", "Suporte de antena tubular 3 m", 6, "27.9", produzir_internamente="indefinido"),
+            item(9, "PF-40-070", "Kit de parafusos ASTM A325 galvanizados", 30, "", produzir_internamente="nao"),
+        ]
+
+    def process_history_rows(self, _process_id):
+        return [
+            {"area": "EXPEDICAO", "status_anterior": "SEPARADO", "status_novo": "ENTREGUE_PARCIAL", "data_hora": "06/10/2026 14:12", "usuario": "marcos.s", "observacao": "Retirada parcial pelo cliente, 52 itens."},
+            {"area": "GALVANIZACAO", "status_anterior": "ENVIADO_GALVANIZACAO", "status_novo": "RETORNOU_PARCIAL", "data_hora": "03/10/2026 16:05", "usuario": "carlos.m", "observacao": "Carga CG-0412 retornou."},
+            {"area": "PRODUCAO", "status_anterior": "NAO_INICIADO", "status_novo": "INICIADO", "data_hora": "16/09/2026 07:35", "usuario": "joao.f", "observacao": ""},
+            {"area": "CONTROLE GERAL", "status_anterior": "NAO_LIBERADO", "status_novo": "LIBERADO_PRODUCAO", "data_hora": "15/09/2026 10:02", "usuario": "henrique.l", "observacao": "Projeto aprovado pelo cliente."},
+            {"area": "CONTROLE GERAL", "status_anterior": "", "status_novo": "NAO_LIBERADO", "data_hora": "12/09/2026 09:14", "usuario": "henrique.l", "observacao": "Proposta cadastrada."},
+        ]
+
+    def fiscal_rows(self, _filters):
+        return [{"processo_id": 103, "fiscal_processo_id": 9, "situacao_fiscal": "NF_PARCIAL", "data_entrada_fiscal": "02/10/2026",
+                 "data_ultima_emissao": "06/10/2026", "quantidade_itens": 148, "itens_faturados": 64, "itens_pendentes": 84,
+                 "peso_total": "3812.4", "peso_faturado": "1465", "peso_pendente": "2347.4"}]
+
+    def fiscal_emissions(self, _fiscal_processo_id):
+        return [
+            {"numero_controle": "NF 000.184.220", "serie": "1", "data_emissao": "04/10/2026", "quantidade_emitida": 52, "peso_emitido": "1240"},
+            {"numero_controle": "NF 000.184.377", "serie": "1", "data_emissao": "06/10/2026", "quantidade_emitida": 12, "peso_emitido": "225"},
+        ]
+
+
 class FramePreview(QWidget):
     """Moldura do programa (Onda 1) com a pagina Controle Geral dentro
     (Onda 2), tudo com um servico falso. `estado` escolhe o que a pagina
@@ -295,7 +413,8 @@ class FramePreview(QWidget):
         from app.ui.components.toast_manager import InAppToast
         from app.ui.sidebar import Sidebar
 
-        service = _FrameService(palette_name)
+        service = _DetailService(palette_name)
+        self.service = service
         self.setObjectName("AppRoot")
         self.setWindowTitle("Prévia da moldura")
         self.setStyleSheet(app_stylesheet(service.palette))
@@ -371,6 +490,13 @@ def main() -> int:
         default="normal",
         help="com --moldura: estado da pagina Controle Geral (banner mostra tambem o resumo de login e o aviso)",
     )
+    parser.add_argument(
+        "--detalhes",
+        type=int,
+        choices=range(6),
+        metavar="ABA",
+        help="com --moldura: abre Detalhes da proposta por cima, na aba 0..5",
+    )
     parser.add_argument("--shot", metavar="ARQUIVO.png")
     args = parser.parse_args()
 
@@ -380,13 +506,24 @@ def main() -> int:
         preview = FramePreview(args.tema, args.estado)
         preview.resize(1366, 740)
         preview.show()
+        detail = None
+        if args.detalhes is not None:
+            from app.ui.process_detail_dialog import ProcessDetailDialog
+
+            detail = ProcessDetailDialog(preview.service, 103, preview.page)
+            detail.setModal(True)
+            detail.loaded.connect(lambda: detail.tabs.setCurrentIndex(args.detalhes))
+            detail.show()
         if args.shot:
             def capture_frame():
                 preview.grab().save(args.shot)
+                if detail is not None:
+                    target = Path(args.shot)
+                    detail.grab().save(str(target.with_name(f"{target.stem}_dialogo{target.suffix}")))
                 print(f"fonte={family} salvo={args.shot}")
                 app.quit()
 
-            QTimer.singleShot(500, capture_frame)
+            QTimer.singleShot(1200, capture_frame)
         return app.exec()
     gallery = Gallery(OFFICIAL_COLOR_PALETTES[args.tema])
     gallery.resize(1200, 640)

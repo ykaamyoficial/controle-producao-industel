@@ -48,13 +48,13 @@ def format_proposal_header(proposal_labels: Iterable[Any], cliente: Any) -> str:
 
 
 def format_weight_or_missing(value: Any, *, suffix: str = " kg") -> str:
-    """Peso ausente exibe "Nao informado", nunca "0" - a mesma regra em todo
+    """Peso ausente exibe "Não informado", nunca "0" - a mesma regra em todo
     lugar que mostra peso (Resumo, Fluxo, Itens)."""
     if value in (None, ""):
-        return "Nao informado"
+        return "Não informado"
     quantity = parse_decimal(value, "0")
     if quantity <= 0:
-        return "Nao informado"
+        return "Não informado"
     return f"{format_decimal(quantity)}{suffix}"
 
 

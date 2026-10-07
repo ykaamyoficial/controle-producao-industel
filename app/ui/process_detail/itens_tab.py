@@ -4,18 +4,32 @@ from decimal import Decimal
 from typing import Any
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QAbstractItemView, QHeaderView, QLabel, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QAbstractItemView, QHBoxLayout, QHeaderView, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget
 
+from app.ui.components.badge_delegate import BadgeColumnDelegate, set_status_badge
+from app.ui.components.detail_widgets import clear_panel, make_panel, stat_block
 from app.ui.format_utils import format_quantity, format_weight_or_missing
 from app.ui.numeric_utils import format_decimal, parse_decimal
 from app.ui.table_utils import configure_wrapping_table, item_product_code, resize_rows_to_contents
 
+_STAGE_COLUMN = 5
+# Estagio do item -> status cuja cor o selo usa (so apresentacao).
+_STAGE_STATUS = {
+    "Entregue": "ENTREGUE",
+    "Fluxo não definido": "",
+    "Não será produzido": "",
+    "Em produção": "EM_PRODUCAO",
+    "Galvanizado - aguardando expedição": "EM_EXPEDICAO",
+    "Enviado para galvanização": "EM_GALVANIZACAO",
+    "Produzido - disponível para galvanização": "EM_GALVANIZACAO",
+    "Produzido - aguardando expedição": "EM_EXPEDICAO",
+}
+
 
 class ItensTab(QWidget):
-    """Aba "Itens": mesma tabela de itens que existia no dialogo antigo (sem
-    selecao/menu/acoes proprias - este dialogo nunca teve isso), so com
-    "Descricao" com mais espaco e Processo/Produzido/Galvanizado/Entregue
-    compactados numa unica coluna "Situacao" tipo checklist, como pedido."""
+    """Aba "Itens": resumo em numeros + tabela de itens (sem selecao/menu/
+    acoes proprias - este dialogo nunca teve isso). Processo/Produzido/
+    Galvanizado/Entregue ficam numa unica coluna "Situacao", como selo."""
 
     def __init__(self, service, parent=None):
         super().__init__(parent)
@@ -24,24 +38,28 @@ class ItensTab(QWidget):
 
     def _build(self):
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(4, 4, 4, 4)
-        layout.setSpacing(8)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(12)
 
-        self.summary = QLabel("0 item(ns)")
-        self.summary.setObjectName("Caption")
-        layout.addWidget(self.summary)
+        self.summary_panel, _ = make_panel()
+        layout.addWidget(self.summary_panel)
 
         self.table = QTableWidget(0, 6)
-        self.table.setHorizontalHeaderLabels(["Item", "Codigo", "Descricao", "Qtd.", "Peso unit.", "Situacao"])
+        self.table.setHorizontalHeaderLabels(["Item", "Código", "Descrição", "Qtd.", "Peso unit.", "Situação"])
         self.table.verticalHeader().setVisible(False)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.table.setAlternatingRowColors(True)
+        self.table.setShowGrid(False)
+        self.table.horizontalHeader().setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
-        for col, width in enumerate((70, 100, 320, 70, 100, 190)):
+        for col, width in enumerate((70, 110, 320, 80, 120, 300)):
             self.table.setColumnWidth(col, width)
+        self.table.setItemDelegateForColumn(_STAGE_COLUMN, BadgeColumnDelegate(self.table))
         configure_wrapping_table(self.table, description_columns=(2,), code_columns=(1,), min_row_height=42)
+        # A linha cresce com a descricao, mas nunca fica menor que o padrao.
+        self.table.verticalHeader().setMinimumSectionSize(40)
         layout.addWidget(self.table, 1)
 
     def load(self, process_ids: list[int], processes: list[dict[str, Any]] | None = None):
@@ -62,11 +80,7 @@ class ItensTab(QWidget):
             (parse_decimal(item.get("quantidade"), "1") * parse_decimal(item.get("peso"), "0") for item in weighted_items),
             Decimal("0"),
         )
-        weight_label = f"{format_decimal(total_weight)} kg conhecidos" if weighted_items else "peso nao informado"
-        self.summary.setText(
-            f"{len(items)} linha(s) | {format_decimal(total_units)} unidade(s) | {weight_label} | "
-            f"cobertura {len(weighted_items)}/{len(items)}"
-        )
+        self._load_summary(len(items), total_units, total_weight, len(weighted_items))
         # Os nomes de proposta ja foram buscados pelo dialogo pai (um get_process_dict
         # por process_id, ja necessario para o cabecalho) - reusa esses dados aqui em
         # vez de refazer uma chamada de rede (process_partials, que dispara busca +
@@ -75,6 +89,7 @@ class ItensTab(QWidget):
         if len(process_ids) > 1 and processes:
             process_names.update({process.get("id"): process.get("proposta") for process in processes if process})
         for row, item in enumerate(items):
+            stage = self._current_stage(item)
             values = [
                 item.get("numero_item"),
                 item_product_code(item),
@@ -85,11 +100,28 @@ class ItensTab(QWidget):
             ]
             for col, value in enumerate(values):
                 cell = QTableWidgetItem(str(value or ""))
-                cell.setTextAlignment(Qt.AlignTop | Qt.AlignLeft if col == 2 else Qt.AlignCenter)
+                if col == 2:
+                    cell.setTextAlignment(Qt.AlignVCenter | Qt.AlignLeft)
+                elif col in (3, 4):
+                    cell.setTextAlignment(Qt.AlignVCenter | Qt.AlignRight)
+                else:
+                    cell.setTextAlignment(Qt.AlignCenter if col == 0 else Qt.AlignVCenter | Qt.AlignLeft)
+                if col == _STAGE_COLUMN:
+                    set_status_badge(cell, _STAGE_STATUS.get(stage, ""), self.service.palette)
                 self.table.setItem(row, col, cell)
         resize_rows_to_contents(self.table)
-        visible_rows = min(max(len(items), 2), 8)
-        self.table.setMinimumHeight(68 + visible_rows * 46)
+        return len(items)
+
+    def _load_summary(self, lines: int, units: Decimal, weight: Decimal, weighted: int) -> None:
+        clear_panel(self.summary_panel, keep=0)
+        row = QHBoxLayout()
+        row.setSpacing(44)
+        row.addLayout(stat_block(str(lines), "linha" if lines == 1 else "linhas"))
+        row.addLayout(stat_block(format_decimal(units), "unidades"))
+        row.addLayout(stat_block(f"{format_decimal(weight)} kg" if weighted else "—", "peso conhecido"))
+        row.addLayout(stat_block(f"{weighted}/{lines}", "itens com peso informado"))
+        row.addStretch(1)
+        self.summary_panel.layout().addLayout(row)
 
     @staticmethod
     def _situacao_text(item: dict[str, Any], process_names: dict[Any, str]) -> str:
@@ -114,15 +146,15 @@ class ItensTab(QWidget):
         if entregue:
             return "Entregue"
         if produzir == "indefinido":
-            return "Fluxo nao definido"
+            return "Fluxo não definido"
         if produzir == "nao":
-            return "Nao sera produzido"
+            return "Não será produzido"
         if not produzido:
-            return "Em producao"
+            return "Em produção"
         if precisa_galvanizacao == "sim":
             if galvanizado:
-                return "Galvanizado - aguardando expedicao"
+                return "Galvanizado - aguardando expedição"
             if enviado_galvanizacao:
-                return "Enviado para galvanizacao"
-            return "Produzido - disponivel para galvanizacao"
-        return "Produzido - aguardando expedicao"
+                return "Enviado para galvanização"
+            return "Produzido - disponível para galvanização"
+        return "Produzido - aguardando expedição"

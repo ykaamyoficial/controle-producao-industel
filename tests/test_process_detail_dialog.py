@@ -138,13 +138,13 @@ class ProcessDetailDialogTests(unittest.TestCase):
         dialog = self._dialog()
         self.assertEqual(dialog.title.text(), "CP 05389 | MNS ENGENHARIA")
         self.assertEqual(dialog.subtitle.text(), "MSNVL006_A")
-        self.assertIn("EXPEDICAO", dialog.status_badge.text().upper())
+        self.assertIn("EXPEDIÇÃO", dialog.status_badge.text().upper())
         self.assertIn("Prazo: 03/09/2026", dialog.deadline_label.text())
 
     def test_all_six_tabs_are_present_in_order(self):
         dialog = self._dialog()
         titles = [dialog.tabs.tabText(index) for index in range(dialog.tabs.count())]
-        self.assertEqual(titles, ["Resumo", "Itens", "Fluxo", "Cargas", "Fiscal/Entrega", "Historico"])
+        self.assertEqual(titles, ["Resumo", "Itens", "Fluxo", "Cargas", "Fiscal/Entrega", "Histórico"])
 
     def test_items_tab_merges_grouped_processes_without_duplicating_shared_items(self):
         service = FakeDetailService()
@@ -155,21 +155,21 @@ class ProcessDetailDialogTests(unittest.TestCase):
         ]
         dialog = self._dialog(service)
         self.assertEqual(dialog.itens_tab.table.rowCount(), 3)
-        self.assertIn("Galvanizado - aguardando expedicao", dialog.itens_tab.table.item(0, 5).text())
-        self.assertIn("Enviado para galvanizacao", dialog.itens_tab.table.item(1, 5).text())
-        self.assertIn("Nao informado", dialog.itens_tab.table.item(2, 4).text())
+        self.assertIn("Galvanizado - aguardando expedição", dialog.itens_tab.table.item(0, 5).text())
+        self.assertIn("Enviado para galvanização", dialog.itens_tab.table.item(1, 5).text())
+        self.assertIn("Não informado", dialog.itens_tab.table.item(2, 4).text())
 
     def test_fluxo_tab_hides_almoxarifado_when_not_needed_and_shows_when_needed(self):
         service = FakeDetailService()
         dialog = self._dialog(service)
-        areas_shown = dialog.fluxo_tab.content_layout.count() - 1
+        areas_shown = len(dialog.fluxo_tab.area_panels)
         self.assertEqual(areas_shown, 4)  # sem Almoxarifado: necessita=NAO e sem status
 
         service2 = FakeDetailService()
         service2.process["necessita_almoxarifado"] = "SIM"
         service2.process["status_almoxarifado"] = "EM_SEPARACAO"
         dialog2 = self._dialog(service2)
-        self.assertEqual(dialog2.fluxo_tab.content_layout.count() - 1, 5)
+        self.assertEqual(len(dialog2.fluxo_tab.area_panels), 5)
 
     def test_cargas_tab_shows_empty_state_and_opens_official_dialog_on_double_click(self):
         service = FakeDetailService()
@@ -197,7 +197,7 @@ class ProcessDetailDialogTests(unittest.TestCase):
         entrega_layout = dialog.fiscal_entrega_tab.entrega_panel.layout()
         fiscal_text = fiscal_layout.itemAt(1).widget().text()
         entrega_text = entrega_layout.itemAt(1).widget().text()
-        self.assertEqual(fiscal_text, "Nenhuma movimentacao fiscal registrada.")
+        self.assertEqual(fiscal_text, "Nenhuma movimentação fiscal registrada.")
         self.assertEqual(entrega_text, "Nenhuma entrega registrada.")
 
     def test_fiscal_entrega_tab_shows_delivery_fields_but_no_carrier_data(self):
