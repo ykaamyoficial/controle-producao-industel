@@ -379,7 +379,7 @@ def app_stylesheet(palette: dict) -> str:
         border: 1px solid {accent};
     }}
     QFrame#OperationalHeader {{
-        background: {bg};
+        background: {surface};
         border: 0;
         border-bottom: 1px solid {border};
         border-radius: 0;
@@ -439,12 +439,17 @@ def app_stylesheet(palette: dict) -> str:
         background: {accent_hover};
     }}
     QLabel#FilterTitle {{
+        font-size: 18px;
+        font-weight: 700;
+        color: {text};
+    }}
+    QLabel#BatchModeLabel {{
         font-size: 14px;
-        font-weight: 800;
+        font-weight: 700;
         color: {text};
     }}
     QLabel#FilterSubtitle {{
-        font-size: 10px;
+        font-size: 12px;
         color: {muted};
     }}
     QLabel#FieldLabel {{
@@ -582,6 +587,17 @@ def app_stylesheet(palette: dict) -> str:
         background: {surface};
         border-radius: 0;
     }}
+    QTableView::indicator, QTableWidget::indicator {{
+        width: 15px;
+        height: 15px;
+        border: 1px solid {input_border};
+        border-radius: 4px;
+        background: {surface};
+    }}
+    QTableView::indicator:checked, QTableWidget::indicator:checked {{
+        background: {accent};
+        border-color: {accent};
+    }}
     QTableView::item, QTableWidget::item {{
         padding: 3px 8px;
         border: 0;
@@ -615,7 +631,8 @@ def app_stylesheet(palette: dict) -> str:
         border: 0;
     }}
     QLabel#EmptyStateIcon {{
-        background: transparent;
+        background: {surface_alt};
+        border-radius: 28px;
     }}
     QLabel#EmptyStateTitle {{
         background: transparent;
