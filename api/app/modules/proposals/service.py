@@ -5,10 +5,10 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 
-from sqlalchemy import Select, case, exists, func, or_, select, text
+from sqlalchemy import Select, and_, case, exists, func, or_, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import lazyload, selectinload
 
 from api.app.core import error_codes
 from api.app.core.exceptions import ApiError
@@ -291,6 +291,36 @@ def item_summary(row: ProposalItem) -> ProposalItemSummary:
     )
 
 
+# --- Carga enxuta das listas -------------------------------------------------
+# `Proposal` e `ProposalItem` carregam por padrao uma cascata de relacoes
+# (eventos, itens de carga/expedicao, registro fiscal inteiro, alocacoes...).
+# Uma lista que le so algumas delas pagava a arvore completa: milhares de
+# objetos ORM por chamada (80% do tempo das telas era Python, nao banco).
+# Estas opcoes carregam so o que cada lista usa; o resto fica `lazyload`, que
+# em sessao assincrona LEVANTA ERRO se alguem o acessar (nunca devolve vazio),
+# entao um campo esquecido aparece como falha nos testes, nao como dado errado.
+
+
+def _lean_items(*item_relations):
+    return selectinload(Proposal.items).options(lazyload("*"), *(selectinload(relation).lazyload("*") for relation in item_relations))
+
+
+def _production_status_sql():
+    """`_production_status_value(production_status or current_status)` em SQL."""
+    effective = func.coalesce(func.nullif(Proposal.production_status, ""), Proposal.current_status, "")
+    return func.upper(func.btrim(effective, " \t\r\n"))
+
+
+def _production_active_status_clause():
+    """Superconjunto SQL de `_production_status_value(...) in PRODUCTION_ACTIVE_STATUSES`.
+
+    Inclui os apelidos que normalizam para um status ativo; o filtro exato em
+    Python continua depois, entao o resultado nao muda.
+    """
+    candidates = {raw for raw in ({""} | set(ProductionStateMachine._ALIASES) | set(PRODUCTION_ACTIVE_STATUSES)) if _production_status_value(raw) in PRODUCTION_ACTIVE_STATUSES}
+    return _production_status_sql().in_(sorted(candidates))
+
+
 async def list_proposals(
     session: AsyncSession,
     *,
@@ -349,9 +379,13 @@ async def list_production_proposals(
 ) -> PaginatedProductionResponse:
     stmt = (
         select(Proposal)
-        .options(selectinload(Proposal.items))
+        .options(
+            lazyload("*"),
+            _lean_items(ProposalItem.expedition_item, ProposalItem.production_allocations_sent, ProposalItem.production_allocations_received),
+        )
         .where(_proposal_operational_clause())
         .where(Proposal.active.is_(True))
+        .where(_production_active_status_clause())
     )
     if status:
         normalized_status = _production_status_value(status)
@@ -373,9 +407,13 @@ async def list_production_proposals(
 async def list_production_items(session: AsyncSession, *, search: str | None, pending: bool | None, limit: int, offset: int) -> PaginatedProductionItemResponse:
     stmt = (
         select(Proposal)
-        .options(selectinload(Proposal.items))
+        .options(
+            lazyload("*"),
+            _lean_items(ProposalItem.expedition_item, ProposalItem.production_allocations_sent, ProposalItem.production_allocations_received),
+        )
         .where(_proposal_operational_clause())
         .where(Proposal.active.is_(True))
+        .where(_production_active_status_clause())
     )
     if search:
         value = f"%{search}%"
@@ -401,20 +439,74 @@ async def list_production_items(session: AsyncSession, *, search: str | None, pe
     return PaginatedProductionItemResponse(items=result[offset:offset + limit], total=len(result), limit=limit, offset=offset)
 
 
+def _partial_movement_clause():
+    """Espelho SQL de `_proposal_has_partial_movement` (um ramo por regra).
+
+    Cada ramo e equivalente ao da funcao Python; o filtro exato continua em
+    Python depois, entao um ramo mais largo so custaria desempenho, nunca
+    mudaria o resultado. Ramos mais estreitos seriam um erro: o teste de
+    paridade da lista compara com a resposta anterior.
+    """
+    tracked = sorted(PARTIAL_TRACKED_STATUSES)
+    active_item = (ProposalItem.proposal_id == Proposal.id) & ProposalItem.active.is_(True)
+    produced_count = select(func.count()).select_from(ProposalItem).where(active_item, ProposalItem.produced.is_(True)).correlate(Proposal).scalar_subquery()
+    internal_count = select(func.count()).select_from(ProposalItem).where(active_item, ProposalItem.produce_internally != "NAO").correlate(Proposal).scalar_subquery()
+    fiscal_scope = (FiscalItem.fiscal_record_id == FiscalRecord.id) & (FiscalRecord.proposal_id == Proposal.id) & FiscalItem.active.is_(True)
+    fiscal_billed_count = select(func.count()).select_from(FiscalItem).join(FiscalRecord, FiscalRecord.id == FiscalItem.fiscal_record_id).where(fiscal_scope, FiscalItem.billed_quantity > 0).correlate(Proposal).scalar_subquery()
+    fiscal_active_count = select(func.count()).select_from(FiscalItem).join(FiscalRecord, FiscalRecord.id == FiscalItem.fiscal_record_id).where(fiscal_scope).correlate(Proposal).scalar_subquery()
+    return or_(
+        Proposal.current_status.in_(tracked),
+        Proposal.production_status.in_(tracked),
+        Proposal.galvanization_status.in_(tracked),
+        Proposal.shipping_status.in_(tracked),
+        Proposal.warehouse_status.in_(tracked),
+        Proposal.flow_situation.in_(tracked),
+        Proposal.has_production_pending.is_(True),
+        Proposal.is_partial.is_(True),
+        # ha itens produzidos, mas menos que os itens internos.
+        and_(produced_count > 0, produced_count < internal_count),
+        exists().where(
+            GalvanizationLoadItem.proposal_id == Proposal.id,
+            GalvanizationLoadItem.active.is_(True),
+            GalvanizationLoadItem.returned_quantity > 0,
+            GalvanizationLoadItem.returned_quantity < GalvanizationLoadItem.sent_quantity,
+        ),
+        exists().where(
+            ExpeditionItem.proposal_id == Proposal.id,
+            ExpeditionItem.active.is_(True),
+            ExpeditionItem.delivered_quantity > 0,
+            ExpeditionItem.delivered_quantity + ExpeditionItem.remanaged_quantity < ExpeditionItem.available_quantity,
+        ),
+        exists().where(FiscalRecord.proposal_id == Proposal.id, FiscalRecord.status_fiscal.in_(tracked)),
+        # item fiscal faturado so em parte (quantidade) ...
+        exists().where(
+            FiscalItem.fiscal_record_id == FiscalRecord.id,
+            FiscalRecord.proposal_id == Proposal.id,
+            FiscalItem.active.is_(True),
+            FiscalItem.billed_quantity > 0,
+            FiscalItem.billed_quantity < FiscalItem.total_quantity,
+        ),
+        # ... ou alguns itens faturados e outros nao.
+        and_(fiscal_billed_count > 0, fiscal_billed_count < fiscal_active_count),
+    )
+
+
 async def list_partial_proposals(
     session: AsyncSession, *, search: str | None, limit: int, offset: int, proposal_id: int | None = None
 ) -> PaginatedPartialProposalResponse:
     stmt = (
         select(Proposal)
         .options(
-            selectinload(Proposal.items),
-            selectinload(Proposal.galvanization_load_items),
-            selectinload(Proposal.parent_proposal),
-            selectinload(Proposal.expedition_items).selectinload(ExpeditionItem.proposal_item),
-            selectinload(Proposal.fiscal_record).selectinload(FiscalRecord.items),
+            lazyload("*"),
+            _lean_items(),
+            selectinload(Proposal.galvanization_load_items).lazyload("*"),
+            selectinload(Proposal.parent_proposal).lazyload("*"),
+            selectinload(Proposal.expedition_items).options(lazyload("*"), selectinload(ExpeditionItem.proposal_item).lazyload("*")),
+            selectinload(Proposal.fiscal_record).options(lazyload("*"), selectinload(FiscalRecord.items).lazyload("*")),
         )
         .where(Proposal.active.is_(True))
         .where(_proposal_operational_clause())
+        .where(_partial_movement_clause())
     )
     # Busca e proposta especifica filtram no SQL, antes de carregar as cinco
     # relacoes: o Detalhe de uma proposta chama este endpoint so para achar a
@@ -434,7 +526,7 @@ async def list_partial_proposals(
 async def list_warehouse_proposals(session: AsyncSession, *, search: str | None, status: str | None, limit: int, offset: int) -> PaginatedWarehouseProposalResponse:
     stmt = (
         select(Proposal)
-        .options(selectinload(Proposal.items))
+        .options(lazyload("*"), _lean_items())
         .where(Proposal.active.is_(True))
         .where(_proposal_operational_clause())
         .where(Proposal.parent_proposal_id.is_(None))
@@ -500,52 +592,83 @@ async def list_galvanization_candidates(session: AsyncSession, *, search: str | 
     # carga (_ensure_item_eligible_for_galvanization) ja nunca dependeu desse
     # gate - so a listagem dependia, por isso o item sumia da fila mesmo
     # elegivel para montar carga.
+    # Mesmo criterio de `_eligible_galvanization_items`, aplicado no banco: so as
+    # propostas com ao menos um item elegivel sao carregadas (o filtro exato por
+    # item continua em Python logo abaixo).
+    has_eligible_item = exists().where(
+        ProposalItem.proposal_id == Proposal.id,
+        ProposalItem.active.is_(True),
+        ProposalItem.produced.is_(True),
+        ProposalItem.requires_galvanization == "SIM",
+        ProposalItem.flow_defined.is_(True),
+        ProposalItem.galvanized.is_(False),
+    )
     proposals = (
         (await session.execute(
             select(Proposal)
-            .options(selectinload(Proposal.items))
+            .options(lazyload("*"), _lean_items())
             .where(Proposal.active.is_(True))
             .where(_proposal_operational_clause())
+            .where(has_eligible_item)
         ))
         .scalars()
         .unique()
         .all()
     )
+    eligible = [(proposal, item) for proposal in proposals for item in _eligible_galvanization_items(proposal)]
+    # Saldos de todos os itens em UMA consulta agrupada, em vez de duas por item.
+    quantities = await _galvanization_quantities(session, [int(item.id) for _proposal, item in eligible])
     rows = []
     needle = (search or "").strip().lower()
     situation_filter = (situation or "").strip().upper() or None
-    for proposal in proposals:
-        for item in _eligible_galvanization_items(proposal):
-            available = await _galvanization_available_quantity(session, item)
-            # Item ja enviado para uma carga nao pode ser candidato novamente.
-            # O saldo zero era exposto como diagnostico e o desktop o projetava
-            # junto com a linha real da carga, duplicando a filha.
-            if available <= 0 and not include_unavailable:
-                continue
-            item_situation = "DISPONIVEL" if available > Decimal("0") else "EM_GALVANIZACAO"
-            if situation_filter and item_situation != situation_filter:
-                continue
-            pending_away = await _galvanization_pending_quantity(session, item)
-            row = _galvanization_candidate_item(proposal, item, available, item_situation, pending_away)
-            text = " ".join(str(row.get(field) or "") for field in ("proposal_number", "customer_name", "project_name", "lot", "description", "item_number")).lower()
-            if needle and needle not in text:
-                continue
-            rows.append(row)
+    for proposal, item in eligible:
+        sent_total, pending_total = quantities.get(int(item.id), (Decimal("0"), Decimal("0")))
+        available = max(Decimal("0"), (item.quantity - sent_total)).quantize(Decimal("0.0001"))
+        # Item ja enviado para uma carga nao pode ser candidato novamente.
+        # O saldo zero era exposto como diagnostico e o desktop o projetava
+        # junto com a linha real da carga, duplicando a filha.
+        if available <= 0 and not include_unavailable:
+            continue
+        item_situation = "DISPONIVEL" if available > Decimal("0") else "EM_GALVANIZACAO"
+        if situation_filter and item_situation != situation_filter:
+            continue
+        pending_away = max(Decimal("0"), pending_total).quantize(Decimal("0.0001"))
+        row = _galvanization_candidate_item(proposal, item, available, item_situation, pending_away)
+        text = " ".join(str(row.get(field) or "") for field in ("proposal_number", "customer_name", "project_name", "lot", "description", "item_number")).lower()
+        if needle and needle not in text:
+            continue
+        rows.append(row)
     rows.sort(key=lambda row: (row["situation"] == "DISPONIVEL", row["production_completed_at"] or datetime.min.replace(tzinfo=UTC), row["proposal_id"], row["item_id"]), reverse=True)
     return PaginatedGalvanizationCandidateResponse(items=rows[offset:offset + limit], total=len(rows), limit=limit, offset=offset)
 
 
 async def list_galvanization_loads(session: AsyncSession, *, status: str | None, search: str | None, proposal_id: int | None = None, limit: int, offset: int) -> PaginatedGalvanizationLoadResponse:
-    stmt = select(GalvanizationLoad).options(selectinload(GalvanizationLoad.items).selectinload(GalvanizationLoadItem.proposal), selectinload(GalvanizationLoad.items).selectinload(GalvanizationLoadItem.proposal_item)).where(GalvanizationLoad.active.is_(True))
-    if status:
-        stmt = stmt.where(GalvanizationLoad.status == status)
-    if proposal_id:
-        stmt = stmt.where(GalvanizationLoad.id.in_(select(GalvanizationLoadItem.load_id).where(GalvanizationLoadItem.proposal_id == proposal_id)))
-    rows = (await session.execute(stmt.order_by(GalvanizationLoad.created_at.desc(), GalvanizationLoad.id.desc()))).scalars().unique().all()
+    # O resumo so le as colunas da carga e de seus itens. Proposta e item de
+    # proposta so sao necessarios para a BUSCA (texto de cada carga).
     if search:
+        item_options = selectinload(GalvanizationLoad.items).options(
+            lazyload("*"),
+            selectinload(GalvanizationLoadItem.proposal).lazyload("*"),
+            selectinload(GalvanizationLoadItem.proposal_item).lazyload("*"),
+        )
+    else:
+        item_options = selectinload(GalvanizationLoad.items).lazyload("*")
+    conditions = [GalvanizationLoad.active.is_(True)]
+    if status:
+        conditions.append(GalvanizationLoad.status == status)
+    if proposal_id:
+        conditions.append(GalvanizationLoad.id.in_(select(GalvanizationLoadItem.load_id).where(GalvanizationLoadItem.proposal_id == proposal_id)))
+    stmt = select(GalvanizationLoad).options(lazyload("*"), item_options).where(*conditions)
+    ordered = stmt.order_by(GalvanizationLoad.created_at.desc(), GalvanizationLoad.id.desc())
+    if search:
+        rows = (await session.execute(ordered)).scalars().unique().all()
         needle = search.lower()
         rows = [load for load in rows if needle in _galvanization_load_search_text(load)]
-    return PaginatedGalvanizationLoadResponse(items=[_galvanization_load_summary(row) for row in rows[offset:offset + limit]], total=len(rows), limit=limit, offset=offset)
+        return PaginatedGalvanizationLoadResponse(items=[_galvanization_load_summary(row) for row in rows[offset:offset + limit]], total=len(rows), limit=limit, offset=offset)
+    # Sem busca: contagem e pagina no banco, e so a pagina e carregada.
+    total = int((await session.execute(select(func.count()).select_from(GalvanizationLoad).where(*conditions))).scalar_one())
+    page = (await session.execute(ordered.limit(limit).offset(offset))).scalars().unique().all()
+    return PaginatedGalvanizationLoadResponse(items=[_galvanization_load_summary(row) for row in page], total=total, limit=limit, offset=offset)
 
 
 async def get_galvanization_load_detail(session: AsyncSession, load_id: int) -> GalvanizationLoadDetail:
@@ -5246,6 +5369,29 @@ async def _galvanization_available_quantity(session: AsyncSession, item: Proposa
         stmt = stmt.where(GalvanizationLoadItem.load_id != exclude_load_id)
     sent = Decimal(str((await session.execute(stmt)).scalar_one() or "0"))
     return max(Decimal("0"), (item.quantity - sent)).quantize(Decimal("0.0001"))
+
+
+async def _galvanization_quantities(session: AsyncSession, item_ids: list[int]) -> dict[int, tuple[Decimal, Decimal]]:
+    """(enviado, ainda fora) por item, em cargas ativas nao canceladas, numa so consulta.
+
+    Mesma conta de `_galvanization_available_quantity` e `_galvanization_pending_quantity`,
+    para varios itens de uma vez.
+    """
+    if not item_ids:
+        return {}
+    rows = await session.execute(
+        select(
+            GalvanizationLoadItem.proposal_item_id,
+            func.coalesce(func.sum(GalvanizationLoadItem.sent_quantity), 0),
+            func.coalesce(func.sum(GalvanizationLoadItem.sent_quantity - GalvanizationLoadItem.returned_quantity), 0),
+        )
+        .join(GalvanizationLoad, GalvanizationLoad.id == GalvanizationLoadItem.load_id)
+        .where(GalvanizationLoadItem.proposal_item_id.in_(item_ids))
+        .where(GalvanizationLoadItem.active.is_(True))
+        .where(GalvanizationLoad.status != "CANCELADA")
+        .group_by(GalvanizationLoadItem.proposal_item_id)
+    )
+    return {int(item_id): (Decimal(str(sent or "0")), Decimal(str(pending or "0"))) for item_id, sent, pending in rows}
 
 
 async def _galvanization_pending_quantity(session: AsyncSession, item: ProposalItem) -> Decimal:
