@@ -3,7 +3,7 @@ from __future__ import annotations
 import colorsys
 
 from app.services.backend_adapter import legacy
-from app.ui.theme_tokens import contrast_ratio, set_active_palette, ui_tokens, with_alpha
+from app.ui.theme_tokens import contrast_ratio, mix, set_active_palette, ui_tokens, with_alpha
 
 
 def radius(value: int = 10) -> str:
@@ -52,6 +52,7 @@ def app_stylesheet(palette: dict) -> str:
     ring = tokens["ring"]
     # Hover da barra lateral: a superficie clareando a moldura, sem borda.
     nav_hover = with_alpha(surface, 150)
+    highlight_border = mix(border, accent, 0.5)
 
     return f"""
     * {{
@@ -442,6 +443,62 @@ def app_stylesheet(palette: dict) -> str:
         font-size: 18px;
         font-weight: 700;
         color: {text};
+    }}
+    QFrame#DetailPanel {{
+        background: {surface};
+        border: 1px solid {border};
+        {radius(14)}
+    }}
+    QFrame#DetailPanelHighlight {{
+        background: {surface_alt};
+        border: 1px solid {highlight_border};
+        {radius(14)}
+    }}
+    QFrame#NoteBox {{
+        background: {surface_alt};
+        border: 0;
+        {radius(10)}
+    }}
+    QFrame#DetailPanel QLabel, QFrame#DetailPanelHighlight QLabel, QFrame#NoteBox QLabel {{
+        background: transparent;
+    }}
+    QLabel#DetailTitle {{
+        font-size: 18px;
+        font-weight: 800;
+    }}
+    QLabel#PanelTitle {{
+        font-size: 14px;
+        font-weight: 700;
+    }}
+    QLabel#KeyLabel {{
+        color: {muted};
+        font-size: 12px;
+    }}
+    QLabel#ValueLabel {{
+        font-size: 13px;
+        font-weight: 600;
+    }}
+    QLabel#ValueEmpty {{
+        color: {subtle};
+        font-size: 13px;
+    }}
+    QLabel#StatNumber {{
+        font-size: 20px;
+        font-weight: 700;
+    }}
+    QLabel#DeadlineText {{
+        font-size: 13px;
+        font-weight: 500;
+    }}
+    QLabel#DeadlineAlert {{
+        font-size: 12px;
+        font-weight: 700;
+    }}
+    QLabel#DeadlineAlert[kind="danger"] {{ color: {danger}; }}
+    QLabel#DeadlineAlert[kind="warning"] {{ color: {palette["warning"]}; }}
+    QFrame#Divider {{
+        background: {border};
+        border: 0;
     }}
     QLabel#BatchModeLabel {{
         font-size: 14px;
