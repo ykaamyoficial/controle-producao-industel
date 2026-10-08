@@ -486,7 +486,12 @@ def _build_stylesheet(palette: dict) -> str:
         border: 0;
         {radius(10)}
     }}
-    QFrame#DetailPanel QLabel, QFrame#DetailPanelHighlight QLabel, QFrame#NoteBox QLabel {{
+    QFrame#InfoNotice {{
+        background: {surface_alt};
+        border: 1px solid {highlight_border};
+        {radius(10)}
+    }}
+    QFrame#DetailPanel QLabel, QFrame#DetailPanelHighlight QLabel, QFrame#NoteBox QLabel, QFrame#InfoNotice QLabel {{
         background: transparent;
     }}
     QLabel#DetailTitle {{

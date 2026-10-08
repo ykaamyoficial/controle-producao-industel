@@ -126,6 +126,27 @@ def dialog_footer(*, left: tuple | list = (), right: tuple | list = ()) -> QFram
     return frame
 
 
+def info_notice(text: str) -> QFrame:
+    """Aviso fixo da tela: caixa azul-clara com icone de informacao (nunca
+    texto solto em cinza). O QLabel com o texto fica em `frame.text_label`."""
+    from app.ui.icons import make_icon
+
+    frame = QFrame()
+    frame.setObjectName("InfoNotice")
+    row = QHBoxLayout(frame)
+    row.setContentsMargins(14, 9, 14, 9)
+    row.setSpacing(10)
+    icon = QLabel()
+    icon.setFixedSize(18, 18)
+    icon.setPixmap(make_icon("info", active_tokens()["accent"], 18).pixmap(18, 18))
+    label = QLabel(text)
+    label.setWordWrap(True)
+    row.addWidget(icon, 0, Qt.AlignVCenter)
+    row.addWidget(label, 1)
+    frame.text_label = label
+    return frame
+
+
 def set_notice_kind(label: QLabel, kind: str = "") -> QLabel:
     """Marca um QLabel como aviso em linha: "danger" (erro que bloqueia),
     "warning" (atencao) ou "" (informativo). A cor vem da folha de estilo
