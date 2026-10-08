@@ -107,3 +107,72 @@ def launch_detached_process(executable_path: Path, args: list[str] | None = None
         stderr=subprocess.DEVNULL,
     )
     return process.pid
+
+
+# -- processos sob uma pasta (layout versionado) ------------------------------
+
+
+def list_processes_under(directory: Path, *, exclude_pids: tuple[int, ...] = ()) -> list[int]:
+    """PIDs de processos cujo executavel esta dentro de `directory` (janela
+    principal, agente --notifier, helpers). So Windows; nos demais devolve []."""
+    if sys.platform != "win32":
+        return []
+    import ctypes
+    from ctypes import wintypes
+
+    root = str(Path(directory).resolve()).lower().rstrip("\\") + "\\"
+    kernel32 = ctypes.windll.kernel32
+    psapi = ctypes.windll.psapi
+    pids = (wintypes.DWORD * 4096)()
+    needed = wintypes.DWORD()
+    if not psapi.EnumProcesses(pids, ctypes.sizeof(pids), ctypes.byref(needed)):
+        return []
+    found: list[int] = []
+    for index in range(needed.value // ctypes.sizeof(wintypes.DWORD)):
+        pid = int(pids[index])
+        if pid <= 0 or pid in exclude_pids:
+            continue
+        handle = kernel32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        if not handle:
+            continue
+        try:
+            size = wintypes.DWORD(1024)
+            buffer = ctypes.create_unicode_buffer(size.value)
+            if kernel32.QueryFullProcessImageNameW(handle, 0, buffer, ctypes.byref(size)):
+                if buffer.value.lower().startswith(root):
+                    found.append(pid)
+        finally:
+            kernel32.CloseHandle(handle)
+    return found
+
+
+def stop_processes_under(
+    directory: Path,
+    *,
+    exclude_pids: tuple[int, ...] = (),
+    graceful_timeout_seconds: float = 20.0,
+    force_timeout_seconds: float = 10.0,
+    poll_interval_seconds: float = 0.5,
+    lister=list_processes_under,
+    terminator=terminate_process_forcefully,
+    sleep=time.sleep,
+    clock=time.monotonic,
+) -> list[int]:
+    """Espera a saida cooperativa de todos os processos sob `directory` e, passado
+    o prazo, encerra os que sobraram (politica padrao do fluxo versionado: com o
+    ponteiro ja trocado, um processo teimoso nao pode travar a atualizacao).
+    Retorna os PIDs que AINDA estavam vivos no fim (vazio = tudo encerrado)."""
+    deadline = clock() + graceful_timeout_seconds
+    remaining = lister(directory, exclude_pids=exclude_pids)
+    while remaining and clock() < deadline:
+        sleep(poll_interval_seconds)
+        remaining = lister(directory, exclude_pids=exclude_pids)
+    if not remaining:
+        return []
+    for pid in remaining:
+        terminator(pid)
+    deadline = clock() + force_timeout_seconds
+    while remaining and clock() < deadline:
+        sleep(poll_interval_seconds)
+        remaining = lister(directory, exclude_pids=exclude_pids)
+    return remaining
