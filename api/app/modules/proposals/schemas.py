@@ -900,6 +900,24 @@ class ExpeditionProposalDetail(ExpeditionProposalSummary):
     items: list[ExpeditionItemSummary] = Field(default_factory=list)
 
 
+class ExpeditionItemRow(ExpeditionItemSummary):
+    """Item da Expedicao com a proposta a que pertence (aba "Itens em expedicao")."""
+
+    proposal_number: str
+    proposal_version: int
+    customer_name: str
+    project_name: str | None = None
+    lot: str | None = None
+    unit: str | None = None
+
+
+class PaginatedExpeditionItemResponse(BaseModel):
+    items: list[ExpeditionItemRow]
+    total: int
+    limit: int
+    offset: int
+
+
 class ExpeditionVersionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

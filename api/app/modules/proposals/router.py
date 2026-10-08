@@ -55,6 +55,7 @@ from api.app.modules.proposals.schemas import (
     PaginatedGalvanizationCandidateResponse,
     PaginatedGalvanizationLoadResponse,
     PaginatedPartialProposalResponse,
+    PaginatedExpeditionItemResponse,
     PaginatedExpeditionResponse,
     PaginatedFiscalResponse,
     PaginatedProposalResponse,
@@ -376,6 +377,21 @@ async def list_expedition_proposals(
     _actor: User = Depends(require_permission(EXPEDITION_VIEW)),
 ):
     return await service.list_expedition_proposals(session, search=search, limit=limit, offset=offset)
+
+
+@router.get("/shipping/items", response_model=PaginatedExpeditionItemResponse)
+async def list_expedition_items(
+    search: str | None = Query(default=None, max_length=180),
+    status_filter: str | None = Query(default=None, alias="status", max_length=80),
+    pending_only: bool = Query(default=True),
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    session: AsyncSession = Depends(get_db_session),
+    _actor: User = Depends(require_permission(EXPEDITION_VIEW)),
+):
+    return await service.list_expedition_items(
+        session, search=search, status=status_filter, pending_only=pending_only, limit=limit, offset=offset,
+    )
 
 
 @router.get("/shipping/proposals/{proposal_id}", response_model=ExpeditionProposalDetail)

@@ -8,7 +8,7 @@ from decimal import Decimal, InvalidOperation
 from sqlalchemy import Select, and_, case, exists, func, or_, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import lazyload, selectinload
+from sqlalchemy.orm import aliased, lazyload, selectinload
 
 from api.app.core import error_codes
 from api.app.core.exceptions import ApiError
@@ -37,6 +37,7 @@ from api.app.modules.proposals.schemas import (
     CompensationProductPlan,
     CompensationTransfer,
     ExpeditionItemsRequest,
+    ExpeditionItemRow,
     ExpeditionItemSummary,
     ExpeditionProposalDetail,
     ExpeditionProposalSummary,
@@ -66,6 +67,7 @@ from api.app.modules.proposals.schemas import (
     GalvanizationLoadVersionRequest,
     GalvanizationReturnRequest,
     GalvanizationSyncBatch,
+    PaginatedExpeditionItemResponse,
     PaginatedExpeditionResponse,
     PaginatedFiscalResponse,
     PaginatedProposalResponse,
@@ -932,13 +934,17 @@ def _expedition_sort_key_sql():
     return case(_EXPEDITION_SORT_ORDER, value=status, else_=99)
 
 
-def _expedition_listable_clause():
-    """Espelho SQL de `_active_expedition_items` + saldo pendente (ao menos um item)."""
+def _expedition_listable_clause(item=ExpeditionItem):
+    """Espelho SQL de `_active_expedition_items` + saldo pendente (ao menos um item).
+
+    `item` e a entidade usada DENTRO do EXISTS: uma consulta que ja tem
+    `ExpeditionItem` no FROM (lista de itens) passa um `aliased(ExpeditionItem)`,
+    senao o auto-correlate tira a tabela do subselect."""
     return exists().where(
-        ExpeditionItem.proposal_id == Proposal.id,
-        ExpeditionItem.active.is_(True),
-        ExpeditionItem.status != "ENTREGUE",
-        ExpeditionItem.available_quantity > ExpeditionItem.delivered_quantity + ExpeditionItem.remanaged_quantity,
+        item.proposal_id == Proposal.id,
+        item.active.is_(True),
+        item.status != "ENTREGUE",
+        item.available_quantity > item.delivered_quantity + item.remanaged_quantity,
     )
 
 
@@ -970,6 +976,65 @@ async def list_expedition_proposals(session: AsyncSession, *, search: str | None
     return PaginatedExpeditionResponse(
         items=[_expedition_summary(rows_by_id[int(pid)], invoice_numbers.get(int(pid), [])) for pid in page_ids],
         total=total,
+        limit=limit,
+        offset=offset,
+    )
+
+
+async def list_expedition_items(
+    session: AsyncSession, *, search: str | None, status: str | None, pending_only: bool, limit: int, offset: int,
+) -> PaginatedExpeditionItemResponse:
+    """Itens (nao propostas) em Expedicao, uma linha por `ExpeditionItem`.
+
+    Com `pending_only` (padrao) sao os que ainda tem saldo a entregar e nao
+    foram entregues - o mesmo criterio de `_active_expedition_items`. Sem ele
+    entram tambem os ja entregues, mas so das propostas que continuam na lista
+    de Expedicao (com ao menos um item pendente), para a consulta nao varrer o
+    historico inteiro. Filtro, ordenacao e paginacao rodam no SQL.
+    """
+    conditions = [
+        Proposal.active.is_(True),
+        _proposal_operational_clause(),
+        ExpeditionItem.active.is_(True),
+        ProposalItem.active.is_(True),
+    ]
+    if pending_only:
+        conditions += [
+            ExpeditionItem.status != "ENTREGUE",
+            ExpeditionItem.available_quantity > ExpeditionItem.delivered_quantity + ExpeditionItem.remanaged_quantity,
+        ]
+    else:
+        conditions.append(_expedition_listable_clause(aliased(ExpeditionItem)))
+    if status:
+        conditions.append(ExpeditionItem.status == status.strip().upper())
+    needle = (search or "").strip().lower()
+    if needle:
+        item_text = func.lower(func.concat(func.coalesce(ProposalItem.product_code, ""), " ", ProposalItem.description))
+        conditions.append(or_(
+            _proposal_search_clause(search, include_invoices=True),
+            func.strpos(item_text, needle) > 0,
+        ))
+    source = (
+        select(ExpeditionItem, Proposal, ProposalItem)
+        .join(Proposal, ExpeditionItem.proposal_id == Proposal.id)
+        .join(ProposalItem, ExpeditionItem.proposal_item_id == ProposalItem.id)
+        .where(*conditions)
+    )
+    total = (await session.execute(select(func.count()).select_from(source.subquery()))).scalar_one()
+    rows = (await session.execute(
+        source
+        .order_by(
+            case(_EXPEDITION_SORT_ORDER, value=ExpeditionItem.status, else_=99),
+            Proposal.proposal_number,
+            ProposalItem.item_number,
+            ExpeditionItem.id,
+        )
+        .limit(limit)
+        .offset(offset)
+    )).all()
+    return PaginatedExpeditionItemResponse(
+        items=[_expedition_item_row(item, proposal, proposal_item) for item, proposal, proposal_item in rows],
+        total=int(total),
         limit=limit,
         offset=offset,
     )
@@ -3285,6 +3350,34 @@ def _expedition_item_summary(item: ExpeditionItem) -> ExpeditionItemSummary:
         origin=item.origin,
         status=item.status,
         version=item.version,
+    )
+
+
+def _expedition_item_row(item: ExpeditionItem, proposal: Proposal, proposal_item: ProposalItem) -> ExpeditionItemRow:
+    pending = (item.available_quantity - item.delivered_quantity - item.remanaged_quantity).quantize(Decimal("0.0001"))
+    return ExpeditionItemRow(
+        id=item.id,
+        proposal_id=item.proposal_id,
+        proposal_item_id=item.proposal_item_id,
+        item_number=proposal_item.item_number,
+        product_code=proposal_item.product_code,
+        description=proposal_item.description,
+        unit=proposal_item.unit,
+        available_quantity=item.available_quantity,
+        separated_quantity=item.separated_quantity,
+        delivered_quantity=item.delivered_quantity,
+        remanaged_quantity=item.remanaged_quantity,
+        pending_quantity=max(Decimal("0.0000"), pending),
+        unit_weight=normalize_known_weight(proposal_item.unit_weight),
+        total_weight=calculate_known_weight(item.available_quantity, proposal_item.unit_weight),
+        origin=item.origin,
+        status=item.status,
+        version=item.version,
+        proposal_number=proposal.proposal_number,
+        proposal_version=proposal.version,
+        customer_name=proposal.customer_name,
+        project_name=proposal.project_name,
+        lot=proposal.lot,
     )
 
 
