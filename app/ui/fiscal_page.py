@@ -34,6 +34,7 @@ from app.ui.background_worker import start_worker
 from app.ui.refresh_coordinator import RefreshCoordinator
 from app.ui.resilience import show_operation_error
 from app.ui.components.area_identity import style_area_title
+from app.ui.components.detail_widgets import IconChip
 from app.ui.components.kpi_card import KpiCard
 from app.ui.components.modern_button import ModernButton
 from app.ui.components.modern_table import TABLE_HEADER_HEIGHT, ModernTable, ProcessFilterProxy
@@ -250,10 +251,7 @@ class FiscalProposalDetailDialog(QDialog):
         frame.setObjectName("KpiCard")
         layout = QHBoxLayout(frame)
         layout.setContentsMargins(16, 12, 16, 12)
-        icon = QLabel("!")
-        icon.setAlignment(Qt.AlignCenter)
-        icon.setFixedSize(34, 34)
-        icon.setStyleSheet(f"background: {color}22; color: {color}; border-radius: 10px; font-weight: 900;")
+        icon = IconChip("audit", color, size=34)
         text = QLabel(f"<b>{title}</b><br>{detail}")
         text.setWordWrap(True)
         layout.addWidget(icon)
@@ -417,7 +415,7 @@ class FiscalPage(QWidget):
         self.search = QLineEdit()
         self.search.setPlaceholderText("Pesquisar proposta, cliente ou obra/site")
         self.status = QComboBox()
-        self.status.addItem("Todos", "")
+        self.status.addItem("Todos os status fiscais", "")
         self.status.addItem("CP em processamento", "situacao:CP_EM_PROCESSAMENTO")
         self.status.addItem("NF em processamento", "situacao:NF_EM_PROCESSAMENTO")
         self.status.addItem("Disponível para emitir NF", "situacao:DISPONIVEL_PARA_EMISSAO")
@@ -426,9 +424,9 @@ class FiscalPage(QWidget):
         self.status.addItem("NF parcial", "NOTA_FISCAL_PARCIAL")
         self.status.addItem("NF emitida", "NOTA_FISCAL_EMITIDA")
         self.entry_date = QLineEdit()
-        self.entry_date.setPlaceholderText("AAAA-MM-DD ou DD/MM/AAAA")
+        self.entry_date.setPlaceholderText("Data de entrada (AAAA-MM-DD ou DD/MM/AAAA)")
         self.critical = QComboBox()
-        self.critical.addItem("Todas", "")
+        self.critical.addItem("Todos os alertas", "")
         self.critical.addItem("Pendência crítica", "1")
         self.critical.addItem("Mais de 7 dias sem emissão", "7")
         apply_btn = ModernButton("Aplicar", "search")
@@ -444,19 +442,19 @@ class FiscalPage(QWidget):
         fields.setHorizontalSpacing(OPERATIONAL_FIELD_HORIZONTAL_SPACING)
         fields.setVerticalSpacing(OPERATIONAL_FIELD_VERTICAL_SPACING)
         self._add_filter_field(fields, 0, 0, "Busca geral", self.search)
-        self._add_filter_field(fields, 0, 2, "Status Fiscal", self.status)
-        self._add_filter_field(fields, 0, 4, "Entrada", self.entry_date)
-        self._add_filter_field(fields, 0, 6, "Alerta", self.critical)
+        self._add_filter_field(fields, 0, 1, "Status Fiscal", self.status)
+        self._add_filter_field(fields, 0, 2, "Data de entrada", self.entry_date)
+        self._add_filter_field(fields, 0, 3, "Alerta", self.critical)
         actions = QHBoxLayout()
         actions.setSpacing(OPERATIONAL_ACTION_SPACING)
         actions.addWidget(self.loading)
         actions.addWidget(apply_btn)
         actions.addWidget(clear_btn)
-        fields.addLayout(actions, 0, 8)
-        fields.setColumnStretch(1, 4)
+        fields.addLayout(actions, 0, 4)
+        fields.setColumnStretch(0, 4)
+        fields.setColumnStretch(1, 2)
+        fields.setColumnStretch(2, 2)
         fields.setColumnStretch(3, 2)
-        fields.setColumnStretch(5, 2)
-        fields.setColumnStretch(7, 2)
         fl.addLayout(fields)
 
         self.selection_bar = QHBoxLayout()
@@ -549,11 +547,11 @@ class FiscalPage(QWidget):
         root.addWidget(hint)
         return tab
 
-    def _add_filter_field(self, layout, row, column, label_text, widget):
-        label = QLabel(label_text)
-        label.setObjectName("FieldLabel")
-        layout.addWidget(label, row, column)
-        layout.addWidget(widget, row, column + 1)
+    def _add_filter_field(self, layout, row, column, name, widget):
+        # Sem rotulo ao lado do campo: o placeholder e as opcoes explicam o filtro.
+        widget.setAccessibleName(name)
+        widget.setMinimumHeight(34)
+        layout.addWidget(widget, row, column)
 
     def refresh(self, *, debounced: bool = False):
         self._refresh_view_state = (
@@ -1034,7 +1032,7 @@ class FiscalPage(QWidget):
         self.report_site.setMinimumWidth(150)
         self.report_status = QComboBox()
         self.report_status.setMinimumWidth(150)
-        self.report_status.addItem("Todos", "")
+        self.report_status.addItem("Todos os status", "")
         self.report_status.addItem("Falta emitir NF", "FALTA_EMITIR_NOTA_FISCAL")
         self.report_status.addItem("NF parcial", "NOTA_FISCAL_PARCIAL")
         self.report_status.addItem("NF emitida", "NOTA_FISCAL_EMITIDA")
@@ -1046,7 +1044,7 @@ class FiscalPage(QWidget):
         self.report_end.setMinimumWidth(150)
         self.report_alert = QComboBox()
         self.report_alert.setMinimumWidth(190)
-        self.report_alert.addItem("Todos", "")
+        self.report_alert.addItem("Todos os alertas", "")
         self.report_alert.addItem("Pendência crítica", "critica")
         self.report_alert.addItem("Mais de 7 dias sem emissão", "7")
         generate = ModernButton("Gerar relatório", "search", accent=True)
@@ -1063,12 +1061,12 @@ class FiscalPage(QWidget):
         grid.setHorizontalSpacing(OPERATIONAL_FIELD_HORIZONTAL_SPACING)
         grid.setVerticalSpacing(OPERATIONAL_FIELD_VERTICAL_SPACING)
         self._add_filter_field(grid, 0, 0, "Relatório", self.report_type)
-        self._add_filter_field(grid, 0, 2, "Período inicial", self.report_start)
-        self._add_filter_field(grid, 0, 4, "Período final", self.report_end)
-        self._add_filter_field(grid, 0, 6, "Cliente", self.report_client)
+        self._add_filter_field(grid, 0, 1, "Período inicial", self.report_start)
+        self._add_filter_field(grid, 0, 2, "Período final", self.report_end)
+        self._add_filter_field(grid, 0, 3, "Cliente", self.report_client)
         self._add_filter_field(grid, 1, 0, "Obra/Site", self.report_site)
-        self._add_filter_field(grid, 1, 2, "Status fiscal", self.report_status)
-        self._add_filter_field(grid, 1, 4, "Pendência crítica / +7 dias", self.report_alert)
+        self._add_filter_field(grid, 1, 1, "Status fiscal", self.report_status)
+        self._add_filter_field(grid, 1, 2, "Pendência crítica / +7 dias", self.report_alert)
         layout.addLayout(grid)
         actions = QHBoxLayout()
         actions.setSpacing(OPERATIONAL_ACTION_SPACING)
@@ -1078,7 +1076,7 @@ class FiscalPage(QWidget):
         actions.addWidget(self.export_csv_btn)
         actions.addWidget(self.export_pdf_btn)
         layout.addLayout(actions)
-        for column in (1, 3, 5, 7):
+        for column in range(4):
             grid.setColumnStretch(column, 1)
         root.addWidget(filters)
 
