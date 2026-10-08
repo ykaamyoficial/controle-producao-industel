@@ -1483,11 +1483,26 @@ class BackendService:
         labels = {'FALTA_EMITIR_NOTA_FISCAL': 'Falta emitir NF', 'AGUARDANDO_NF': 'CP em processamento', 'CP_EM_PROCESSAMENTO': 'CP em processamento', 'NF_EM_PROCESSAMENTO': 'NF em processamento', 'DISPONIVEL_PARA_EMISSAO': 'Disponivel para emitir NF', 'PENDENCIA_FISCAL_CRITICA': 'Pendencia fiscal critica', 'NOTA_FISCAL_PARCIAL': 'NF parcial', 'NF_PARCIAL': 'NF parcial', 'NOTA_FISCAL_EMITIDA': 'NF emitida', 'NF_EMITIDA': 'NF emitida', 'NF_RETIRADA_CLIENTE': 'NF retirada pelo cliente', 'FISCAL_CANCELADO': 'Fiscal cancelado', 'PENDENTE': 'Pendente', 'PARCIAL': 'Parcial', 'FATURADO': 'Faturado', 'CANCELADO': 'Cancelado'}
         return labels.get(legacy.normalize_status(status or ''), status or '-')
 
+    # Areas em que uma proposta ainda pode ser adiantada com material pronto de
+    # outra: o que ja chegou a Expedicao (ou foi entregue) nao precisa receber.
+    REMANAGEMENT_DESTINATION_AREAS = ('PRODUCAO', 'GALVANIZACAO')
+
     def early_delivery_destination_candidates(self, search: str='') -> list[dict[str, Any]]:
+        """Propostas que podem RECEBER material por remanejamento: as que ainda
+        estao em Producao ou Galvanizacao. Ficam de fora as que ja estao na
+        Expedicao ou alem dela (Fiscal, entregues, finalizadas) e as canceladas."""
         try:
-            rows = self.official_proposal_storage.list_proposals(sort_by='updated_at', sort_dir='desc', limit=200, offset=0)
-            text = search.strip().upper()
-            return [row for row in rows if not text or text in (row.get('proposta') or '').upper() or text in (row.get('cliente') or '').upper() or (text in (row.get('obra_site') or '').upper())]
+            text = (search or '').strip()
+            found: dict[int, dict[str, Any]] = {}
+            for area in self.REMANAGEMENT_DESTINATION_AREAS:
+                rows = self.official_proposal_storage.list_proposals(
+                    current_area=area, search=text or None, sort_by='updated_at', sort_dir='desc', limit=200, offset=0,
+                )
+                for row in rows:
+                    if row.get('is_cancelled') or row.get('is_completed'):
+                        continue
+                    found.setdefault(int(row['id']), row)
+            return sorted(found.values(), key=lambda row: str(row.get('proposta') or ''))
         except Exception as exc:
             raise self._api_app_error(exc) from exc
 
