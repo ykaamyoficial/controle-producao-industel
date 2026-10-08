@@ -28,10 +28,11 @@ from api.app.modules.proposals.admin_correction import (
 )
 from api.app.modules.proposals.compensation import Allocation, CompensationError, CompensationPlan, ItemSnapshot, RequestedItem, build_compensation_plan
 from api.app.modules.proposals.domain import ProductionStateMachine, ProposalStateMachine
-from api.app.modules.proposals.models import ExpeditionEvent, ExpeditionItem, FiscalEvent, FiscalInvoice, FiscalInvoiceItem, FiscalRecord, FiscalItem, GalvanizationLoad, GalvanizationLoadEvent, GalvanizationLoadItem, ProductionAllocationTransfer, Proposal, ProposalEvent, ProposalItem, ProposalRemanagement, ProposalRemanagementItem, SyncRun
+from api.app.modules.proposals.models import ExpeditionEvent, ExpeditionItem, FiscalEvent, FiscalInvoice, FiscalInvoiceItem, FiscalRecord, FiscalItem, GalvanizationLoad, GalvanizationLoadEvent, GalvanizationLoadItem, ProductionAllocationTransfer, Proposal, ProposalEvent, ProposalItem, ProposalRemanagement, ProposalRemanagementItem, RemanagementStageTransfer, SyncRun
+from api.app.modules.proposals import remanagement as remanagement_rules
 from api.app.modules.proposals.remanagement import calculate_item_balance, items_are_compatible, max_remanageable, quantity
 from api.app.modules.proposals.stage_ledger import load_pipeline_quantities
-from api.app.modules.proposals.stage_swap import verify_swap_conservation
+from api.app.modules.proposals.stage_swap import STAGE_AWAITING_GALVANIZATION, STAGE_IN_GALVANIZATION, STAGE_TO_PRODUCE, verify_swap_conservation
 from api.app.modules.proposals.weights import calculate_known_weight, calculate_weight_coverage, normalize_known_weight
 from api.app.shared.formatting import format_quantity
 from api.app.modules.proposals.schemas import (
@@ -125,7 +126,7 @@ from api.app.modules.proposals.schemas import (
     RemanagementReviewRequest,
     RemanagementReviewResult,
     RemanagementReviewSource,
-    RemanagementStageTransfer,
+    RemanagementStageTransferRow,
     RemanagementReviewSummary,
     RemanagementSourceCandidate,
     RemanagementSummary,
@@ -1642,6 +1643,9 @@ async def confirm_remanagement_batch(session: AsyncSession, payload: Remanagemen
 
         created_rows: list[ProposalRemanagement] = []
         transferred_by_destination_item: dict[int, Decimal] = {}
+        swaps_by_line = {(swap.destination_item_id, swap.source_item_id): swap for swap in stage_swaps}
+        productive_pending_by_source: dict[int, Decimal] = {}
+        fabricated_received_sources: set[int] = set()
 
         for source_id in source_proposal_ids:
             source_lines = lines_by_source.get(source_id)
@@ -1691,7 +1695,21 @@ async def confirm_remanagement_batch(session: AsyncSession, payload: Remanagemen
                 )
                 session.add(item_row)
                 await session.flush()
-                session.add(ProductionAllocationTransfer(remanagement_item_id=item_row.id, from_item=destination_item, to_item=source_item, quantity=qty, created_by=actor.id))
+                swap = swaps_by_line.get((destination_item.id, source_item.id))
+                transfers = list(swap.transfers) if swap is not None else []
+                to_produce_quantity = sum((transfer.quantity for transfer in transfers if transfer.stage == STAGE_TO_PRODUCE), Decimal("0"))
+                if swap is None:
+                    to_produce_quantity = qty
+                if to_produce_quantity > 0:
+                    session.add(ProductionAllocationTransfer(remanagement_item_id=item_row.id, from_item=destination_item, to_item=source_item, quantity=to_produce_quantity, created_by=actor.id))
+                    productive_pending_by_source[source_id] = productive_pending_by_source.get(source_id, Decimal("0")) + to_produce_quantity
+                for transfer in transfers:
+                    if transfer.stage in (STAGE_AWAITING_GALVANIZATION, STAGE_IN_GALVANIZATION):
+                        await _apply_fabricated_transfer(
+                            session, item_row=item_row, transfer=transfer, source_item=source_item, destination_item=destination_item,
+                            actor=actor, request_id=request_id,
+                        )
+                        fabricated_received_sources.add(source_id)
 
                 source_expedition = source_item.expedition_item
                 if source_expedition is None:
@@ -1742,10 +1760,18 @@ async def confirm_remanagement_batch(session: AsyncSession, payload: Remanagemen
                 await _record_expedition_event(session, source_proposal, "COMPENSATED_REMANAGEMENT_READY_SENT", actor, expedition_item=source_expedition, request_id=request_id, from_status=previous_source_status, to_status=source_expedition.status, metadata=event_metadata)
                 await _record_expedition_event(session, destination, "COMPENSATED_REMANAGEMENT_READY_RECEIVED", actor, expedition_item=destination_expedition, request_id=request_id, to_status=destination_expedition.status, metadata=event_metadata)
 
-            source_proposal.has_production_pending = True
-            source_proposal.production_status = "ITEM_PENDENTE_FABRICACAO"
+            if productive_pending_by_source.get(source_id, Decimal("0")) > 0:
+                source_proposal.has_production_pending = True
+                source_proposal.production_status = "ITEM_PENDENTE_FABRICACAO"
             source_proposal.flow_situation = "PENDENTE_POR_REMANEJAMENTO"
             _touch(source_proposal, actor)
+            if source_id in fabricated_received_sources:
+                # A origem recebeu pecas que ja estao fabricadas (aguardando ou dentro de carga):
+                # o estado dela passa a seguir a galvanizacao (parcial) enquanto elas nao voltam.
+                await session.flush()
+                await _recalculate_galvanization_proposal_state(
+                    session, source_proposal, actor, request_id=request_id, load_id=0, observation="Pecas recebidas por remanejamento",
+                )
 
         # Destino e recalculado UMA vez, com o total transferido somado de
         # TODAS as origens - nunca uma vez por origem (evitaria contar so a
@@ -1982,7 +2008,7 @@ async def find_remanagement_sources(session: AsyncSession, payload: Remanagement
         # Mesma exclusao ja aplicada por `compatible_remanagement_items`: item
         # pendente de galvanizacao nao pode ser origem ate essa etapa ficar
         # rastreavel quantitativamente.
-        if item.requires_galvanization == "SIM":
+        if remanagement_rules.galvanized_remanagement_blocked(item.requires_galvanization):
             continue
         balance = balances.get(item.id)
         if balance is None or balance.ready_available <= 0:
@@ -2222,12 +2248,12 @@ async def simulate_remanagement_review(session: AsyncSession, payload: Remanagem
         errors.append(CompensationError(code="REASON_REQUIRED", message="Informe o motivo do remanejamento."))
 
     # Quais pecas em andamento do destino passam para cada origem (estagio a estagio).
-    swap_by_line: dict[tuple[int, int], list[RemanagementStageTransfer]] = {}
+    swap_by_line: dict[tuple[int, int], list[RemanagementStageTransferRow]] = {}
     if plan.products:
         _stages, swaps, swap_errors = await _stage_swaps_for_plan(session, plan)
         for swap in swaps:
             swap_by_line[(swap.destination_item_id, swap.source_item_id)] = [
-                RemanagementStageTransfer(stage=transfer.stage, quantity=transfer.quantity) for transfer in swap.transfers
+                RemanagementStageTransferRow(stage=transfer.stage, quantity=transfer.quantity) for transfer in swap.transfers
             ]
         for destination_item_id, message in swap_errors.items():
             errors.append(CompensationError(code="DESTINATION_IN_FLIGHT_INSUFFICIENT", message=message, destination_item_id=destination_item_id))
@@ -2316,6 +2342,106 @@ async def simulate_remanagement_review(session: AsyncSession, payload: Remanagem
     )
 
 
+async def _apply_fabricated_transfer(
+    session: AsyncSession, *, item_row: ProposalRemanagementItem, transfer, source_item: ProposalItem, destination_item: ProposalItem,
+    actor: User, request_id: str | None,
+) -> None:
+    """Troca de dono de pecas JA FABRICADAS do item destino para o item origem (plano de logistica).
+
+    `AWAITING_GALVANIZATION`: so registra (as pecas ainda nao estao em carga).
+    `IN_GALVANIZATION`: tira as pecas pendentes das linhas de carga do destino (da carga mais antiga
+    para a mais nova) e poe na MESMA carga em nome da origem; a carga continua a mesma, o retorno vale
+    para a origem e tudo fica no historico da carga. Linha do destino que zera e desativada, nunca apagada."""
+    now = datetime.now(UTC)
+    if transfer.stage == STAGE_AWAITING_GALVANIZATION:
+        session.add(RemanagementStageTransfer(
+            remanagement_item_id=item_row.id, stage=STAGE_AWAITING_GALVANIZATION, quantity=transfer.quantity,
+            from_item_id=destination_item.id, to_item_id=source_item.id, created_by=actor.id,
+        ))
+        source_item.galvanized = False
+        _touch(source_item, actor)
+        return
+    remaining = transfer.quantity
+    rows = (await session.execute(
+        select(GalvanizationLoadItem)
+        .join(GalvanizationLoad, GalvanizationLoad.id == GalvanizationLoadItem.load_id)
+        .where(GalvanizationLoadItem.proposal_item_id == destination_item.id)
+        .where(GalvanizationLoadItem.active.is_(True))
+        .where(GalvanizationLoad.status != "CANCELADA")
+        .where(GalvanizationLoadItem.sent_quantity > GalvanizationLoadItem.returned_quantity)
+        .order_by(GalvanizationLoadItem.load_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )).scalars().all()
+    for row in rows:
+        if remaining <= 0:
+            break
+        take = min(quantity(row.sent_quantity - row.returned_quantity), remaining)
+        target = (await session.execute(
+            select(GalvanizationLoadItem)
+            .where(GalvanizationLoadItem.load_id == row.load_id, GalvanizationLoadItem.proposal_item_id == source_item.id)
+            .with_for_update()
+        )).scalars().first()
+        unit_weight = normalize_known_weight(source_item.unit_weight)
+        previous_row_status = row.status
+        if take >= quantity(row.sent_quantity) and quantity(row.returned_quantity) <= 0:
+            # Todas as pecas da linha mudaram de dono: a linha sai de cena (continua gravada, inativa).
+            row.active = False
+        else:
+            row.sent_quantity = quantity(row.sent_quantity - take)
+            row.sent_weight = calculate_known_weight(row.sent_quantity, row.unit_weight)
+            row.status = "RETORNADO" if row.returned_quantity >= row.sent_quantity else ("RETORNO_PARCIAL" if row.returned_quantity > 0 else "AGUARDANDO_RETORNO")
+        _touch(row, actor)
+        if target is None:
+            target = GalvanizationLoadItem(
+                load_id=row.load_id, proposal_id=source_item.proposal_id, proposal_item_id=source_item.id, sent_quantity=take,
+                unit_weight=unit_weight, sent_weight=calculate_known_weight(take, unit_weight),
+                returned_weight=None if unit_weight is None else Decimal("0"), created_by=actor.id, updated_by=actor.id,
+            )
+            session.add(target)
+        elif not target.active:
+            # Linha antiga e inativa (ja foi retirada da carga): recomeca do zero com as pecas recebidas.
+            target.active = True
+            target.sent_quantity = take
+            target.returned_quantity = Decimal("0")
+            target.unit_weight = unit_weight
+            target.sent_weight = calculate_known_weight(take, unit_weight)
+            target.returned_weight = None if unit_weight is None else Decimal("0")
+            target.status = "AGUARDANDO_RETORNO"
+            target.returned_at = None
+            _touch(target, actor)
+        else:
+            target.sent_quantity = quantity(target.sent_quantity + take)
+            target.sent_weight = calculate_known_weight(target.sent_quantity, target.unit_weight if target.unit_weight is not None else unit_weight)
+            target.status = "RETORNADO" if target.returned_quantity >= target.sent_quantity else ("RETORNO_PARCIAL" if target.returned_quantity > 0 else "AGUARDANDO_RETORNO")
+            target.returned_at = None
+            _touch(target, actor)
+        await session.flush()
+        # Relê a carga ja com a linha nova, para o peso total e o historico.
+        load = await session.get(GalvanizationLoad, row.load_id, options=[selectinload(GalvanizationLoad.items)], populate_existing=True)
+        session.add(RemanagementStageTransfer(
+            remanagement_item_id=item_row.id, stage=STAGE_IN_GALVANIZATION, quantity=take, from_item_id=destination_item.id,
+            to_item_id=source_item.id, load_id=row.load_id, from_load_item_id=row.id, to_load_item_id=target.id, created_by=actor.id,
+        ))
+        load.total_weight = calculate_weight_coverage(item.sent_weight for item in load.items if item.active).known_weight
+        _touch(load, actor)
+        metadata = {
+            "remanagement_item_id": item_row.id, "quantity": str(take), "from_proposal_item_id": destination_item.id,
+            "to_proposal_item_id": source_item.id, "from_load_item_id": row.id, "to_load_item_id": target.id,
+        }
+        await _record_load_event(session, load, "GALVANIZATION_ITEM_OWNER_CHANGED", actor, load_item=row, request_id=request_id, from_status=previous_row_status, to_status=row.status, metadata={**metadata, "direction": "OUT"})
+        await _record_load_event(session, load, "GALVANIZATION_ITEM_OWNER_CHANGED", actor, load_item=target, request_id=request_id, metadata={**metadata, "direction": "IN"})
+        remaining -= take
+    if remaining > 0:
+        raise ApiError(
+            error_codes.EXPEDITION_REMANAGEMENT_INVALID,
+            "As pecas do destino que estao em carga de galvanizacao mudaram desde a revisao. Revalide o remanejamento.",
+            status_code=409,
+        )
+    source_item.galvanized = False
+    _touch(source_item, actor)
+
+
 async def _stage_swaps_for_plan(session: AsyncSession, plan, *, refresh: bool = False):
     """Estagios (antes) dos itens envolvidos no plano e a troca por estagio de cada linha.
 
@@ -2337,6 +2463,28 @@ async def _stage_swaps_for_plan(session: AsyncSession, plan, *, refresh: bool = 
             swaps.extend(plan_stage_swaps(destination_stages, [(line.source_item_id, line.ready_quantity_to_destination) for line in product.transfers]))
         except StageSwapError as exc:
             errors[product.destination_item_id] = str(exc)
+
+    # Troca de pecas JA FABRICADAS (aguardando galvanizacao / dentro de carga) ainda nao
+    # sabe lidar com propostas mae/filhas (parciais): ate la, e recusada com mensagem clara.
+    fabricated_destinations = {
+        swap.destination_item_id for swap in swaps if any(transfer.stage != STAGE_TO_PRODUCE for transfer in swap.transfers)
+    }
+    if fabricated_destinations:
+        involved = set(proposal_ids)
+        partial_ids = set((await session.execute(
+            select(Proposal.id).where(
+                or_(
+                    and_(Proposal.id.in_(involved), Proposal.parent_proposal_id.is_not(None)),
+                    Proposal.parent_proposal_id.in_(involved),
+                )
+            )
+        )).scalars())
+        if partial_ids:
+            for destination_item_id in fabricated_destinations:
+                errors[destination_item_id] = (
+                    "Remanejar peças que já estão fabricadas (aguardando galvanização ou em carga) ainda não funciona "
+                    "com propostas que têm parciais. Conclua ou una as parciais antes."
+                )
     return stages, swaps, errors
 
 
@@ -4625,6 +4773,13 @@ async def complete_production_items(session: AsyncSession, proposal_id: int, pay
             transfer.completed_by = actor.id
             transfer.completed_at = datetime.now(UTC)
             transfer.version += 1
+            if item.requires_galvanization == "SIM":
+                # Reposicao de item galvanizado: as pecas recem-fabricadas seguem para a galvanizacao
+                # (entram na esteira do item) e so ficam prontas na Expedicao quando voltarem.
+                item.galvanized = False
+                _touch(item, actor)
+                await _record_event(session, proposal, "REALLOCATED_PRODUCTION_COMPLETED", actor, item_id=item.id, request_id=request_id, metadata={"transfer_id": transfer.id, "quantity": str(transfer_pending), "from_item_id": transfer.from_item_id, "to_item_id": transfer.to_item_id, "next_stage": "GALVANIZACAO"})
+                continue
             exp_item = item.expedition_item
             if exp_item is None:
                 exp_item = ExpeditionItem(

@@ -6,6 +6,15 @@ from decimal import Decimal
 
 ZERO = Decimal("0.0000")
 
+# Plano de logistica do remanejamento: item galvanizado como ORIGEM/DESTINO so e liberado na
+# Fase E (assistente). Ate la a chave fica desligada e os testes da Fase C a ligam por patch.
+GALVANIZED_REMANAGEMENT_ENABLED = False
+
+
+def galvanized_remanagement_blocked(requires_galvanization: str | None) -> bool:
+    """True quando o item e galvanizado e o remanejamento de galvanizados ainda esta desligado."""
+    return requires_galvanization == "SIM" and not GALVANIZED_REMANAGEMENT_ENABLED
+
 
 def quantity(value) -> Decimal:
     return Decimal(str(value or "0")).quantize(Decimal("0.0001"))
