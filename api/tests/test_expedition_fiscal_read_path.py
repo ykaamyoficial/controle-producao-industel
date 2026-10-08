@@ -324,6 +324,49 @@ class ExpeditionFiscalReadPathTests(unittest.TestCase):
         self.assertNotIn("EXP-D", self._nums(everything))
         self.assertEqual(self._nums(self._shipping_items(pending_only="false", status="ENTREGUE")), ["EXP-B"])
 
+    def _stage_ledger(self, proposal_id):
+        response = self.client.get("/api/v1/shipping/remanagements/stage-ledger", params={"proposal_id": proposal_id}, headers=self.headers)
+        self.assertEqual(response.status_code, 200, response.text)
+        return response.json()
+
+    def test_stage_ledger_places_every_piece_in_a_stage_and_the_accounts_close(self):
+        ids = self._build_scenario()
+        expected = {
+            # proposta -> (a fabricar, aguardando galv., na galv., pronta, entregue) do primeiro item
+            "A": ("0.0000", "0.0000", "0.0000", "2.0000", "0.0000"),   # fabricada, na Expedicao
+            "D": ("0.0000", "0.0000", "0.0000", "0.0000", "2.0000"),   # entregue
+            "F": ("2.0000", "0.0000", "0.0000", "0.0000", "0.0000"),   # nem foi liberada: a fabricar
+        }
+        for key, stages in expected.items():
+            with self.subTest(proposal=key):
+                payload = self._stage_ledger(ids[key])
+                self.assertEqual(payload["anomalies"], [])
+                item = payload["items"][0]
+                self.assertEqual((item["to_produce"], item["awaiting_galvanization"], item["in_galvanization"], item["ready"], item["delivered"]), stages)
+                self.assertEqual(item["gap"], "0.0000")
+                self.assertEqual(item["flow"], "SIMPLES")
+        both = self._stage_ledger(ids["B"])
+        self.assertEqual([row["requested"] for row in both["items"]], ["2.0000", "4.0000"])
+        self.assertEqual([row["ready"] for row in both["items"]], ["2.0000", "4.0000"])
+        for key in ids:
+            self.assertEqual([a for a in self._stage_ledger(ids[key])["anomalies"] if a["severity"] == "ERROR"], [], key)
+
+    def test_stage_ledger_follows_a_partial_delivery(self):
+        ids = self._build_scenario()
+        detail = self.client.get(f"/api/v1/shipping/proposals/{ids['B']}", headers=self.headers).json()
+        separated = self._post(f"/api/v1/shipping/proposals/{ids['B']}/separate-items", {"version": detail["version"]})
+        first = sorted(separated["items"], key=lambda row: row["item_number"])[0]
+        self._post(f"/api/v1/shipping/proposals/{ids['B']}/deliver-items", {"version": separated["version"], "items": [{"expedition_item_id": first["id"], "quantity": "1.0000"}]})
+        payload = self._stage_ledger(ids["B"])
+        rows = {row["requested"]: row for row in payload["items"]}
+        self.assertEqual((rows["2.0000"]["ready"], rows["2.0000"]["delivered"]), ("1.0000", "1.0000"))
+        self.assertEqual(payload["anomalies"], [])
+
+    def test_stage_ledger_requires_authentication_and_a_known_proposal(self):
+        self.assertEqual(self.client.get("/api/v1/shipping/remanagements/stage-ledger", params={"proposal_id": 1}).status_code, 401)
+        missing = self.client.get("/api/v1/shipping/remanagements/stage-ledger", params={"proposal_id": 999999}, headers=self.headers)
+        self.assertEqual(missing.status_code, 404)
+
     def test_expedition_items_list_requires_the_expedition_view_permission(self):
         response = self.client.get("/api/v1/shipping/items")
         self.assertEqual(response.status_code, 401)

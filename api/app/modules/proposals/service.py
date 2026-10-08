@@ -67,6 +67,9 @@ from api.app.modules.proposals.schemas import (
     GalvanizationLoadVersionRequest,
     GalvanizationReturnRequest,
     GalvanizationSyncBatch,
+    ItemStageRow,
+    StageAnomalyRow,
+    StageLedgerResponse,
     PaginatedExpeditionItemResponse,
     PaginatedExpeditionResponse,
     PaginatedFiscalResponse,
@@ -1043,6 +1046,34 @@ async def list_expedition_items(
         total=int(total),
         limit=limit,
         offset=offset,
+    )
+
+
+async def get_stage_ledger(session: AsyncSession, proposal_id: int) -> StageLedgerResponse:
+    """Pecas por estagio dos itens de uma proposta e as contas que nao fecham.
+    Somente leitura (Fase A do plano de logistica do remanejamento)."""
+    from api.app.modules.proposals.stage_ledger import load_stage_ledger
+
+    proposal = await get_proposal(session, proposal_id)
+    ledger = await load_stage_ledger(session, proposal_ids=[int(proposal.id)])
+    return StageLedgerResponse(
+        items=[
+            ItemStageRow(
+                item_id=item.item_id, proposal_id=item.proposal_id, proposal_number=item.proposal_number, product_code=item.product_code,
+                unit=item.unit, flow=item.flow, requested=item.requested, to_produce=item.to_produce,
+                awaiting_galvanization=item.awaiting_galvanization, in_galvanization=item.in_galvanization, ready=item.ready,
+                delivered=item.delivered, given_away=item.given_away, received_ready=item.received_ready,
+                undefined_flow=item.undefined_flow, gap=item.gap,
+            )
+            for item in ledger.items
+        ],
+        anomalies=[
+            StageAnomalyRow(
+                code=a.code, severity=a.severity, item_id=a.item_id, proposal_id=a.proposal_id, proposal_number=a.proposal_number,
+                product_code=a.product_code, detail=a.detail,
+            )
+            for a in ledger.anomalies
+        ],
     )
 
 

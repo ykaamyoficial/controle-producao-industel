@@ -930,6 +930,42 @@ class ExpeditionItemRow(BaseModel):
     lot: str | None = None
 
 
+class ItemStageRow(BaseModel):
+    """Pecas de um item por estagio (plano de logistica do remanejamento, Fase A)."""
+
+    item_id: int
+    proposal_id: int
+    proposal_number: str
+    product_code: str | None = None
+    unit: str | None = None
+    flow: str
+    requested: Decimal
+    to_produce: Decimal
+    awaiting_galvanization: Decimal
+    in_galvanization: Decimal
+    ready: Decimal
+    delivered: Decimal
+    given_away: Decimal
+    received_ready: Decimal
+    undefined_flow: Decimal
+    gap: Decimal
+
+
+class StageAnomalyRow(BaseModel):
+    code: str
+    severity: str
+    item_id: int
+    proposal_id: int
+    proposal_number: str
+    product_code: str | None = None
+    detail: str
+
+
+class StageLedgerResponse(BaseModel):
+    items: list[ItemStageRow]
+    anomalies: list[StageAnomalyRow]
+
+
 class PaginatedExpeditionItemResponse(BaseModel):
     items: list[ExpeditionItemRow]
     total: int

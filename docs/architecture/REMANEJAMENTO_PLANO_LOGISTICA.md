@@ -1,6 +1,6 @@
 # Remanejamento — plano de logística (proposta de 08/10/2026)
 
-Plano refeito a partir da explicação do Henrique sobre como o remanejamento deve funcionar na fábrica. **Ainda não foi implementado nada deste plano**; ele precisa de aprovação (decisões na seção 8).
+Plano refeito a partir da explicação do Henrique sobre como o remanejamento deve funcionar na fábrica. **Aprovado em 08/10/2026** com as decisões da seção 8. A execução segue por fases (seção 9); a Fase A está em andamento.
 
 ## 1. A ideia em uma frase
 
@@ -10,11 +10,11 @@ Remanejar é **trocar o dono das peças**: as peças prontas da proposta que já
 
 | | Antes | Depois de remanejar 4 |
 |---|---|---|
-| **CP 05507** (cedente) | 10 prontas na Expedição | 6 prontas na Expedição **+ 4 em fabricação** (as que eram da 05600) |
-| **CP 05600** (destino) | 10 pedidas: 6 em fabricação, 4 na galvanização | **4 prontas na Expedição** + 2 em fabricação + 4 na galvanização |
+| **CP 05507** (cedente) | 10 prontas na Expedição | 6 prontas na Expedição **+ 4 na galvanização** (as que eram da 05600) |
+| **CP 05600** (destino) | 10 pedidas: 6 em fabricação, 4 na galvanização | **4 prontas na Expedição** + 6 em fabricação |
 
-- As 4 peças que passam para a 05507 são as **menos adiantadas** da 05600 (as que estavam em fabricação): seguem fabricar → galvanizar → Expedição, só que agora para a 05507. A 05600 fica com as mais adiantadas, para entregar mais cedo.
-- A 05507 **continua na Expedição como parcial**, com as 6 prontas que sobraram. Quando as 4 peças novas chegarem à Expedição, elas **se juntam** às 6 (mesmo item, sem criar proposta nova) e a 05507 segue o processo normal.
+- As 4 peças que passam para a 05507 são as **mais adiantadas** da 05600 (as que já estavam na galvanização): seguem o caminho em que estavam (voltar da galvanização → Expedição), só que agora para a 05507. *(Decisão D1 do Henrique: a cedente volta a ter peças prontas mais cedo; a destino fica com as menos adiantadas.)*
+- A 05507 **continua na Expedição como parcial**, com as 6 prontas que sobraram. Quando as 4 peças voltarem da galvanização, elas **se juntam** às 6 (mesmo item, sem criar proposta nova) e a 05507 segue o processo normal.
 - Se a 05507 cedesse as **10**: ela sai sozinha da lista da Expedição e fica só nos processos (fabricação/galvanização) das peças que vieram da 05600. Ao chegarem, volta à Expedição.
 
 ## 2. As peças e seus estágios
@@ -44,7 +44,7 @@ Regra de ouro: **o remanejamento nunca muda o total de peças nem o estágio de 
 
 - **R1 — Mesma peça.** Só se remaneja entre itens com mesmo código, unidade e mesmo fluxo (galvanizado com galvanizado, interno com interno). Já é assim.
 - **R2 — O que a cedente pode ceder.** Peças **prontas** na Expedição (separadas ou não) que ainda não foram entregues nem cedidas antes. Peça entregue ou retirada pelo cliente não entra.
-- **R3 — O que a cedente recebe em troca.** A mesma quantidade de peças em andamento da destino (estágios 1 a 3), **preservando o estágio**. Ordem padrão: as **menos adiantadas** primeiro (decisão D1).
+- **R3 — O que a cedente recebe em troca.** A mesma quantidade de peças em andamento da destino (estágios 1 a 3), **preservando o estágio**. Ordem: as **mais adiantadas** primeiro, ou seja, as que estão na galvanização, depois as fabricadas aguardando galvanização, depois as a fabricar (decisão D1).
 - **R4 — Cedeu tudo.** A cedente sai sozinha da lista da Expedição e fica só nos processos das peças que recebeu. Selo **"Substituída"**.
 - **R5 — Cedeu parte.** A cedente continua na Expedição como parcial, só com as prontas que sobraram. As peças que recebeu seguem seus processos e, ao chegarem à Expedição, juntam-se às demais do mesmo item. Selo **"Parcialmente substituída"**.
 - **R6 — Destino.** Recebe as prontas na Expedição como parcial (se ainda tem peças em andamento) ou como completa (se não falta nada) e continua nos processos pelas peças que manteve. Selo **"Recebeu remanejamento"**.
@@ -74,11 +74,11 @@ Regra de ouro: **o remanejamento nunca muda o total de peças nem o estágio de 
 - **Cenários de teste** (cada um com conferência de totais): só prontas, item não galvanizado; destino com peças a fabricar; destino com peças dentro de carga de galvanização; estágios misturados; cedente cede tudo; cedente cede parte e as peças voltam e se juntam; duas cedentes para uma destino; uma cedente para duas destinos em sequência; cancelamento no meio; entrega ou outro remanejamento ao mesmo tempo (versões e idempotência); repetir o mesmo pedido de confirmação.
 - **Sem mexer nos remanejamentos já gravados** (nenhum dado antigo é reescrito; só novos usam a regra nova).
 
-## 8. Decisões que preciso de você
+## 8. Decisões tomadas (08/10/2026)
 
-- **D1 — Quais peças em andamento vão para a cedente?** Recomendo **as menos adiantadas** (a destino fica com as mais adiantadas e entrega mais cedo). A alternativa é as mais adiantadas.
-- **D2 — Peça já separada na Expedição pode ser cedida?** Recomendo **sim** (continua pronta; a separação da cedente é refeita para o que sobrou).
-- **D3 — Ordem de entrega das fases.** Recomendo começar pelas fases 1 e 2 (só leitura e troca de dono, sem mudar telas), depois 3 e 4, e só no fim liberar os galvanizados no assistente. Assim o remanejamento atual de itens sem galvanização continua funcionando durante o trabalho.
+- **D1 — Quais peças em andamento vão para a cedente?** **As mais adiantadas.** (A destino fica com as menos adiantadas e demora mais para completar; foi a escolha do Henrique.)
+- **D2 — Peça já separada na Expedição pode ser cedida?** **Sim.** Continua pronta; a separação da cedente é refeita para o que sobrou.
+- **D3 — Ordem de execução.** **Por etapas, galvanizados no fim**: o remanejamento atual de itens sem galvanização continua funcionando durante o trabalho.
 
 ## 9. Ordem de execução proposta
 
@@ -91,3 +91,16 @@ Regra de ouro: **o remanejamento nunca muda o total de peças nem o estágio de 
 | E | Assistente: libera galvanizados e mostra "o que acontece" | Baixo |
 
 Tudo desenvolvido e testado na API de desenvolvimento; a API oficial só recebe com tudo definido e com a sua autorização.
+
+## 10. Andamento
+
+### Fase A — controle de peças por estágio (feita em 08/10/2026, só leitura)
+
+- `api/app/modules/proposals/stage_ledger.py`: para cada item, quantas peças estão **a fabricar, aguardando galvanização, na galvanização, prontas e entregues** (mais "cedidas", "recebidas prontas" e "sem fluxo definido" para o item que ainda não tem fluxo). Usa as mesmas contas que a API já tinha (`calculate_item_balance`, disponibilidade da Expedição, cargas de galvanização, remanejamentos); nenhuma fórmula nova de negócio.
+- Identidade conferida por item: `pedido = a fabricar + aguardando galvanização + na galvanização + pronta + entregue` (+ sem fluxo definido). Anomalias: estágio negativo, conta que não fecha, entregue + remanejado acima do disponível, Expedição divergente da produção/galvanização, linha de Expedição ausente, remanejado sem registro ou com registro diferente, galvanização em item sem galvanização.
+- `GET /shipping/remanagements/stage-ledger?proposal_id=` devolve isso para uma proposta (será a base do "o que acontece" no assistente).
+- `python scripts/reconcile_item_stages.py` (banco por `DATABASE_URL`) percorre a base inteira, sem gravar, e sai com código 1 se alguma conta não fechar. É o comando a rodar antes e depois de cada fase.
+- Testes: `api/tests/test_stage_ledger.py` (24 casos, sem banco, inclui os dois lados de um remanejamento e o fluxo galvanizado em todos os estágios) e três testes de integração em `test_expedition_fiscal_read_path.py`.
+
+**Resultado na base de desenvolvimento:** 1.216 itens conferidos (805 galvanizados, 310 simples, 101 sem fluxo definido); **1.215 fecham a conta**. Uma única anomalia, e é dado legado: **CP05300 item 2 (26 un)** consta como entregue 26 na Expedição, mas só 25,8582 voltaram da galvanização (a carga 12 enviou e recebeu 25,8582). Não foi corrigida; a Fase B só mexe em itens que fecham a conta.
+

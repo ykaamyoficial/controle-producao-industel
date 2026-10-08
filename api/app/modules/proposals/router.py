@@ -57,6 +57,7 @@ from api.app.modules.proposals.schemas import (
     PaginatedPartialProposalResponse,
     PaginatedExpeditionItemResponse,
     PaginatedExpeditionResponse,
+    StageLedgerResponse,
     PaginatedFiscalResponse,
     PaginatedProposalResponse,
     PaginatedProductionItemResponse,
@@ -432,6 +433,13 @@ async def create_remanagement(payload: ExpeditionRemanagementDeliveryRequest, re
 @router.get("/shipping/remanagements/compatible-items", response_model=list[RemanagementCompatibleItem])
 async def get_compatible_remanagement_items(source_proposal_id: int = Query(gt=0), destination_proposal_id: int = Query(gt=0), session: AsyncSession = Depends(get_db_session), _actor: User = Depends(require_permission(EXPEDITION_UPDATE))):
     return await service.compatible_remanagement_items(session, source_proposal_id, destination_proposal_id)
+
+
+@router.get("/shipping/remanagements/stage-ledger", response_model=StageLedgerResponse)
+async def get_remanagement_stage_ledger(proposal_id: int = Query(gt=0), session: AsyncSession = Depends(get_db_session), _actor: User = Depends(require_permission(EXPEDITION_VIEW))):
+    """Pecas de cada item da proposta por estagio (a fabricar, aguardando galvanizacao, na
+    galvanizacao, prontas, entregues) e as contas que nao fecham. So leitura."""
+    return await service.get_stage_ledger(session, proposal_id)
 
 
 @router.get("/shipping/remanagements/destination-items", response_model=list[RemanagementDestinationItem])
