@@ -53,6 +53,15 @@ def app_stylesheet(palette: dict) -> str:
     # Hover da barra lateral: a superficie clareando a moldura, sem borda.
     nav_hover = with_alpha(surface, 150)
     highlight_border = mix(border, accent, 0.5)
+    danger_text = _contrast_text(danger)
+    warning = palette["warning"]
+    secondary = palette["secondary"]
+    success = palette["success"]
+    media_bg = tokens["media_bg"]
+    media_text = tokens["media_text"]
+    overlay = tokens["overlay"]
+    overlay_strong = tokens["overlay_strong"]
+    on_overlay = tokens["on_overlay"]
 
     return f"""
     * {{
@@ -243,6 +252,21 @@ def app_stylesheet(palette: dict) -> str:
     }}
     QPushButton#GhostButton:hover {{
         background: {surface_alt};
+    }}
+    QToolButton#GhostButton {{
+        background: transparent;
+        border: 0;
+        border-radius: 6px;
+        padding: 0;
+        font-size: 14px;
+        font-weight: 700;
+    }}
+    QToolButton#GhostButton:hover {{
+        background: {surface_alt};
+    }}
+    QToolButton#GhostButton::menu-indicator {{
+        image: none;
+        width: 0;
     }}
     QPushButton#NavButton {{
         background: transparent;
@@ -541,6 +565,182 @@ def app_stylesheet(palette: dict) -> str:
     QFrame#AlertRow QLabel {{
         background: transparent;
     }}
+    /* ---- chat: baloes, cartoes, anexos ---- */
+    QFrame#BubbleRow {{ background: transparent; border: 0; }}
+    QFrame#BubbleOwn {{ background: {accent}; border: 0; border-radius: 14px; }}
+    QFrame#BubbleOther {{ background: {surface_alt}; border: 1px solid {border}; border-radius: 14px; }}
+    QFrame#BubbleOther[mentionsMe="true"] {{ border-left: 3px solid {accent}; }}
+    QLabel#BubbleBody {{ font-size: 13px; background: transparent; }}
+    QLabel#BubbleBody[tone="own"] {{ color: {accent_text}; }}
+    QLabel#BubbleBody[tone="other"] {{ color: {text}; }}
+    QLabel#BubbleTime {{ font-size: 11px; background: transparent; }}
+    QLabel#BubbleTime[tone="own"] {{ color: {accent_text}; }}
+    QLabel#BubbleTime[tone="other"] {{ color: {muted}; }}
+    QLabel#BubbleAuthor {{ font-size: 12px; font-weight: 700; background: transparent; }}
+    QLabel#BubbleMeta {{ font-size: 11px; color: {muted}; background: transparent; }}
+    QLabel#ChatDayChip {{
+        background: {surface_alt};
+        color: {muted};
+        border-radius: 11px;
+        padding: 2px 14px;
+        font-size: 11px;
+        font-weight: 700;
+    }}
+    QFrame#InternalNoteCard {{
+        background: {surface};
+        border: 1px dashed {warning};
+        border-left: 4px solid {warning};
+        border-radius: 10px;
+    }}
+    QFrame#QuestionCard {{
+        background: {surface};
+        border: 1px solid {secondary};
+        border-left: 4px solid {secondary};
+        border-radius: 10px;
+    }}
+    QFrame#AnswerCard, QFrame#FileCard, QFrame#AudioAttachment, QFrame#SharedDocumentRow,
+    QFrame#SharedLinkRow, QFrame#ActivityRow, QFrame#ChatAttachment[card="true"] {{
+        background: {surface};
+        border: 1px solid {border};
+        border-radius: 10px;
+    }}
+    QFrame#QuotePreview {{
+        background: {surface_alt};
+        border: 0;
+        border-left: 3px solid {accent};
+        border-radius: 6px;
+    }}
+    QFrame#ReplyConnector {{ background: {accent}; border: 0; }}
+    QFrame#InternalNoteCard QLabel, QFrame#QuestionCard QLabel, QFrame#AnswerCard QLabel,
+    QFrame#QuotePreview QLabel, QFrame#FileCard QLabel, QFrame#AudioAttachment QLabel,
+    QFrame#SharedDocumentRow QLabel, QFrame#SharedLinkRow QLabel, QFrame#ActivityRow QLabel {{
+        background: transparent;
+    }}
+    QLabel#ChatText {{ font-size: 13px; background: transparent; }}
+    QLabel#ChatName {{ font-size: 12px; font-weight: 700; background: transparent; }}
+    QLabel#ChatCaption {{ font-size: 11px; color: {muted}; background: transparent; }}
+    QLabel#ChatCaption[italic="true"] {{ font-style: italic; }}
+    QLabel#ChatCaption[strong="true"] {{ font-weight: 700; }}
+    QLabel#ChatHeading {{ font-size: 13px; font-weight: 800; }}
+    QLabel#ChatLink {{ font-size: 12px; font-weight: 700; color: {accent}; background: transparent; }}
+    QLabel#CardTitle {{ font-size: 11px; font-weight: 800; background: transparent; }}
+    QLabel#CardTitle[tone="warning"] {{ color: {warning}; }}
+    QLabel#CardTitle[tone="secondary"] {{ color: {secondary}; }}
+    QLabel#QuoteAuthor {{ font-size: 11px; font-weight: 700; color: {accent}; background: transparent; }}
+    QLabel#QuoteText {{ font-size: 12px; background: transparent; }}
+    QFrame#ChatAttachment {{ background: transparent; border: 0; }}
+    QLabel#FileCardName {{ font-size: 12px; font-weight: 700; background: transparent; }}
+    QLabel#FileCardMeta {{ font-size: 11px; color: {muted}; background: transparent; }}
+    QLabel#TransferLabel {{ font-size: 11px; background: transparent; }}
+    QPushButton#ChatSmallButton {{ font-size: 11px; padding: 2px 10px; }}
+    QLabel#AttachmentPreview {{
+        background: {surface_alt};
+        border: 0;
+        border-radius: 10px;
+        color: {muted};
+    }}
+    QLabel#AttachmentPreview[card="true"] {{ border: 1px solid {border}; }}
+    QFrame#AttachmentImageTile {{ background: {surface_alt}; border: 0; border-radius: 10px; }}
+    QLabel#AttachmentImageLabel {{ background: transparent; color: {muted}; font-size: 11px; }}
+    QWidget#ImageGallery {{ background: transparent; border: 0; }}
+    QFrame#VideoAttachment {{ background: transparent; border: 0; }}
+    QFrame#VideoMediaBox {{ background: {surface_alt}; border: 0; border-radius: 10px; }}
+    QLabel#VideoPoster {{ background: transparent; }}
+    QToolButton#VideoPlayButton {{ background: {overlay}; border: 0; border-radius: 24px; }}
+    QToolButton#VideoPlayButton:hover {{ background: {overlay_strong}; }}
+    QToolButton#VideoExpandButton {{ background: {overlay}; border: 0; border-radius: 4px; color: {on_overlay}; }}
+    QToolButton#VideoExpandButton:hover {{ background: {overlay_strong}; }}
+    QLabel#VideoDurationBadge {{
+        background: {overlay};
+        color: {on_overlay};
+        font-size: 11px;
+        padding: 2px 6px;
+        border-radius: 4px;
+        margin: 6px;
+    }}
+    QLabel#VideoOverlayMessage {{
+        background: {overlay_strong};
+        color: {on_overlay};
+        font-size: 12px;
+        padding: 8px 12px;
+        border-radius: 8px;
+    }}
+    QToolButton#AudioPlayButton {{ background: {surface_alt}; border: 0; border-radius: 13px; }}
+    QWidget#MediaCanvas, QScrollArea#MediaCanvas, QStackedWidget#MediaCanvas,
+    QScrollArea#MediaCanvas > QWidget, QScrollArea#MediaCanvas > QWidget > QWidget {{
+        background: {media_bg};
+        border: 0;
+    }}
+    QLabel#MediaCanvasText {{ background: {media_bg}; color: {media_text}; font-size: 13px; }}
+    QLabel#MediaInfoKey {{ font-size: 11px; font-weight: 700; color: {muted}; margin-top: 6px; }}
+    QLabel#MediaInfoValue {{ font-size: 12px; }}
+    QFrame#ComposeBar {{ background: {surface}; border: 1px solid {border}; border-radius: 12px; }}
+    QFrame#ComposeBar[dropActive="true"] {{ border: 2px dashed {accent}; }}
+    QFrame#ReplyPreviewBar {{
+        background: {surface_alt};
+        border: 0;
+        border-left: 3px solid {accent};
+        border-radius: 6px;
+    }}
+    QTextEdit#ComposeTextEdit {{ border: 0; background: transparent; }}
+    QPushButton#ChatSendButton {{ background: {accent}; border: 0; border-radius: 18px; }}
+    QPushButton#ChatSendButton:hover:enabled {{ background: {accent_hover}; }}
+    QPushButton#ChatSendButton:disabled {{ background: {surface_alt}; }}
+    QLabel#PresenceDot {{ background: {muted}; border-radius: 4px; }}
+    QLabel#PresenceDot[online="true"] {{ background: {success}; }}
+    QWidget#MentionRow[selected="true"] {{ background: {surface_alt}; border-radius: 8px; }}
+    QPushButton#SharedContentFilterButton {{
+        background: {surface_alt};
+        color: {muted};
+        border: 0;
+        border-radius: 14px;
+        padding: 4px 14px;
+        font-size: 11px;
+        font-weight: 600;
+    }}
+    QPushButton#SharedContentFilterButton:checked {{
+        background: {accent};
+        color: {accent_text};
+        font-weight: 700;
+    }}
+    QFrame#SharedMediaTile {{ background: {surface_alt}; border: 1px solid {border}; border-radius: 10px; }}
+    QLabel#MediaPlayBadge {{ background: {overlay}; border-radius: 10px; padding: 2px; }}
+    QListWidget#ConversationList {{ border: 0; background: transparent; }}
+    QListWidget#ConversationList QScrollBar:vertical {{ width: 5px; margin: 0px; }}
+    QListWidget#ConversationList QScrollBar::handle:vertical {{ min-height: 24px; }}
+    QLabel#ConversationProposal {{ font-size: 12px; font-weight: 700; background: transparent; }}
+    QLabel#UnreadBadge {{
+        background: {danger};
+        color: {danger_text};
+        border-radius: 9px;
+        font-size: 11px;
+        font-weight: 800;
+    }}
+    QLabel#StatusDot {{ background: {muted}; border-radius: 4px; }}
+    QLabel#StatusDot[tone="success"] {{ background: {success}; }}
+    QLabel#StatusDot[tone="warning"] {{ background: {warning}; }}
+    QLabel#StatusDot[tone="danger"] {{ background: {danger}; }}
+    QWidget#ChatFeedStack {{ border: 0; }}
+    QWidget#ChatFeedStack[dropActive="true"] {{ border: 2px dashed {accent}; background: {surface_alt}; }}
+    QWidget#ChatFlashRow[flash="true"] {{ background: {highlight_border}; }}
+    QPushButton#ChatTabButton {{
+        background: transparent;
+        border: 0;
+        border-bottom: 2px solid transparent;
+        border-radius: 0;
+        padding: 6px 2px 7px 2px;
+        color: {muted};
+        font-weight: 600;
+        font-size: 12px;
+        text-align: left;
+    }}
+    QPushButton#ChatTabButton:hover {{ color: {text}; }}
+    QPushButton#ChatTabButton[active="true"] {{
+        color: {accent};
+        border-bottom: 2px solid {accent};
+        font-weight: 700;
+    }}
+    QPushButton#ChatTabButton[active="true"]:hover {{ color: {accent}; }}
     QLabel#DeadlineText {{
         font-size: 13px;
         font-weight: 500;

@@ -50,6 +50,16 @@ def palette_pairs(name: str, palette: dict) -> list[tuple[str, str, str, float]]
         ("borda de campo / superficie", t["input_border"], t["surface"], GRAPHIC),
         ("anel de foco / superficie", t["ring"], t["surface"], GRAPHIC),
         ("anel de foco / fundo", t["ring"], t["bg"], GRAPHIC),
+        # Chat: bolhas, cartoes e visualizador de midia.
+        ("texto da bolha propria", t["accent_text"], t["accent"], TEXT),
+        ("hora na bolha dos outros", t["muted"], t["surface_alt"], TEXT),
+        ("texto da bolha dos outros", t["text"], t["surface_alt"], TEXT),
+        ("sucesso como texto / superficie", t["success"], t["surface"], TEXT),
+        ("secundaria como texto / superficie", t["secondary"], t["surface"], TEXT),
+        ("contagem nao lida", _contrast_text(t["danger"]), t["danger"], TEXT),
+        ("texto do visualizador", t["media_text"], t["media_bg"], TEXT),
+        ("legenda do visualizador", t["media_muted"], t["media_bg"], TEXT),
+        ("legenda / superficie alternativa", t["muted"], t["surface_alt"], TEXT),
     ]
     theme_key = "escuro" if _is_dark(palette.get("bg", "#ffffff")) else "claro"
     for category, color in STATUS_BADGE_COLORS[theme_key].items():

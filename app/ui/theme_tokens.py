@@ -55,6 +55,7 @@ def ui_tokens(palette: dict) -> dict[str, str]:
     - input_border: borda de campo e de caixa de marcacao (>= 3:1)
     - ring: anel de foco (>= 3:1)
     - accent_soft: fundo suave na cor de destaque (pilulas de contagem)
+    - media_*, overlay*, on_overlay: visualizador de midia (unica excecao fixa)
     """
     surface = palette["surface"]
     surface_alt = palette["surface_alt"]
@@ -70,6 +71,14 @@ def ui_tokens(palette: dict) -> dict[str, str]:
         "input_border": ensure_contrast(mix(palette["border"], palette["muted"], 0.5), surface, 3.1, text),
         "ring": ensure_contrast(accent, surface, 3.0, text),
         "accent_soft": mix(surface, accent, 0.12),
+        # Visualizador de foto/video e sobreposicoes sobre midia: escuros nos
+        # dois temas (a midia e que manda), por isso nao derivam da paleta.
+        "media_bg": "#111827",
+        "media_text": "#e5e7eb",
+        "media_muted": "#94a3b8",
+        "overlay": "rgba(15, 23, 42, 160)",
+        "overlay_strong": "rgba(15, 23, 42, 200)",
+        "on_overlay": "#ffffff",
     }
 
 
