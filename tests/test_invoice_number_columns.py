@@ -68,6 +68,16 @@ class InvoiceNumberColumnTests(unittest.TestCase):
         self.assertEqual(model.data(model.index(1, column), Qt.DisplayRole), "-")
         self.assertEqual(model.data(model.index(0, column), Qt.ToolTipRole), "1001, 1002")
 
+    def test_expedition_search_box_says_it_finds_by_invoice_number(self):
+        from app.ui.process_page import ProcessPage
+        from test_visual_pages import FakeService as PageService
+
+        service = PageService(["NAO_LIBERADO"])
+        expedition = ProcessPage(service, "EXPEDICAO", "Expedição")
+        production = ProcessPage(service, "PRODUCAO", "Produção")
+        self.assertIn("NF", expedition.search.placeholderText())
+        self.assertNotIn("NF", production.search.placeholderText())
+
     def test_expedition_model_shows_the_numbers_after_obra_site(self):
         model = ProcessTableModel(FakeService(), "EXPEDICAO", [{"id": 1, "proposta": "CP 1", "obra_site": "Site", "numero_nf": "3001"}])
         keys = [key for key, _label in model.columns]

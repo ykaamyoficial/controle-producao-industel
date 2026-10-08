@@ -128,7 +128,10 @@ class ProcessPage(QWidget):
             palette=self.service.palette,
         )
         self.search = QLineEdit()
-        self.search.setPlaceholderText("Pesquisar proposta, cliente, site ou lote")
+        # Expedicao tem a coluna "Nº da NF" e a busca da API tambem casa por NF.
+        self.search.setPlaceholderText(
+            "Pesquisar proposta, cliente, site, lote ou NF" if self.area == "EXPEDICAO" else "Pesquisar proposta, cliente, site ou lote"
+        )
         self.search.setClearButtonEnabled(True)
         self.search.setAccessibleName("Busca geral")
         self.search.setMinimumWidth(220)

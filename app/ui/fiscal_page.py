@@ -413,7 +413,7 @@ class FiscalPage(QWidget):
         fl.addWidget(caption)
 
         self.search = QLineEdit()
-        self.search.setPlaceholderText("Pesquisar proposta, cliente ou obra/site")
+        self.search.setPlaceholderText("Pesquisar proposta, cliente, obra/site ou NF")
         self.status = QComboBox()
         self.status.addItem("Todos os status fiscais", "")
         self.status.addItem("CP em processamento", "situacao:CP_EM_PROCESSAMENTO")
