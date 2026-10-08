@@ -30,6 +30,21 @@ class InvoiceNumbersTests(unittest.TestCase):
     def test_no_invoices_means_an_empty_list(self):
         self.assertEqual(service._invoice_numbers([]), [])
 
+    def test_search_clause_looks_at_invoices_only_when_asked(self):
+        from sqlalchemy.dialects import postgresql
+
+        def sql(clause):
+            return str(clause.compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}))
+
+        plain = sql(service._proposal_search_clause("1001"))
+        self.assertNotIn("fiscal_invoices", plain)
+        with_invoices = sql(service._proposal_search_clause("1001", include_invoices=True))
+        self.assertIn("fiscal_invoices.invoice_number", with_invoices)
+        self.assertIn("fiscal_invoices.active IS true", with_invoices)
+        # A NF sem numero informado ("REGISTRO-...") nao entra na busca.
+        self.assertRegex(with_invoices, r"NOT LIKE 'REGISTRO-%+'")
+        self.assertIsNone(service._proposal_search_clause("  ", include_invoices=True))
+
     def test_summary_schemas_expose_invoice_numbers_with_an_empty_default(self):
         self.assertEqual(schemas.FiscalRecordSummary.model_fields["invoice_numbers"].default_factory(), [])
         self.assertEqual(schemas.ExpeditionProposalSummary.model_fields["invoice_numbers"].default_factory(), [])

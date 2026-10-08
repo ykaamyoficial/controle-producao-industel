@@ -239,6 +239,22 @@ class ExpeditionFiscalReadPathTests(unittest.TestCase):
         fiscal_detail = self.client.get(f"/api/v1/fiscal/records/{fiscal['EXP-C']['id']}", headers=self.headers).json()
         self.assertEqual(fiscal_detail["invoice_numbers"], ["1001"])
 
+    def test_search_finds_proposals_by_invoice_number_in_fiscal_and_expedition(self):
+        # Busca pelo numero da NF (coluna "Nº da NF"): EXP-C tem a NF 1001 e
+        # EXP-B a 1002; texto sem NF correspondente continua sem resultado.
+        self._build_scenario()
+        self.assertEqual(self._nums(self._fiscal_list(search="1001", limit=200)), ["EXP-C"])
+        self.assertEqual(self._nums(self._fiscal_list(search="1002", limit=200)), ["EXP-B"])
+        self.assertEqual(self._nums(self._shipping_list(search="1001", limit=200)), ["EXP-C"])
+        self.assertEqual(self._nums(self._shipping_list(search=" 1002 ", limit=200)), ["EXP-B"])
+        self.assertEqual(self._fiscal_list(search="1001", limit=200)["total"], 1)
+        self.assertEqual(self._shipping_list(search="9999", limit=200)["items"], [])
+        self.assertEqual(self._fiscal_list(search="9999", limit=200)["items"], [])
+        # Busca por texto de proposta/cliente segue igual.
+        self.assertEqual(self._nums(self._fiscal_list(search="beta", limit=200)), EXPECTED_FISCAL_SEARCH_BETA)
+        # Substring: "100" casa 1001 e 1002.
+        self.assertEqual(sorted(self._nums(self._fiscal_list(search="100", limit=200))), ["EXP-B", "EXP-C"])
+
     def test_fiscal_list_filters_order_pagination_and_indicators(self):
         self._build_scenario()
         full = self._fiscal_list(limit=200)

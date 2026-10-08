@@ -873,8 +873,12 @@ async def close_galvanization_load(session: AsyncSession, load_id: int, payload:
     return await get_galvanization_load_detail(session, load_id)
 
 
-def _proposal_search_clause(search: str | None):
-    """Equivalente SQL de `needle in " ".join([numero, cliente, projeto or "", lote or ""]).lower()`."""
+def _proposal_search_clause(search: str | None, *, include_invoices: bool = False):
+    """Equivalente SQL de `needle in " ".join([numero, cliente, projeto or "", lote or ""]).lower()`.
+
+    Com `include_invoices` (listas de Fiscal e Expedicao, que mostram a coluna
+    "Nº da NF") a proposta tambem casa quando alguma NF ativa dela contem o
+    texto. O marcador "REGISTRO-..." (NF sem numero informado) nao conta."""
     needle = (search or "").strip().lower()
     if not needle:
         return None
@@ -882,7 +886,16 @@ def _proposal_search_clause(search: str | None):
         Proposal.proposal_number, " ", Proposal.customer_name, " ",
         func.coalesce(Proposal.project_name, ""), " ", func.coalesce(Proposal.lot, ""),
     ))
-    return func.strpos(haystack, needle) > 0  # strpos: sem curingas, igual ao `in` do Python
+    clause = func.strpos(haystack, needle) > 0  # strpos: sem curingas, igual ao `in` do Python
+    if include_invoices:
+        invoice_match = exists().where(
+            FiscalInvoice.proposal_id == Proposal.id,
+            FiscalInvoice.active.is_(True),
+            FiscalInvoice.invoice_number.not_like("REGISTRO-%"),
+            func.strpos(func.lower(FiscalInvoice.invoice_number), needle) > 0,
+        )
+        clause = or_(clause, invoice_match)
+    return clause
 
 
 _EXPEDITION_SORT_ORDER = {
@@ -934,7 +947,7 @@ async def list_expedition_proposals(session: AsyncSession, *, search: str | None
     # (derived_sync). Filtro, ordenacao e paginacao rodam no SQL; relacoes so
     # sao carregadas para a pagina devolvida.
     conditions = [Proposal.active.is_(True), _proposal_operational_clause(), _expedition_listable_clause()]
-    search_clause = _proposal_search_clause(search)
+    search_clause = _proposal_search_clause(search, include_invoices=True)
     if search_clause is not None:
         conditions.append(search_clause)
     total = (await session.execute(select(func.count()).select_from(Proposal).where(*conditions))).scalar_one()
@@ -2211,7 +2224,7 @@ async def list_fiscal_records(session: AsyncSession, *, search: str | None, stat
         conditions.append(FiscalRecord.status_fiscal == status)
     if situation:
         conditions.append(_fiscal_situation_sql() == situation)
-    search_clause = _proposal_search_clause(search)
+    search_clause = _proposal_search_clause(search, include_invoices=True)
     if search_clause is not None:
         conditions.append(search_clause)
     total = (await session.execute(select(func.count()).select_from(FiscalRecord).join(FiscalRecord.proposal).where(*conditions))).scalar_one()
