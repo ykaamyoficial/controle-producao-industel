@@ -39,7 +39,9 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='ControleProducao',
+    # Layout versionado: o exe real e ControleProducaoApp.exe (em versions/<v>/);
+    # ControleProducao.exe na raiz da instalacao e o launcher (Launcher.spec).
+    name='ControleProducaoApp',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

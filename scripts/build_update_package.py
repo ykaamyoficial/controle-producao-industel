@@ -1,25 +1,23 @@
-"""Empacota a atualizacao do Desktop no formato que o Updater (Fase 10)
-espera: um ZIP cujo conteudo na raiz e exatamente a arvore de install_dir.
-
-O Updater NUNCA roda o instalador Inno -- ele valida o pacote como ZIP
-(`app/updater/validation.py::verify_package`), extrai
-(`safe_extract_zip`) e faz swap de diretorio (`app/updater/swap.py`). O
-`.exe` do Inno Setup continua existindo, mas so para instalacao nova
-(primeira vez); a atualizacao assistida usa este ZIP.
+"""Empacota a atualizacao do Desktop no formato do Updater versionado
+(app/updater/versioned.py): um ZIP cuja raiz e a arvore COMPLETA de UMA
+versao -- vira `versions/<versao>/` na instalacao. O Updater nunca roda o
+instalador Inno; ele verifica o ZIP, extrai ao lado da versao em uso e so
+depois troca o ponteiro `current.json` (nenhuma pasta em uso e renomeada).
 
 Conteudo do ZIP (raiz) = `dist/ControleProducao/*` + `dist/Updater/*`
-mesclados (o mesmo que `installer/ControleProducao.iss` copia para {app}),
-mais um arquivo `VERSION` = APP_VERSION.
+mesclados (o mesmo que `installer/ControleProducao.iss` copia para
+`{app}/versions/<versao>`), mais um arquivo `VERSION` = APP_VERSION. O
+launcher (`dist/Launcher`, ControleProducao.exe na raiz da instalacao) NAO
+entra: so muda por instalador.
 
 Uso:
     python -m PyInstaller Updater.spec --clean --noconfirm
     python -m PyInstaller ControleProducao.spec --clean --noconfirm
+    python -m PyInstaller Launcher.spec --clean --noconfirm   # so para o instalador
     python scripts/build_update_package.py
     # -> release/ControleProducao-<versao>-update.zip
-    python scripts/generate_release_manifest.py \
-        --artifact release/ControleProducao-<versao>-update.zip \
-        --content-type application/zip \
-        --minimum-server-version <X.Y.Z> --api-contract-version v1
+    python scripts/generate_release_manifest.py --artifact release/ControleProducao-<versao>-update.zip
+        --content-type application/zip --minimum-server-version <X.Y.Z> --api-contract-version v1
 """
 
 from __future__ import annotations
@@ -79,6 +77,12 @@ def build_update_package() -> Path:
             if arcname in entries and _sha256(entries[arcname]) != _sha256(path):
                 print(f"  aviso: '{arcname}' difere entre os bundles -- usando {source.name} (mesma regra do .iss)")
             entries[arcname] = path
+
+    if "ControleProducaoApp.exe" not in entries:
+        raise FileNotFoundError(
+            "'ControleProducaoApp.exe' nao esta em dist/ControleProducao -- o build e do layout antigo "
+            "(rode `python -m PyInstaller ControleProducao.spec --clean --noconfirm`)."
+        )
 
     with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         for arcname in sorted(entries):
