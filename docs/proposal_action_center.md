@@ -134,7 +134,7 @@ Não remover essa entrada por estética arquitetural.
 | Edição estrutural da proposta | `ProcessFormDialog` |
 | Detalhes/histórico (consulta) | `ProcessDetailDialog` |
 | Operações exclusivamente de item | telas de item (`production_items_page.py`, `galvanization_items_page.py`, etc.) |
-| Remanejamento compensado | `EarlyRemanagementDeliveryDialog` |
+| Remanejamento compensado | `RemanagementWizardDialog` (`app/ui/remanagement_wizard/`) |
 
 ## 6. Regra para desenvolvimentos futuros
 

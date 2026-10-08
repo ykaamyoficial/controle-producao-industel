@@ -165,7 +165,7 @@ Detalhes da proposta é o segundo protótipo aprovado. Central de ações: a ord
 
 ### Onda 4 — Formulários e assistentes de produção (G)
 
-`process_form_dialog.py`, `item_flow_dialog.py`, `item_selection_dialog.py`, `item_weight_dialog.py`, `production_registration_dialog.py`, `flow_review_dialog.py`, `galvanization_load_dialog.py` (1.904 linhas), `galvanization_load_details_dialog.py`, `early_remanagement_dialog.py` e os cinco passos de remanejamento (`remanagement_*_dialog.py`).
+`process_form_dialog.py`, `item_flow_dialog.py`, `item_selection_dialog.py`, `item_weight_dialog.py`, `production_registration_dialog.py`, `flow_review_dialog.py`, `galvanization_load_dialog.py` (1.904 linhas), `galvanization_load_details_dialog.py`. O remanejamento (a tela legada `early_remanagement_dialog.py` e os cinco passos `remanagement_*_dialog.py`) deixou de ser uma sequência de diálogos: virou **um assistente de 4 passos em uma janela** (`app/ui/remanagement_wizard/`, ver `REMANEJAMENTO_ASSISTENTE_UNICO.md`), já no padrão novo, com trilha de passos, rodapé de ações e caixa de aviso azul-clara.
 
 Aqui entra o rodapé de ações (Cancelar, Voltar, confirmar) e o indicador de passo nos assistentes. Clique fora **não** fecha.
 

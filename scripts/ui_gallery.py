@@ -718,6 +718,165 @@ class ChatPreview(QWidget):
         self.widgets.append(widget)
 
 
+class _RemanagementService:
+    """Duble de servico do Remanejamento: propostas, itens, material pronto e
+    simulacao com dados de exemplo (sem API)."""
+
+    DESTINATIONS = [
+        (1, "CP05672", "Torres Norte Telecom", "Torre 12 - Faixa Norte", "PRODUCAO", "18/10/2026"),
+        (2, "CP05701", "MNS Engenharia", "Linha 230kV SE Oeste", "GALVANIZACAO", "22/10/2026"),
+        (3, "CP05718", "Eletro Sul", "Subestação Canoas", "PRODUCAO", "30/10/2026"),
+        (4, "CP05733", "Vale Torres", "Parque Eólico Serra", "PRODUCAO", "05/11/2026"),
+        (5, "CP05745", "Construtora Aliança", "Galpão Logístico", "GALVANIZACAO", "12/11/2026"),
+        (6, "CP05760", "MSR Comércio", "Obra 2 - Ampliação", "PRODUCAO", "20/11/2026"),
+    ]
+    ITEMS = [
+        (101, "PT-0112", "Cantoneira 50x50x5 galvanizada", "kg", "1200", "200", "1000", True, None),
+        (102, "PT-0245", "Parafuso sextavado M16x60 zincado", "un", "800", "0", "800", True, None),
+        (103, "PT-0310", "Chapa de base 200x200x12", "un", "40", "40", "0", False, "Item sem necessidade pendente de remanejamento."),
+        (104, "PT-0388", "Mão francesa MF-3 galvanizada", "un", "120", "20", "100", True, None),
+        (105, "PT-0420", "Arruela lisa M16", "un", "1600", "0", "1600", True, None),
+        (106, "", "Peça especial sob desenho", "un", "4", "0", "4", False, "Item sem codigo de produto para busca de remanejamento."),
+    ]
+    SOURCES = {
+        301: ("CP05301", "Eletro Sul", "Subestação Norte"),
+        318: ("CP05318", "MNS Engenharia", "Obra 1"),
+        355: ("CP05355", "Vale Torres", "Parque Eólico Serra"),
+        390: ("CP05390", "Construtora Aliança", "Galpão Norte"),
+    }
+    # codigo do produto -> [(proposta de origem, quantidade pronta)]
+    READY = {
+        "PT-0112": [(301, "600"), (318, "450"), (355, "300")],
+        "PT-0245": [(301, "400"), (390, "1000")],
+        "PT-0388": [(318, "60")],
+        "PT-0420": [(301, "1600")],
+    }
+
+    def __init__(self, palette_name: str):
+        self.palette = OFFICIAL_COLOR_PALETTES[palette_name]
+
+    def early_delivery_destination_candidates(self, search=""):
+        rows = [
+            {
+                "id": pid, "api_version": 1, "proposta": number, "cliente": client, "obra_site": site,
+                "localizacao_atual": area, "prazo_entrega": deadline, "pedido_compra": f"PC-{4000 + pid}",
+            }
+            for pid, number, client, site, area, deadline in self.DESTINATIONS
+        ]
+        text = (search or "").strip().upper()
+        return [r for r in rows if not text or text in r["proposta"] or text in r["cliente"].upper() or text in r["obra_site"].upper()]
+
+    def remanagement_destination_items(self, destination_id):
+        return [
+            {
+                "item_id": item_id, "product_code": code, "description": description, "unit": unit, "total_quantity": total,
+                "already_attended": attended, "remanageable_need": need, "selectable": selectable, "block_reason": reason,
+            }
+            for item_id, code, description, unit, total, attended, need, selectable, reason in self.ITEMS
+        ]
+
+    def _item(self, item_id):
+        return next(row for row in self.ITEMS if row[0] == item_id)
+
+    def remanagement_availability(self, destination_id, items):
+        from decimal import Decimal as D
+
+        groups = []
+        for row in items:
+            item_id = int(row["destination_item_id"])
+            _id, code, description, unit, *_rest = self._item(item_id)
+            requested = str(row["requested_quantity"])
+            candidates = [
+                {
+                    "source_proposal_id": source_id, "source_proposal_number": self.SOURCES[source_id][0],
+                    "source_item_id": source_id * 10 + item_id % 10, "source_item_version": 1,
+                    "client": self.SOURCES[source_id][1], "site": self.SOURCES[source_id][2],
+                    "available_quantity": quantity, "unit": unit, "operational_status": "SEPARADO",
+                }
+                for source_id, quantity in self.READY.get(code, [])
+            ]
+            total = sum((D(c["available_quantity"]) for c in candidates), D("0"))
+            coverage = "SEM_DISPONIBILIDADE" if not candidates else ("SUFICIENTE" if total >= D(requested) else "PARCIAL")
+            groups.append({
+                "destination_item_id": item_id, "product_code": code, "description": description, "unit": unit,
+                "requested_quantity": requested, "total_available": str(total), "coverage_status": coverage, "candidates": candidates,
+            })
+        return {"items": groups}
+
+    def remanagement_review(self, destination_id, items, allocations, reason):
+        from decimal import Decimal as D
+
+        review_items = []
+        origins = set()
+        for row in items:
+            item_id = int(row["destination_item_id"])
+            code = self._item(item_id)[1]
+            requested = D(str(row["requested_quantity"]))
+            sources = []
+            for allocation in allocations:
+                if int(allocation["destination_item_id"]) != item_id:
+                    continue
+                quantity = D(str(allocation["allocated_quantity"]))
+                ready = dict(self.READY[code])[int(allocation["source_proposal_id"])]
+                origins.add(int(allocation["source_proposal_id"]))
+                sources.append({
+                    "source_proposal_id": allocation["source_proposal_id"], "source_item_id": allocation["source_item_id"],
+                    "ready_transfer": str(quantity), "production_compensation": str(quantity),
+                    "source_before": ready, "source_after_simulated": str(D(ready) - quantity),
+                })
+            allocated = sum((D(s["ready_transfer"]) for s in sources), D("0"))
+            status = "NAO_ALOCADO" if allocated <= 0 else ("COMPLETO" if allocated >= requested else "PARCIAL")
+            review_items.append({
+                "destination_item_id": item_id, "product_code": code, "requested": str(requested), "allocated": str(allocated),
+                "remaining": str(max(requested - allocated, D("0"))), "status": status, "sources": sources,
+            })
+        errors = [] if reason else [{"code": "REASON_REQUIRED", "message": "Informe o motivo.", "destination_item_id": None, "source_item_id": None}]
+        return {
+            "destination_proposal_id": destination_id, "valid": not errors, "warnings": [], "errors": errors,
+            "summary": {
+                "product_count": len(review_items), "source_proposal_count": len(origins),
+                "source_item_count": sum(len(i["sources"]) for i in review_items), "total_quantity": None, "total_unit": None,
+                "complete_items": sum(i["status"] == "COMPLETO" for i in review_items),
+                "partial_items": sum(i["status"] == "PARCIAL" for i in review_items),
+                "not_allocated_items": sum(i["status"] == "NAO_ALOCADO" for i in review_items), "invalid_items": 0,
+            },
+            "items": review_items,
+        }
+
+    def remanagement_confirm(self, operation_id, destination_id, items, allocations, reason):
+        return {"operation_id": operation_id}
+
+
+def remanagement_preview(palette_name: str, step: int):
+    """Assistente de Remanejamento aberto no passo `step` (1 a 4), sobre uma
+    janela do tamanho de um monitor comum. Devolve (janela, assistente)."""
+    from app.ui.remanagement_wizard import RemanagementWizardDialog
+
+    service = _RemanagementService(palette_name)
+    window = QWidget()
+    window.setObjectName("AppRoot")
+    window.setStyleSheet(app_stylesheet(service.palette))
+    window.resize(1600, 940)
+    window.show()
+    wizard = RemanagementWizardDialog(service, window)
+    wizard.show()
+    if step >= 2:
+        wizard.destination_page.table.selectRow(0)
+        wizard._next()
+    if step >= 3:
+        wizard.items_page._select_all()
+        wizard._next()
+        sources = wizard.sources_page
+        sources._take_max_from_source()
+        sources.sources_table.selectRow(1)
+        sources._source_selection_changed()
+        sources.detail_table.item(0, 4).setText("200")
+    if step >= 4:
+        wizard._next()
+        wizard.review_page.reason_edit.setPlainText("Antecipar a entrega da torre 12 com material já pronto na Expedição.")
+    return window, wizard
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--tema", choices=tuple(OFFICIAL_COLOR_PALETTES), default="claro")
@@ -729,6 +888,10 @@ def main() -> int:
         help="com --moldura: estado da pagina Controle Geral (banner mostra tambem o resumo de login e o aviso)",
     )
     parser.add_argument("--chat", action="store_true", help="mostra as mensagens do chat (baloes, cartoes, anexos)")
+    parser.add_argument(
+        "--remanejamento", type=int, choices=range(1, 5), metavar="PASSO",
+        help="abre o assistente de Remanejamento no passo 1..4 (dados de exemplo)",
+    )
     parser.add_argument(
         "--painel",
         choices=("geral", "executivo", "relatorios"),
@@ -747,6 +910,19 @@ def main() -> int:
 
     app = QApplication(sys.argv[:1])
     family = load_app_fonts()
+    if args.remanejamento:
+        window, wizard = remanagement_preview(args.tema, args.remanejamento)
+        if args.shot:
+            def capture_wizard():
+                wizard.grab().save(args.shot)
+                print(f"fonte={family} salvo={args.shot}")
+                # Sem escolhas pendentes o fechamento nao pergunta nada.
+                wizard.state.item_selections.clear()
+                wizard.state.allocations.clear()
+                app.quit()
+
+            QTimer.singleShot(1200, capture_wizard)
+        return app.exec()
     if args.chat:
         chat = ChatPreview(args.tema)
         chat.resize(900, max(args.altura, 1000))

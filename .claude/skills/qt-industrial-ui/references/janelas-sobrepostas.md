@@ -78,3 +78,16 @@ O protótipo desenha a janela como um widget filho. **No sistema continua sendo 
 - Não use `WA_TranslucentBackground` no diálogo: o comentário em `frameless_dialog.py` registra que isso quebra o repaint de tabelas e áreas de rolagem.
 - O cabeçalho-cartão, as abas com contagem e o rodapé de ações viram componentes reutilizáveis em `app/ui/components/`, para nenhum diálogo montá-los à mão.
 - `QMessageBox` continua sendo `QMessageBox` (os testes fazem patch nele); só recebe estilo.
+
+## Assistente em uma janela
+
+Um fluxo de vários passos abre **uma** janela grande (94% x 94%, como a central de chats) e troca a página dentro dela; nunca uma sequência de diálogos. Modelo: `app/ui/remanagement_wizard/` (`RemanagementWizardDialog`), prévia em `python scripts/ui_gallery.py --remanejamento 1..4`.
+
+- **Cabeçalho-cartão** com o título fixo e, no subtítulo, "Passo N de M — instrução do passo"; X de fechar à direita (`AppIconButton` CLOSE, 36 x 36).
+- **Trilha de passos** (`WizardStepper`) logo abaixo: círculo com número, check verde nos passos feitos, o atual em destaque. Passo feito é clicável e volta a ele; passo futuro não.
+- **Corpo** é um `QStackedWidget` de páginas (`WizardPage`: `enter()` ao chegar avançando, `is_valid()`, `commit()`, `summary()`). Voltar não recarrega; o estado compartilhado preserva o que foi escolhido.
+- **Rodapé**: resumo do passo à esquerda; Cancelar (fantasma), Voltar (some no passo 1) e o primário com o verbo do que vem a seguir ("Escolher itens", "Confirmar remanejamento"). O primário fica desabilitado até a página ser válida e muda de texto sem mudar de largura (nasce com o rótulo mais longo). Duplo clique numa linha escolhida também avança.
+- **Aviso fixo da tela** em `info_notice()` (caixa azul-clara com ícone), nunca texto solto em cinza. Erro de carga fica no aviso da própria página (`show_error`) e o usuário ainda pode voltar.
+- **Células digitáveis** de tabela em negrito na cor de destaque (o fundo da célula é da zebra); a quantidade digitada é cortada nos limites (saldo, pedido) e o valor que valeu aparece na célula.
+- **Fechar** (X, Esc, Cancelar) com escolhas já feitas pede confirmação dizendo que nada foi gravado.
+- Tabela criada **depois** de a janela aparecer (cartões gerados na revisão) precisa de `standardize_tables(painel)`; as criadas antes são padronizadas pelo próprio diálogo.
