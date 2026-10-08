@@ -953,12 +953,19 @@ async def list_expedition_proposals(session: AsyncSession, *, search: str | None
             .where(Proposal.id.in_(page_ids))
         )).scalars().unique().all()
         rows_by_id = {int(row.id): row for row in rows}
-    return PaginatedExpeditionResponse(items=[_expedition_summary(rows_by_id[int(pid)]) for pid in page_ids], total=total, limit=limit, offset=offset)
+    invoice_numbers = await _invoice_numbers_by_proposal(session, [int(pid) for pid in page_ids])
+    return PaginatedExpeditionResponse(
+        items=[_expedition_summary(rows_by_id[int(pid)], invoice_numbers.get(int(pid), [])) for pid in page_ids],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
 
 
 async def get_expedition_detail(session: AsyncSession, proposal_id: int) -> ExpeditionProposalDetail:
     proposal = await _get_expedition_proposal(session, proposal_id)
-    return _expedition_detail(proposal)
+    invoice_numbers = await _invoice_numbers_by_proposal(session, [int(proposal.id)])
+    return _expedition_detail(proposal, invoice_numbers.get(int(proposal.id), []))
 
 
 async def start_expedition_separation(session: AsyncSession, proposal_id: int, payload: ExpeditionVersionRequest, actor: User, *, request_id: str | None) -> ExpeditionProposalDetail:
@@ -2732,6 +2739,31 @@ def _fiscal_pending_weight(record: FiscalRecord) -> Decimal:
     ).quantize(Decimal("0.0001"))
 
 
+def _invoice_numbers(invoices) -> list[str]:
+    """Numeros das NFs ativas, na ordem de emissao e sem repetir. O numero
+    "REGISTRO-..." e um marcador gerado quando o usuario nao informou a NF, nao
+    um numero de nota: nao aparece."""
+    numbers: list[str] = []
+    for invoice in sorted((row for row in invoices if row.active), key=lambda row: (row.issued_at, row.id)):
+        number = str(invoice.invoice_number or "").strip()
+        if number and not number.startswith("REGISTRO-") and number not in numbers:
+            numbers.append(number)
+    return numbers
+
+
+async def _invoice_numbers_by_proposal(session: AsyncSession, proposal_ids: list[int]) -> dict[int, list[str]]:
+    """NFs das propostas de uma pagina, numa unica consulta (sem N+1)."""
+    if not proposal_ids:
+        return {}
+    rows = (await session.execute(
+        select(FiscalInvoice).where(FiscalInvoice.proposal_id.in_(proposal_ids), FiscalInvoice.active.is_(True))
+    )).scalars().all()
+    grouped: dict[int, list[FiscalInvoice]] = {}
+    for row in rows:
+        grouped.setdefault(int(row.proposal_id), []).append(row)
+    return {proposal_id: _invoice_numbers(invoices) for proposal_id, invoices in grouped.items()}
+
+
 def _fiscal_record_summary(record: FiscalRecord) -> FiscalRecordSummary:
     active_items = [item for item in record.items if item.active]
     pending = [item for item in active_items if item.status != "FATURADO"]
@@ -2770,6 +2802,7 @@ def _fiscal_record_summary(record: FiscalRecord) -> FiscalRecordSummary:
         weight_complete=coverage.complete,
         critical_pending=situation == "PENDENCIA_FISCAL_CRITICA",
         older_than_7_days=_fiscal_older_than_7_days(record),
+        invoice_numbers=_invoice_numbers(record.invoices),
         actions=_fiscal_actions(record),
     )
 
@@ -3185,7 +3218,7 @@ def _expedition_sort_key(proposal: Proposal) -> int:
     return order.get(status, 99)
 
 
-def _expedition_summary(proposal: Proposal) -> ExpeditionProposalSummary:
+def _expedition_summary(proposal: Proposal, invoice_numbers: list[str] | None = None) -> ExpeditionProposalSummary:
     items = _all_expedition_items(proposal)
     active_items = [item for item in items if item.available_quantity > item.delivered_quantity + item.remanaged_quantity]
     available = sum((item.available_quantity for item in active_items), Decimal("0")).quantize(Decimal("0.0001"))
@@ -3209,12 +3242,13 @@ def _expedition_summary(proposal: Proposal) -> ExpeditionProposalSummary:
         delivered_quantity=delivered,
         pending_quantity=pending,
         origins=sorted({item.origin for item in active_items}),
+        invoice_numbers=list(invoice_numbers or []),
         actions=_expedition_actions(proposal),
     )
 
 
-def _expedition_detail(proposal: Proposal) -> ExpeditionProposalDetail:
-    summary = _expedition_summary(proposal).model_dump()
+def _expedition_detail(proposal: Proposal, invoice_numbers: list[str] | None = None) -> ExpeditionProposalDetail:
+    summary = _expedition_summary(proposal, invoice_numbers).model_dump()
     items = [_expedition_item_summary(item) for item in sorted(_all_expedition_items(proposal), key=lambda row: (row.proposal_item.item_number, row.id))]
     return ExpeditionProposalDetail(**summary, items=items)
 

@@ -884,6 +884,8 @@ class ExpeditionProposalSummary(BaseModel):
     delivered_quantity: Decimal
     pending_quantity: Decimal
     origins: list[str] = Field(default_factory=list)
+    # Numeros das NFs registradas para a proposta (ordem de emissao).
+    invoice_numbers: list[str] = Field(default_factory=list)
     actions: list[ProductionAction] = Field(default_factory=list)
 
 
@@ -1310,6 +1312,8 @@ class FiscalRecordSummary(BaseModel):
     weight_complete: bool = False
     critical_pending: bool = False
     older_than_7_days: bool = False
+    # Numeros das NFs registradas (ativas), na ordem de emissao.
+    invoice_numbers: list[str] = Field(default_factory=list)
     actions: list[FiscalAction] = Field(default_factory=list)
 
 

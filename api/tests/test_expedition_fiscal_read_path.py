@@ -222,6 +222,23 @@ class ExpeditionFiscalReadPathTests(unittest.TestCase):
         self.assertEqual(len(detail.json()["items"]), 2)
         self.assertEqual(detail.json()["shipping_status"], "SEPARACAO_INICIADA")
 
+    def test_lists_and_details_expose_the_invoice_numbers(self):
+        # Coluna "NF" nas telas de Fiscal e Expedicao: a lista traz os numeros
+        # das NFs registradas, sem uma consulta por linha.
+        ids = self._build_scenario()
+        fiscal = {row["proposal_number"]: row for row in self._fiscal_list(limit=200)["items"]}
+        self.assertEqual(fiscal["EXP-C"]["invoice_numbers"], ["1001"])
+        self.assertEqual(fiscal["EXP-B"]["invoice_numbers"], ["1002"])
+        self.assertEqual(fiscal["EXP-A"]["invoice_numbers"], [])
+        shipping = {row["proposal_number"]: row for row in self._shipping_list(limit=200)["items"]}
+        self.assertEqual(shipping["EXP-C"]["invoice_numbers"], ["1001"])
+        self.assertEqual(shipping["EXP-B"]["invoice_numbers"], ["1002"])
+        self.assertEqual(shipping["EXP-A"]["invoice_numbers"], [])
+        detail = self.client.get(f"/api/v1/shipping/proposals/{ids['B']}", headers=self.headers).json()
+        self.assertEqual(detail["invoice_numbers"], ["1002"])
+        fiscal_detail = self.client.get(f"/api/v1/fiscal/records/{fiscal['EXP-C']['id']}", headers=self.headers).json()
+        self.assertEqual(fiscal_detail["invoice_numbers"], ["1001"])
+
     def test_fiscal_list_filters_order_pagination_and_indicators(self):
         self._build_scenario()
         full = self._fiscal_list(limit=200)
