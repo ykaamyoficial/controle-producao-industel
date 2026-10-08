@@ -82,6 +82,9 @@ Regra de ouro: **o remanejamento nunca muda o total de peças nem o estágio de 
 - **D4 — Onde a cedente aparece.** **Nas duas telas**: na Expedição com as prontas que sobraram e na Galvanização (ou Produção) com as peças que recebeu, até elas voltarem; ao voltarem juntam-se às prontas.
 - **D5 — Peça dentro de uma carga que já saiu.** **Pode trocar de dono dentro da carga**: a carga continua a mesma (motorista, dados), passa a listar essas peças no nome da nova proposta, o retorno vale para ela e tudo fica no histórico.
 - **D6 — Remanejamentos antigos.** **Ficam como estão**: só os novos seguem a regra nova; nenhum dado já gravado é reescrito.
+- **D7 — Fluxos diferentes (09/10/2026).** O remanejamento **acontece mesmo que o fluxo das propostas seja diferente**. As peças que trocam de dono **seguem o caminho que já tinham**, mesmo que a nova dona não fabrique internamente.
+- **D8 — Destino sem fluxo definido.** Pode receber o remanejamento: as propostas **trocam as peças** e o destino **continua com o fluxo indefinido**, como estava desde o princípio.
+- **D9 — Diferença de galvanização.** **Permitir sempre** (a origem galvanizada pode dar para um destino sem galvanização e vice-versa); a única regra de fluxo é a origem ter fluxo definido.
 
 ## 9. Ordem de execução proposta
 
@@ -164,3 +167,14 @@ Sem nenhuma troca, a esteira é igual ao pedido, então **nada muda para os iten
 - Testes: a regra "galvanizado como origem é válido" e a regra "inválido com a chave desligada" estão cobertas (`test_remanagement_compensation.py`, `test_galvanized_remanagement.py`); 7 testes novos do assistente (frase, estágios, leitura do detalhe da API, API antiga).
 - **Pendente (Fase D, selos):** coluna "Remanejamento" nas listas de Expedição, Produção e Galvanização (Controle Geral fica de fora porque lê do SQLite local); o selo some quando a proposta volta a ficar inteira (decisões do Henrique). A aba "Remanejamentos" nos Detalhes e a marca nos Itens em expedição **não** foram pedidas agora.
 
+### Fase F — fluxos diferentes (feita em 09/10/2026)
+
+Motivo: a busca escondia origens por "fluxo de produção diferente" (origem só galvaniza e destino fabrica e galvaniza, ou destino ainda sem fluxo). Na base de desenvolvimento, de 127 itens destino com necessidade, 63 já achavam origem, **48 só estavam bloqueados pela diferença de fluxo** e 16 não tinham nenhuma peça pronta do mesmo código.
+
+- **Compatibilidade (`items_are_compatible(..., strict_flow=False)`):** no motor novo só importam o **mesmo código e a mesma unidade** e a **origem ter fluxo definido** (a reposição dela segue o fluxo da própria origem). Galvanização, produção interna e fluxo do destino deixam de bloquear. O caminho antigo (`apply_remanagement`) continua com a regra estrita.
+- **Estágio novo `UNDEFINED_FLOW`:** peças do destino que ainda não têm caminho. Entram na troca depois das outras (as menos adiantadas) e viram **"a fabricar" na origem**, que fabrica no fluxo dela. O destino fica com as prontas que recebeu, **não muda nenhuma marca de fluxo** e, enquanto sobrar peça sem fluxo, **continua na mesma área** (só ganha a situação "parcial com pendência"). Na conferência de conservação "a fabricar" e "sem fluxo" formam um só total (a peça muda de nome, não some nem aparece).
+- **Origem que não galvaniza só recebe peças "a fabricar" (ou sem fluxo):** peças do destino que já estão fabricadas (aguardando galvanização ou em carga) só cabem em origem que passa pela galvanização; senão o pedido é recusado com mensagem clara, sem gravar nada, e o usuário pode escolher outra origem ou outra quantidade.
+- **Origem que não fabrica internamente (só galvaniza):** passa a **dever peças a fabricar** depois de ceder prontas. Enquanto não forem feitas, a Produção trata o item dela como item de produção (`_hosts_reallocated_production`): aparece na lista de itens da Produção com a quantidade pendente, deixa iniciar e registrar a produção, e ao concluir as peças seguem o fluxo da própria origem (vão para a galvanização, voltam e juntam-se às prontas).
+- **Expedição:** item sem fluxo definido que recebeu prontas mantém a disponibilidade recebida (a conferência periódica não a zera); o controle de peças usa a mesma regra.
+- **Assistente:** a frase de "o que acontece" e a tabela mostram *"N un ainda sem fluxo definido (seguem o fluxo da origem)"* quando for o caso.
+- **Testes:** `api/tests/test_remanagement_different_flows.py` (5 cenários de ponta a ponta: origem só galvaniza → destino que fabrica e galvaniza, com a reposição aparecendo e sendo feita na Produção; destino sem fluxo recebendo e continuando indefinido; item sem fluxo não serve de origem; peças já fabricadas recusadas para origem que não galvaniza; destino galvanizado não produzido recebendo de origem simples), mais os casos novos de `test_stage_swap.py` e `test_stage_ledger.py`. A conta de cada item e o total das propostas são conferidos a cada passo.
