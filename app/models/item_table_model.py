@@ -21,23 +21,13 @@ AREA_ITEM_COLUMNS = {
         ("obra_site", "Obra/Site"),
         ("lote", "Lote"),
     ],
-    # Proposta, Cliente, item e situacao primeiro, depois o disponivel e o saldo:
-    # o que mais importa cabe na tela sem rolar; o resto fica a direita.
+    # Mesmo desenho da aba de Producao, so as colunas que importam.
     "EXPEDICAO": [
-        ("proposta", "Proposta"),
-        ("cliente", "Cliente"),
-        ("numero_item", "Item"),
         ("codigo_produto", "Código"),
         ("descricao", "Descrição"),
+        ("quantidade", "Quantidade"),
+        ("proposta", "Proposta"),
         ("status_expedicao_item", "Situação"),
-        ("quantidade_disponivel", "Disponível"),
-        ("saldo_pendente", "Saldo"),
-        ("quantidade_entregue", "Entregue"),
-        ("quantidade_separada", "Separado"),
-        ("quantidade_remanejada", "Remanejado"),
-        ("origem_expedicao", "Origem"),
-        ("obra_site", "Obra/Site"),
-        ("lote", "Lote"),
     ],
     "GALVANIZACAO": [
         ("numero_item", "Item"),
@@ -63,14 +53,9 @@ AREA_STATUS_COLUMN_MAP = {
 }
 
 WEIGHT_COLUMNS = {"peso_total"}
-NUMERIC_COLUMNS = {
-    "quantidade", "quantidade_disponivel", "quantidade_em_galvanizacao", "quantidade_separada", "quantidade_entregue",
-    "quantidade_remanejada", "saldo_pendente",
-}
-# Quantidades da Expedicao saem com a unidade do item ("12 UN", "7.5 kg").
-QUANTITY_WITH_UNIT = {
-    "quantidade_disponivel", "quantidade_separada", "quantidade_entregue", "quantidade_remanejada", "saldo_pendente",
-}
+NUMERIC_COLUMNS = {"quantidade", "quantidade_disponivel", "quantidade_em_galvanizacao"}
+# Se a linha traz a unidade (itens da Expedicao), a quantidade sai com ela ("12 UN", "7.5 kg").
+QUANTITY_WITH_UNIT = {"quantidade"}
 
 
 def _number(value) -> float:

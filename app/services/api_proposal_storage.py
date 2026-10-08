@@ -25,7 +25,7 @@ from app.integrations.api.notifications_client import NotificationsApiClient
 from app.integrations.api.proposals_client import ProposalsApiClient
 from app.integrations.api.session import ExperimentalApiSession
 from app.integrations.api.token_store import ApiTokenStore
-from app.replica import proposals_view
+from app.replica import expedition_items_view, proposals_view
 from app.services.app_logging import get_logger
 
 # Reaproveita os identificadores oficiais definidos no backend (unica fonte
@@ -1015,8 +1015,12 @@ class OfficialProposalApiStorage:
             client.close()
 
     def expedition_items_queue(self, *, max_rows: int = EXPEDITION_ITEMS_MAX_ROWS, **filters) -> list[dict[str, Any]]:
-        """Todas as linhas que couberem em `max_rows`, buscando de 500 em 500
-        (limite da API): a aba nao mostra so as primeiras 500 sem avisar."""
+        """Todas as linhas que couberem em `max_rows`. Da replica local numa leitura so;
+        da API, buscando de 500 em 500 (limite dela): a aba nao mostra so as
+        primeiras 500 sem avisar."""
+        local = self._expedition_items_from_replica(limit=max_rows, offset=0, **filters)
+        if local is not None:
+            return [_api_expedition_item_row_to_process_item(row) for row in local.get("items", [])]
         rows: list[dict[str, Any]] = []
         while len(rows) < max_rows:
             page = self.expedition_items_queue_page(limit=min(500, max_rows - len(rows)), offset=len(rows), **filters)
@@ -1025,16 +1029,29 @@ class OfficialProposalApiStorage:
                 break
         return rows
 
+    def _expedition_items_from_replica(self, **filters) -> dict[str, Any] | None:
+        """Lista de itens da Expedicao pela replica local (SQLite), ou None para usar a API
+        (replica desligada, fechada por uma escrita deste Desktop, sem a entidade ou com erro)."""
+        filters = _expedition_items_filters(filters)
+        if not expedition_items_view.can_serve(filters):
+            return None
+        return self._read_from_replica(
+            "Itens em expedicao",
+            expedition_items_view.required_entities(filters),
+            lambda database: expedition_items_view.list_expedition_items(database, **filters),
+        )
+
     def expedition_items_queue_page(self, **filters) -> dict[str, Any]:
-        """Itens (nao propostas) da Expedicao. `pending_only` vai como "true"/"false"."""
-        if isinstance(filters.get("pending_only"), bool):
-            filters["pending_only"] = "true" if filters["pending_only"] else "false"
-        client, proposals, token = self._client()
-        try:
-            payload = proposals.list_expedition_items(token, **filters)
-            return {"items": [_api_expedition_item_row_to_process_item(row) for row in payload.get("items", [])], "total": payload.get("total")}
-        finally:
-            client.close()
+        """Itens (nao propostas) da Expedicao, uma pagina. `pending_only` vai como "true"/"false"."""
+        filters = _expedition_items_filters(filters)
+        payload = self._expedition_items_from_replica(**filters)
+        if payload is None:
+            client, proposals, token = self._client()
+            try:
+                payload = proposals.list_expedition_items(token, **filters)
+            finally:
+                client.close()
+        return {"items": [_api_expedition_item_row_to_process_item(row) for row in payload.get("items", [])], "total": payload.get("total")}
 
     def get_expedition_process(self, proposal_id: int) -> dict[str, Any]:
         client, proposals, token = self._client()
@@ -2297,9 +2314,17 @@ def _api_expedition_item_to_process_item(item: dict[str, Any]) -> dict[str, Any]
     }
 
 
+def _expedition_items_filters(filters: dict[str, Any]) -> dict[str, Any]:
+    """Filtros da lista de itens: `pending_only` sempre como "true"/"false" (texto da URL)."""
+    result = dict(filters)
+    if isinstance(result.get("pending_only"), bool):
+        result["pending_only"] = "true" if result["pending_only"] else "false"
+    return result
+
+
 def _api_expedition_item_row_to_process_item(row: dict[str, Any]) -> dict[str, Any]:
     """Linha da aba "Itens em expedicao": o item da Expedicao com a proposta dele.
-    Quantidades ja saem sem zeros a direita ("2", "7.5")."""
+    Quantidades ja saem sem zeros a direita ("2", "7.5"); `quantidade` e o saldo a entregar."""
     return {
         "id": row.get("id"),
         "api_id": row.get("proposal_item_id"),
@@ -2309,14 +2334,12 @@ def _api_expedition_item_row_to_process_item(row: dict[str, Any]) -> dict[str, A
         "codigo_produto": row.get("product_code") or "",
         "descricao": row.get("description") or "",
         "unidade": row.get("unit") or "",
-        "quantidade": _decimal_text(row.get("available_quantity")) or "0",
+        "quantidade": _decimal_text(row.get("pending_quantity")) or "0",
         "quantidade_disponivel": _decimal_text(row.get("available_quantity")) or "0",
         "quantidade_separada": _decimal_text(row.get("separated_quantity")) or "0",
         "quantidade_entregue": _decimal_text(row.get("delivered_quantity")) or "0",
         "quantidade_remanejada": _decimal_text(row.get("remanaged_quantity")) or "0",
         "saldo_pendente": _decimal_text(row.get("pending_quantity")) or "0",
-        "peso": row.get("unit_weight") or "",
-        "peso_total": _decimal_text(row.get("total_weight")),
         "origem_expedicao": row.get("origin") or "",
         "status_expedicao_item": row.get("status") or "",
         "processo_atual_id": row.get("proposal_id"),

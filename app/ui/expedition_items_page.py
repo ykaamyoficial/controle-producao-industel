@@ -1,16 +1,22 @@
 from __future__ import annotations
 
+from decimal import Decimal, InvalidOperation
+
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QDialog,
     QFrame,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QLineEdit,
     QMenu,
     QStackedLayout,
+    QTableWidget,
+    QTableWidgetItem,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -37,25 +43,98 @@ from app.ui.resilience import show_operation_error
 
 # Situacao do item na Expedicao (valores de `ExpeditionItem.status` na API).
 ITEM_STATUSES = ("EM_SEPARACAO", "SEPARACAO_INICIADA", "SEPARADO", "ENTREGUE")
+# Itens que ja sairam da separacao (entregue implica separado).
+_SEPARATED = {"SEPARADO", "ENTREGUE"}
 
 
-def summary_text(rows: list[dict]) -> str:
-    """"12 itens em 4 propostas" - a contagem que acompanha a lista."""
+def _number(value) -> Decimal:
+    try:
+        return Decimal(str(value or "0").replace(",", "."))
+    except InvalidOperation:
+        return Decimal("0")
+
+
+def _plain(value: Decimal) -> str:
+    """Quantidade sem zeros a direita ("12", "7.5")."""
+    text = f"{value.normalize():f}"
+    return text or "0"
+
+
+def _item_sort_key(row: dict) -> tuple:
+    item = str(row.get("numero_item") or "")
+    return (str(row.get("proposta") or ""), int(item) if item.isdigit() else 0, item)
+
+
+def group_by_product(rows: list[dict]) -> list[dict]:
+    """Agrupa os itens por codigo de produto, somando o saldo entre propostas.
+
+    A coluna Proposta mostra o numero quando o produto so esta em uma proposta
+    e "N propostas" quando esta em mais de uma. Cada grupo leva os itens
+    originais em `_items`, para o duplo clique (distribuicao por proposta) e
+    para os detalhes. Sem codigo, agrupa pela descricao; sem nenhum dos dois,
+    o item fica sozinho."""
+    groups: dict[str, list[dict]] = {}
+    for row in rows:
+        key = (row.get("codigo_produto") or "").strip() or (row.get("descricao") or "").strip() or f"item-{row.get('id')}"
+        groups.setdefault(key, []).append(row)
+
+    result = []
+    for items in groups.values():
+        first = items[0]
+        proposals = list(dict.fromkeys(item.get("api_proposal_id") or item.get("proposta") for item in items))
+        units = {str(item.get("unidade") or "").strip() for item in items}
+        statuses = {item.get("status_expedicao_item") for item in items}
+        total = sum((_number(item.get("quantidade")) for item in items), Decimal("0"))
+        result.append({
+            "id": None,
+            "_group": True,
+            "_items": items,
+            "codigo_produto": first.get("codigo_produto") or "-",
+            "descricao": next((item.get("descricao") for item in items if item.get("descricao")), "-"),
+            "quantidade": _plain(total),
+            # Unidades diferentes nao se somam como "UN": mostra so o numero.
+            "unidade": next(iter(units)) if len(units) == 1 else "",
+            "proposta": first.get("proposta") if len(proposals) == 1 else f"{len(proposals)} propostas",
+            "api_proposal_id": first.get("api_proposal_id") if len(proposals) == 1 else None,
+            "status_expedicao_item": _group_status(items, statuses),
+        })
+    result.sort(key=lambda row: str(row.get("codigo_produto") or ""))
+    return result
+
+
+def _group_status(items: list[dict], statuses: set) -> str:
+    if len(statuses) == 1:
+        return next(iter(statuses))
+    if statuses <= _SEPARATED:
+        return "SEPARADO"
+    separated = sum(1 for item in items if item.get("status_expedicao_item") in _SEPARATED)
+    return f"Em separação ({separated}/{len(items)} separados)"
+
+
+def summary_text(rows: list[dict], *, grouped: bool = False) -> str:
+    """"12 produtos em 4 propostas" (agrupado) ou "12 itens em 4 propostas"."""
     if not rows:
         return ""
-    proposals = {row.get("api_proposal_id") or row.get("proposta") for row in rows}
-    items = f"{len(rows)} item" if len(rows) == 1 else f"{len(rows)} itens"
-    count = len(proposals)
-    return f"{items} em {count} proposta" + ("" if count == 1 else "s")
+    if grouped:
+        proposals = {
+            item.get("api_proposal_id") or item.get("proposta") for row in rows for item in row.get("_items") or [row]
+        }
+        count, noun = len(rows), ("produto", "produtos")
+    else:
+        proposals = {row.get("api_proposal_id") or row.get("proposta") for row in rows}
+        count, noun = len(rows), ("item", "itens")
+    text = f"{count} {noun[0] if count == 1 else noun[1]}"
+    total = len(proposals)
+    return f"{text} em {total} proposta" + ("" if total == 1 else "s")
 
 
 class ExpeditionItemsPage(QWidget):
     """Itens (nao propostas) que estao na Expedicao - aba "Itens em expedicao".
 
+    Mesmo desenho da aba de Producao: busca, "Somente ..." e "Agrupar por
+    produto" (ligado), com Codigo, Descricao, Quantidade, Proposta e Situacao.
     So leitura: a separacao, a entrega e o remanejamento continuam sendo feitos
-    por proposta, na aba "Propostas". Aqui o usuario ve cada item com o que ha
-    de disponivel, separado, entregue, remanejado e o saldo a entregar, e abre
-    os detalhes da proposta dele."""
+    por proposta, na aba "Propostas". A quantidade e o saldo a entregar."""
 
     def __init__(self, service, parent=None):
         super().__init__(parent)
@@ -63,6 +142,7 @@ class ExpeditionItemsPage(QWidget):
         self.model = ItemTableModel(service, "EXPEDICAO")
         self._refreshing = False
         self._refresh_view_state = (0, 0)
+        self._flat_rows: list[dict] = []
         self._refresh_coordinator = RefreshCoordinator(self)
         self._build()
 
@@ -80,16 +160,20 @@ class ExpeditionItemsPage(QWidget):
         title.setObjectName("FilterTitle")
         style_area_title(title, "EXPEDICAO", self.service.palette)
         self.search = QLineEdit()
-        self.search.setPlaceholderText("Pesquisar item, proposta, cliente, obra/site, lote ou NF")
+        self.search.setPlaceholderText("Código, descrição, proposta, cliente, obra/site, lote ou NF")
         self.search.textChanged.connect(lambda _text: self.refresh(debounced=True))
         self.status = QComboBox()
         self.status.addItem("Todas as situações", "")
         for code in ITEM_STATUSES:
             self.status.addItem(self.service.area_status_label("EXPEDICAO", code), code)
         self.status.currentIndexChanged.connect(lambda _index: self.refresh())
-        self.only_pending = QCheckBox("Somente com saldo a entregar")
+        self.only_pending = QCheckBox("Somente com saldo")
         self.only_pending.setChecked(True)
+        self.only_pending.setToolTip("Só os itens que ainda têm quantidade a entregar.")
         self.only_pending.stateChanged.connect(lambda _state: self.refresh())
+        self.group_by_product = QCheckBox("Agrupar por produto")
+        self.group_by_product.setChecked(True)
+        self.group_by_product.stateChanged.connect(self._apply_grouping)
         apply_button = ModernButton("Aplicar", "search")
         clear_button = ModernButton("Limpar", "clear", variant="ghost")
         apply_button.clicked.connect(self.refresh)
@@ -102,6 +186,7 @@ class ExpeditionItemsPage(QWidget):
         filter_row.addWidget(self.search, 1)
         filter_row.addWidget(self.status)
         filter_row.addWidget(self.only_pending)
+        filter_row.addWidget(self.group_by_product)
         filter_row.addWidget(apply_button)
         filter_row.addWidget(clear_button)
         root.addWidget(filters)
@@ -180,18 +265,27 @@ class ExpeditionItemsPage(QWidget):
         )
 
     def _refresh_success(self, rows):
-        rows = rows or []
-        self.model.set_rows(rows)
-        self.table.apply_column_layout()
-        self.table_stack.setCurrentWidget(self.table if rows else self.empty_state)
-        self.table.verticalScrollBar().setValue(self._refresh_view_state[0])
-        self.table.horizontalScrollBar().setValue(self._refresh_view_state[1])
-        self.count_label.setText(summary_text(rows))
+        self._flat_rows = rows or []
+        self._apply_grouping()
         self._set_loading(False)
 
     def _refresh_error(self, exc):
         self._set_loading(False)
         show_operation_error(self, exc, self.refresh, title="Expedição")
+
+    def _apply_grouping(self, *_args):
+        grouped = self.group_by_product.isChecked()
+        rows = group_by_product(self._flat_rows) if grouped else sorted(self._flat_rows, key=_item_sort_key)
+        self.model.set_rows(rows)
+        self.table.apply_column_layout()
+        # A descricao ocupa a folga da tela; a situacao nao estica (selo de largura fixa).
+        header = self.table.horizontalHeader()
+        header.setStretchLastSection(False)
+        header.setSectionResizeMode(1, QHeaderView.Stretch)
+        self.table_stack.setCurrentWidget(self.table if rows else self.empty_state)
+        self.table.verticalScrollBar().setValue(self._refresh_view_state[0])
+        self.table.horizontalScrollBar().setValue(self._refresh_view_state[1])
+        self.count_label.setText(summary_text(rows, grouped=grouped))
 
     def _set_loading(self, loading: bool):
         self._refreshing = loading
@@ -212,25 +306,73 @@ class ExpeditionItemsPage(QWidget):
 
     def open_proposal_details(self):
         row = self.selected_row()
-        proposal_id = (row or {}).get("api_proposal_id") or (row or {}).get("processo_atual_id")
+        if not row:
+            ToastNotification(self.window(), "Selecione um item para ver os detalhes da proposta.", "error")
+            return
+        proposal_id = row.get("api_proposal_id") or row.get("processo_atual_id")
+        if row.get("_group") and not proposal_id:
+            # Produto em varias propostas: mostra a distribuicao, de onde se abre cada uma.
+            self.show_distribution(row)
+            return
+        self._open_details(proposal_id)
+
+    def _open_details(self, proposal_id, parent=None):
         if not proposal_id:
             ToastNotification(self.window(), "Selecione um item para ver os detalhes da proposta.", "error")
             return
         try:
-            dialog = ProcessDetailDialog(self.service, int(proposal_id), self, area="EXPEDICAO")
+            dialog = ProcessDetailDialog(self.service, int(proposal_id), parent or self, area="EXPEDICAO")
         except Exception as exc:
             ToastNotification(self.window(), f"Não foi possível abrir os detalhes da proposta: {exc}", "error")
             return
         if dialog.exec() or dialog.changed:
             self.refresh()
 
+    def show_distribution(self, group_row: dict):
+        """Em quais propostas o produto esta e quanto falta entregar em cada uma."""
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f"Distribuição por proposta — {group_row.get('codigo_produto') or group_row.get('descricao')}")
+        dialog.resize(760, 400)
+        layout = QVBoxLayout(dialog)
+        table = QTableWidget(0, 5)
+        table.setHorizontalHeaderLabels(["Proposta", "Cliente", "Item", "Quantidade", "Situação"])
+        table.verticalHeader().setVisible(False)
+        table.setEditTriggers(QTableWidget.NoEditTriggers)
+        table.setAlternatingRowColors(True)
+        table.setSelectionBehavior(QTableWidget.SelectRows)
+        table.horizontalHeader().setStretchLastSection(True)
+        items = group_row.get("_items") or []
+        for item in items:
+            row_index = table.rowCount()
+            table.insertRow(row_index)
+            unit = str(item.get("unidade") or "").strip()
+            quantity = f"{item.get('quantidade') or '0'} {unit}".strip()
+            status = self.service.area_status_label("EXPEDICAO", item.get("status_expedicao_item") or "")
+            for column, value in enumerate([item.get("proposta"), item.get("cliente"), item.get("numero_item"), quantity, status]):
+                cell = QTableWidgetItem(str(value if value not in (None, "") else "-"))
+                cell.setTextAlignment(Qt.AlignCenter)
+                table.setItem(row_index, column, cell)
+        table.itemDoubleClicked.connect(
+            lambda cell: self._open_details(items[cell.row()].get("api_proposal_id"), dialog)
+        )
+        layout.addWidget(table)
+        footer = QHBoxLayout()
+        footer.addStretch()
+        close_button = ModernButton("Fechar", "clear", variant="ghost")
+        close_button.clicked.connect(dialog.accept)
+        footer.addWidget(close_button)
+        layout.addLayout(footer)
+        dialog.exec()
+
     def open_context_menu(self, position):
         index = self.table.indexAt(position)
         if not index.isValid():
             return
         self.table.setCurrentIndex(index)
+        row = self.model.item_row_at(index.row()) or {}
+        label = "Distribuição por proposta" if row.get("_group") and not row.get("api_proposal_id") else "Detalhes da proposta"
         menu = QMenu(self)
-        menu.addAction(QAction("Detalhes da proposta", self, triggered=self.open_proposal_details))
+        menu.addAction(QAction(label, self, triggered=self.open_proposal_details))
         menu.exec(self.table.viewport().mapToGlobal(position))
 
 
