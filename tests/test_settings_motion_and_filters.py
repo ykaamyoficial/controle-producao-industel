@@ -62,12 +62,13 @@ class ReduceMotionSettingTests(unittest.TestCase):
 
     def test_active_category_icon_switches_to_the_color_over_the_accent_pill(self):
         page = SettingsPage(MotionSettingsService())
-        page.select_category("users")
-        self.assertEqual(page.category_buttons["users"]._color_role, IconColorRole.ON_ACCENT)
+        # "identity" nao carrega dados do servico (usuarios carregaria a lista).
+        page.select_category("identity")
+        self.assertEqual(page.category_buttons["identity"]._color_role, IconColorRole.ON_ACCENT)
         self.assertEqual(page.category_buttons["appearance"]._color_role, IconColorRole.PRIMARY)
         page.select_category("appearance")
         self.assertEqual(page.category_buttons["appearance"]._color_role, IconColorRole.ON_ACCENT)
-        self.assertEqual(page.category_buttons["users"]._color_role, IconColorRole.PRIMARY)
+        self.assertEqual(page.category_buttons["identity"]._color_role, IconColorRole.PRIMARY)
 
     def test_settings_menu_texts_are_accented_but_category_keys_are_not(self):
         page = SettingsPage(MotionSettingsService())
