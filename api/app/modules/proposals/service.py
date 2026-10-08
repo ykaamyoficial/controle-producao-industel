@@ -30,6 +30,7 @@ from api.app.modules.proposals.compensation import Allocation, CompensationError
 from api.app.modules.proposals.domain import ProductionStateMachine, ProposalStateMachine
 from api.app.modules.proposals.models import ExpeditionEvent, ExpeditionItem, FiscalEvent, FiscalInvoice, FiscalInvoiceItem, FiscalRecord, FiscalItem, GalvanizationLoad, GalvanizationLoadEvent, GalvanizationLoadItem, ProductionAllocationTransfer, Proposal, ProposalEvent, ProposalItem, ProposalRemanagement, ProposalRemanagementItem, SyncRun
 from api.app.modules.proposals.remanagement import calculate_item_balance, items_are_compatible, max_remanageable, quantity
+from api.app.modules.proposals.stage_swap import verify_swap_conservation
 from api.app.modules.proposals.weights import calculate_known_weight, calculate_weight_coverage, normalize_known_weight
 from api.app.shared.formatting import format_quantity
 from api.app.modules.proposals.schemas import (
@@ -123,6 +124,7 @@ from api.app.modules.proposals.schemas import (
     RemanagementReviewRequest,
     RemanagementReviewResult,
     RemanagementReviewSource,
+    RemanagementStageTransfer,
     RemanagementReviewSummary,
     RemanagementSourceCandidate,
     RemanagementSummary,
@@ -1615,6 +1617,16 @@ async def confirm_remanagement_batch(session: AsyncSession, payload: Remanagemen
 
         fresh_balances = await _batch_item_allocation_balances(session, list(items_by_id.values()))
 
+        # Plano de logistica (Fase B): quais pecas em andamento do destino passam para as
+        # origens, e a leitura de estagios de ANTES, para conferir a conservacao no fim.
+        stages_before, stage_swaps, stage_swap_errors = await _stage_swaps_for_plan(session, plan)
+        if stage_swap_errors:
+            first_item_id, message = next(iter(stage_swap_errors.items()))
+            raise ApiError(
+                error_codes.EXPEDITION_REMANAGEMENT_INVALID, message, status_code=409,
+                details={"code": "DESTINATION_IN_FLIGHT_INSUFFICIENT", "destination_item_id": first_item_id},
+            )
+
         lines_by_source: dict[int, list] = {}
         for line in plan.lines:
             lines_by_source.setdefault(line.source_proposal_id, []).append(line)
@@ -1777,6 +1789,18 @@ async def confirm_remanagement_batch(session: AsyncSession, payload: Remanagemen
             session, "COMPENSATED_REMANAGEMENT_APPLIED", actor_user_id=actor.id, request_id=request_id,
             details={"operation_id": payload.operation_id, "destination_proposal_id": destination.id, "source_proposal_ids": source_proposal_ids, "remanagement_ids": [row.id for row in created_rows]},
         )
+        # Conservacao (Fase B): a gravacao so pode ter trocado o dono das pecas. Relê os
+        # estagios do banco e confere contra o plano; qualquer diferenca desfaz tudo.
+        await session.flush()
+        stages_after, _swaps_after, _errors_after = await _stage_swaps_for_plan(session, plan, refresh=True)
+        conservation_problems = verify_swap_conservation(stages_before, stages_after, stage_swaps)
+        if conservation_problems:
+            raise ApiError(
+                error_codes.REMANAGEMENT_CONSERVATION_VIOLATION,
+                "O remanejamento nao foi gravado: a conferencia de pecas por estagio nao fechou.",
+                status_code=409,
+                details={"problems": conservation_problems[:10]},
+            )
         await session.commit()
     except IntegrityError:
         await session.rollback()
@@ -2194,6 +2218,20 @@ async def simulate_remanagement_review(session: AsyncSession, payload: Remanagem
     if not reason:
         errors.append(CompensationError(code="REASON_REQUIRED", message="Informe o motivo do remanejamento."))
 
+    # Quais pecas em andamento do destino passam para cada origem (estagio a estagio).
+    swap_by_line: dict[tuple[int, int], list[RemanagementStageTransfer]] = {}
+    if plan.products:
+        _stages, swaps, swap_errors = await _stage_swaps_for_plan(session, plan)
+        for swap in swaps:
+            swap_by_line[(swap.destination_item_id, swap.source_item_id)] = [
+                RemanagementStageTransfer(stage=transfer.stage, quantity=transfer.quantity) for transfer in swap.transfers
+            ]
+        for destination_item_id, message in swap_errors.items():
+            errors.append(CompensationError(code="DESTINATION_IN_FLIGHT_INSUFFICIENT", message=message, destination_item_id=destination_item_id))
+        plan_errors_by_item = {error.destination_item_id for error in plan.errors} | set(swap_errors)
+    else:
+        plan_errors_by_item = {error.destination_item_id for error in plan.errors}
+
     products_by_item = {product.destination_item_id: product for product in plan.products}
     review_items = []
     complete = partial = not_allocated = invalid = 0
@@ -2206,7 +2244,7 @@ async def simulate_remanagement_review(session: AsyncSession, payload: Remanagem
         product = products_by_item.get(requested.destination_item_id)
         allocated = product.allocated_quantity if product else Decimal("0")
         remaining = max(requested.requested_quantity - allocated, Decimal("0"))
-        has_error = any(error.destination_item_id == requested.destination_item_id for error in plan.errors)
+        has_error = requested.destination_item_id in plan_errors_by_item
         if has_error:
             status = "INVALIDO"
             invalid += 1
@@ -2234,6 +2272,7 @@ async def simulate_remanagement_review(session: AsyncSession, payload: Remanagem
                 production_compensation=line.obligation_quantity_to_source,
                 source_before=before,
                 source_after_simulated=after,
+                stage_transfers=swap_by_line.get((requested.destination_item_id, line.source_item_id), []),
             ))
 
         destination_snapshot = item_snapshots.get(requested.destination_item_id)
@@ -2272,6 +2311,30 @@ async def simulate_remanagement_review(session: AsyncSession, payload: Remanagem
         summary=summary,
         items=review_items,
     )
+
+
+async def _stage_swaps_for_plan(session: AsyncSession, plan, *, refresh: bool = False):
+    """Estagios (antes) dos itens envolvidos no plano e a troca por estagio de cada linha.
+
+    Devolve (estagios por item, trocas, erros por item destino). Um destino sem pecas em
+    andamento suficientes para ceder em troca vira erro desse item, nunca excecao."""
+    from api.app.modules.proposals.stage_ledger import compute_item_stages, load_item_facts
+    from api.app.modules.proposals.stage_swap import StageSwapError, plan_stage_swaps
+
+    proposal_ids = sorted({plan.destination_proposal_id, *(line.source_proposal_id for line in plan.lines)})
+    stages = {facts.item_id: compute_item_stages(facts) for facts in await load_item_facts(session, proposal_ids=proposal_ids, refresh=refresh)}
+    swaps = []
+    errors: dict[int, str] = {}
+    for product in plan.products:
+        destination_stages = stages.get(product.destination_item_id)
+        if destination_stages is None:
+            errors[product.destination_item_id] = "Item destino sem leitura de estágios."
+            continue
+        try:
+            swaps.extend(plan_stage_swaps(destination_stages, [(line.source_item_id, line.ready_quantity_to_destination) for line in product.transfers]))
+        except StageSwapError as exc:
+            errors[product.destination_item_id] = str(exc)
+    return stages, swaps, errors
 
 
 async def list_remanagements(session: AsyncSession, *, proposal_id: int | None, limit: int, offset: int) -> PaginatedRemanagementResponse:

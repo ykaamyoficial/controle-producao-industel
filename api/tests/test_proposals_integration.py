@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import os
 import unittest
+from decimal import Decimal
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -2950,6 +2951,101 @@ class ProposalsIntegrationTests(unittest.TestCase):
         self.assertEqual(history["total"], 1)
         destination_shipping = self.client.get(f"/api/v1/shipping/proposals/{destination['id']}", headers=headers).json()
         self.assertEqual(destination_shipping["items"][0]["available_quantity"], "10.0000")
+
+    def _stage_ledger_items(self, headers, proposal_id):
+        response = self.client.get("/api/v1/shipping/remanagements/stage-ledger", params={"proposal_id": proposal_id}, headers=headers)
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertEqual([a for a in body["anomalies"] if a["severity"] == "ERROR"], [])
+        return body["items"][0]
+
+    def _remanagement_pair(self, headers, destination_number, source_number):
+        destination = self.client.post(
+            "/api/v1/proposals",
+            json=_proposal_payload(destination_number, [_item_payload("1", product_code="300.23", quantity="10.0000", requires_galvanization=False)]),
+            headers=headers,
+        ).json()
+        destination_item_id = destination["items"][0]["id"]
+        source = self._proposal_ready_for_expedition(source_number, headers, [_item_payload("1", product_code="300.23", quantity="15.0000", requires_galvanization=False)])
+        source_item_id = self.client.get(f"/api/v1/shipping/proposals/{source['id']}", headers=headers).json()["items"][0]["proposal_item_id"]
+        payload = {
+            "destination_proposal_id": destination["id"],
+            "items": [{"destination_item_id": destination_item_id, "requested_quantity": "10.0000"}],
+            "allocations": [{"destination_item_id": destination_item_id, "source_proposal_id": source["id"], "source_item_id": source_item_id, "allocated_quantity": "10.0000"}],
+            "reason": "Troca de dono das pecas",
+        }
+        return destination, source, payload
+
+    def test_remanagement_review_tells_which_pieces_of_the_destination_go_to_the_source(self):
+        headers = self._headers()
+        _destination, _source, payload = self._remanagement_pair(headers, "CP03280", "CP03281")
+        response = self.client.post("/api/v1/shipping/remanagements/review", json=payload, headers=headers)
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertTrue(body["valid"], body)
+        # Item sem galvanizacao: as pecas em andamento do destino estao todas "a fabricar".
+        self.assertEqual(body["items"][0]["sources"][0]["stage_transfers"], [{"stage": "TO_PRODUCE", "quantity": "10.0000"}])
+
+    def test_remanagement_confirm_swaps_ownership_and_keeps_every_stage_total(self):
+        headers = self._headers()
+        destination, source, payload = self._remanagement_pair(headers, "CP03285", "CP03286")
+        source_before = self._stage_ledger_items(headers, source["id"])
+        destination_before = self._stage_ledger_items(headers, destination["id"])
+        self.assertEqual((source_before["ready"], source_before["to_produce"]), ("15.0000", "0.0000"))
+        self.assertEqual((destination_before["ready"], destination_before["to_produce"]), ("0.0000", "10.0000"))
+
+        response = self.client.post("/api/v1/shipping/remanagements/confirm", json={**payload, "operation_id": "stage-swap-op-0001"}, headers=headers)
+        self.assertEqual(response.status_code, 201, response.text)
+
+        source_after = self._stage_ledger_items(headers, source["id"])
+        destination_after = self._stage_ledger_items(headers, destination["id"])
+        # A origem cedeu 10 prontas e recebeu 10 a fabricar; o destino recebeu 10 prontas e cedeu 10 a fabricar.
+        self.assertEqual((source_after["ready"], source_after["to_produce"], source_after["given_away"]), ("5.0000", "10.0000", "10.0000"))
+        self.assertEqual((destination_after["ready"], destination_after["to_produce"], destination_after["received_ready"]), ("10.0000", "0.0000", "10.0000"))
+        self.assertEqual((source_after["gap"], destination_after["gap"]), ("0.0000", "0.0000"))
+        for stage in ("ready", "to_produce", "awaiting_galvanization", "in_galvanization", "delivered"):
+            self.assertEqual(
+                Decimal(source_before[stage]) + Decimal(destination_before[stage]),
+                Decimal(source_after[stage]) + Decimal(destination_after[stage]),
+                stage,
+            )
+
+    def test_remanagement_confirm_is_undone_when_the_conservation_check_fails(self):
+        headers = self._headers()
+        destination, source, payload = self._remanagement_pair(headers, "CP03290", "CP03291")
+        with patch("api.app.modules.proposals.service.verify_swap_conservation", return_value=["item 1: ready deveria ficar 5 e ficou 7"]):
+            response = self.client.post("/api/v1/shipping/remanagements/confirm", json={**payload, "operation_id": "stage-swap-op-0002"}, headers=headers)
+        self.assertEqual(response.status_code, 409, response.text)
+        error = response.json()["error"]
+        self.assertEqual(error["code"], "REMANAGEMENT_CONSERVATION_VIOLATION")
+        self.assertEqual(error["details"]["problems"], ["item 1: ready deveria ficar 5 e ficou 7"])
+        # Nada foi gravado: sem historico, sem saldo cedido, estagios como antes.
+        self.assertEqual(self.client.get(f"/api/v1/shipping/remanagements?proposal_id={source['id']}", headers=headers).json()["total"], 0)
+        source_after = self._stage_ledger_items(headers, source["id"])
+        destination_after = self._stage_ledger_items(headers, destination["id"])
+        self.assertEqual((source_after["ready"], source_after["to_produce"], source_after["given_away"]), ("15.0000", "0.0000", "0.0000"))
+        self.assertEqual((destination_after["ready"], destination_after["to_produce"]), ("0.0000", "10.0000"))
+        # E o mesmo pedido, agora sem a falha simulada, grava normalmente.
+        again = self.client.post("/api/v1/shipping/remanagements/confirm", json={**payload, "operation_id": "stage-swap-op-0002"}, headers=headers)
+        self.assertEqual(again.status_code, 201, again.text)
+
+    def test_remanagement_confirm_rejects_a_destination_without_pieces_in_flight(self):
+        headers = self._headers()
+        destination, source, payload = self._remanagement_pair(headers, "CP03295", "CP03296")
+        # Primeiro remanejamento leva as 10 pecas em andamento do destino...
+        first = self.client.post("/api/v1/shipping/remanagements/confirm", json={**payload, "operation_id": "stage-swap-op-0003"}, headers=headers)
+        self.assertEqual(first.status_code, 201, first.text)
+        # ...e uma segunda origem nao tem mais o que receber em troca (a necessidade do destino ja foi atendida).
+        second_source = self._proposal_ready_for_expedition("CP03297", headers, [_item_payload("1", product_code="300.23", quantity="5.0000", requires_galvanization=False)])
+        second_item_id = self.client.get(f"/api/v1/shipping/proposals/{second_source['id']}", headers=headers).json()["items"][0]["proposal_item_id"]
+        retry = {
+            **payload,
+            "operation_id": "stage-swap-op-0004",
+            "allocations": [{**payload["allocations"][0], "source_proposal_id": second_source["id"], "source_item_id": second_item_id, "allocated_quantity": "5.0000"}],
+        }
+        response = self.client.post("/api/v1/shipping/remanagements/confirm", json=retry, headers=headers)
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertEqual(self.client.get(f"/api/v1/shipping/remanagements?proposal_id={second_source['id']}", headers=headers).json()["total"], 0)
 
     def test_remanagement_confirm_rejects_incompatible_plan_and_persists_nothing(self):
         headers = self._headers()

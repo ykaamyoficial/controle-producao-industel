@@ -108,6 +108,9 @@ class ItemStages:
     # Item sem fluxo definido (producao/galvanizacao "INDEFINIDO"): ainda nao tem
     # estagio; o pedido inteiro fica aqui para a conta fechar.
     undefined_flow: Decimal = ZERO
+    # Parte de `to_produce` que e reposicao recebida de outro remanejamento (nao e peca
+    # propria do item e por isso nao pode ser cedida de novo).
+    received_replacement: Decimal = ZERO
 
     @property
     def in_flight(self) -> Decimal:
@@ -214,6 +217,7 @@ def compute_item_stages(facts: ItemFacts) -> ItemStages:
         delivered=quantity(facts.expedition_delivered),
         given_away=quantity(facts.expedition_remanaged),
         received_ready=quantity(facts.ready_received),
+        received_replacement=balance.production_reallocated_in_pending,
     )
 
 
@@ -265,7 +269,9 @@ def build_ledger(all_facts: Iterable[ItemFacts]) -> StageLedger:
 
 # ---- leitura do banco -------------------------------------------------------
 
-async def load_item_facts(session: AsyncSession, *, proposal_ids: list[int] | None = None) -> list[ItemFacts]:
+async def load_item_facts(session: AsyncSession, *, proposal_ids: list[int] | None = None, refresh: bool = False) -> list[ItemFacts]:
+    """`refresh=True` rele tudo do banco (depois de um flush) em vez de confiar no que a
+    sessao ja tem em memoria - necessario para ver as colecoes de transferencias recem criadas."""
     # Importado aqui: `service` e grande e importa muita coisa; o motor puro acima nao precisa dele.
     from api.app.modules.proposals.service import _galvanization_quantities, _proposal_operational_clause
 
@@ -283,6 +289,8 @@ async def load_item_facts(session: AsyncSession, *, proposal_ids: list[int] | No
     )
     if proposal_ids is not None:
         stmt = stmt.where(Proposal.id.in_(proposal_ids))
+    if refresh:
+        stmt = stmt.execution_options(populate_existing=True)
     rows = (await session.execute(stmt)).unique().all()
     item_ids = [int(item.id) for item, _number in rows]
     galvanization = await _galvanization_quantities(session, item_ids)

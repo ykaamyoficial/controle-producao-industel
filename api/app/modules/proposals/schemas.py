@@ -1219,6 +1219,14 @@ class RemanagementReviewRequest(BaseModel):
     reason: str = Field(default="", max_length=1000)
 
 
+class RemanagementStageTransfer(BaseModel):
+    """Pecas em andamento do destino que passam para a origem, em um estagio
+    (IN_GALVANIZATION, AWAITING_GALVANIZATION ou TO_PRODUCE)."""
+
+    stage: str
+    quantity: Decimal
+
+
 class RemanagementReviewSource(BaseModel):
     source_proposal_id: int
     source_item_id: int
@@ -1226,6 +1234,8 @@ class RemanagementReviewSource(BaseModel):
     production_compensation: Decimal
     source_before: Decimal
     source_after_simulated: Decimal
+    # Quais pecas do destino vao para a origem em troca (estagio a estagio).
+    stage_transfers: list[RemanagementStageTransfer] = Field(default_factory=list)
 
 
 class RemanagementReviewItem(BaseModel):
