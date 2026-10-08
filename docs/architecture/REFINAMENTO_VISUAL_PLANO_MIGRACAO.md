@@ -205,7 +205,7 @@ Só aparência; conferir contra `NOMUS_FISCAL_INTEGRATION_CONTRACT.md` com o age
 
 `dashboard_page.py`, `executive_dashboard_page.py`, `operational_reports_page.py` e os componentes `kpi_card.py`, `card_indicador.py`, `grafico_status.py`, `header_dashboard.py`, `tabela_prazos.py`, `barra_progresso_area.py`.
 
-Ainda não há protótipo aprovado para painéis; fazer um antes (mesmo método das duas telas anteriores).
+O redesenho seguiu o que o usuário aprovou nos dois protótipos (manter a identidade de hoje, só refinar), sem protótipo próprio para painéis: a conferência visual foi feita na galeria (`python scripts/ui_gallery.py --moldura --painel geral|executivo|relatorios`, com `--tema escuro` e `--altura` para ver a página inteira).
 
 **Andamento (07/10/2026):**
 
@@ -213,13 +213,16 @@ Ainda não há protótipo aprovado para painéis; fazer um antes (mesmo método 
 |---|---|
 | Painel geral, Dashboard Executivo, Relatórios Operacionais e seus componentes: textos exibidos acentuados, Limpar/Fechar como botão fantasma, títulos pela folha de estilo | Feito |
 | Filtro "Confiabilidade" do Dashboard Executivo | Corrigido - enviava o texto da opção em minúsculas como valor; passou a usar um valor interno (`itemData`), senão "Média" com acento deixaria de filtrar |
-| **Redesenho dos painéis (cartões de indicador, gráficos, cabeçalho)** | **Não feito** - sem protótipo aprovado; os componentes `kpi_card`, `card_indicador`, `grafico_status`, `header_dashboard` e `tabela_prazos` continuam com o desenho e os estilos inline de antes |
+| Redesenho do Painel geral | Feito: cabeçalho em degradê vira a faixa padrão de página (`page_header.py`) com hora da última atualização e botão Atualizar (único primário, ícone gira durante a consulta); cartões de indicador sem sombra, com hover e anel de foco pela folha de estilo e Enter/Espaço abrindo as propostas; barras de área animadas; legenda do gráfico com a linha inteira clicável; selos de prazo pintados, neutros quando a contagem é zero; os cartões antigos ficam na tela até os novos chegarem |
+| Redesenho do Dashboard Executivo | Feito: faixa padrão e filtros sem rótulo lateral (placeholder e nome acessível); grupos de indicadores em painel suave; ícone na cor do significado (atraso e pendência crítica em perigo, vencendo e falta emitir em atenção, emitida em sucesso) em vez de cor por posição; barras animadas; selo de severidade sólido nos alertas, com a lista do tamanho do conteúdo; gargalo atual com selo de área; números no padrão brasileiro (21.400 kg) |
+| Redesenho dos Relatórios Operacionais | Feito: faixa padrão com Gerar relatório como único primário e Exportar CSV como secundário; filtros sem rótulo lateral; cartões ocupando a largura; os três diálogos de consulta (registros, proposta, carga) com cabeçalho-cartão e rodapé padrão; rótulos de coluna e de relatório acentuados, o que vale também para o cabeçalho do CSV exportado |
+| Estilos inline e sombras dos painéis | Zerados nas três páginas e nos componentes (`kpi_card`, `card_indicador`, `grafico_status`, `header_dashboard`, `tabela_prazos`, `barra_progresso_area`, `badge_status`) |
 
 ### Onda 7 — Chat (G)
 
 `chat_center_page.py`, `proposal_chat_dialog.py` (1.897 linhas) e os componentes `chat_message_attachments.py` (2.218 linhas, 45 estilos inline), `timeline_entries.py`, `chat_shared_content.py`, `chat_pending_attachments.py`, `mention_compose_bar.py`, `proposal_activity_panel.py`.
 
-É a área com mais estilo inline e mais pintura própria. Fazer protótipo antes.
+Era a área com mais estilo inline e mais pintura própria. Como nos painéis, o redesenho manteve a identidade de hoje; galeria: `python scripts/ui_gallery.py --chat [--tema escuro] [--altura 1300]`.
 
 **Andamento (07/10/2026):**
 
@@ -227,7 +230,10 @@ Ainda não há protótipo aprovado para painéis; fazer um antes (mesmo método 
 |---|---|
 | Central de chat, chat da proposta e componentes (anexos, linha do tempo, conteúdo compartilhado, barra de menção, painel de atividade): textos exibidos acentuados e títulos pela folha de estilo | Feito |
 | Handlers da central de ações (cancelar proposta, galvanização, produção): textos acentuados e Cancelar como botão fantasma | Feito |
-| **Redesenho do chat (balões, anexos, linha do tempo)** | **Não feito** - sem protótipo aprovado; os cerca de 120 estilos inline dessa área continuam |
+| Balões e cartões da linha do tempo | Feito: balão próprio, dos outros (com a mensagem que menciona você marcada por propriedade), separador de dia, nota interna, pergunta dirigida e resposta citada saem do estilo escrito no código e passam à folha de estilo; texto sobe de 9-12 px para 11-13 px; selos de status (Aguardando, Respondida, IMPORTANTE) sólidos como no resto do programa; botão "mais ações" com ícone no lugar do caractere "⋮", que a fonte não tem |
+| Largura e alinhamento dos balões | Corrigidos: o corpo do balão tem a largura natural do texto (até 420 px), em vez da largura proporcional do `QLabel`, que deixava a mensagem curta estreita e alta; a coluna do avatar tem largura fixa, então a mensagem agrupada alinha com a primeira e a linha deixa de esticar na vertical quando há poucas mensagens |
+| Anexos e visualizador de mídia | Feito: cartão de arquivo, vídeo, áudio, galeria, barra de transferência, anexo pendente e visualizador usam a folha de estilo; o fundo escuro do visualizador e as sobreposições vêm de tokens fixos (`media_bg`, `media_text`, `overlay`...), a única exceção aos tokens derivados da paleta, porque a mídia é escura nos dois temas; os ícones da barra do visualizador usavam um cinza claro fixo que sumia sobre o fundo claro do diálogo |
+| Barra de composição, conversas e aba Mídia e arquivos | Feito: área de soltar arquivo, prévia de resposta, ponto de presença, abas da conversa, destaque temporário de mensagem e selo de situação passam a estado por propriedade (`set_style_state`), sem reescrever stylesheet em tempo de execução; ponto de status e avatar pintados; contagem de não lidas na cor de perigo com o texto de maior contraste |
 
 ### Onda 8 — Sistema e acesso (M)
 
@@ -240,7 +246,7 @@ Login, atualização e manutenção abrem **sem** janela principal por trás: n�
 | Entrega | Situação |
 |---|---|
 | Os 13 diálogos e páginas de sistema: textos exibidos acentuados, Cancelar/Fechar como botão fantasma, títulos pela folha de estilo | Feito |
-| Botão "Reduzir animações" em Configurações | **Não feito** - a opção existe só pela chave `reduce_motion` da configuração |
+| Botão "Reduzir animações" em Configurações | Feito em Aparência: caixa "Reduzir animações" aplicada na hora (`set_reduced_motion`) e gravada em `reduce_motion`; vale para qualquer usuário, sem depender da permissão de editar configurações. Os textos exibidos da página (menu e títulos) também ganharam acento |
 | Layout dessas telas | Feito para os diálogos de janela (usuários, perfil, Sobre, Configurações, Nomus); login, primeiro acesso, atualização, manutenção e compatibilidade **não** mudaram: abrem sem janela principal e ficam com a barra de título nativa |
 | Vários botões primários em Configurações | Mantidos - cada um é a ação principal de uma seção diferente da página |
 
@@ -256,17 +262,33 @@ Peças novas em `app/ui/components/dialog_shell.py`: `dialog_header()` (cabeçal
 
 **Não refeitos:** diálogo de progresso do Nomus (visual próprio, com cerca de 13 estilos inline dependentes do tema), diagnóstico da API (linha de botões muito larga, pede redesenho), diálogo antigo de ações em lote (`batch_status_dialog`, picker legado) e os de inicialização citados acima.
 
+## Painéis, chat e estilos inline (07/10/2026)
+
+Peças novas: `app/ui/components/page_header.py` (faixa de topo de página: título na cor de destaque, subtítulo, informações de apoio e ações, com área para filtros), `style_state.py` (`set_style_state` muda propriedade de estado e reaplica o estilo; `StatusDot` é o ponto de cor pintado), `StageChip` e `StatusBadge.colors()` em `status_badge.py`, `AvatarLabel` em `avatar.py` e os tokens `media_*` / `overlay*` / `on_overlay` em `ui_tokens()`.
+
+Regras de estilo novas em `styles.py`: cartão de indicador, legenda, linha de alerta e painel suave (painéis); balões, cartões, anexos, vídeo, áudio, composição, conversas, abas e visualizador de mídia (chat); avisos de sucesso, toast, cabeçalho de coluna e o diálogo de progresso do Nomus. `check_contrast.py` passou a conferir também os pares do chat (hora na bolha, texto do visualizador, contagem não lida...).
+
+**Diálogo de progresso do Nomus** refeito sobre a casca padrão: cabeçalho-cartão no lugar do degradê, painel de progresso e rodapé padrão; os 13 estilos inline (cópia dupla da folha de estilo, com degradê) viraram regras na folha de estilo do app.
+
+**Estilos inline** em `app/ui`: 317 no início, 12 agora. O que sobra é intencional: aplicação do tema (`main_window`, `dialog_utils`, `frameless_dialog`), identidade de área (`area_identity`, `top_tabs`, cujos testes conferem a cor no stylesheet), variantes do cartão da central de ações (`action_card_button`, contrato do Action Center) e o diálogo de atualização, que abre sem janela principal.
+
+**Filtros sem rótulo lateral** também em Fiscal (e nos relatórios fiscais), itens de Produção, itens de Galvanização e cargas: placeholder e primeira opção autoexplicativa ("Todos os status fiscais", "Todas as situações"), nome acessível em cada campo.
+
+**Exportações.** PDF e CSV de seleção (`ProcessPage._export_pdf/_export_csv`) e o CSV dos relatórios escrevem texto puro vindo de `display_cell`: não usam as cores de status, então a mudança de cor não os afeta. O texto de status agora sai acentuado e o CSV já é gravado em UTF-8 com BOM, que o Excel lê certo.
+
+**Instalador.** Os `.spec` oficiais incluem `app/assets` inteiro e as seis fontes Inter estão versionadas. Conferido gerando o pacote de verdade (`python -m PyInstaller ControleProducao.spec`, em pasta temporária): `ControleProducao.exe` + `_internal/app/assets/fonts` com as seis fontes e a licença, no mesmo caminho relativo que `app/ui/fonts.py` usa. Obs.: o build em um caminho longo estoura o limite de 260 caracteres do Windows (arquivo de licença do numpy); gere o pacote em pasta curta. O instalador do Inno Setup não foi gerado.
+
+**Contagem por status no Controle Geral** (filtro segmentado): **não feita**. A lista é paginada e a API não devolve o total de cada status; mostrar número ali seria mentir. Depende de um endpoint de totais por status em `api/app/modules/proposals/` (mais testes da API e entrada na documentação do contrato); fica fora do refinamento visual.
+
 ## Situação geral (07/10/2026)
 
-Todas as nove ondas passaram pela etapa que não depende de protótipo: fundação, moldura, páginas operacionais, Detalhes da proposta e centrais de ação refeitas no padrão; nas demais telas, hierarquia de botões, textos acentuados e títulos pela folha de estilo. Suíte ao fim: 2407 testes passando; estilos inline em `app/ui` caíram de 317 para 226.
+As nove ondas foram refeitas no padrão: fundação, moldura, páginas operacionais, Detalhes da proposta, centrais de ação, layout de todos os diálogos, painéis e relatórios, chat e a página de Configurações. Suíte Desktop ao fim: 2446 testes passando; estilos inline em `app/ui`: 317 no início, 12 agora.
 
 O que continua em aberto, em ordem de valor:
 
-1. **Conferir no sistema real, logado, nos dois temas.** Até aqui a conferência visual foi feita na galeria (`scripts/ui_gallery.py`) e pelos testes; nenhuma tela foi vista com dados reais.
-2. **Layout dos diálogos das Ondas 4, 5 e 8** (cabeçalho-cartão, painéis, rodapé de ações, indicador de passo). Só a "pele" mudou.
-3. **Redesenho de painéis (Onda 6) e chat (Onda 7)**, que pedem protótipo aprovado antes.
-4. **Estilos inline restantes** (a maior parte no chat e nos painéis).
-5. Botão "Reduzir animações" em Configurações; conferência de PDF/Excel exportados com as cores novas de status; gerar o instalador e confirmar que a fonte Inter vem junto.
+1. **Conferir no sistema real, logado, nos dois temas.** Até aqui a conferência visual foi feita na galeria (`scripts/ui_gallery.py`, com `--moldura`, `--painel` e `--chat`) e pelos testes; nenhuma tela foi vista com dados reais. É o passo que mais pode revelar ajuste fino (larguras com dado real, textos longos, 1366x768).
+2. **Contagem por status no filtro segmentado do Controle Geral**: precisa de endpoint de totais na API (ver o bloco acima).
+3. Diálogos que ficaram de fora do layout novo: diagnóstico da API, ações em lote antigo (`batch_status_dialog`) e os de inicialização (login, primeiro acesso, atualização, manutenção, compatibilidade, que abrem sem janela principal).
 
 ## Ordem e dependências
 
@@ -313,5 +335,5 @@ As ondas 6 e 7 precisam de protótipo aprovado antes de começar.
 
 ## Pendências
 
-1. Gerar o instalador e conferir que a Inter vem junto (os `.spec` já incluem `app/assets`, mas o executável ainda não foi gerado depois da mudança).
-2. Abrir o sistema real, logado, e conferir as telas nos dois temas antes de commitar a Onda 0.
+1. Abrir o sistema real, logado, e conferir as telas nos dois temas.
+2. Gerar o instalador (Inno Setup) com a versão final e instalar numa máquina limpa: a conferência do pacote já foi feita (fontes presentes no `.exe` do PyInstaller), falta só o instalador completo.
