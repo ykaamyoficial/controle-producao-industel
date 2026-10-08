@@ -272,7 +272,7 @@ class ProcessPage(QWidget):
         self.batch_header.setFixedHeight(TABLE_HEADER_HEIGHT)
         self.batch_header.setStretchLastSection(True)
         self.batch_header.setSectionResizeMode(QHeaderView.Interactive)
-        self.batch_header.setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self.batch_header.setDefaultAlignment(Qt.AlignCenter)
         self.table.setModel(self.proxy)
         self.table.status_shortcut_requested.connect(self.change_status_for_id)
         self.table.chat_shortcut_requested.connect(self.open_chat_for_id)

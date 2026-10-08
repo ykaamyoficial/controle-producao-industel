@@ -482,7 +482,7 @@ class FiscalPage(QWidget):
         self.batch_header = BatchSelectionHeader(Qt.Horizontal, self.table)
         self.table.setHorizontalHeader(self.batch_header)
         self.batch_header.setFixedHeight(TABLE_HEADER_HEIGHT)
-        self.batch_header.setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self.batch_header.setDefaultAlignment(Qt.AlignCenter)
         self.batch_header.setStretchLastSection(True)
         self.table.status_shortcut_enabled = False
         self.table.setModel(self.proxy)

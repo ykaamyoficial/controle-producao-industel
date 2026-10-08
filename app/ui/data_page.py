@@ -63,7 +63,7 @@ class DataPage(QWidget):
         self.table.setShowGrid(False)
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.horizontalHeader().setFixedHeight(TABLE_HEADER_HEIGHT)
-        self.table.horizontalHeader().setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self.table.horizontalHeader().setDefaultAlignment(Qt.AlignCenter)
         self.table.verticalHeader().setDefaultSectionSize(TABLE_ROW_HEIGHT)
         self.empty_state = EmptyState(
             "Nenhum registro encontrado",

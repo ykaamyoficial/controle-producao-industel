@@ -46,6 +46,10 @@ def deadline_alert(row: dict | None, today: date | None = None) -> tuple[str, st
     return "", ""
 
 
+# Texto de celula e titulo de coluna das tabelas operacionais: centralizados.
+TABLE_TEXT_ALIGNMENT = Qt.AlignCenter
+
+
 class ProcessFilterProxy(QSortFilterProxyModel):
     def filterAcceptsRow(self, source_row: int, source_parent) -> bool:
         text = self.filterRegularExpression().pattern().lower()
@@ -94,6 +98,9 @@ class StatusBadgeDelegate(QStyledItemDelegate):
         # O fundo de linha (selecao, hover) e pintado em paint() para a linha
         # inteira; sem estes estados o estilo nao repinta cada celula por cima.
         option.state &= ~(QStyle.State_Selected | QStyle.State_MouseOver)
+        # Todo texto de tabela operacional fica centralizado (pedido do usuario
+        # em 08/10/2026), independente do alinhamento que o modelo devolve.
+        option.displayAlignment = TABLE_TEXT_ALIGNMENT
         if index.data(Qt.UserRole + 1) == "proposta":
             font = QFont(option.font)
             font.setWeight(QFont.Weight.DemiBold)
@@ -202,7 +209,11 @@ class StatusBadgeDelegate(QStyledItemDelegate):
         painter.setClipRect(rect)
         font = QFont(option.font)
         metrics = QFontMetricsF(font)
-        x = rect.x() + 8
+        alert_font = QFont(option.font)
+        alert_font.setWeight(QFont.Weight.DemiBold)
+        # Data + aviso formam um bloco so, centralizado na celula.
+        block_width = metrics.horizontalAdvance(text) + 10 + (18 if kind == "danger" else 0) + QFontMetricsF(alert_font).horizontalAdvance(alert)
+        x = rect.x() + max(8.0, (rect.width() - block_width) / 2)
         painter.setFont(font)
         painter.setPen(QPen(QColor(tokens["text"])))
         painter.drawText(QRectF(x, rect.y(), rect.width(), rect.height()), Qt.AlignVCenter | Qt.AlignLeft, text)
@@ -210,8 +221,6 @@ class StatusBadgeDelegate(QStyledItemDelegate):
         if kind == "danger":
             painter.drawPixmap(int(x), int(center_y - 7), make_icon("warning", color, 14).pixmap(14, 14))
             x += 18
-        alert_font = QFont(option.font)
-        alert_font.setWeight(QFont.Weight.DemiBold)
         painter.setFont(alert_font)
         painter.setPen(QPen(QColor(color)))
         painter.drawText(QRectF(x, rect.y(), rect.width(), rect.height()), Qt.AlignVCenter | Qt.AlignLeft, alert)
@@ -241,7 +250,7 @@ class ModernTable(QTableView):
         self.horizontalHeader().setFixedHeight(TABLE_HEADER_HEIGHT)
         self.horizontalHeader().setStretchLastSection(True)
         self.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
-        self.horizontalHeader().setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self.horizontalHeader().setDefaultAlignment(TABLE_TEXT_ALIGNMENT)
         self.setItemDelegate(StatusBadgeDelegate(service, self))
         self.setWordWrap(True)
         self.setToolTip("Clique no ícone de status para abrir as ações da proposta, ou no ícone de chat para abrir a conversa.")
@@ -273,7 +282,7 @@ class ModernTable(QTableView):
             "id": 54,
             "tipo_processo": 86,
             "cliente": 200,
-            "proposta": 130,
+            "proposta": 112,
             "pedido_compra": 112,
             "obra_site": 190,
             "numero_nf": 130,
