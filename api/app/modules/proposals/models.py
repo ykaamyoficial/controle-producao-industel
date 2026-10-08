@@ -403,6 +403,35 @@ class ProductionAllocationTransfer(Base):
     to_item: Mapped[ProposalItem] = relationship(foreign_keys=[to_item_id], overlaps="production_allocations_received")
 
 
+class RemanagementStageTransfer(Base):
+    """Troca de dono de pecas JA FABRICADAS entre dois itens, em um remanejamento
+    (plano de logistica, Fase C): `AWAITING_GALVANIZATION` (fabricadas, ainda fora de
+    carga) ou `IN_GALVANIZATION` (dentro de uma carga, com as linhas de carga que
+    cederam e receberam). A troca de "a fabricar" continua sendo `ProductionAllocationTransfer`."""
+
+    __tablename__ = "remanagement_stage_transfers"
+    __table_args__ = (
+        CheckConstraint("quantity > 0", name="ck_remanagement_stage_transfers_quantity_positive"),
+        CheckConstraint("stage IN ('AWAITING_GALVANIZATION', 'IN_GALVANIZATION')", name="ck_remanagement_stage_transfers_stage"),
+        CheckConstraint("stage <> 'IN_GALVANIZATION' OR load_id IS NOT NULL", name="ck_remanagement_stage_transfers_load_for_stage"),
+        Index("ix_remanagement_stage_transfers_from_item", "from_item_id"),
+        Index("ix_remanagement_stage_transfers_to_item", "to_item_id"),
+        Index("ix_remanagement_stage_transfers_remanagement_item", "remanagement_item_id"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    remanagement_item_id: Mapped[int] = mapped_column(ForeignKey("proposal_remanagement_items.id", ondelete="CASCADE"), nullable=False)
+    stage: Mapped[str] = mapped_column(String(30), nullable=False)
+    quantity: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
+    from_item_id: Mapped[int] = mapped_column(ForeignKey("proposal_items.id", ondelete="RESTRICT"), nullable=False)
+    to_item_id: Mapped[int] = mapped_column(ForeignKey("proposal_items.id", ondelete="RESTRICT"), nullable=False)
+    load_id: Mapped[int | None] = mapped_column(ForeignKey("galvanization_loads.id", ondelete="RESTRICT"), nullable=True)
+    from_load_item_id: Mapped[int | None] = mapped_column(ForeignKey("galvanization_load_items.id", ondelete="RESTRICT"), nullable=True)
+    to_load_item_id: Mapped[int | None] = mapped_column(ForeignKey("galvanization_load_items.id", ondelete="RESTRICT"), nullable=True)
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
 class FiscalRecord(Base):
     __tablename__ = "fiscal_records"
     __table_args__ = (

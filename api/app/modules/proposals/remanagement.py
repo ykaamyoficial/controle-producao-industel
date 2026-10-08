@@ -80,6 +80,28 @@ def calculate_item_balance(
     )
 
 
+def galvanization_pipeline_quantity(
+    *,
+    requested,
+    production_out=ZERO,
+    production_in_completed=ZERO,
+    fabricated_in=ZERO,
+    fabricated_out=ZERO,
+) -> Decimal:
+    """Quantas pecas de um item GALVANIZADO passam pela galvanizacao ("esteira").
+
+    esteira = pedido - obrigacao de fabricar cedida + reposicao concluida recebida
+              + pecas ja fabricadas recebidas - pecas ja fabricadas cedidas
+
+    Sem nenhuma troca por remanejamento a esteira e igual ao pedido. E esta quantidade (e nao
+    mais `item.quantity`) que diz quanto o item ainda pode mandar em carga e quando ele
+    voltou inteiro da galvanizacao (plano de logistica do remanejamento, Fase C)."""
+    return (
+        quantity(requested) - quantity(production_out) + quantity(production_in_completed)
+        + quantity(fabricated_in) - quantity(fabricated_out)
+    ).quantize(Decimal("0.0001"))
+
+
 def items_are_compatible(source_item, destination_item) -> tuple[bool, str | None]:
     source_code = str(source_item.product_code or "").strip().upper()
     destination_code = str(destination_item.product_code or "").strip().upper()

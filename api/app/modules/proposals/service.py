@@ -30,6 +30,7 @@ from api.app.modules.proposals.compensation import Allocation, CompensationError
 from api.app.modules.proposals.domain import ProductionStateMachine, ProposalStateMachine
 from api.app.modules.proposals.models import ExpeditionEvent, ExpeditionItem, FiscalEvent, FiscalInvoice, FiscalInvoiceItem, FiscalRecord, FiscalItem, GalvanizationLoad, GalvanizationLoadEvent, GalvanizationLoadItem, ProductionAllocationTransfer, Proposal, ProposalEvent, ProposalItem, ProposalRemanagement, ProposalRemanagementItem, SyncRun
 from api.app.modules.proposals.remanagement import calculate_item_balance, items_are_compatible, max_remanageable, quantity
+from api.app.modules.proposals.stage_ledger import load_pipeline_quantities
 from api.app.modules.proposals.stage_swap import verify_swap_conservation
 from api.app.modules.proposals.weights import calculate_known_weight, calculate_weight_coverage, normalize_known_weight
 from api.app.shared.formatting import format_quantity
@@ -625,12 +626,14 @@ async def list_galvanization_candidates(session: AsyncSession, *, search: str | 
     eligible = [(proposal, item) for proposal in proposals for item in _eligible_galvanization_items(proposal)]
     # Saldos de todos os itens em UMA consulta agrupada, em vez de duas por item.
     quantities = await _galvanization_quantities(session, [int(item.id) for _proposal, item in eligible])
+    # Quanto cada item leva pela galvanizacao (igual ao pedido, salvo troca por remanejamento).
+    pipelines = await load_pipeline_quantities(session, [item for _proposal, item in eligible])
     rows = []
     needle = (search or "").strip().lower()
     situation_filter = (situation or "").strip().upper() or None
     for proposal, item in eligible:
         sent_total, pending_total = quantities.get(int(item.id), (Decimal("0"), Decimal("0")))
-        available = max(Decimal("0"), (item.quantity - sent_total)).quantize(Decimal("0.0001"))
+        available = max(Decimal("0"), (pipelines[int(item.id)] - sent_total)).quantize(Decimal("0.0001"))
         # Item ja enviado para uma carga nao pode ser candidato novamente.
         # O saldo zero era exposto como diagnostico e o desktop o projetava
         # junto com a linha real da carga, duplicando a filha.
@@ -3362,7 +3365,10 @@ async def _expedition_available_source(session: AsyncSession, item: ProposalItem
             .where(GalvanizationLoadItem.active.is_(True))
             .where(GalvanizationLoad.status != "CANCELADA")
         )).scalar_one() or "0")).quantize(Decimal("0.0001"))
-        return returned, "GALVANIZACAO"
+        # + pronto recebido de outro remanejamento (o item galvanizado que recebe material pronto
+        # nao pode perder esse pronto quando a propria galvanizacao voltar).
+        origin = "MISTO" if ready_received_by_remanagement > 0 and returned > 0 else ("REMANEJAMENTO" if ready_received_by_remanagement > 0 else "GALVANIZACAO")
+        return (returned + ready_received_by_remanagement).quantize(Decimal("0.0001")), origin
     if item.requires_galvanization == "NAO":
         native_available = max(Decimal("0"), item.quantity - production_out) if item.produced else Decimal("0")
         available = (native_available + production_in_completed + ready_received_by_remanagement).quantize(Decimal("0.0001"))
@@ -5606,7 +5612,8 @@ async def _galvanization_available_quantity(session: AsyncSession, item: Proposa
     if exclude_load_id is not None:
         stmt = stmt.where(GalvanizationLoadItem.load_id != exclude_load_id)
     sent = Decimal(str((await session.execute(stmt)).scalar_one() or "0"))
-    return max(Decimal("0"), (item.quantity - sent)).quantize(Decimal("0.0001"))
+    pipeline = (await load_pipeline_quantities(session, [item]))[int(item.id)]
+    return max(Decimal("0"), (pipeline - sent)).quantize(Decimal("0.0001"))
 
 
 async def _galvanization_quantities(session: AsyncSession, item_ids: list[int]) -> dict[int, tuple[Decimal, Decimal]]:
@@ -5680,6 +5687,7 @@ def _selected_return_items(load: GalvanizationLoad, payload: GalvanizationReturn
 async def _recalculate_galvanization_proposal_state(session: AsyncSession, proposal: Proposal, actor: User, *, request_id: str | None, load_id: int, observation: str | None) -> None:
     _ensure_proposal_not_cancelled(proposal)
     galv_items = [item for item in _active_items(proposal) if item.requires_galvanization == "SIM"]
+    pipelines = await load_pipeline_quantities(session, galv_items)
     returned = []
     partial = False
     for item in galv_items:
@@ -5690,7 +5698,7 @@ async def _recalculate_galvanization_proposal_state(session: AsyncSession, propo
             .where(GalvanizationLoadItem.active.is_(True))
             .where(GalvanizationLoad.status != "CANCELADA")
         )).scalar_one() or "0"))
-        if total_returned >= item.quantity:
+        if total_returned >= pipelines[int(item.id)]:
             item.galvanized = True
             _touch(item, actor)
             returned.append(item)

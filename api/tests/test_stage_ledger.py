@@ -6,6 +6,7 @@ import unittest
 from decimal import Decimal
 
 from api.app.modules.proposals import stage_ledger as ledger
+from api.app.modules.proposals.remanagement import galvanization_pipeline_quantity
 from api.app.modules.proposals.stage_ledger import ItemFacts, build_ledger, compute_item_stages, find_anomalies
 
 
@@ -16,7 +17,7 @@ def D(value) -> Decimal:
 DECIMAL_FIELDS = {
     "requested", "expedition_available", "expedition_delivered", "expedition_remanaged", "production_out",
     "production_in_pending", "production_in_completed", "galvanization_sent", "galvanization_pending", "ready_given",
-    "ready_received",
+    "ready_received", "fabricated_in", "fabricated_out",
 }
 
 
@@ -127,6 +128,90 @@ class GalvanizedFlowTests(unittest.TestCase):
         item = self.galvanized(produced=True, has_expedition_row=True, expedition_available=10, expedition_delivered=6, galvanization_sent=10)
         self.assertEqual(numbers(item), (D(0), D(0), D(0), D(4), D(6)))
         self.assertEqual(item.gap, D(0))
+
+
+class GalvanizedRemanagementTests(unittest.TestCase):
+    """O item galvanizado depois de remanejar (Fase C): a esteira troca de tamanho, o total do item nao."""
+
+    def galvanized(self, **changes):
+        return stages(requires_galvanization="SIM", **changes)
+
+    def test_pipeline_is_the_requested_quantity_when_nothing_was_swapped(self):
+        self.assertEqual(galvanization_pipeline_quantity(requested=10), D(10))
+
+    def test_pipeline_follows_every_kind_of_swap(self):
+        self.assertEqual(
+            galvanization_pipeline_quantity(requested=10, production_out=2, production_in_completed=3, fabricated_in=4, fabricated_out=1),
+            D(14),
+        )
+
+    def test_source_that_gave_ready_pieces_owes_the_replacement_to_produce(self):
+        item = self.galvanized(
+            produced=True, has_expedition_row=True, expedition_available=10, expedition_remanaged=4, ready_given=4,
+            galvanization_sent=10, production_in_pending=4,
+        )
+        self.assertEqual(numbers(item), (D(4), D(0), D(0), D(6), D(0)))
+        self.assertEqual(item.gap, D(0))
+
+    def test_replacement_produced_goes_to_the_galvanization_queue_not_to_the_expedition(self):
+        item = self.galvanized(
+            produced=True, has_expedition_row=True, expedition_available=10, expedition_remanaged=4, ready_given=4,
+            galvanization_sent=10, production_in_completed=4,
+        )
+        self.assertEqual(numbers(item), (D(0), D(4), D(0), D(6), D(0)))
+        self.assertEqual(item.gap, D(0))
+
+    def test_replacement_sent_and_returned_joins_the_ready_pieces(self):
+        sent_back = self.galvanized(
+            produced=True, has_expedition_row=True, expedition_available=14, expedition_remanaged=4, ready_given=4,
+            galvanization_sent=14, production_in_completed=4,
+        )
+        self.assertEqual(numbers(sent_back), (D(0), D(0), D(0), D(10), D(0)))
+        self.assertEqual(sent_back.gap, D(0))
+        self.assertEqual(find_anomalies(facts(
+            requires_galvanization="SIM", produced=True, has_expedition_row=True, expedition_available=14, expedition_remanaged=4,
+            ready_given=4, galvanization_sent=14, production_in_completed=4,
+        ), sent_back), [])
+
+    def test_destination_not_yet_produced_after_receiving_ready_pieces(self):
+        item = self.galvanized(has_expedition_row=True, expedition_available=4, ready_received=4, production_out=4)
+        self.assertEqual(numbers(item), (D(6), D(0), D(0), D(4), D(0)))
+        self.assertEqual(item.gap, D(0))
+
+    def test_destination_after_production_waits_for_a_load_and_keeps_the_received_ready_pieces(self):
+        item = self.galvanized(produced=True, has_expedition_row=True, expedition_available=4, ready_received=4, production_out=4)
+        self.assertEqual(numbers(item), (D(0), D(6), D(0), D(4), D(0)))
+        self.assertEqual(item.gap, D(0))
+
+    def test_destination_whose_galvanized_pieces_came_back_does_not_lose_the_received_ready_pieces(self):
+        facts_back = facts(
+            requires_galvanization="SIM", produced=True, has_expedition_row=True, expedition_available=10, ready_received=4,
+            production_out=4, galvanization_sent=6,
+        )
+        item = compute_item_stages(facts_back)
+        self.assertEqual(numbers(item), (D(0), D(0), D(0), D(10), D(0)))
+        self.assertEqual(find_anomalies(facts_back, item), [])
+
+    def test_source_that_received_pieces_inside_a_load_and_destination_that_gave_them(self):
+        source = self.galvanized(
+            produced=True, has_expedition_row=True, expedition_available=10, expedition_remanaged=4, ready_given=4,
+            galvanization_sent=14, galvanization_pending=4, fabricated_in=4,
+        )
+        self.assertEqual(numbers(source), (D(0), D(0), D(4), D(6), D(0)))
+        self.assertEqual(source.gap, D(0))
+        destination = self.galvanized(
+            produced=True, has_expedition_row=True, expedition_available=4, ready_received=4, galvanization_sent=0, fabricated_out=4,
+        )
+        self.assertEqual(numbers(destination), (D(0), D(6), D(0), D(4), D(0)))
+        self.assertEqual(destination.gap, D(0))
+
+    def test_awaiting_pieces_that_changed_owner(self):
+        source = self.galvanized(
+            produced=True, has_expedition_row=True, expedition_available=10, expedition_remanaged=4, ready_given=4,
+            galvanization_sent=10, fabricated_in=4,
+        )
+        self.assertEqual(numbers(source), (D(0), D(4), D(0), D(6), D(0)))
+        self.assertEqual(source.gap, D(0))
 
 
 class UndefinedFlowTests(unittest.TestCase):

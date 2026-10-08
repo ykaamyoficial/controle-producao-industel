@@ -30,8 +30,10 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import lazyload, selectinload
 
-from api.app.modules.proposals.models import Proposal, ProposalItem, ProposalRemanagementItem
-from api.app.modules.proposals.remanagement import calculate_item_balance, quantity
+from api.app.modules.proposals.models import (
+    ProductionAllocationTransfer, Proposal, ProposalItem, ProposalRemanagementItem, RemanagementStageTransfer,
+)
+from api.app.modules.proposals.remanagement import calculate_item_balance, galvanization_pipeline_quantity, quantity
 
 ZERO = Decimal("0.0000")
 TOLERANCE = Decimal("0.0001")
@@ -87,6 +89,9 @@ class ItemFacts:
     galvanization_pending: Decimal
     ready_given: Decimal  # remanejamentos em que o item foi origem (pronto cedido)
     ready_received: Decimal  # remanejamentos em que o item foi destino (pronto recebido)
+    # Pecas ja fabricadas que mudaram de dono (aguardando galvanizacao ou dentro de carga).
+    fabricated_in: Decimal = ZERO
+    fabricated_out: Decimal = ZERO
 
 
 @dataclass(frozen=True)
@@ -156,7 +161,8 @@ def derived_expedition_available(facts: ItemFacts) -> Decimal:
     if not facts.flow_defined or (not facts.produced and facts.production_in_completed <= 0 and facts.ready_received <= 0):
         return ZERO
     if facts.requires_galvanization == "SIM":
-        return quantity(facts.galvanization_sent - facts.galvanization_pending)
+        # Voltou da galvanizacao + pronto recebido de outro remanejamento.
+        return quantity(facts.galvanization_sent - facts.galvanization_pending + facts.ready_received)
     if facts.requires_galvanization == "NAO":
         native = max(ZERO, facts.requested - facts.production_out) if facts.produced else ZERO
         return quantity(native + facts.production_in_completed + facts.ready_received)
@@ -193,11 +199,18 @@ def compute_item_stages(facts: ItemFacts) -> ItemStages:
     ready = balance.ready_available
     if facts.requires_galvanization == "SIM":
         # So o que ainda nao foi fabricado (mais a reposicao recebida) esta "a fabricar";
-        # o resto do pedido esta aguardando carga, dentro de carga ou ja voltou.
+        # o resto da esteira esta aguardando carga, dentro de carga ou ja voltou.
+        pipeline = galvanization_pipeline_quantity(
+            requested=facts.requested, production_out=facts.production_out, production_in_completed=facts.production_in_completed,
+            fabricated_in=facts.fabricated_in, fabricated_out=facts.fabricated_out,
+        )
         native_to_produce = ZERO if facts.produced else balance.reallocatable_production
         to_produce = quantity(native_to_produce + balance.production_reallocated_in_pending)
         in_galvanization = quantity(max(ZERO, facts.galvanization_pending))
-        awaiting = quantity(facts.requested - native_to_produce - facts.galvanization_sent)
+        if facts.produced:
+            awaiting = quantity(pipeline - facts.galvanization_sent)
+        else:
+            awaiting = quantity(max(ZERO, facts.fabricated_in - facts.fabricated_out + facts.production_in_completed - facts.galvanization_sent))
     else:
         to_produce = balance.production_pending if facts.produce_internally == "SIM" else ZERO
         in_galvanization = ZERO
@@ -309,6 +322,8 @@ async def load_item_facts(session: AsyncSession, *, proposal_ids: list[int] | No
         )).all()
     } if item_ids else {}
 
+    fabricated_in, fabricated_out = await _fabricated_transfers(session, item_ids)
+
     result = []
     for item, proposal_number in rows:
         expedition = item.expedition_item
@@ -335,8 +350,65 @@ async def load_item_facts(session: AsyncSession, *, proposal_ids: list[int] | No
             galvanization_pending=quantity(pending),
             ready_given=quantity(given.get(int(item.id), ZERO)),
             ready_received=quantity(received.get(int(item.id), ZERO)),
+            fabricated_in=quantity(fabricated_in.get(int(item.id), ZERO)),
+            fabricated_out=quantity(fabricated_out.get(int(item.id), ZERO)),
         ))
     return result
+
+
+async def _fabricated_transfers(session: AsyncSession, item_ids: list[int]) -> tuple[dict[int, Decimal], dict[int, Decimal]]:
+    """(recebidas, cedidas) por item: pecas ja fabricadas que trocaram de dono em remanejamentos."""
+    if not item_ids:
+        return {}, {}
+    received = {
+        int(item_id): Decimal(str(total or "0"))
+        for item_id, total in (await session.execute(
+            select(RemanagementStageTransfer.to_item_id, func.sum(RemanagementStageTransfer.quantity))
+            .where(RemanagementStageTransfer.to_item_id.in_(item_ids)).group_by(RemanagementStageTransfer.to_item_id)
+        )).all()
+    }
+    given = {
+        int(item_id): Decimal(str(total or "0"))
+        for item_id, total in (await session.execute(
+            select(RemanagementStageTransfer.from_item_id, func.sum(RemanagementStageTransfer.quantity))
+            .where(RemanagementStageTransfer.from_item_id.in_(item_ids)).group_by(RemanagementStageTransfer.from_item_id)
+        )).all()
+    }
+    return received, given
+
+
+async def load_pipeline_quantities(session: AsyncSession, items: list[ProposalItem]) -> dict[int, Decimal]:
+    """Esteira de cada item (ver `galvanization_pipeline_quantity`). Item sem nenhuma troca
+    por remanejamento volta com a propria quantidade pedida, sem custo de consulta extra
+    alem de quatro somas agrupadas."""
+    if not items:
+        return {}
+    item_ids = [int(item.id) for item in items]
+    production_out = {
+        int(item_id): Decimal(str(total or "0"))
+        for item_id, total in (await session.execute(
+            select(ProductionAllocationTransfer.from_item_id, func.sum(ProductionAllocationTransfer.quantity))
+            .where(ProductionAllocationTransfer.from_item_id.in_(item_ids)).group_by(ProductionAllocationTransfer.from_item_id)
+        )).all()
+    }
+    production_in_completed = {
+        int(item_id): Decimal(str(total or "0"))
+        for item_id, total in (await session.execute(
+            select(ProductionAllocationTransfer.to_item_id, func.sum(ProductionAllocationTransfer.completed_quantity))
+            .where(ProductionAllocationTransfer.to_item_id.in_(item_ids)).group_by(ProductionAllocationTransfer.to_item_id)
+        )).all()
+    }
+    fabricated_in, fabricated_out = await _fabricated_transfers(session, item_ids)
+    return {
+        int(item.id): galvanization_pipeline_quantity(
+            requested=item.quantity,
+            production_out=production_out.get(int(item.id), ZERO),
+            production_in_completed=production_in_completed.get(int(item.id), ZERO),
+            fabricated_in=fabricated_in.get(int(item.id), ZERO),
+            fabricated_out=fabricated_out.get(int(item.id), ZERO),
+        )
+        for item in items
+    }
 
 
 async def load_stage_ledger(session: AsyncSession, *, proposal_ids: list[int] | None = None) -> StageLedger:

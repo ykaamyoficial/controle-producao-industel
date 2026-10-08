@@ -140,3 +140,11 @@ Sem nenhuma troca, a esteira é igual ao pedido, então **nada muda para os iten
 - **C2 — gravar a troca no galvanizado:** aplicar as transferências (linhas de carga e tabela), concluir a reposição galvanizada seguindo para a galvanização e ressincronizar o estado das duas propostas. Tudo atrás de uma chave que mantém o galvanizado bloqueado até a Fase E; os testes ligam a chave.
 - **C3 — estados da cedente e do destino (R4–R6) e testes de cenário de ponta a ponta:** cedeu tudo, cedeu parte e voltou, duas cedentes, uma cedente para dois destinos, propostas com filhas (por enquanto recusadas com mensagem clara).
 
+#### C1 — esteira e leitura (feita em 08/10/2026)
+
+- **Migração `20261008_0035`** (TRANSITIONAL, tabela nova e vazia com FKs): `remanagement_stage_transfers`. `EXPECTED_DATABASE_REVISION` passou a `20261008_0035`. **Aplicada na base de desenvolvimento** (`docker exec controle_producao_api_dev ... alembic upgrade head`); a API oficial e o banco oficial **não foram tocados** e só recebem esta migração quando a publicação for autorizada.
+- **Esteira** (`galvanization_pipeline_quantity`, em `remanagement.py`): `pedido − obrigação cedida + reposição concluída recebida + fabricadas recebidas − fabricadas cedidas`. Três pontos da galvanização passaram a usá-la no lugar de `item.quantity`: disponível para carga, validação da carga e a conta do retorno (`galvanized`). Item que nunca foi remanejado tem esteira igual ao pedido: **comportamento idêntico**.
+- **Expedição do galvanizado**: o disponível passa a ser `voltou da galvanização + pronto recebido` (antes só o que voltou), para o destino galvanizado não perder o pronto recebido quando a própria galvanização voltar; origem `REMANEJAMENTO`/`MISTO` quando há pronto recebido.
+- **Controle de peças por estágio** usa a esteira (`awaiting = esteira − enviado`) e a reposição galvanizada concluída conta como "aguardando galvanização".
+- **Prova de que nada mudou:** a conferência da base de desenvolvimento deu o mesmo resultado de antes (1.216 itens, 1.215 fecham) com as fórmulas novas; as suítes de migração, propostas, leitura da Expedição e paridade passaram (108 testes); 30 casos novos no controle de peças (os dois lados de um remanejamento galvanizado em cada estágio).
+
