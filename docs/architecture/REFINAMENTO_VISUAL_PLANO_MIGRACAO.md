@@ -282,7 +282,7 @@ Regras de estilo novas em `styles.py`: cartão de indicador, legenda, linha de a
 
 ## Situação geral (07/10/2026)
 
-As nove ondas foram refeitas no padrão: fundação, moldura, páginas operacionais, Detalhes da proposta, centrais de ação, layout de todos os diálogos, painéis e relatórios, chat e a página de Configurações. Suíte Desktop ao fim: 2446 testes passando; estilos inline em `app/ui`: 317 no início, 12 agora.
+As nove ondas foram refeitas no padrão: fundação, moldura, páginas operacionais, Detalhes da proposta, centrais de ação, layout de todos os diálogos, painéis e relatórios, chat e a página de Configurações. Suíte completa (Desktop + API) ao fim: 2446 testes passando, 340 pulados; estilos inline em `app/ui`: 317 no início, 12 agora.
 
 O que continua em aberto, em ordem de valor:
 
