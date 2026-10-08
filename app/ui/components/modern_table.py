@@ -11,6 +11,7 @@ from app.ui.components.operational_table import configure_operational_table
 from app.ui.styles import _contrast_text, area_color, status_color
 from app.ui.theme_tokens import ui_tokens
 from app.ui.icons import IconSize, make_icon, status_icon
+from app.ui.fonts import scaled_px
 
 # Medidas do padrao visual (skill qt-industrial-ui).
 TABLE_ROW_HEIGHT = 40
@@ -132,7 +133,7 @@ class StatusBadgeDelegate(QStyledItemDelegate):
             if unread > 0:
                 badge_text = str(unread) if unread < 100 else "99+"
                 font = QFont(option.font)
-                font.setPixelSize(10)
+                font.setPixelSize(scaled_px(10))
                 font.setWeight(QFont.Weight.Bold)
                 width = max(16.0, QFontMetricsF(font).horizontalAdvance(badge_text) + 8)
                 badge_rect = QRectF(x + 11, center_y - 15, width, 15)

@@ -17,6 +17,7 @@ from app.ui.components.count_tabs import CountTabs
 from app.ui.icons import make_icon
 from app.ui.styles import _contrast_text
 from app.ui.theme_tokens import active_tokens
+from app.ui.fonts import scaled_px
 
 EMPTY_VALUES = ("", "-", "Não informado", "Nao informado", "Sem movimentação registrada", "Sem registro")
 EM_DASH = "—"
@@ -318,9 +319,9 @@ class FlowTrail(QWidget):
                 painter.setPen(QPen(done_color, 3))
             painter.drawLine(QPointF(xs[index] + 22, center_y), QPointF(xs[index + 1] - 22, center_y))
         name_font = QFont(self.font())
-        name_font.setPixelSize(13)
+        name_font.setPixelSize(scaled_px(13))
         label_font = QFont(self.font())
-        label_font.setPixelSize(12)
+        label_font.setPixelSize(scaled_px(12))
         for x, item in zip(xs, self._steps):
             state = item["state"]
             color = done_color if state == STEP_DONE else QColor(item.get("color") or tokens["accent"])

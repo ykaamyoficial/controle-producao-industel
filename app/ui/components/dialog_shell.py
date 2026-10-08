@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.ui.theme_tokens import active_tokens
+from app.ui.fonts import scaled_px
 
 DIALOG_MARGINS = (16, 14, 16, 14)
 DIALOG_SPACING = 10
@@ -161,7 +162,7 @@ class StepIndicator(QWidget):
 
     def _font(self) -> QFont:
         font = QFont(self.font())
-        font.setPixelSize(12)
+        font.setPixelSize(scaled_px(12))
         font.setWeight(QFont.Weight.DemiBold)
         return font
 

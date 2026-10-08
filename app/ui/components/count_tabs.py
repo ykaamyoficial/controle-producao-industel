@@ -6,6 +6,7 @@ from PySide6.QtWidgets import QWidget
 
 from app.ui.animations import animate_value
 from app.ui.theme_tokens import active_tokens
+from app.ui.fonts import scaled_px
 
 _KEYBOARD_FOCUS_REASONS = (Qt.TabFocusReason, Qt.BacktabFocusReason, Qt.ShortcutFocusReason)
 _HEIGHT = 40
@@ -64,7 +65,7 @@ class CountTabs(QWidget):
     # ---- geometria -------------------------------------------------------
     def _font(self, size: int, weight: QFont.Weight) -> QFont:
         font = QFont(self.font())
-        font.setPixelSize(size)
+        font.setPixelSize(scaled_px(size))
         font.setWeight(weight)
         return font
 

@@ -5,6 +5,7 @@ import re
 from PySide6.QtCore import QRectF, QSize, Qt
 from PySide6.QtGui import QColor, QFont, QFontMetricsF, QPainter
 from PySide6.QtWidgets import QLabel, QSizePolicy
+from app.ui.fonts import scaled_px
 
 _RGBA = re.compile(r"rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*(?:,\s*([\d.]+)\s*)?\)")
 _HEIGHT = 24
@@ -64,7 +65,7 @@ class StatusBadge(QLabel):
 
     def _font(self) -> QFont:
         font = QFont(self.font())
-        font.setPixelSize(12)
+        font.setPixelSize(scaled_px(12))
         font.setWeight(QFont.Weight.Bold)
         return font
 

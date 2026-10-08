@@ -7,6 +7,7 @@ from PySide6.QtWidgets import QLabel, QSizePolicy
 from app.ui.animations import animate_value
 from app.ui.styles import _contrast_text
 from app.ui.theme_tokens import active_tokens, mix
+from app.ui.fonts import scaled_px
 
 _HEIGHT = 36
 _RADIUS = 10
@@ -34,7 +35,7 @@ class BadgeStatus(QLabel):
 
     def _font(self) -> QFont:
         font = QFont(self.font())
-        font.setPixelSize(13)
+        font.setPixelSize(scaled_px(13))
         font.setWeight(QFont.Weight.Bold)
         return font
 

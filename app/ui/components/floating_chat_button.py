@@ -9,6 +9,7 @@ from app.ui.components.count_badge import format_count_badge
 from app.ui.icons import make_icon
 from app.ui.styles import _contrast_text
 from app.ui.theme_tokens import active_tokens, mix
+from app.ui.fonts import scaled_px
 
 _SIZE = 56
 _ICON_SIZE = 24
@@ -67,7 +68,7 @@ class FloatingChatButton(QPushButton):
         text = format_count_badge(self._badge_count)
         if text:
             font = QFont(self.font())
-            font.setPixelSize(11)
+            font.setPixelSize(scaled_px(11))
             font.setWeight(QFont.Weight.Bold)
             width = max(20.0, QFontMetricsF(font).horizontalAdvance(text) + 10)
             bubble = QRectF(self.width() - width - 1, 1, width, 20)

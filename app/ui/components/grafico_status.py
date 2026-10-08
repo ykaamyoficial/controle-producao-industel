@@ -5,6 +5,7 @@ from PySide6.QtGui import QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QSizePolicy, QVBoxLayout, QWidget
 
 from app.ui.components.empty_state import EmptyState
+from app.ui.fonts import scaled_px
 
 
 class DonutCanvas(QWidget):
@@ -44,13 +45,13 @@ class DonutCanvas(QWidget):
             start += span
         # Total no centro, com a legenda "processos" logo abaixo.
         number_font = QFont(painter.font())
-        number_font.setPixelSize(28)
+        number_font.setPixelSize(scaled_px(28))
         number_font.setWeight(QFont.Weight.Bold)
         painter.setFont(number_font)
         painter.setPen(QColor(self.palette["text"]))
         painter.drawText(rect.adjusted(0, -10, 0, -10), Qt.AlignCenter, str(total))
         caption_font = QFont(painter.font())
-        caption_font.setPixelSize(12)
+        caption_font.setPixelSize(scaled_px(12))
         caption_font.setWeight(QFont.Weight.Normal)
         painter.setFont(caption_font)
         painter.setPen(QColor(self.palette["muted"]))

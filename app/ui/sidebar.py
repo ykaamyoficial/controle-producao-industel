@@ -7,6 +7,7 @@ from PySide6.QtWidgets import QFrame, QLabel, QVBoxLayout
 from app.ui.components.app_icon_button import AppIconButton
 from app.ui.components.count_badge import format_count_badge
 from app.ui.icons import AppIcons, IconColorRole
+from app.ui.fonts import scaled_px
 
 
 # Chaves (1o campo) sao identificadores internos e ficam sem acento; so o
@@ -66,7 +67,7 @@ class NavButton(AppIconButton):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
         font = QFont(self.font())
-        font.setPixelSize(11)
+        font.setPixelSize(scaled_px(11))
         font.setWeight(QFont.Weight.Bold)
         painter.setFont(font)
         width = max(20.0, QFontMetricsF(font).horizontalAdvance(text) + 12)
