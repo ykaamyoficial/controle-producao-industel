@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QRectF
+from PySide6.QtGui import QColor, QPainter, QPainterPath
 from PySide6.QtWidgets import QComboBox, QFrame, QHBoxLayout, QLabel, QScrollArea, QVBoxLayout, QWidget
 
 from app.ui.background_worker import start_worker
 from app.ui.components.modern_button import ModernButton
+from app.ui.components.status_badge import area_badge
 from app.ui.components.timeline_entries import TimelineDaySeparator
 from app.ui.components.toast_notification import ToastNotification
 from app.ui.styles import area_color
@@ -54,11 +56,7 @@ class ActivityRow(QFrame):
         area = activity.get("area") or ""
         color = area_color(area, palette) if area != "CORRECAO_ADMINISTRATIVA" else palette.get("muted", "#94a3b8")
         self.setObjectName("ActivityRow")
-        self.setStyleSheet(
-            f"QFrame#ActivityRow {{ background: {palette.get('surface', '#ffffff')}; "
-            f"border: 1px solid {palette.get('border', '#cbd5e1')}; "
-            f"border-left: 3px solid {color}; border-radius: 8px; }}"
-        )
+        self._accent = color
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 6, 10, 6)
         layout.setSpacing(2)
@@ -66,16 +64,31 @@ class ActivityRow(QFrame):
         header = QHBoxLayout()
         header.setSpacing(6)
         area_label_text = _area_display_label(area)
-        time_area = QLabel(f"{_format_clock(activity.get('occurred_at'))} · {area_label_text}" if area_label_text else _format_clock(activity.get("occurred_at")))
-        time_area.setStyleSheet(f"font-weight: 700; font-size: 11px; color: {color};")
+        time_area = QLabel(_format_clock(activity.get("occurred_at")))
+        time_area.setObjectName("ChatCaption")
+        time_area.setProperty("strong", True)
         header.addWidget(time_area)
+        if area_label_text:
+            header.addWidget(area_badge(area_label_text, color))
         header.addStretch()
         layout.addLayout(header)
 
         headline = QLabel(activity.get("headline") or "-")
         headline.setWordWrap(True)
-        headline.setStyleSheet("font-size: 12px;")
+        headline.setObjectName("ChatText")
         layout.addWidget(headline)
+
+    def paintEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        super().paintEvent(event)
+        # Barra de 3 px na cor da area (dinamica, por isso pintada e nao QSS),
+        # recortada pelo canto arredondado do cartao.
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        clip = QPainterPath()
+        clip.addRoundedRect(QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5), 10, 10)
+        painter.setClipPath(clip)
+        painter.fillRect(0, 0, 3, self.height(), QColor(self._accent))
+        painter.end()
 
 
 def _area_display_label(area: str | None) -> str:

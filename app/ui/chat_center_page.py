@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 from app.ui.animations import fade_in
 from app.ui.background_worker import start_worker
 from app.ui.components.modern_button import ModernButton
+from app.ui.components.style_state import StatusDot
 from app.ui.components.toast_notification import ToastNotification
 from app.ui.dialog_utils import apply_large_dialog_geometry, style_dialog_from_parent
 from app.ui.resilience import show_operation_error
@@ -88,7 +89,8 @@ class ChatCenterPage(QWidget):
         root.setSpacing(6)
 
         title = QLabel("\U0001F4AC Chats")
-        title.setStyleSheet("font-size: 15px; font-weight: 800;")
+        title.setObjectName("FilterTitle")
+        title.setProperty("tone", "accent")
         root.addWidget(title)
 
         self.left_column = self._build_left_column()
@@ -139,11 +141,6 @@ class ChatCenterPage(QWidget):
         self.conversation_list.setObjectName("ConversationList")
         self.conversation_list.setSpacing(3)
         self.conversation_list.setFrameShape(QFrame.NoFrame)
-        self.conversation_list.setStyleSheet(
-            "QListWidget#ConversationList { border: none; background: transparent; }"
-            "QListWidget#ConversationList QScrollBar:vertical { width: 5px; margin: 0px; }"
-            "QListWidget#ConversationList QScrollBar::handle:vertical { min-height: 24px; }"
-        )
         self.conversation_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.conversation_list.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.conversation_list.setUniformItemSizes(True)
@@ -316,22 +313,17 @@ class ChatCenterPage(QWidget):
         top_row.setSpacing(5)
         if not is_general and conversation.get("proposal_status"):
             dot_color, _fg = status_color(conversation["proposal_status"], self.service.palette, conversation.get("proposal_area") or "")
-            status_dot = QLabel()
-            status_dot.setFixedSize(8, 8)
-            status_dot.setStyleSheet(f"background: {dot_color}; border-radius: 4px;")
-            top_row.addWidget(status_dot)
+            top_row.addWidget(StatusDot(dot_color))
         name_label = QLabel(name)
         name_label.setObjectName("ConversationProposal")
         name_label.setProperty("full_text", name)
-        name_label.setStyleSheet("font-weight: 700; font-size: 11px;")
         name_label.setMinimumWidth(0)
         name_label.setWordWrap(False)
         name_label.setText(name_label.fontMetrics().elidedText(name, Qt.ElideRight, max(90, card.width() - 90)))
         top_row.addWidget(name_label)
         top_row.addStretch()
         time_label = QLabel(_relative_time(conversation.get("last_activity_at")))
-        time_label.setStyleSheet("font-size: 9px;")
-        time_label.setObjectName("Caption")
+        time_label.setObjectName("ChatCaption")
         top_row.addWidget(time_label)
         layout.addLayout(top_row)
 
@@ -339,8 +331,7 @@ class ChatCenterPage(QWidget):
         subtitle = QLabel(subtitle_text)
         subtitle.setObjectName("ConversationClient")
         subtitle.setProperty("full_text", subtitle_text)
-        subtitle.setObjectName("Caption")
-        subtitle.setStyleSheet("font-size: 10px;")
+        subtitle.setObjectName("ChatCaption")
         subtitle.setMinimumWidth(0)
         subtitle.setWordWrap(False)
         subtitle.setText(subtitle.fontMetrics().elidedText(subtitle_text, Qt.ElideRight, max(120, card.width() - 26)))
@@ -357,8 +348,7 @@ class ChatCenterPage(QWidget):
         preview_label = QLabel(preview_text)
         preview_label.setObjectName("ConversationPreview")
         preview_label.setProperty("full_text", preview_text)
-        preview_label.setObjectName("Caption")
-        preview_label.setStyleSheet("font-size: 10px;")
+        preview_label.setObjectName("ChatCaption")
         preview_label.setWordWrap(False)
         preview_label.setMinimumWidth(0)
         metrics = preview_label.fontMetrics()
@@ -368,11 +358,8 @@ class ChatCenterPage(QWidget):
         if unread:
             badge = QLabel(str(unread) if unread < 100 else "99+")
             badge.setAlignment(Qt.AlignCenter)
-            badge.setFixedSize(19, 18)
-            badge.setStyleSheet(
-                f"background: {self.service.palette.get('danger', '#dc2626')}; color: #ffffff; "
-                "border-radius: 9px; font-weight: 800; font-size: 9px;"
-            )
+            badge.setFixedSize(22, 18)
+            badge.setObjectName("UnreadBadge")
             bottom_row.addWidget(badge)
         layout.addLayout(bottom_row)
         return card

@@ -37,6 +37,8 @@ from app.ui.components.chat_shared_content import SharedContentPanel
 from app.ui.components.mention_compose_bar import MentionComposeBar
 from app.ui.components.modern_button import ModernButton
 from app.ui.components.proposal_activity_panel import ProposalActivityPanel
+from app.ui.components.status_badge import StatusBadge
+from app.ui.components.style_state import set_style_state
 from app.ui.components.timeline_entries import (
     GROUP_WINDOW_SECONDS,
     CurrentUserMessageWidget,
@@ -196,28 +198,9 @@ class ChatTabButton(QPushButton):
         self.set_active(False)
 
     def set_active(self, active: bool) -> None:
-        palette = self._palette
-        accent = palette.get("accent", "#0078d4")
-        muted = palette.get("muted", "#64748b")
-        text_color = palette.get("text", "#0f172a")
-        color = accent if active else muted
-        underline = accent if active else "transparent"
-        self.setStyleSheet(f"""
-            QPushButton#ChatTabButton {{
-                background: transparent;
-                border: none;
-                border-bottom: 2px solid {underline};
-                border-radius: 0;
-                padding: 6px 2px 7px 2px;
-                color: {color};
-                font-weight: {700 if active else 600};
-                font-size: 12px;
-                text-align: left;
-            }}
-            QPushButton#ChatTabButton:hover {{
-                color: {accent if active else text_color};
-            }}
-        """)
+        # Cor, negrito e traco inferior vem de QPushButton#ChatTabButton[active]
+        # na folha de estilo.
+        set_style_state(self, active=bool(active))
 
 
 class _TopFadeOverlay(QWidget):
@@ -441,7 +424,6 @@ class ChatConversationPanel(QWidget):
         feed_stack_host = QWidget()
         feed_stack_host.setObjectName("ChatFeedStack")
         feed_stack_host.setAcceptDrops(True)
-        feed_stack_host.setStyleSheet("QWidget#ChatFeedStack { border: 0; }")
         self._feed_stack_host = feed_stack_host
         self._feed_stack = QStackedLayout(feed_stack_host)
         self._feed_stack.setContentsMargins(0, 0, 0, 0)
@@ -530,16 +512,11 @@ class ChatConversationPanel(QWidget):
         if active == self._attachment_drag_active or not hasattr(self, "_feed_stack_host"):
             return
         self._attachment_drag_active = active
+        set_style_state(self._feed_stack_host, dropActive=active)
         if active:
-            palette = self.service.palette
-            self._feed_stack_host.setStyleSheet(
-                f"QWidget#ChatFeedStack {{ border: 2px dashed {palette.get('accent', '#0078d4')}; "
-                f"background: {palette.get('surface_alt', '#e2e8f0')}; }}"
-            )
             self.loading.setText("Solte os arquivos para anexar")
             self.loading.setVisible(True)
             return
-        self._feed_stack_host.setStyleSheet("QWidget#ChatFeedStack { border: 0; }")
         if self.loading.text() == "Solte os arquivos para anexar":
             self.loading.setVisible(False)
             self.loading.setText("Carregando...")
@@ -695,11 +672,7 @@ class ChatConversationPanel(QWidget):
 
         if status:
             bg, fg = status_color(status, palette, area or "")
-            status_badge = QLabel(self.service.status_label(status))
-            status_badge.setStyleSheet(
-                f"background: {bg}; color: {fg}; border-radius: 9px; padding: 2px 10px; font-weight: 700; font-size: 11px;"
-            )
-            top_row.addWidget(status_badge)
+            top_row.addWidget(StatusBadge(self.service.status_label(status), bg, fg))
 
         refresh_btn = AppIconButton(AppIcons.REFRESH, palette=palette, size=IconSize.LG, tooltip="Atualizar conversa")
         refresh_btn.setFixedSize(36, 36)
@@ -1381,9 +1354,17 @@ class ChatConversationPanel(QWidget):
             QTimer.singleShot(0, lambda: self._jump_to_message(message_id))
 
     def _flash_highlight(self, row: QWidget):
-        original_style = row.styleSheet()
-        row.setStyleSheet(original_style + "background: rgba(0, 120, 212, 60);")
-        QTimer.singleShot(700, lambda: row.setStyleSheet(original_style))
+        row.setObjectName("ChatFlashRow")
+        row.setAttribute(Qt.WA_StyledBackground, True)
+        set_style_state(row, flash=True)
+
+        def clear_flash():
+            try:
+                set_style_state(row, flash=False)
+            except RuntimeError:  # a linha pode ter sido recriada no refresh
+                pass
+
+        QTimer.singleShot(700, clear_flash)
 
     def _wrap_row(self, content: QWidget, align: str) -> QWidget:
         row = QWidget()
