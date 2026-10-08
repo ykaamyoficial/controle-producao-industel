@@ -33,8 +33,10 @@ from app.ui.components.chat_message_attachments import (
     load_oriented_pixmap,
     resolve_file_presentation,
     scaled_cover_pixmap,
+    style_menu_button,
 )
 from app.ui.icons import make_icon
+from app.ui.theme_tokens import active_tokens
 
 
 SEARCH_DEBOUNCE_MS = 320
@@ -70,24 +72,9 @@ class _FilterButton(QPushButton):
         self._palette = palette
         self.setCheckable(True)
         self.setCursor(Qt.PointingHandCursor)
+        # Fundo, cor e negrito do estado marcado vem de
+        # QPushButton#SharedContentFilterButton:checked na folha de estilo.
         self.setObjectName("SharedContentFilterButton")
-        self._apply_style()
-        self.toggled.connect(self._apply_style)
-
-    def _apply_style(self) -> None:
-        palette = self._palette
-        accent = palette.get("accent", "#0078d4")
-        if self.isChecked():
-            self.setStyleSheet(
-                f"QPushButton#SharedContentFilterButton {{ background: {accent}; color: #ffffff; "
-                f"border: none; border-radius: 14px; padding: 4px 14px; font-weight: 700; font-size: 11px; }}"
-            )
-        else:
-            self.setStyleSheet(
-                f"QPushButton#SharedContentFilterButton {{ background: {palette.get('surface_alt', '#e2e8f0')}; "
-                f"color: {palette.get('muted', '#64748b')}; border: none; border-radius: 14px; padding: 4px 14px; "
-                f"font-weight: 600; font-size: 11px; }}"
-            )
 
 
 class _MediaTile(QFrame):
@@ -100,15 +87,11 @@ class _MediaTile(QFrame):
         self.setObjectName("SharedMediaTile")
         self.setFixedSize(MEDIA_TILE_SIZE)
         self.setCursor(Qt.PointingHandCursor)
-        self.setStyleSheet(
-            f"QFrame#SharedMediaTile {{ background: {palette.get('surface_alt', '#e2e8f0')}; "
-            f"border: 1px solid {palette.get('border', '#cbd5e1')}; border-radius: 8px; }}"
-        )
         grid = QGridLayout(self)
         grid.setContentsMargins(0, 0, 0, 0)
         thumb = QLabel()
         thumb.setAlignment(Qt.AlignCenter)
-        thumb.setStyleSheet("background: transparent;")
+        thumb.setObjectName("AttachmentImageLabel")
         path = attachment_local_media_path(attachment) if attachment.get("category") == "video" else attachment_local_image_path(attachment)
         if path is not None:
             pixmap = load_oriented_pixmap(path)
@@ -120,8 +103,8 @@ class _MediaTile(QFrame):
         grid.addWidget(thumb, 0, 0)
         if attachment.get("category") == "video":
             play_badge = QLabel()
-            play_badge.setPixmap(make_icon("play", "#ffffff", 16).pixmap(16, 16))
-            play_badge.setStyleSheet("background: rgba(15, 23, 42, 150); border-radius: 10px; padding: 2px;")
+            play_badge.setPixmap(make_icon("play", active_tokens()["on_overlay"], 16).pixmap(16, 16))
+            play_badge.setObjectName("MediaPlayBadge")
             grid.addWidget(play_badge, 0, 0, alignment=Qt.AlignCenter)
 
     def mousePressEvent(self, event) -> None:
@@ -141,10 +124,6 @@ class _DocumentRow(QFrame):
         self.item = item
         self.attachment = _shared_item_to_attachment(item)
         self.setObjectName("SharedDocumentRow")
-        self.setStyleSheet(
-            f"QFrame#SharedDocumentRow {{ background: {palette.get('surface', '#ffffff')}; "
-            f"border: 1px solid {palette.get('border', '#cbd5e1')}; border-radius: 8px; }}"
-        )
         layout = QHBoxLayout(self)
         layout.setContentsMargins(8, 5, 8, 5)
         layout.setSpacing(6)
@@ -159,7 +138,7 @@ class _DocumentRow(QFrame):
         text_col = QVBoxLayout()
         text_col.setSpacing(0)
         name_label = QLabel(presentation["filename"])
-        name_label.setStyleSheet("font-weight: 700; font-size: 11px;")
+        name_label.setObjectName("FileCardName")
         name_label.setToolTip(presentation["filename"])
         text_col.addWidget(name_label)
         size = item.get("size") or 0
@@ -173,13 +152,13 @@ class _DocumentRow(QFrame):
         if date_text:
             meta_parts.append(date_text)
         meta_label = QLabel(" - ".join(meta_parts))
-        meta_label.setStyleSheet(f"font-size: 9px; color: {palette.get('muted', '#64748b')};")
+        meta_label.setObjectName("FileCardMeta")
         text_col.addWidget(meta_label)
         layout.addLayout(text_col, 1)
 
         menu_btn = QToolButton()
-        menu_btn.setText("...")
-        menu_btn.setFixedSize(20, 20)
+        style_menu_button(menu_btn, palette.get("muted"))
+        menu_btn.setFixedSize(24, 24)
         menu_btn.setPopupMode(QToolButton.InstantPopup)
         menu = QMenu(menu_btn)
         open_action = menu.addAction("Abrir")
@@ -199,17 +178,13 @@ class _LinkRow(QFrame):
         super().__init__(parent)
         self.item = item
         self.setObjectName("SharedLinkRow")
-        self.setStyleSheet(
-            f"QFrame#SharedLinkRow {{ background: {palette.get('surface', '#ffffff')}; "
-            f"border: 1px solid {palette.get('border', '#cbd5e1')}; border-radius: 8px; }}"
-        )
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 5, 8, 5)
         layout.setSpacing(1)
 
         url = str(item.get("name") or "")
         url_label = QLabel(url)
-        url_label.setStyleSheet(f"font-weight: 700; font-size: 11px; color: {palette.get('accent', '#0078d4')};")
+        url_label.setObjectName("ChatLink")
         url_label.setWordWrap(True)
         layout.addWidget(url_label)
 
@@ -222,24 +197,24 @@ class _LinkRow(QFrame):
             meta_parts.append(date_text)
         if meta_parts:
             meta_label = QLabel(" - ".join(meta_parts))
-            meta_label.setStyleSheet(f"font-size: 9px; color: {palette.get('muted', '#64748b')};")
+            meta_label.setObjectName("FileCardMeta")
             layout.addWidget(meta_label)
 
         snippet = item.get("snippet")
         if snippet:
             snippet_label = QLabel(snippet)
             snippet_label.setWordWrap(True)
-            snippet_label.setStyleSheet(f"font-size: 10px; color: {palette.get('text', '#0f172a')};")
+            snippet_label.setObjectName("QuoteText")
             layout.addWidget(snippet_label)
 
         actions = QHBoxLayout()
         actions.addStretch()
         open_btn = QPushButton("Abrir")
-        open_btn.setStyleSheet("font-size: 10px; padding: 2px 8px;")
+        open_btn.setObjectName("ChatSmallButton")
         open_btn.clicked.connect(lambda: self._open_url(url))
         actions.addWidget(open_btn)
         jump_btn = QPushButton("Ir para mensagem")
-        jump_btn.setStyleSheet("font-size: 10px; padding: 2px 8px;")
+        jump_btn.setObjectName("ChatSmallButton")
         jump_btn.clicked.connect(lambda: self.jump_requested.emit(item.get("message_id")))
         actions.addWidget(jump_btn)
         layout.addLayout(actions)
@@ -290,8 +265,8 @@ class SharedContentPanel(QFrame):
         layout.setContentsMargins(14, 14, 14, 14)
         layout.setSpacing(8)
 
-        title = QLabel("Midia e arquivos")
-        title.setStyleSheet("font-weight: 800; font-size: 13px;")
+        title = QLabel("Mídia e arquivos")
+        title.setObjectName("ChatHeading")
         layout.addWidget(title)
 
         self.search_edit = QLineEdit()
