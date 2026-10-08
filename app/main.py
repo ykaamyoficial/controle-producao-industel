@@ -299,6 +299,11 @@ def main():
     if not window.start():
         return 0
     window.showMaximized()
+
+    # O Updater pede a saida de todos os processos antes de ativar a versao nova.
+    from app.services.update_quit_watcher import install_quit_watcher
+
+    install_quit_watcher(app, lambda: (window.close(), app.quit()))
     return app.exec()
 
 

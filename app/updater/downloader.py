@@ -100,6 +100,7 @@ def download_package(
     retry_backoff_seconds: float = 1.0,
     chunk_size: int = DEFAULT_CHUNK_SIZE,
     stream_opener: Callable[[str], ContextManager[StreamingResponse]] | None = None,
+    progress: Callable[[int, int | None], None] | None = None,
 ) -> Path:
     """Baixa `source` para `destination_dir`, retornando o caminho final (sem
     `.part`). Levanta DownloadError/TransientDownloadError em falha -- nunca
@@ -118,7 +119,7 @@ def download_package(
     last_error: DownloadError | None = None
     while attempt <= max_retries:
         try:
-            _stream_to_part(source, part_path, expected_size=expected_size, chunk_size=chunk_size, opener=opener)
+            _stream_to_part(source, part_path, expected_size=expected_size, chunk_size=chunk_size, opener=opener, progress=progress)
             part_path.replace(final_path)
             return final_path
         except TransientDownloadError as exc:
@@ -143,6 +144,7 @@ def _stream_to_part(
     expected_size: int | None,
     chunk_size: int,
     opener: Callable[[str], ContextManager[StreamingResponse]],
+    progress: Callable[[int, int | None], None] | None = None,
 ) -> None:
     try:
         with opener(source) as response:
@@ -168,6 +170,8 @@ def _stream_to_part(
                     if expected_size is not None and written > expected_size:
                         raise DownloadError(f"Pacote excedeu o tamanho esperado ({expected_size} bytes) durante o download.")
                     handle.write(chunk)
+                    if progress is not None:
+                        progress(written, expected_size)
     except TransientDownloadError:
         raise
     except DownloadError:

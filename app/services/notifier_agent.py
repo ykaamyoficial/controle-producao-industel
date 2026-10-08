@@ -15,7 +15,7 @@ from app.integrations.api.exceptions import ApiAuthenticationError, ApiClientErr
 from app.integrations.api.notifications_client import NotificationsApiClient
 from app.integrations.api.token_store import ApiTokenStore
 from app.services.app_logging import get_logger
-from app.services.app_paths import get_app_data_dir, is_packaged
+from app.services.app_paths import get_app_data_dir, get_launcher_path, is_packaged
 from app.ui.app_icon import app_icon_path
 
 
@@ -270,7 +270,7 @@ def plan_toasts(items: list[dict[str, Any]], *, suppress_individual: bool) -> li
 def _launch_target(deep_link: str) -> str:
     if not is_packaged():
         return ""
-    exe = str(Path(sys.executable))
+    exe = str(get_launcher_path())
     route = (deep_link or "").strip()
     return f'"{exe}" --open {route}' if route else f'"{exe}"'
 
@@ -382,7 +382,7 @@ def _open_main_app() -> None:
     try:
         import subprocess
 
-        subprocess.Popen([str(Path(sys.executable))])  # noqa: S603
+        subprocess.Popen([str(get_launcher_path())])  # noqa: S603
     except OSError:
         log.warning("notifier_abrir_app_falhou")
 
@@ -399,6 +399,11 @@ def run_notifier_loop(*, poll_interval: int = POLL_INTERVAL_SECONDS) -> None:
 
     app = QApplication.instance() or QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
+
+    # O Updater pede a saida de todos os processos do app antes de ativar a versao nova.
+    from app.services.update_quit_watcher import install_quit_watcher
+
+    install_quit_watcher(app, app.quit)
 
     tray = NotifierTrayIcon(
         app,
@@ -527,7 +532,7 @@ def ensure_startup_registration() -> None:
         return
     startup_dir = Path(appdata) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
     script_path = startup_dir / STARTUP_SCRIPT_NAME
-    exe_path = Path(sys.executable)
+    exe_path = get_launcher_path()
     expected_content = f'@echo off\nstart "" "{exe_path}" --notifier\n'
     try:
         if script_path.exists() and script_path.read_text(encoding="utf-8") == expected_content:

@@ -63,10 +63,12 @@ class UpdateCoordinatorTestCase(unittest.TestCase):
 
         return FakeManifestProvider
 
-    def _fake_downloader(self, source, destination_dir, *, expected_size=None):
+    def _fake_downloader(self, source, destination_dir, *, expected_size=None, progress=None):
         destination_dir.mkdir(parents=True, exist_ok=True)
         dest = destination_dir / self.package.name
         dest.write_bytes(self.package.read_bytes())
+        if progress is not None:
+            progress(dest.stat().st_size, expected_size)
         return dest
 
     def _coordinator(self, **overrides) -> UpdateCoordinator:

@@ -257,8 +257,13 @@ class UpdateDialog(QDialog):
         self._progress_animation.start()
 
     def _prepare_update(self, progress):
-        progress("Baixando e validando a atualizacao", 30)
+        progress("Baixando e validando a atualizacao", 5)
         coordinator = self._update_coordinator_factory()
+        # Progresso real (download e preparacao pelo Updater). Coordenadores de
+        # teste/legados sem o gancho seguem so com os marcos fixos.
+        set_callback = getattr(coordinator, "set_progress_callback", None)
+        if callable(set_callback):
+            set_callback(progress)
         result = coordinator.start_required_update(expected_version=self.update_info.get("latest_version"))
         progress("Atualizacao preparada", 90)
         return result
