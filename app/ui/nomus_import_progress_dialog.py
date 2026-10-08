@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PySide6.QtCore import QEasingCurve, QPropertyAnimation, QSize, Qt
+from PySide6.QtCore import QEasingCurve, QPropertyAnimation, Qt
 from PySide6.QtWidgets import (
     QDialog,
     QFrame,
@@ -22,9 +22,10 @@ from app.services.nomus_import_progress import (
     STAGE_VALIDATION,
     NomusImportProgressEvent,
 )
+from app.ui.components.detail_widgets import make_panel
+from app.ui.components.dialog_shell import dialog_footer, dialog_header, set_notice_kind
 from app.ui.components.modern_button import ModernButton
 from app.ui.dialog_utils import style_dialog_from_parent
-from app.ui.icons import make_icon
 
 
 ANIMATION_DURATION_MS = 220
@@ -53,7 +54,6 @@ class NomusImportProgressDialog(QDialog):
         self._current_stage = ""
         self._running = True
         self._build()
-        self._apply_local_style(parent)
         self.set_indeterminate(True)
 
     @property
@@ -65,27 +65,10 @@ class NomusImportProgressDialog(QDialog):
         root.setContentsMargins(20, 20, 20, 18)
         root.setSpacing(14)
 
-        self.hero = QFrame()
-        self.hero.setObjectName("NomusProgressHero")
-        self.hero.setAttribute(Qt.WA_StyledBackground, True)
-        header = QHBoxLayout(self.hero)
-        header.setContentsMargins(18, 18, 18, 18)
-        header.setSpacing(14)
-        self.icon_label = QLabel()
-        self.icon_label.setObjectName("NomusProgressIcon")
-        self.icon_label.setAlignment(Qt.AlignCenter)
-        self.icon_label.setFixedSize(58, 58)
-        header_text = QVBoxLayout()
-        header_text.setSpacing(4)
         self.title_label = QLabel("Importando proposta do Nomus")
-        self.title_label.setObjectName("NomusProgressTitle")
         self.subtitle_label = QLabel("Aguarde enquanto os dados operacionais são consultados.")
-        self.subtitle_label.setObjectName("NomusProgressSubtitle")
         self.subtitle_label.setWordWrap(True)
-        header_text.addWidget(self.title_label)
-        header_text.addWidget(self.subtitle_label)
-        header.addWidget(self.icon_label)
-        header.addLayout(header_text, 1)
+        self.hero = dialog_header(self.title_label, self.subtitle_label)
         root.addWidget(self.hero)
 
         chips = QWidget()
@@ -104,15 +87,11 @@ class NomusImportProgressDialog(QDialog):
         chips_layout.addWidget(self._chip("Origem", self.source_chip_value))
         root.addWidget(chips)
 
-        self.progress_panel = QFrame()
-        self.progress_panel.setObjectName("NomusProgressPanel")
-        self.progress_panel.setAttribute(Qt.WA_StyledBackground, True)
-        panel_layout = QVBoxLayout(self.progress_panel)
-        panel_layout.setContentsMargins(18, 16, 18, 16)
+        self.progress_panel, panel_layout = make_panel()
         panel_layout.setSpacing(11)
 
         self.stage_label = QLabel("Conectando ao Nomus")
-        self.stage_label.setObjectName("NomusProgressStage")
+        self.stage_label.setObjectName("PanelTitle")
         self.detail_label = QLabel("Preparando consulta segura.")
         self.detail_label.setObjectName("NomusProgressDetail")
         self.detail_label.setWordWrap(True)
@@ -134,13 +113,12 @@ class NomusImportProgressDialog(QDialog):
         panel_layout.addLayout(progress_row)
 
         self.product_card = QFrame()
-        self.product_card.setObjectName("NomusProductProgressCard")
-        self.product_card.setAttribute(Qt.WA_StyledBackground, True)
+        self.product_card.setObjectName("SoftPanel")
         product_layout = QHBoxLayout(self.product_card)
         product_layout.setContentsMargins(12, 8, 12, 8)
         product_layout.setSpacing(8)
         self.product_label = QLabel("Produtos: aguardando contagem")
-        self.product_label.setObjectName("NomusProductProgressText")
+        self.product_label.setObjectName("ValueLabel")
         self.product_label.setWordWrap(True)
         product_layout.addWidget(self.product_label, 1)
         panel_layout.addWidget(self.product_card)
@@ -153,18 +131,14 @@ class NomusImportProgressDialog(QDialog):
         self.message_label.hide()
         root.addWidget(self.message_label)
 
-        footer = QHBoxLayout()
-        footer.addStretch()
         self.close_button = ModernButton("Fechar", "clear", variant="ghost")
         self.close_button.setVisible(False)
         self.close_button.clicked.connect(self.accept)
-        footer.addWidget(self.close_button)
-        root.addLayout(footer)
+        root.addWidget(dialog_footer(right=[self.close_button]))
 
     def _chip(self, label: str, value_widget: QLabel, *, accent: bool = False) -> QFrame:
         chip = QFrame()
         chip.setObjectName("NomusProgressChipAccent" if accent else "NomusProgressChip")
-        chip.setAttribute(Qt.WA_StyledBackground, True)
         layout = QVBoxLayout(chip)
         layout.setContentsMargins(12, 9, 12, 9)
         layout.setSpacing(2)
@@ -226,7 +200,7 @@ class NomusImportProgressDialog(QDialog):
         self.set_indeterminate(False)
         self.stage_label.setText("Não foi possível importar a proposta.")
         self.detail_label.setText("O sistema continuara funcionando normalmente.")
-        self.message_label.setObjectName("ValidationError")
+        set_notice_kind(self.message_label, "warning")
         self.message_label.setText(message)
         self.message_label.show()
         self.close_button.setVisible(True)
@@ -259,296 +233,3 @@ class NomusImportProgressDialog(QDialog):
         if self._running:
             return
         super().reject()
-
-    def _apply_local_style(self, parent):
-        palette = _palette_from_parent(parent)
-        accent = palette["accent"]
-        accent_hover = palette.get("accent_hover", accent)
-        accent_text = palette.get("accent_text", "#ffffff")
-        text = palette["text"]
-        muted = palette["muted"]
-        surface = palette["surface"]
-        surface_alt = palette["surface_alt"]
-        bg = palette.get("bg", surface)
-        border = palette["border"]
-        success = palette["success"]
-        warning = palette["warning"]
-        self.icon_label.setPixmap(make_icon("search", accent_text, 26).pixmap(QSize(26, 26)))
-        self.setStyleSheet(f"QDialog#NomusImportProgressDialog {{ background: {bg}; }}")
-        self.hero.setStyleSheet(
-            f"""
-            QFrame#NomusProgressHero {{
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 {accent}, stop:1 {accent_hover});
-                border: 1px solid {accent_hover};
-                border-radius: 18px;
-            }}
-            """
-        )
-        self.icon_label.setStyleSheet(
-            """
-            QLabel#NomusProgressIcon {
-                background: rgba(255, 255, 255, 42);
-                border: 1px solid rgba(255, 255, 255, 82);
-                border-radius: 18px;
-            }
-            """
-        )
-        self.title_label.setStyleSheet(
-            f"""
-            QLabel#NomusProgressTitle {{
-                color: {accent_text};
-                font-size: 21px;
-                font-weight: 900;
-                background: transparent;
-            }}
-            """
-        )
-        self.subtitle_label.setStyleSheet(
-            f"""
-            QLabel#NomusProgressSubtitle {{
-                color: {accent_text};
-                font-size: 11px;
-                background: transparent;
-            }}
-            """
-        )
-        for chip, is_accent in self.chip_frames:
-            chip.setStyleSheet(
-                f"""
-                QFrame#{chip.objectName()} {{
-                    background: {surface_alt if is_accent else surface};
-                    border: 1px solid {accent if is_accent else border};
-                    border-radius: 14px;
-                }}
-                QLabel#Caption {{
-                    color: {muted};
-                    background: transparent;
-                }}
-                QLabel#NomusChipValue {{
-                    color: {text};
-                    font-size: 13px;
-                    font-weight: 900;
-                    background: transparent;
-                }}
-                """
-            )
-        self.progress_panel.setStyleSheet(
-            f"""
-            QFrame#NomusProgressPanel {{
-                background: {surface};
-                border: 1px solid {border};
-                border-radius: 18px;
-            }}
-            """
-        )
-        self.stage_label.setStyleSheet(
-            f"""
-            QLabel#NomusProgressStage {{
-                color: {text};
-                font-size: 15px;
-                font-weight: 900;
-                background: transparent;
-            }}
-            """
-        )
-        self.detail_label.setStyleSheet(
-            f"""
-            QLabel#NomusProgressDetail {{
-                color: {muted};
-                font-size: 11px;
-                background: {surface_alt};
-                border-radius: 8px;
-                padding: 7px 9px;
-            }}
-            """
-        )
-        self.progress_bar.setStyleSheet(
-            f"""
-            QProgressBar#NomusProgressBar {{
-                background: {surface_alt};
-                border: 1px solid {border};
-                border-radius: 11px;
-                min-height: 22px;
-                max-height: 22px;
-                padding: 1px;
-            }}
-            QProgressBar#NomusProgressBar::chunk {{
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 {success}, stop:0.58 {accent}, stop:1 {accent_hover});
-                border-radius: 10px;
-            }}
-            """
-        )
-        self.percent_label.setStyleSheet(
-            f"""
-            QLabel#NomusProgressPercent {{
-                background: {surface_alt};
-                color: {text};
-                border: 1px solid {border};
-                border-radius: 10px;
-                padding: 6px 10px;
-                font-weight: 900;
-            }}
-            """
-        )
-        self.product_card.setStyleSheet(
-            f"""
-            QFrame#NomusProductProgressCard {{
-                background: {surface_alt};
-                border: 1px solid {border};
-                border-radius: 12px;
-            }}
-            QLabel#NomusProductProgressText {{
-                color: {text};
-                font-size: 11px;
-                font-weight: 700;
-                background: transparent;
-            }}
-            """
-        )
-        self.setStyleSheet(
-            self.styleSheet()
-            + f"""
-            QDialog#NomusImportProgressDialog {{
-                background: {bg};
-            }}
-            QFrame#NomusProgressHero {{
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 {accent}, stop:1 {accent_hover});
-                border: 1px solid {accent_hover};
-                border-radius: 18px;
-            }}
-            QLabel#NomusProgressIcon {{
-                background: rgba(255, 255, 255, 38);
-                border: 1px solid rgba(255, 255, 255, 70);
-                border-radius: 18px;
-            }}
-            QLabel#NomusProgressTitle {{
-                color: {accent_text};
-                font-size: 21px;
-                font-weight: 900;
-                background: transparent;
-            }}
-            QLabel#NomusProgressSubtitle {{
-                color: {accent_text};
-                font-size: 11px;
-                background: transparent;
-            }}
-            QFrame#NomusProgressChip, QFrame#NomusProgressChipAccent {{
-                background: {surface};
-                border: 1px solid {border};
-                border-radius: 14px;
-            }}
-            QFrame#NomusProgressChipAccent {{
-                background: {surface_alt};
-                border: 1px solid {accent};
-            }}
-            QLabel#NomusChipValue {{
-                color: {text};
-                font-size: 13px;
-                font-weight: 900;
-                background: transparent;
-            }}
-            QFrame#NomusProgressPanel {{
-                background: {surface};
-                border: 1px solid {border};
-                border-radius: 18px;
-            }}
-            QLabel#NomusProgressStage {{
-                color: {text};
-                font-size: 15px;
-                font-weight: 900;
-                background: transparent;
-            }}
-            QLabel#NomusProgressDetail {{
-                color: {muted};
-                font-size: 11px;
-                background: {surface_alt};
-                border-radius: 8px;
-                padding: 7px 9px;
-            }}
-            QProgressBar#NomusProgressBar {{
-                background: {surface_alt};
-                border: 1px solid {border};
-                border-radius: 11px;
-                min-height: 22px;
-                max-height: 22px;
-                padding: 1px;
-            }}
-            QProgressBar#NomusProgressBar::chunk {{
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 {success}, stop:0.58 {accent}, stop:1 {accent_hover});
-                border-radius: 10px;
-            }}
-            QLabel#NomusProgressPercent {{
-                background: {surface_alt};
-                color: {text};
-                border: 1px solid {border};
-                border-radius: 10px;
-                padding: 6px 10px;
-                font-weight: 900;
-            }}
-            QFrame#NomusProductProgressCard {{
-                background: {surface_alt};
-                border: 1px solid {border};
-                border-radius: 12px;
-            }}
-            QLabel#NomusProductProgressText {{
-                color: {text};
-                font-size: 11px;
-                font-weight: 700;
-                background: transparent;
-            }}
-            QLabel#NomusProgressDone {{
-                background: {surface_alt};
-                color: {success};
-                font-weight: 700;
-                border-left: 4px solid {success};
-                border-radius: 9px;
-                padding: 4px 10px;
-            }}
-            QLabel#NomusProgressCurrent {{
-                background: {surface_alt};
-                color: {text};
-                font-weight: 800;
-                border-left: 4px solid {accent};
-                border-radius: 9px;
-                padding: 4px 10px;
-            }}
-            QLabel#NomusProgressPending {{
-                background: transparent;
-                color: {muted};
-                border-left: 4px solid {border};
-                border-radius: 9px;
-                padding: 4px 10px;
-            }}
-            QLabel#ValidationError {{
-                color: {warning};
-                font-weight: 700;
-            }}
-            """
-        )
-
-
-def _palette_from_parent(parent: QWidget | None) -> dict:
-    cursor = parent
-    while cursor is not None:
-        service = getattr(cursor, "service", None)
-        palette = getattr(service, "palette", None)
-        if isinstance(palette, dict):
-            return palette
-        cursor = cursor.parentWidget()
-    return {
-        "bg": "#F4F7FB",
-        "surface": "#FFFFFF",
-        "surface_alt": "#EAF2FF",
-        "text": "#0F172A",
-        "muted": "#475569",
-        "border": "#C9D7EA",
-        "accent": "#0B7BD3",
-        "accent_hover": "#075EA8",
-        "accent_text": "#FFFFFF",
-        "success": "#16A34A",
-        "warning": "#CA8A04",
-    }

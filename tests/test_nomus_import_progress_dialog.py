@@ -70,8 +70,10 @@ class NomusImportProgressDialogTests(unittest.TestCase):
             self.assertEqual(dialog.progress_bar.objectName(), "NomusProgressBar")
             self.assertIn("Localizando", dialog.stage_chip_value.text())
             self.assertIn("Sem dados financeiros", dialog.security_chip_value.text())
-            self.assertIn("qlineargradient", dialog.hero.styleSheet())
-            self.assertIn("QProgressBar#NomusProgressBar", dialog.progress_bar.styleSheet())
+            # Cabecalho-cartao padrao e barra estilizada pela folha de estilo do app.
+            self.assertEqual(dialog.hero.objectName(), "DetailPanel")
+            self.assertEqual(dialog.hero.styleSheet(), "")
+            self.assertEqual(dialog.progress_bar.styleSheet(), "")
             self.assertGreaterEqual(dialog.width(), 700)
         finally:
             dialog.close()
