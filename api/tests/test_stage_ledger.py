@@ -222,6 +222,50 @@ class UndefinedFlowTests(unittest.TestCase):
         self.assertEqual(item.gap, D(0))
         self.assertEqual(find_anomalies(facts(flow_defined=False, produce_internally="INDEFINIDO", requires_galvanization="INDEFINIDO"), item), [])
 
+    def test_undefined_destination_that_received_ready_pieces_keeps_the_rest_without_flow(self):
+        """Fluxos diferentes: o destino segue indefinido, so troca as pecas (4 prontas entram, 6 continuam sem fluxo)."""
+        item = stages(
+            flow_defined=False, produce_internally="INDEFINIDO", requires_galvanization="INDEFINIDO",
+            has_expedition_row=True, expedition_available=4, ready_received=4, production_out=4,
+        )
+        self.assertEqual(numbers(item), (D(0), D(0), D(0), D(4), D(0)))
+        self.assertEqual(item.undefined_flow, D(6))
+        self.assertEqual(item.received_ready, D(4))
+        self.assertEqual(item.gap, D(0))
+
+    def test_the_ready_pieces_of_an_undefined_destination_are_available_in_the_expedition(self):
+        value = facts(flow_defined=False, produce_internally="INDEFINIDO", requires_galvanization="INDEFINIDO", ready_received=4)
+        self.assertEqual(ledger.derived_expedition_available(value), D(4))
+        self.assertEqual(ledger.derived_expedition_available(facts(flow_defined=False, produce_internally="INDEFINIDO", requires_galvanization="INDEFINIDO")), D(0))
+
+    def test_undefined_destination_that_was_delivered_part_of_it(self):
+        item = stages(
+            flow_defined=False, produce_internally="INDEFINIDO", requires_galvanization="INDEFINIDO",
+            has_expedition_row=True, expedition_available=4, expedition_delivered=1, ready_received=4, production_out=4,
+        )
+        self.assertEqual((item.ready, item.delivered, item.undefined_flow), (D(3), D(1), D(6)))
+        self.assertEqual(item.gap, D(0))
+
+
+class SourceThatDoesNotProduceInternallyTests(unittest.TestCase):
+    """Fluxos diferentes: uma origem que nao produz internamente (so galvaniza) fica devendo a reposicao."""
+
+    def test_source_owes_the_replacement_even_without_internal_production(self):
+        source = stages(
+            produce_internally="NAO", requires_galvanization="SIM", produced=True, has_expedition_row=True,
+            expedition_available=10, expedition_remanaged=4, ready_given=4, galvanization_sent=10, production_in_pending=4,
+        )
+        self.assertEqual(numbers(source), (D(4), D(0), D(0), D(6), D(0)))
+        self.assertEqual(source.gap, D(0))
+
+    def test_simple_source_that_does_not_produce_internally_owes_the_replacement(self):
+        source = stages(
+            produce_internally="NAO", requires_galvanization="NAO", produced=True, has_expedition_row=True,
+            expedition_available=10, expedition_remanaged=4, production_in_pending=4, ready_given=4,
+        )
+        self.assertEqual(numbers(source), (D(4), D(0), D(0), D(6), D(0)))
+        self.assertEqual(source.gap, D(0))
+
 
 class AnomalyTests(unittest.TestCase):
     def codes(self, **changes):

@@ -8,8 +8,8 @@ from decimal import Decimal
 from api.app.modules.proposals import stage_swap as swap
 from api.app.modules.proposals.stage_ledger import ItemStages
 from api.app.modules.proposals.stage_swap import (
-    STAGE_AWAITING_GALVANIZATION, STAGE_IN_GALVANIZATION, STAGE_TO_PRODUCE, StageSwap, StageSwapError, StageTransfer,
-    plan_stage_swaps, stage_capacity, verify_swap_conservation,
+    STAGE_AWAITING_GALVANIZATION, STAGE_IN_GALVANIZATION, STAGE_TO_PRODUCE, STAGE_UNDEFINED_FLOW, StageSwap, StageSwapError,
+    StageTransfer, plan_stage_swaps, stage_capacity, verify_swap_conservation,
 )
 
 
@@ -17,11 +17,12 @@ def D(value) -> Decimal:
     return Decimal(str(value)).quantize(Decimal("0.0001"))
 
 
-def item(item_id, *, requested=10, to_produce=0, awaiting=0, in_galv=0, ready=0, delivered=0, received_replacement=0, flow="SIMPLES") -> ItemStages:
+def item(item_id, *, requested=10, to_produce=0, awaiting=0, in_galv=0, ready=0, delivered=0, received_replacement=0, undefined=0, flow="SIMPLES") -> ItemStages:
     return ItemStages(
         item_id=item_id, proposal_id=item_id, proposal_number=f"CP-{item_id}", product_code="450.400", unit="un", flow=flow,
         requested=D(requested), to_produce=D(to_produce), awaiting_galvanization=D(awaiting), in_galvanization=D(in_galv),
         ready=D(ready), delivered=D(delivered), given_away=D(0), received_ready=D(0), received_replacement=D(received_replacement),
+        undefined_flow=D(undefined),
     )
 
 
@@ -75,6 +76,49 @@ class PlanStageSwapsTests(unittest.TestCase):
     def test_a_line_that_needs_nothing_from_a_stage_skips_it(self):
         (plan,) = plan_stage_swaps(item(2, to_produce=5, awaiting=5, in_galv=5), [(1, D(5))])
         self.assertEqual([transfer.stage for transfer in plan.transfers], [STAGE_IN_GALVANIZATION])
+
+
+class DifferentFlowsTests(unittest.TestCase):
+    """O fluxo da origem nao precisa ser igual ao do destino (plano: "fluxos diferentes")."""
+
+    def test_pieces_without_a_defined_flow_go_to_the_source_after_the_ones_in_flight(self):
+        destination = item(2, to_produce=2, undefined=8, flow="INDEFINIDO")
+        (plan,) = plan_stage_swaps(destination, [(1, D(5))])
+        self.assertEqual(plan.transfers, transfers((STAGE_TO_PRODUCE, 2), (STAGE_UNDEFINED_FLOW, 3)))
+
+    def test_a_destination_entirely_without_flow_can_receive_the_remanagement(self):
+        (plan,) = plan_stage_swaps(item(2, undefined=10, flow="INDEFINIDO"), [(1, D(4))])
+        self.assertEqual(plan.transfers, transfers((STAGE_UNDEFINED_FLOW, 4)))
+
+    def test_a_source_that_does_not_galvanize_only_receives_pieces_not_yet_made(self):
+        destination = item(2, to_produce=4, awaiting=3, in_galv=2, flow="GALVANIZADO")
+        (plan,) = plan_stage_swaps(destination, [(1, D(4))], {1: False})
+        self.assertEqual(plan.transfers, transfers((STAGE_TO_PRODUCE, 4)))
+
+    def test_a_source_that_does_not_galvanize_cannot_take_what_is_already_made(self):
+        destination = item(2, to_produce=1, awaiting=3, in_galv=2, flow="GALVANIZADO")
+        with self.assertRaises(StageSwapError) as caught:
+            plan_stage_swaps(destination, [(1, D(4))], {1: False})
+        self.assertIn("não passa pela galvanização", str(caught.exception))
+
+    def test_another_source_that_galvanizes_takes_the_made_pieces(self):
+        destination = item(2, to_produce=2, awaiting=3, in_galv=2, flow="GALVANIZADO")
+        plain, galvanizing = plan_stage_swaps(destination, [(1, D(2)), (3, D(5))], {1: False, 3: True})
+        self.assertEqual(plain.transfers, transfers((STAGE_TO_PRODUCE, 2)))
+        self.assertEqual(galvanizing.transfers, transfers((STAGE_IN_GALVANIZATION, 2), (STAGE_AWAITING_GALVANIZATION, 3)))
+
+    def test_undefined_flow_swap_conserves_pieces(self):
+        before = {1: item(1, ready=10), 2: item(2, undefined=10, flow="INDEFINIDO")}
+        after = {1: item(1, ready=6, to_produce=4), 2: item(2, ready=4, undefined=6, flow="INDEFINIDO")}
+        swaps = [StageSwap(1, 2, transfers((STAGE_UNDEFINED_FLOW, 4)))]
+        self.assertEqual(verify_swap_conservation(before, after, swaps), [])
+
+    def test_undefined_flow_swap_that_forgets_to_hand_over_the_obligation_is_caught(self):
+        before = {1: item(1, ready=10), 2: item(2, undefined=10, flow="INDEFINIDO")}
+        after = {1: item(1, ready=6), 2: item(2, ready=4, undefined=6, flow="INDEFINIDO")}  # a origem nao ficou devendo
+        swaps = [StageSwap(1, 2, transfers((STAGE_UNDEFINED_FLOW, 4)))]
+        problems = verify_swap_conservation(before, after, swaps)
+        self.assertTrue(any("item 1" in problem and "to_produce" in problem for problem in problems))
 
 
 class VerifyConservationTests(unittest.TestCase):
@@ -141,7 +185,10 @@ class VerifyConservationTests(unittest.TestCase):
         self.assertEqual(verify_swap_conservation(before, after, self.swaps), [])
 
     def test_stage_labels_cover_every_stage_in_order(self):
-        self.assertEqual(swap.STAGES_MOST_ADVANCED_FIRST, (STAGE_IN_GALVANIZATION, STAGE_AWAITING_GALVANIZATION, STAGE_TO_PRODUCE))
+        self.assertEqual(
+            swap.STAGES_MOST_ADVANCED_FIRST,
+            (STAGE_IN_GALVANIZATION, STAGE_AWAITING_GALVANIZATION, STAGE_TO_PRODUCE, STAGE_UNDEFINED_FLOW),
+        )
         self.assertEqual(set(swap.STAGE_LABELS), set(swap.STAGES_MOST_ADVANCED_FIRST))
 
 

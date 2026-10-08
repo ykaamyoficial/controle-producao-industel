@@ -32,7 +32,7 @@ from api.app.modules.proposals.models import ExpeditionEvent, ExpeditionItem, Fi
 from api.app.modules.proposals import remanagement as remanagement_rules
 from api.app.modules.proposals.remanagement import calculate_item_balance, items_are_compatible, max_remanageable, quantity
 from api.app.modules.proposals.stage_ledger import load_pipeline_quantities
-from api.app.modules.proposals.stage_swap import STAGE_AWAITING_GALVANIZATION, STAGE_IN_GALVANIZATION, STAGE_TO_PRODUCE, verify_swap_conservation
+from api.app.modules.proposals.stage_swap import OBLIGATION_STAGES, STAGE_AWAITING_GALVANIZATION, STAGE_IN_GALVANIZATION, STAGE_TO_PRODUCE, STAGE_UNDEFINED_FLOW, verify_swap_conservation
 from api.app.modules.proposals.weights import calculate_known_weight, calculate_weight_coverage, normalize_known_weight
 from api.app.shared.formatting import format_quantity
 from api.app.modules.proposals.schemas import (
@@ -1697,7 +1697,7 @@ async def confirm_remanagement_batch(session: AsyncSession, payload: Remanagemen
                 await session.flush()
                 swap = swaps_by_line.get((destination_item.id, source_item.id))
                 transfers = list(swap.transfers) if swap is not None else []
-                to_produce_quantity = sum((transfer.quantity for transfer in transfers if transfer.stage == STAGE_TO_PRODUCE), Decimal("0"))
+                to_produce_quantity = sum((transfer.quantity for transfer in transfers if transfer.stage in OBLIGATION_STAGES), Decimal("0"))
                 if swap is None:
                     to_produce_quantity = qty
                 if to_produce_quantity > 0:
@@ -1784,8 +1784,23 @@ async def confirm_remanagement_batch(session: AsyncSession, payload: Remanagemen
             mapped_destination_pending.get(int(item.id), _loaded_item_balance(item).production_pending) > 0
             for item in _internal_items(destination)
         )
+        # Pecas do destino que continuam sem fluxo definido depois da troca (o que saiu dele em
+        # "sem fluxo definido" foi para a origem, que segue o fluxo dela).
+        undefined_handed_over: dict[int, Decimal] = {}
+        for swap in stage_swaps:
+            for transfer in swap.transfers:
+                if transfer.stage == STAGE_UNDEFINED_FLOW:
+                    undefined_handed_over[swap.destination_item_id] = undefined_handed_over.get(swap.destination_item_id, Decimal("0")) + transfer.quantity
+        destination_undefined_left = sum(
+            (max(Decimal("0"), stage.undefined_flow - undefined_handed_over.get(item_id, Decimal("0"))) for item_id, stage in stages_before.items() if stage.proposal_id == destination.id),
+            Decimal("0"),
+        )
         destination.shipping_status = "EM_SEPARACAO"
-        if not destination_has_production_pending:
+        if destination_undefined_left > 0 and not destination_has_production_pending:
+            # Ainda ha pecas deste destino sem fluxo definido: ele continua exatamente como estava
+            # (na mesma area, com o fluxo indefinido); so recebeu as pecas prontas em troca.
+            destination.flow_situation = "PARCIAL_COM_PENDENCIA"
+        elif not destination_has_production_pending:
             destination.production_status = "FINALIZADO"
             destination.has_production_pending = False
             destination.current_area = "EXPEDICAO"
@@ -2020,7 +2035,7 @@ async def find_remanagement_sources(session: AsyncSession, payload: Remanagement
         code = _normalized_product_code(destination_item.product_code)
         matches = [
             candidate_item for candidate_item in candidates_by_code.get(code, [])
-            if items_are_compatible(candidate_item, destination_item)[0]
+            if items_are_compatible(candidate_item, destination_item, strict_flow=False)[0]
         ]
         matches.sort(key=lambda candidate_item: balances[candidate_item.id].ready_available, reverse=True)
         candidates = [
@@ -2459,15 +2474,20 @@ async def _stage_swaps_for_plan(session: AsyncSession, plan, *, refresh: bool = 
         if destination_stages is None:
             errors[product.destination_item_id] = "Item destino sem leitura de estágios."
             continue
+        # Origem que nao galvaniza nao sabe receber pecas ja fabricadas (aguardando galvanizacao ou em carga).
+        hosts_fabricated = {
+            line.source_item_id: (stages.get(line.source_item_id) is None or stages[line.source_item_id].flow == "GALVANIZADO")
+            for line in product.transfers
+        }
         try:
-            swaps.extend(plan_stage_swaps(destination_stages, [(line.source_item_id, line.ready_quantity_to_destination) for line in product.transfers]))
+            swaps.extend(plan_stage_swaps(destination_stages, [(line.source_item_id, line.ready_quantity_to_destination) for line in product.transfers], hosts_fabricated))
         except StageSwapError as exc:
             errors[product.destination_item_id] = str(exc)
 
     # Troca de pecas JA FABRICADAS (aguardando galvanizacao / dentro de carga) ainda nao
     # sabe lidar com propostas mae/filhas (parciais): ate la, e recusada com mensagem clara.
     fabricated_destinations = {
-        swap.destination_item_id for swap in swaps if any(transfer.stage != STAGE_TO_PRODUCE for transfer in swap.transfers)
+        swap.destination_item_id for swap in swaps if any(transfer.stage in (STAGE_AWAITING_GALVANIZATION, STAGE_IN_GALVANIZATION) for transfer in swap.transfers)
     }
     if fabricated_destinations:
         involved = set(proposal_ids)
@@ -3489,8 +3509,16 @@ async def _ensure_expedition_items_for_proposal(session: AsyncSession, proposal:
 
 
 async def _expedition_available_source(session: AsyncSession, item: ProposalItem) -> tuple[Decimal, str]:
-    if not item.active or item.delivered or not item.flow_defined:
+    if not item.active or item.delivered:
         return Decimal("0"), "PRODUCAO"
+    if not item.flow_defined:
+        # Sem fluxo definido o item nao fabrica nada, mas pode ter recebido pecas prontas de outro
+        # remanejamento (o destino continua com fluxo indefinido, so troca as pecas).
+        received = Decimal(str((await session.execute(
+            select(func.coalesce(func.sum(ProposalRemanagementItem.quantity), 0))
+            .where(ProposalRemanagementItem.destination_item_id == item.id)
+        )).scalar_one() or "0")).quantize(Decimal("0.0001"))
+        return received, ("REMANEJAMENTO" if received > 0 else "PRODUCAO")
     production_out = Decimal(str((await session.execute(
         select(func.coalesce(func.sum(ProductionAllocationTransfer.quantity), 0))
         .where(ProductionAllocationTransfer.from_item_id == item.id)
@@ -3523,7 +3551,8 @@ async def _expedition_available_source(session: AsyncSession, item: ProposalItem
         has_reallocation = production_in_completed > 0 or ready_received_by_remanagement > 0
         origin = "REMANEJAMENTO" if native_available <= 0 and has_reallocation else ("MISTO" if has_reallocation else "PRODUCAO")
         return available, origin
-    return Decimal("0"), "PRODUCAO"
+    # Fluxo de galvanizacao ainda indefinido: so conta o pronto recebido de remanejamento.
+    return ready_received_by_remanagement.quantize(Decimal("0.0001")), ("REMANEJAMENTO" if ready_received_by_remanagement > 0 else "PRODUCAO")
 
 
 def _active_expedition_items(proposal: Proposal) -> list[ExpeditionItem]:
@@ -6090,8 +6119,19 @@ def _loaded_item_balance(item: ProposalItem):
     )
 
 
+def _hosts_reallocated_production(item: ProposalItem) -> bool:
+    """Item que NAO produz internamente (ex.: so galvaniza), mas ficou devendo pecas a fabricar por
+    causa de um remanejamento (fluxos diferentes): enquanto elas nao forem feitas, a producao delas
+    acontece nele, como em qualquer item de producao interna."""
+    return (
+        item.produce_internally != "SIM"
+        and item.flow_defined
+        and _loaded_item_balance(item).production_reallocated_in_pending > 0
+    )
+
+
 def _internal_items(proposal: Proposal) -> list[ProposalItem]:
-    return [item for item in _active_items(proposal) if item.produce_internally == "SIM"]
+    return [item for item in _active_items(proposal) if item.produce_internally == "SIM" or _hosts_reallocated_production(item)]
 
 
 def _items_by_id(proposal: Proposal) -> dict[int, ProposalItem]:
@@ -6120,6 +6160,7 @@ def _production_queue_items(proposal: Proposal) -> list[ProposalItem]:
     return [
         item for item in _active_items(proposal)
         if item.produce_internally == "SIM"
+        or _hosts_reallocated_production(item)
         or not item.flow_defined
         or item.produce_internally == "INDEFINIDO"
         or item.requires_galvanization == "INDEFINIDO"

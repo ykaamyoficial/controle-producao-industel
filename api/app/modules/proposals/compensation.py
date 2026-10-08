@@ -226,7 +226,7 @@ def build_compensation_plan(
                 item_has_error = True
                 continue
             seen_sources.add(key)
-            compatible, reason = items_are_compatible(source_snapshot, destination_snapshot)
+            compatible, reason = items_are_compatible(source_snapshot, destination_snapshot, strict_flow=False)
             if not compatible:
                 errors.append(CompensationError("PRODUCT_INCOMPATIBLE", reason or "Item de origem incompativel com o item destino.", destination_item_id=requested.destination_item_id, source_item_id=allocation.source_item_id))
                 item_has_error = True

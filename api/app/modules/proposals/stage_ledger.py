@@ -158,7 +158,10 @@ def _flow(facts: ItemFacts) -> str:
 def derived_expedition_available(facts: ItemFacts) -> Decimal:
     """O que a Expedicao deveria ter de disponivel para o item (espelho de
     `_expedition_available_source`), sem o piso de entregue+remanejado."""
-    if not facts.flow_defined or (not facts.produced and facts.production_in_completed <= 0 and facts.ready_received <= 0):
+    if not facts.flow_defined:
+        # Sem fluxo definido o item so tem o pronto que recebeu de outro remanejamento.
+        return quantity(facts.ready_received)
+    if not facts.produced and facts.production_in_completed <= 0 and facts.ready_received <= 0:
         return ZERO
     if facts.requires_galvanization == "SIM":
         # Voltou da galvanizacao + pronto recebido de outro remanejamento.
@@ -166,7 +169,7 @@ def derived_expedition_available(facts: ItemFacts) -> Decimal:
     if facts.requires_galvanization == "NAO":
         native = max(ZERO, facts.requested - facts.production_out) if facts.produced else ZERO
         return quantity(native + facts.production_in_completed + facts.ready_received)
-    return ZERO
+    return quantity(facts.ready_received)
 
 
 def _flow_is_undefined(facts: ItemFacts) -> bool:
@@ -177,14 +180,6 @@ def _flow_is_undefined(facts: ItemFacts) -> bool:
 
 
 def compute_item_stages(facts: ItemFacts) -> ItemStages:
-    if _flow_is_undefined(facts) and facts.expedition_available <= ZERO and facts.galvanization_sent <= ZERO:
-        return ItemStages(
-            item_id=facts.item_id, proposal_id=facts.proposal_id, proposal_number=facts.proposal_number,
-            product_code=facts.product_code, unit=facts.unit, flow=_flow(facts), requested=quantity(facts.requested),
-            to_produce=ZERO, awaiting_galvanization=ZERO, in_galvanization=ZERO, ready=ZERO,
-            delivered=quantity(facts.expedition_delivered), given_away=quantity(facts.expedition_remanaged),
-            received_ready=quantity(facts.ready_received), undefined_flow=quantity(facts.requested - facts.expedition_delivered),
-        )
     balance = calculate_item_balance(
         requested=facts.requested,
         produced=facts.produced,
@@ -197,6 +192,18 @@ def compute_item_stages(facts: ItemFacts) -> ItemStages:
         production_reallocated_in_completed=facts.production_in_completed,
     )
     ready = balance.ready_available
+    if _flow_is_undefined(facts) and facts.galvanization_sent <= ZERO:
+        # Item sem fluxo definido: as pecas que ainda nao sao prontas nem entregues ainda nao tem
+        # caminho ("sem fluxo definido"); ele so tem pronto se recebeu de um remanejamento.
+        replacement = balance.production_reallocated_in_pending
+        return ItemStages(
+            item_id=facts.item_id, proposal_id=facts.proposal_id, proposal_number=facts.proposal_number,
+            product_code=facts.product_code, unit=facts.unit, flow=_flow(facts), requested=quantity(facts.requested),
+            to_produce=replacement, awaiting_galvanization=ZERO, in_galvanization=ZERO, ready=ready,
+            delivered=quantity(facts.expedition_delivered), given_away=quantity(facts.expedition_remanaged),
+            received_ready=quantity(facts.ready_received), received_replacement=replacement,
+            undefined_flow=quantity(max(ZERO, facts.requested - facts.expedition_delivered - ready - replacement)),
+        )
     if facts.requires_galvanization == "SIM":
         # So o que ainda nao foi fabricado (mais a reposicao recebida) esta "a fabricar";
         # o resto da esteira esta aguardando carga, dentro de carga ou ja voltou.
@@ -212,7 +219,8 @@ def compute_item_stages(facts: ItemFacts) -> ItemStages:
         else:
             awaiting = quantity(max(ZERO, facts.fabricated_in - facts.fabricated_out + facts.production_in_completed - facts.galvanization_sent))
     else:
-        to_produce = balance.production_pending if facts.produce_internally == "SIM" else ZERO
+        # Inclui a reposicao recebida de outro remanejamento mesmo que o item nao produza internamente.
+        to_produce = balance.production_pending
         in_galvanization = ZERO
         awaiting = ZERO
     return ItemStages(

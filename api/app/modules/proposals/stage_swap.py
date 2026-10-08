@@ -27,18 +27,29 @@ from api.app.modules.proposals.stage_ledger import TOLERANCE, ZERO, ItemStages
 STAGE_IN_GALVANIZATION = "IN_GALVANIZATION"
 STAGE_AWAITING_GALVANIZATION = "AWAITING_GALVANIZATION"
 STAGE_TO_PRODUCE = "TO_PRODUCE"
+# Pecas do destino que ainda nao tem fluxo definido: a origem fica devendo a reposicao (que segue o
+# fluxo da PROPRIA origem) e o fluxo do destino continua indefinido, como estava.
+STAGE_UNDEFINED_FLOW = "UNDEFINED_FLOW"
 # Decisao D1: as mais adiantadas primeiro.
-STAGES_MOST_ADVANCED_FIRST = (STAGE_IN_GALVANIZATION, STAGE_AWAITING_GALVANIZATION, STAGE_TO_PRODUCE)
+STAGES_MOST_ADVANCED_FIRST = (STAGE_IN_GALVANIZATION, STAGE_AWAITING_GALVANIZATION, STAGE_TO_PRODUCE, STAGE_UNDEFINED_FLOW)
+# Estagios de pecas JA FABRICADAS: so uma origem que passa pela galvanizacao sabe receber.
+FABRICATED_STAGES = (STAGE_IN_GALVANIZATION, STAGE_AWAITING_GALVANIZATION)
+# Estagios que viram obrigacao de fabricar da origem (ProductionAllocationTransfer).
+OBLIGATION_STAGES = (STAGE_TO_PRODUCE, STAGE_UNDEFINED_FLOW)
 STAGE_LABELS = {
     STAGE_IN_GALVANIZATION: "na galvanização",
     STAGE_AWAITING_GALVANIZATION: "fabricadas, aguardando galvanização",
     STAGE_TO_PRODUCE: "a fabricar",
+    STAGE_UNDEFINED_FLOW: "ainda sem fluxo definido",
 }
-_STAGE_FIELD = {
+# Em que campo do controle de pecas a peca SAI do destino e ENTRA na origem.
+_DESTINATION_FIELD = {
     STAGE_IN_GALVANIZATION: "in_galvanization",
     STAGE_AWAITING_GALVANIZATION: "awaiting_galvanization",
     STAGE_TO_PRODUCE: "to_produce",
+    STAGE_UNDEFINED_FLOW: "undefined_flow",
 }
+_SOURCE_FIELD = {**_DESTINATION_FIELD, STAGE_UNDEFINED_FLOW: "to_produce"}
 
 
 class StageSwapError(ValueError):
@@ -73,35 +84,56 @@ def stage_capacity(destination: ItemStages) -> dict[str, Decimal]:
         STAGE_IN_GALVANIZATION: max(ZERO, destination.in_galvanization),
         STAGE_AWAITING_GALVANIZATION: max(ZERO, destination.awaiting_galvanization),
         STAGE_TO_PRODUCE: max(ZERO, destination.to_produce - destination.received_replacement),
+        STAGE_UNDEFINED_FLOW: max(ZERO, destination.undefined_flow),
     }
 
 
-def plan_stage_swaps(destination: ItemStages, lines: Sequence[tuple[int, Decimal]]) -> list[StageSwap]:
+def plan_stage_swaps(
+    destination: ItemStages,
+    lines: Sequence[tuple[int, Decimal]],
+    hosts_fabricated: Mapping[int, bool] | None = None,
+) -> list[StageSwap]:
     """Distribui as pecas em andamento do destino entre as origens (`lines` =
     [(item de origem, quantidade pronta cedida)], na ordem recebida), sempre das
-    mais adiantadas para as menos adiantadas."""
+    mais adiantadas para as menos adiantadas.
+
+    `hosts_fabricated[item de origem]` diz se a origem passa pela galvanizacao e portanto sabe receber
+    pecas ja fabricadas (aguardando galvanizacao ou em carga); sem a informacao, sabe. Uma origem que
+    nao galvaniza so recebe pecas "a fabricar" (ou sem fluxo definido): as pecas que o destino ja
+    fabricou ficam para outra origem. O fluxo da origem em si nao e exigido ser igual ao do destino."""
     remaining = stage_capacity(destination)
-    wanted = sum((quantity for _source, quantity in lines), ZERO)
-    available = sum(remaining.values(), ZERO)
-    if wanted > available + TOLERANCE:
-        raise StageSwapError(
-            f"O item {destination.item_id} tem só {available} peça(s) em andamento para ceder em troca, e o remanejamento pede {wanted}."
-        )
     swaps: list[StageSwap] = []
+    short = ZERO
     for source_item_id, quantity in lines:
+        can_host_fabricated = True if hosts_fabricated is None else bool(hosts_fabricated.get(source_item_id, True))
         left = quantity
         transfers: list[StageTransfer] = []
         for stage in STAGES_MOST_ADVANCED_FIRST:
+            if stage in FABRICATED_STAGES and not can_host_fabricated:
+                continue
             take = min(left, remaining[stage])
             if take > ZERO:
                 transfers.append(StageTransfer(stage, take.quantize(TOLERANCE)))
                 remaining[stage] -= take
                 left -= take
+        short += left
         swaps.append(StageSwap(source_item_id, destination.item_id, tuple(transfers)))
+    if short > TOLERANCE:
+        available = sum(stage_capacity(destination).values(), ZERO)
+        wanted = sum((quantity for _source, quantity in lines), ZERO)
+        if not (hosts_fabricated is None or all(hosts_fabricated.get(source, True) for source, _qty in lines)) and wanted <= available + TOLERANCE:
+            raise StageSwapError(
+                f"As peças em andamento do item {destination.item_id} já estão fabricadas (aguardando galvanização ou em carga) "
+                "e a origem escolhida não passa pela galvanização, então não consegue recebê-las. Escolha uma origem que galvanize."
+            )
+        raise StageSwapError(
+            f"O item {destination.item_id} tem só {available} peça(s) em andamento para ceder em troca, e o remanejamento pede {wanted}."
+        )
     return swaps
 
 
-_FIELDS = ("ready", "delivered", "in_galvanization", "awaiting_galvanization", "to_produce")
+_FIELDS = ("ready", "delivered", "in_galvanization", "awaiting_galvanization", "to_produce", "undefined_flow")
+_TOTAL_BUCKETS = (("ready",), ("delivered",), ("in_galvanization",), ("awaiting_galvanization",), ("to_produce", "undefined_flow"))
 
 
 def verify_swap_conservation(
@@ -124,9 +156,8 @@ def verify_swap_conservation(
         source["ready"] -= quantity
         destination["ready"] += quantity
         for transfer in swap.transfers:
-            name = _STAGE_FIELD[transfer.stage]
-            source[name] += transfer.quantity
-            destination[name] -= transfer.quantity
+            source[_SOURCE_FIELD[transfer.stage]] += transfer.quantity
+            destination[_DESTINATION_FIELD[transfer.stage]] -= transfer.quantity
 
     problems: list[str] = []
     for item_id, changes in expected.items():
@@ -141,9 +172,11 @@ def verify_swap_conservation(
         if abs(after[item_id].gap - before[item_id].gap) > TOLERANCE:
             problems.append(f"item {item_id}: a conta do item mudou (diferença {before[item_id].gap} -> {after[item_id].gap})")
 
-    for name in _FIELDS:
-        total_before = sum((getattr(before[item_id], name) for item_id in expected if item_id in before), ZERO)
-        total_after = sum((getattr(after[item_id], name) for item_id in expected if item_id in after), ZERO)
+    # "A fabricar" e "sem fluxo definido" formam um so balde no total: a peca sem fluxo do destino vira
+    # "a fabricar" na origem (que segue o fluxo da propria origem), sem criar nem fazer sumir peca.
+    for names in _TOTAL_BUCKETS:
+        total_before = sum((getattr(before[item_id], name) for item_id in expected if item_id in before for name in names), ZERO)
+        total_after = sum((getattr(after[item_id], name) for item_id in expected if item_id in after for name in names), ZERO)
         if abs(total_before - total_after) > TOLERANCE:
-            problems.append(f"total de {name} nos itens envolvidos mudou de {total_before} para {total_after}")
+            problems.append(f"total de {'+'.join(names)} nos itens envolvidos mudou de {total_before} para {total_after}")
     return problems

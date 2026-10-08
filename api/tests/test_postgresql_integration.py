@@ -240,6 +240,7 @@ class PostgreSQLIntegrationTests(unittest.TestCase):
                         "proposal_remanagement_items",
                         "proposal_remanagements",
                         "proposals",
+                        "remanagement_stage_transfers",
                         "role_permissions",
                         "roles",
                         "security_events",

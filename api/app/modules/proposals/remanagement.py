@@ -113,7 +113,15 @@ def galvanization_pipeline_quantity(
     ).quantize(Decimal("0.0001"))
 
 
-def items_are_compatible(source_item, destination_item) -> tuple[bool, str | None]:
+def items_are_compatible(source_item, destination_item, *, strict_flow: bool = True) -> tuple[bool, str | None]:
+    """Dois itens podem trocar pecas quando sao a MESMA peca (mesmo codigo e mesma unidade).
+
+    `strict_flow=True` (caminho antigo `apply_remanagement`) exige tambem o mesmo fluxo
+    (galvanizacao, producao interna, fluxo definido nos dois). O motor novo (compensacao por
+    estagio) usa `strict_flow=False`: o fluxo de cada proposta pode ser diferente, porque as pecas
+    em andamento que trocam de dono continuam o caminho que ja seguiam. A unica exigencia de fluxo e
+    que a ORIGEM tenha fluxo definido (a reposicao dela segue o fluxo da propria origem); o destino
+    pode ainda estar sem fluxo definido."""
     source_code = str(source_item.product_code or "").strip().upper()
     destination_code = str(destination_item.product_code or "").strip().upper()
     if not source_code or not destination_code or source_code != destination_code:
@@ -122,6 +130,10 @@ def items_are_compatible(source_item, destination_item) -> tuple[bool, str | Non
     destination_unit = str(destination_item.unit or "").strip().upper()
     if source_unit != destination_unit:
         return False, "Os itens precisam possuir a mesma unidade."
+    if not strict_flow:
+        if not source_item.flow_defined:
+            return False, "A origem precisa possuir fluxo operacional definido."
+        return True, None
     if source_item.requires_galvanization != destination_item.requires_galvanization:
         return False, "Os itens possuem fluxos de galvanizacao diferentes."
     if source_item.produce_internally != destination_item.produce_internally:
