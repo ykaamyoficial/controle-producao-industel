@@ -6,9 +6,11 @@ from decimal import Decimal
 
 ZERO = Decimal("0.0000")
 
-# Plano de logistica do remanejamento: item galvanizado como ORIGEM/DESTINO so e liberado na
-# Fase E (assistente). Ate la a chave fica desligada e os testes da Fase C a ligam por patch.
-GALVANIZED_REMANAGEMENT_ENABLED = False
+# Plano de logistica do remanejamento: itens galvanizados podem ser origem e destino do
+# remanejamento (liberado na Fase E). A troca de dono das pecas por estagio, a reposicao que
+# passa pela galvanizacao e a conferencia de conservacao (Fases B e C) valem para eles. A chave
+# existe so para os testes provarem o caminho bloqueado e para desligar de emergencia.
+GALVANIZED_REMANAGEMENT_ENABLED = True
 
 
 def galvanized_remanagement_blocked(requires_galvanization: str | None) -> bool:

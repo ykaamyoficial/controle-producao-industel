@@ -132,17 +132,27 @@ def test_incompatible_unit_is_invalid():
     assert not plan.valid
 
 
-def test_source_pending_galvanization_is_invalid():
-    # requires_galvanization igual nos dois lados para nao disparar o
-    # PRODUCT_INCOMPATIBLE de items_are_compatible - o alvo aqui e o bloqueio
-    # explicito e independente de origem pendente de galvanizacao.
+def _galvanized_plan():
+    # requires_galvanization igual nos dois lados para nao disparar o PRODUCT_INCOMPATIBLE de
+    # items_are_compatible - o alvo aqui e a regra do item galvanizado como origem.
     snapshots = {1: _snapshot(1, 100, available="10", requires_galvanization="SIM"), 2: _snapshot(2, 200, available="10", requires_galvanization="SIM")}
-    plan = build_compensation_plan(
+    return build_compensation_plan(
         destination_proposal_id=100,
         requested_items=[RequestedItem(destination_item_id=1, requested_quantity=Decimal("10"))],
         allocations=[Allocation(destination_item_id=1, source_proposal_id=200, source_item_id=2, allocated_quantity=Decimal("10"))],
         item_snapshots=snapshots,
     )
+
+
+def test_galvanized_source_is_valid_now_that_the_swap_follows_every_stage():
+    plan = _galvanized_plan()
+    assert plan.valid
+    assert not any(error.code == "OPERATIONAL_STATE_NOT_SUPPORTED" for error in plan.errors)
+
+
+def test_source_pending_galvanization_is_invalid_while_the_switch_is_off(monkeypatch):
+    monkeypatch.setattr("api.app.modules.proposals.remanagement.GALVANIZED_REMANAGEMENT_ENABLED", False)
+    plan = _galvanized_plan()
     assert not plan.valid
     assert any(error.code == "OPERATIONAL_STATE_NOT_SUPPORTED" for error in plan.errors)
 

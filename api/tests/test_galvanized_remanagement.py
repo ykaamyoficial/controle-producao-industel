@@ -35,6 +35,11 @@ class GalvanizedRemanagementTests(unittest.TestCase):
         with patch(SWITCH, True):
             yield
 
+    @contextmanager
+    def switch_off(self):
+        with patch(SWITCH, False):
+            yield
+
     def _get(self, url, **params):
         response = self.client.get(url, params=params or None, headers=self.headers)
         self.assertEqual(response.status_code, 200, response.text)
@@ -108,11 +113,22 @@ class GalvanizedRemanagementTests(unittest.TestCase):
         source, source_item_id = self._ready_source("GALV-OFF-A")
         destination = self._proposal("GALV-OFF-B")
         destination_item_id = destination["items"][0]["id"]
-        review = self._post("/api/v1/shipping/remanagements/review", self._payload(destination, destination_item_id, source, source_item_id, "4.0000"))
+        with self.switch_off():
+            review = self._post("/api/v1/shipping/remanagements/review", self._payload(destination, destination_item_id, source, source_item_id, "4.0000"))
+            availability = self._post("/api/v1/shipping/remanagements/availability", {"destination_proposal_id": destination["id"], "items": [{"destination_item_id": destination_item_id, "requested_quantity": "4.0000"}]})
         self.assertFalse(review["valid"])
         self.assertTrue(any(error["code"] in {"OPERATIONAL_STATE_NOT_SUPPORTED", "SOURCE_ITEM_UNKNOWN"} for error in review["errors"]), review["errors"])
-        availability = self._post("/api/v1/shipping/remanagements/availability", {"destination_proposal_id": destination["id"], "items": [{"destination_item_id": destination_item_id, "requested_quantity": "4.0000"}]})
         self.assertEqual(availability["items"][0]["candidates"], [])
+
+    def test_galvanized_items_are_found_as_sources_by_default(self):
+        """O que fazia o remanejamento nao achar nada: sem nenhuma chave, o galvanizado pronto na Expedicao e candidato."""
+        source, source_item_id = self._ready_source("GALV-ON-A")
+        destination = self._proposal("GALV-ON-B")
+        destination_item_id = destination["items"][0]["id"]
+        availability = self._post("/api/v1/shipping/remanagements/availability", {"destination_proposal_id": destination["id"], "items": [{"destination_item_id": destination_item_id, "requested_quantity": "4.0000"}]})
+        candidates = availability["items"][0]["candidates"]
+        self.assertEqual([(c["source_proposal_id"], c["source_item_id"], c["available_quantity"]) for c in candidates], [(source["id"], source_item_id, "10.0000")])
+        self.assertEqual(availability["items"][0]["coverage_status"], "SUFICIENTE")
 
     # ---- destino ainda nao fabricado: a obrigacao de fabricar muda de mao --------------------------------------
     def test_destination_not_produced_the_replacement_goes_through_galvanization_and_joins_the_ready_pieces(self):
