@@ -91,15 +91,15 @@ class MaintenanceModeDialog(QDialog):
 
         self.details_label = QLabel()
         self.details_label.setWordWrap(True)
-        self.details_label.setStyleSheet("color: #64748b;")
+        self.details_label.setObjectName("Caption")
         layout.addWidget(self.details_label)
 
         self.status_label = QLabel()
-        self.status_label.setStyleSheet("color: #94a3b8; font-size: 11px;")
+        self.status_label.setObjectName("Caption")
         layout.addWidget(self.status_label)
 
         version_label = QLabel(f"Versão do Desktop: {APP_VERSION}")
-        version_label.setStyleSheet("color: #94a3b8; font-size: 11px;")
+        version_label.setObjectName("Caption")
         layout.addWidget(version_label)
 
         footer = QHBoxLayout()

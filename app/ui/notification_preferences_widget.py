@@ -53,12 +53,13 @@ class NotificationPreferencesWidget(QWidget):
         self.grid.setVerticalSpacing(6)
         for col, text in enumerate(["Categoria", "No app", "Bandeja", "E-mail", "E-mail a partir de"]):
             header = QLabel(text)
-            header.setStyleSheet("font-weight: 700; font-size: 11px;")
+            header.setObjectName("ColumnHeader")
             self.grid.addWidget(header, 0, col)
         layout.addLayout(self.grid)
 
+        layout.addSpacing(8)
         quiet_title = QLabel("Horário de silêncio")
-        quiet_title.setStyleSheet("font-weight: 800; font-size: 13px; margin-top: 8px;")
+        quiet_title.setObjectName("PanelTitle")
         layout.addWidget(quiet_title)
         quiet_row = QHBoxLayout()
         quiet_row.setSpacing(8)

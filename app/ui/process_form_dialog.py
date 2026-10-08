@@ -26,8 +26,8 @@ class ItemEditorDelegate(QStyledItemDelegate):
     def createEditor(self, parent, option, index):
         editor = super().createEditor(parent, option, index)
         if isinstance(editor, QLineEdit):
+            # Padding e canto do editor de celula vem de `QAbstractItemView QLineEdit`.
             editor.setMinimumHeight(30)
-            editor.setStyleSheet("QLineEdit { padding: 2px 8px; border-radius: 6px; }")
         return editor
 
     def updateEditorGeometry(self, editor, option, index):

@@ -79,7 +79,7 @@ class ApiDiagnosticDialog(QDialog):
         root.setSpacing(14)
 
         title = QLabel("Diagnóstico da API")
-        title.setStyleSheet("font-size: 20px; font-weight: 800;")
+        title.setObjectName("DetailTitle")
         subtitle = QLabel("Validação da API oficial usada pelo desktop.")
         subtitle.setObjectName("Caption")
         subtitle.setWordWrap(True)
@@ -93,7 +93,7 @@ class ApiDiagnosticDialog(QDialog):
         diag_layout.setSpacing(8)
 
         diag_title = QLabel("Diagnóstico de conexão")
-        diag_title.setStyleSheet("font-size: 15px; font-weight: 800;")
+        diag_title.setObjectName("PanelTitle")
         diag_layout.addWidget(diag_title)
 
         self.diag_status_label = QLabel("Status geral: não executado")

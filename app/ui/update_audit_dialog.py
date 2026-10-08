@@ -93,7 +93,7 @@ class UpdateAuditDialog(QDialog):
         root.setSpacing(12)
 
         title = QLabel("Auditoria de atualizações")
-        title.setStyleSheet("font-size: 20px; font-weight: 800;")
+        title.setObjectName("DetailTitle")
         subtitle = QLabel("Histórico oficial de releases, deploys, manutenção e canais -- somente leitura.")
         subtitle.setObjectName("Caption")
         subtitle.setWordWrap(True)

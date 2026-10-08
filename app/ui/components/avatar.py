@@ -34,6 +34,10 @@ class AvatarLabel(QLabel):
         self.setText("")
         self.update()
 
+    def clear_photo(self) -> None:
+        self._photo = None
+        self.update()
+
     def paintEvent(self, _event) -> None:  # noqa: N802 (Qt override)
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)

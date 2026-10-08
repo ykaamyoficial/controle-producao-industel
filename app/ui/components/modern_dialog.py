@@ -13,7 +13,7 @@ class ModernDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 22, 24, 18)
         title_label = QLabel(title)
-        title_label.setStyleSheet("font-size: 18px; font-weight: 800;")
+        title_label.setObjectName("DetailTitle")
         msg = QLabel(message)
         msg.setWordWrap(True)
         msg.setObjectName("Caption")

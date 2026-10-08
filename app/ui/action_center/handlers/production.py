@@ -27,7 +27,7 @@ class ProductionPauseDialog(QDialog):
         root.setContentsMargins(20, 18, 20, 16)
         root.setSpacing(10)
         title = QLabel("Motivo da pausa")
-        title.setStyleSheet("font-size: 15px; font-weight: 800;")
+        title.setObjectName("PanelTitle")
         help_text = QLabel("Informe por que a fabricação será interrompida temporariamente.")
         help_text.setWordWrap(True)
         help_text.setObjectName("Caption")

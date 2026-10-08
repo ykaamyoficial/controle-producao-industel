@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QDialog, QVBoxLayout
 
 from app.ui.components.dialog_shell import dialog_footer, dialog_header
+from app.ui.components.avatar import AvatarLabel
 from app.ui.components.modern_button import ModernButton
 from app.ui.dialog_utils import style_dialog_from_parent
 
@@ -50,10 +50,7 @@ class UserProfileDialog(QDialog):
 
         avatar_group = QGroupBox("Foto de perfil")
         avatar_layout = QHBoxLayout(avatar_group)
-        self.avatar_preview = QLabel(self._initials(str(user.get("nome") or user.get("login") or "?")))
-        self.avatar_preview.setFixedSize(82, 82)
-        self.avatar_preview.setAlignment(Qt.AlignCenter)
-        self.avatar_preview.setStyleSheet(f"background: {self.service.palette['accent']}; color: {self.service.palette['accent_text']}; border-radius: 41px; font-size: 22px; font-weight: 800;")
+        self.avatar_preview = AvatarLabel(str(user.get("nome") or user.get("login") or "?"), self.service, 82)
         avatar_layout.addWidget(self.avatar_preview)
         avatar_buttons = QVBoxLayout()
         choose = ModernButton("Alterar foto", "edit")
@@ -102,15 +99,14 @@ class UserProfileDialog(QDialog):
         try:
             self.service.upload_current_avatar(Path(path).name, content, mime)
             pixmap = QPixmap(path)
-            self.avatar_preview.setPixmap(pixmap.scaled(82, 82, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation))
-            self.avatar_preview.setText("")
+            self.avatar_preview.set_photo(pixmap)
         except Exception as exc:
             QMessageBox.warning(self, "Foto de perfil", str(exc))
 
     def _remove_avatar(self):
         try:
             self.service.remove_current_avatar()
-            self.avatar_preview.clear()
+            self.avatar_preview.clear_photo()
             self.avatar_preview.setText(self._initials(self.display_name.text() or self.username.text()))
         except Exception as exc:
             QMessageBox.warning(self, "Foto de perfil", str(exc))

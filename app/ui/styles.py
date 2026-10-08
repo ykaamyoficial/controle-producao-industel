@@ -54,6 +54,7 @@ def app_stylesheet(palette: dict) -> str:
     nav_hover = with_alpha(surface, 150)
     highlight_border = mix(border, accent, 0.5)
     danger_text = _contrast_text(danger)
+    success_text = _contrast_text(palette["success"])
     warning = palette["warning"]
     secondary = palette["secondary"]
     success = palette["success"]
@@ -709,6 +710,49 @@ def app_stylesheet(palette: dict) -> str:
     QListWidget#ConversationList QScrollBar:vertical {{ width: 5px; margin: 0px; }}
     QListWidget#ConversationList QScrollBar::handle:vertical {{ min-height: 24px; }}
     QLabel#ConversationProposal {{ font-size: 12px; font-weight: 700; background: transparent; }}
+    QLabel#ColumnHeader {{ font-size: 11px; font-weight: 700; }}
+    QFrame#NomusProgressChip, QFrame#NomusProgressChipAccent {{
+        background: {surface};
+        border: 1px solid {border};
+        border-radius: 12px;
+    }}
+    QFrame#NomusProgressChipAccent {{ background: {surface_alt}; border: 1px solid {accent}; }}
+    QFrame#NomusProgressChip QLabel, QFrame#NomusProgressChipAccent QLabel {{ background: transparent; }}
+    QLabel#NomusChipValue {{ font-size: 13px; font-weight: 700; }}
+    QFrame#DetailPanel QLabel#NomusProgressDetail {{
+        color: {muted};
+        font-size: 12px;
+        background: {surface_alt};
+        border-radius: 8px;
+        padding: 7px 9px;
+    }}
+    QProgressBar#NomusProgressBar {{
+        background: {surface_alt};
+        border: 1px solid {border};
+        border-radius: 11px;
+        min-height: 22px;
+        max-height: 22px;
+        padding: 1px;
+    }}
+    QProgressBar#NomusProgressBar::chunk {{ background: {accent}; border-radius: 10px; }}
+    QFrame#DetailPanel QLabel#NomusProgressPercent {{
+        background: {surface_alt};
+        border: 1px solid {border};
+        border-radius: 10px;
+        padding: 6px 10px;
+        font-weight: 700;
+    }}
+    QAbstractItemView QLineEdit {{ padding: 2px 8px; border-radius: 6px; }}
+    QLabel#ToastNotification {{
+        background: {success};
+        color: {success_text};
+        border-radius: 12px;
+        padding: 12px 18px;
+        font-weight: 700;
+    }}
+    QLabel#ToastNotification[kind="error"] {{ background: {danger}; color: {danger_text}; }}
+    QLabel#StageChip {{ font-size: 12px; }}
+    QLabel#StageArrow {{ color: {muted}; font-size: 18px; }}
     QLabel#UnreadBadge {{
         background: {danger};
         color: {danger_text};

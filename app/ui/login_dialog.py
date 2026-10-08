@@ -24,7 +24,7 @@ class LoginDialog(QDialog):
         layout.setContentsMargins(28, 26, 28, 24)
         layout.setSpacing(12)
         title = QLabel(APP_DISPLAY_NAME)
-        title.setStyleSheet("font-size: 21px; font-weight: 800;")
+        title.setObjectName("DetailTitle")
         subtitle = QLabel("Acesse o painel operacional")
         subtitle.setObjectName("Caption")
         self.error = QLabel("")
