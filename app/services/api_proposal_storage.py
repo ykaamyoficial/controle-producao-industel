@@ -141,6 +141,10 @@ API_PERMISSION_TO_AREA = {
 }
 
 
+# Teto de linhas da aba "Itens em expedicao" (a API entrega ate 500 por pagina).
+EXPEDITION_ITEMS_MAX_ROWS = 2000
+
+
 class OfficialProposalStorageError(RuntimeError):
     def __init__(self, message: str, *, code: str | None = None):
         super().__init__(message)
@@ -1007,6 +1011,28 @@ class OfficialProposalApiStorage:
         try:
             payload = proposals.list_expedition_proposals(token, **filters)
             return {"items": [_api_expedition_to_process(row) for row in payload.get("items", [])], "total": payload.get("total")}
+        finally:
+            client.close()
+
+    def expedition_items_queue(self, *, max_rows: int = EXPEDITION_ITEMS_MAX_ROWS, **filters) -> list[dict[str, Any]]:
+        """Todas as linhas que couberem em `max_rows`, buscando de 500 em 500
+        (limite da API): a aba nao mostra so as primeiras 500 sem avisar."""
+        rows: list[dict[str, Any]] = []
+        while len(rows) < max_rows:
+            page = self.expedition_items_queue_page(limit=min(500, max_rows - len(rows)), offset=len(rows), **filters)
+            rows.extend(page["items"])
+            if not page["items"] or len(rows) >= int(page.get("total") or 0):
+                break
+        return rows
+
+    def expedition_items_queue_page(self, **filters) -> dict[str, Any]:
+        """Itens (nao propostas) da Expedicao. `pending_only` vai como "true"/"false"."""
+        if isinstance(filters.get("pending_only"), bool):
+            filters["pending_only"] = "true" if filters["pending_only"] else "false"
+        client, proposals, token = self._client()
+        try:
+            payload = proposals.list_expedition_items(token, **filters)
+            return {"items": [_api_expedition_item_row_to_process_item(row) for row in payload.get("items", [])], "total": payload.get("total")}
         finally:
             client.close()
 
@@ -2268,6 +2294,38 @@ def _api_expedition_item_to_process_item(item: dict[str, Any]) -> dict[str, Any]
         "processo_atual_id": item.get("proposal_id"),
         "produzido": 1,
         "entregue": 1 if item.get("status") == "ENTREGUE" else 0,
+    }
+
+
+def _api_expedition_item_row_to_process_item(row: dict[str, Any]) -> dict[str, Any]:
+    """Linha da aba "Itens em expedicao": o item da Expedicao com a proposta dele.
+    Quantidades ja saem sem zeros a direita ("2", "7.5")."""
+    return {
+        "id": row.get("id"),
+        "api_id": row.get("proposal_item_id"),
+        "api_expedition_item_id": row.get("id"),
+        "api_version": row.get("version"),
+        "numero_item": row.get("item_number") or "",
+        "codigo_produto": row.get("product_code") or "",
+        "descricao": row.get("description") or "",
+        "unidade": row.get("unit") or "",
+        "quantidade": _decimal_text(row.get("available_quantity")) or "0",
+        "quantidade_disponivel": _decimal_text(row.get("available_quantity")) or "0",
+        "quantidade_separada": _decimal_text(row.get("separated_quantity")) or "0",
+        "quantidade_entregue": _decimal_text(row.get("delivered_quantity")) or "0",
+        "quantidade_remanejada": _decimal_text(row.get("remanaged_quantity")) or "0",
+        "saldo_pendente": _decimal_text(row.get("pending_quantity")) or "0",
+        "peso": row.get("unit_weight") or "",
+        "peso_total": _decimal_text(row.get("total_weight")),
+        "origem_expedicao": row.get("origin") or "",
+        "status_expedicao_item": row.get("status") or "",
+        "processo_atual_id": row.get("proposal_id"),
+        "api_proposal_id": row.get("proposal_id"),
+        "api_proposal_version": row.get("proposal_version"),
+        "proposta": row.get("proposal_number") or "",
+        "cliente": row.get("customer_name") or "",
+        "obra_site": row.get("project_name") or "",
+        "lote": row.get("lot") or "",
     }
 
 

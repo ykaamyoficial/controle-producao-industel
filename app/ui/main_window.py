@@ -31,6 +31,7 @@ from app.ui.operational_reports_page import OperationalReportsPage
 from app.ui.process_page import ProcessPage
 from app.ui.production_items_page import ProductionAreaPage
 from app.ui.galvanization_items_page import GalvanizationAreaPage
+from app.ui.expedition_items_page import ExpeditionAreaPage
 from app.ui.settings_dialog import SettingsDialog
 from app.ui.sidebar import NAV_LABELS, Sidebar
 from app.ui.icons import icon_cache
@@ -425,6 +426,8 @@ class MainWindow(FramelessHitTestMixin, QMainWindow):
                 self.pages[area] = ProductionAreaPage(self.service)
             elif area == "GALVANIZACAO":
                 self.pages[area] = GalvanizationAreaPage(self.service)
+            elif area == "EXPEDICAO":
+                self.pages[area] = ExpeditionAreaPage(self.service)
             else:
                 self.pages[area] = ProcessPage(self.service, area, NAV_LABELS.get(area, area.title()))
             self.stack.addWidget(self.pages[area])

@@ -902,6 +902,24 @@ class BackendService:
         except Exception as exc:
             raise self._api_app_error(exc) from exc
 
+    def expedition_items_queue(self, filters: dict[str, Any] | None=None) -> list[dict[str, Any]]:
+        """Itens da Expedicao (aba "Itens em expedicao"). `pending` (padrao True)
+        so traz os que ainda tem saldo a entregar; `status` e o do item."""
+        filters = filters or {}
+        try:
+            key = f"expedition_items:{tuple(sorted(filters.items()))}"
+            return self._cached_read(
+                key,
+                lambda: self.official_proposal_storage.expedition_items_queue(
+                    search=filters.get('text') or None,
+                    status=filters.get('status') or None,
+                    pending_only=bool(filters.get('pending', True)),
+                ),
+                ttl=2.0,
+            )
+        except Exception as exc:
+            raise self._api_app_error(exc) from exc
+
     def galvanization_items_queue(self, filters: dict[str, Any] | None=None) -> list[dict[str, Any]]:
         filters = filters or {}
         try:

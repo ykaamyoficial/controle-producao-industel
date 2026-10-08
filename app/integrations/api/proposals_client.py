@@ -66,6 +66,11 @@ class ProposalsApiClient:
         path = "/api/v1/production/items" + (f"?{params}" if params else "")
         return self.client.get(path, access_token=access_token).data
 
+    def list_expedition_items(self, access_token: str, **filters) -> dict[str, Any]:
+        params = urlencode({key: value for key, value in filters.items() if value not in (None, "")})
+        path = "/api/v1/shipping/items" + (f"?{params}" if params else "")
+        return self.client.get(path, access_token=access_token).data
+
     def get_item(self, access_token: str, item_id: int) -> dict[str, Any]:
         return self.client.get(f"/api/v1/proposal-items/{item_id}", access_token=access_token).data
 
