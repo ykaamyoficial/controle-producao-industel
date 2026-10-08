@@ -31,6 +31,10 @@ A página filtra o texto de busca localmente (a lista é pequena), sem chamar a 
 
 > **Limite conhecido:** a regra vale na **listagem do Desktop**. A API (`remanagement_destination_items`, `review`, `confirm`) continua aceitando qualquer proposta ativa como destino, porque os testes e a compensação da Fase 5-7 foram escritos assim. Se outro cliente (ou uma chamada direta) precisar ser barrado, o próximo passo é validar `current_area in (PRODUCAO, GALVANIZACAO)` em `_load_compensation_snapshots`/`confirm_remanagement_batch` com um código de erro próprio.
 
+## Itens galvanizados
+
+Desde a Fase E do [plano de logística](REMANEJAMENTO_PLANO_LOGISTICA.md) o item galvanizado pronto na Expedição também é origem. No passo de revisão cada origem mostra, em frase simples e na última coluna da tabela, **quais peças do destino passam para ela, estágio por estágio** (na galvanização, já fabricadas aguardando galvanização, ainda a fabricar — as mais adiantadas primeiro). A API confere, a cada gravação, que só houve a troca prevista e desfaz tudo se algo não fechar.
+
 ## Fluxo de dados
 
 Todas as páginas compartilham um único `RemanagementFlowState` (`app/services/remanagement_flow_state.py`), então Voltar preserva o que já foi escolhido.

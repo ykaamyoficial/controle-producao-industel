@@ -17,6 +17,21 @@ from app.ui.remanagement_wizard.widgets import REVIEW_STATUS_KINDS, coverage_bad
 SIDE_WIDTH = 360
 
 
+def what_happens(destination: str, source: str, ready, transfers, unit: str = "") -> str:
+    """O que acontece com as pecas numa linha do remanejamento, em linguagem simples.
+
+    "A CP 05507 entrega 4 un prontas à CP 05600. Em troca, passam a ser da CP 05507 (eram da CP 05600):
+    4 un na galvanização e 2 un ainda a fabricar." Sem detalhe de estagio (resposta antiga da API) so a
+    primeira frase."""
+    unit_text = f" {unit}" if unit else ""
+    sentence = f"A {source} entrega {format_decimal(ready)}{unit_text} prontas à {destination}."
+    parts = [f"{format_decimal(transfer.quantity)}{unit_text} {transfer.label}" for transfer in transfers if transfer.quantity > 0]
+    if not parts:
+        return sentence
+    joined = parts[0] if len(parts) == 1 else ", ".join(parts[:-1]) + " e " + parts[-1]
+    return f"{sentence} Em troca, passam a ser da {source} (eram da {destination}): {joined}."
+
+
 class ReviewPage(WizardPage):
     """Passo 4: revisao, simulacao (antes/depois) e confirmacao consciente.
 
@@ -48,8 +63,9 @@ class ReviewPage(WizardPage):
 
     def _build(self):
         self.info_notice = info_notice(
-            "Esta operação NÃO registra entrega ao cliente. Ela apenas passa material pronto de uma proposta "
-            "para outra e transfere, no mesmo valor, a obrigação de produção para a proposta de origem."
+            "Esta operação NÃO registra entrega ao cliente. Ela passa o material pronto da proposta de origem para a de "
+            "destino e, em troca, passa para a origem o mesmo número de peças que o destino ainda tem em andamento "
+            "(fabricação ou galvanização), no estágio em que estão."
         )
         self.root.addWidget(self.info_notice)
 
@@ -281,10 +297,18 @@ class ReviewPage(WizardPage):
             layout.addWidget(empty)
             return panel
 
+        # O que acontece, uma frase por origem.
+        for source in item.sources:
+            number, source_unit = self._source_label(item.destination_item_id, source.source_proposal_id, source.source_item_id)
+            sentence = QLabel(what_happens(destination, number, source.ready_transfer, source.stage_transfers, source_unit or unit))
+            sentence.setWordWrap(True)
+            sentence.setObjectName("ValueLabel")
+            layout.addWidget(sentence)
+
         table = QTableWidget(len(item.sources), 4)
         table.setHorizontalHeaderLabels([
             "Proposta de origem", f"Material pronto → {destination}", "Pronto na origem (antes → depois)",
-            f"Produção que {destination} passa à origem",
+            f"Peças que passam de {destination} para a origem",
         ])
         table.verticalHeader().setVisible(False)
         table.setSelectionMode(QTableWidget.NoSelection)
@@ -298,11 +322,12 @@ class ReviewPage(WizardPage):
         for row, source in enumerate(item.sources):
             number, source_unit = self._source_label(item.destination_item_id, source.source_proposal_id, source.source_item_id)
             display_unit = source_unit or unit
+            exchanged = "; ".join(f"{quantity_text(transfer.quantity, display_unit)} {transfer.label}" for transfer in source.stage_transfers if transfer.quantity > 0)
             values = (
                 number,
                 quantity_text(source.ready_transfer, display_unit),
                 f"{format_decimal(source.source_before)} → {format_decimal(source.source_after_simulated)}",
-                quantity_text(source.production_compensation, display_unit),
+                exchanged or quantity_text(source.production_compensation, display_unit),
             )
             for column, text in enumerate(values):
                 table.setItem(row, column, QTableWidgetItem(text))

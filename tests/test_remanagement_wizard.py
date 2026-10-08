@@ -9,7 +9,7 @@ from PySide6.QtGui import QMouseEvent
 from PySide6.QtWidgets import QApplication, QDialog, QLabel, QTableWidget
 
 from app.services.remanagement_flow_state import (
-    RemanagementFlowState, RemanagementItemSelection, availability_from_api,
+    RemanagementFlowState, RemanagementItemSelection, RemanagementStageTransferView, availability_from_api, review_from_api,
 )
 from app.ui.components.wizard_stepper import WizardStepper
 from app.ui.remanagement_wizard import RemanagementWizardDialog
@@ -20,7 +20,7 @@ from app.ui.remanagement_wizard import review_page as review_module
 from app.ui.remanagement_wizard import sources_page as sources_module
 from app.ui.remanagement_wizard.destination_page import DestinationPage
 from app.ui.remanagement_wizard.items_page import ItemsPage
-from app.ui.remanagement_wizard.review_page import ReviewPage
+from app.ui.remanagement_wizard.review_page import ReviewPage, what_happens
 from app.ui.remanagement_wizard.sources_page import SourcesPage
 
 
@@ -76,6 +76,8 @@ class FakeWizardService:
         self.review_errors: list[dict] = []
         self.confirm_error: Exception | None = None
         self.confirm_response = {"operation_id": "op-1", "status": "CONFIRMED"}
+        # Pecas do destino que passam para a origem (resposta nova da API); None = resposta antiga, sem o campo.
+        self.stage_transfers: list[dict] | None = None
 
     def early_delivery_destination_candidates(self, search: str = ""):
         self.destination_calls += 1
@@ -129,11 +131,14 @@ class FakeWizardService:
                 key = (int(allocation["source_proposal_id"]), int(allocation["source_item_id"]))
                 quantity = Decimal(str(allocation["allocated_quantity"]))
                 origins.add(key[0])
-                sources.append({
+                source_row = {
                     "source_proposal_id": key[0], "source_item_id": key[1], "ready_transfer": str(quantity),
                     "production_compensation": str(quantity), "source_before": str(available[key]),
                     "source_after_simulated": str(available[key] - quantity),
-                })
+                }
+                if self.stage_transfers is not None:
+                    source_row["stage_transfers"] = list(self.stage_transfers)
+                sources.append(source_row)
             allocated = sum((Decimal(s["ready_transfer"]) for s in sources), Decimal("0"))
             status = "NAO_ALOCADO" if allocated <= 0 else ("COMPLETO" if allocated >= requested else "PARCIAL")
             review_items.append({
@@ -196,6 +201,48 @@ class QtCase(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
+
+
+class WhatHappensTests(unittest.TestCase):
+    def _t(self, *pairs):
+        return [RemanagementStageTransferView(stage=stage, quantity=Decimal(str(quantity))) for stage, quantity in pairs]
+
+    def test_one_stage(self):
+        self.assertEqual(
+            what_happens("CP 05600", "CP 05507", Decimal("4"), self._t(("IN_GALVANIZATION", 4)), "un"),
+            "A CP 05507 entrega 4 un prontas à CP 05600. Em troca, passam a ser da CP 05507 (eram da CP 05600): 4 un na galvanização.",
+        )
+
+    def test_several_stages_in_order(self):
+        text = what_happens("B", "A", Decimal("9"), self._t(("IN_GALVANIZATION", 4), ("AWAITING_GALVANIZATION", 3), ("TO_PRODUCE", 2)), "")
+        self.assertTrue(text.endswith("4 na galvanização, 3 já fabricadas, aguardando galvanização e 2 ainda a fabricar."))
+
+    def test_zero_quantities_are_left_out_and_no_detail_gives_only_the_first_sentence(self):
+        self.assertEqual(what_happens("B", "A", Decimal("2"), self._t(("TO_PRODUCE", 0)), "kg"), "A A entrega 2 kg prontas à B.")
+        self.assertEqual(what_happens("B", "A", Decimal("2"), [], "kg"), "A A entrega 2 kg prontas à B.")
+
+    def test_the_api_detail_is_parsed(self):
+        result = review_from_api({
+            "destination_proposal_id": 9, "valid": True, "warnings": [], "errors": [],
+            "summary": {"product_count": 1, "source_proposal_count": 1, "source_item_count": 1},
+            "items": [{
+                "destination_item_id": 101, "product_code": "X", "requested": "5", "allocated": "5", "remaining": "0", "status": "COMPLETO",
+                "sources": [{
+                    "source_proposal_id": 20, "source_item_id": 501, "ready_transfer": "5", "production_compensation": "5",
+                    "source_before": "8", "source_after_simulated": "3",
+                    "stage_transfers": [{"stage": "AWAITING_GALVANIZATION", "quantity": "5.0000"}],
+                }],
+            }],
+        })
+        transfers = result.items[0].sources[0].stage_transfers
+        self.assertEqual([(t.stage, t.quantity, t.label) for t in transfers], [("AWAITING_GALVANIZATION", Decimal("5"), "já fabricadas, aguardando galvanização")])
+
+    def test_an_older_response_has_no_stage_transfers(self):
+        result = review_from_api({
+            "destination_proposal_id": 9, "valid": True, "summary": {},
+            "items": [{"destination_item_id": 1, "sources": [{"source_proposal_id": 2, "source_item_id": 3}]}],
+        })
+        self.assertEqual(result.items[0].sources[0].stage_transfers, [])
 
 
 # ---------------------------------------------------------------------------
@@ -782,6 +829,25 @@ class ReviewPageTests(QtCase):
         rows = {first.item(row, 0).text(): [first.item(row, c).text() for c in (1, 2, 3)] for row in range(first.rowCount())}
         self.assertEqual(rows["CP05401"], ["15 UN", "20 → 5", "15 UN"])
         self.assertEqual(rows["CP05301"], ["5 UN", "5 → 0", "5 UN"])
+
+    def test_review_explains_in_plain_words_which_pieces_change_owner(self):
+        service = FakeWizardService()
+        service.stage_transfers = [{"stage": "IN_GALVANIZATION", "quantity": "3.0000"}, {"stage": "TO_PRODUCE", "quantity": "2.0000"}]
+        page, _ = _review_page(service)
+        text = _card_text(page)
+        self.assertIn("A CP05401 entrega 15 UN prontas à CP05385. Em troca, passam a ser da CP05401 (eram da CP05385): 3 UN na galvanização e 2 UN ainda a fabricar.", text)
+        found = []
+        for index in range(page.groups_layout.count()):
+            widget = page.groups_layout.itemAt(index).widget()
+            if widget is not None:
+                found.extend(widget.findChildren(QTableWidget))
+        self.assertIn("3 UN na galvanização; 2 UN ainda a fabricar", [found[0].item(row, 3).text() for row in range(found[0].rowCount())])
+        self.assertIn("CP05385", found[0].horizontalHeaderItem(3).text())
+
+    def test_review_still_works_with_an_older_api_without_the_stage_detail(self):
+        page, _ = _review_page(FakeWizardService())
+        self.assertIn("A CP05401 entrega 15 UN prontas à CP05385.", _card_text(page))
+        self.assertNotIn("Em troca", _card_text(page))
 
     def test_partial_coverage_shows_the_attention_notice(self):
         state = _state_with_items()

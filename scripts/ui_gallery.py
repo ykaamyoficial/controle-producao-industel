@@ -819,10 +819,16 @@ class _RemanagementService:
                 quantity = D(str(allocation["allocated_quantity"]))
                 ready = dict(self.READY[code])[int(allocation["source_proposal_id"])]
                 origins.add(int(allocation["source_proposal_id"]))
+                # As pecas em andamento do destino que passam para a origem: das mais adiantadas
+                # (na galvanizacao) para as menos adiantadas (a fabricar).
+                in_galvanization = min(quantity, D("4"))
+                transfers = [{"stage": "IN_GALVANIZATION", "quantity": str(in_galvanization)}] if in_galvanization > 0 else []
+                if quantity > in_galvanization:
+                    transfers.append({"stage": "TO_PRODUCE", "quantity": str(quantity - in_galvanization)})
                 sources.append({
                     "source_proposal_id": allocation["source_proposal_id"], "source_item_id": allocation["source_item_id"],
                     "ready_transfer": str(quantity), "production_compensation": str(quantity),
-                    "source_before": ready, "source_after_simulated": str(D(ready) - quantity),
+                    "source_before": ready, "source_after_simulated": str(D(ready) - quantity), "stage_transfers": transfers,
                 })
             allocated = sum((D(s["ready_transfer"]) for s in sources), D("0"))
             status = "NAO_ALOCADO" if allocated <= 0 else ("COMPLETO" if allocated >= requested else "PARCIAL")

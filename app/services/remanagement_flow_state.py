@@ -129,11 +129,32 @@ class RemanagementItemAllocation:
         return "PARCIAL"
 
 
+# Estagios das pecas em andamento do destino que passam para a origem (plano de
+# logistica do remanejamento), das mais adiantadas para as menos adiantadas.
+STAGE_LABELS = {
+    "IN_GALVANIZATION": "na galvanização",
+    "AWAITING_GALVANIZATION": "já fabricadas, aguardando galvanização",
+    "TO_PRODUCE": "ainda a fabricar",
+}
+
+
+@dataclass(frozen=True)
+class RemanagementStageTransferView:
+    """`quantity` pecas do destino que passam para a origem em um estagio."""
+
+    stage: str
+    quantity: Decimal
+
+    @property
+    def label(self) -> str:
+        return STAGE_LABELS.get(self.stage, self.stage)
+
+
 @dataclass(frozen=True)
 class RemanagementReviewSource:
     """Uma linha de compensacao revisada (Fase 6): quanto muda de pronto para
     o destino e de obrigacao para a origem (sempre iguais - regra 1:1), com o
-    saldo da origem antes/depois simulados."""
+    saldo da origem antes/depois simulados e quais pecas do destino passam para a origem."""
 
     source_proposal_id: int
     source_item_id: int
@@ -141,6 +162,7 @@ class RemanagementReviewSource:
     production_compensation: Decimal
     source_before: Decimal
     source_after_simulated: Decimal
+    stage_transfers: list[RemanagementStageTransferView] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -223,6 +245,10 @@ def review_from_api(payload: dict) -> RemanagementReviewResult:
                     production_compensation=parse_decimal(source.get("production_compensation"), "0"),
                     source_before=parse_decimal(source.get("source_before"), "0"),
                     source_after_simulated=parse_decimal(source.get("source_after_simulated"), "0"),
+                    stage_transfers=[
+                        RemanagementStageTransferView(stage=str(transfer.get("stage") or ""), quantity=parse_decimal(transfer.get("quantity"), "0"))
+                        for transfer in source.get("stage_transfers") or []
+                    ],
                 )
                 for source in item.get("sources") or []
             ],
