@@ -135,6 +135,8 @@ STAGE_LABELS = {
     "IN_GALVANIZATION": "na galvanização",
     "AWAITING_GALVANIZATION": "já fabricadas, aguardando galvanização",
     "TO_PRODUCE": "ainda a fabricar",
+    # Pecas do destino que ainda nao tem fluxo definido: a origem fabrica no fluxo dela.
+    "UNDEFINED_FLOW": "ainda sem fluxo definido (seguem o fluxo da origem)",
 }
 
 

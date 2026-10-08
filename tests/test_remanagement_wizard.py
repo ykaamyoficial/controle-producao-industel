@@ -217,6 +217,12 @@ class WhatHappensTests(unittest.TestCase):
         text = what_happens("B", "A", Decimal("9"), self._t(("IN_GALVANIZATION", 4), ("AWAITING_GALVANIZATION", 3), ("TO_PRODUCE", 2)), "")
         self.assertTrue(text.endswith("4 na galvanização, 3 já fabricadas, aguardando galvanização e 2 ainda a fabricar."))
 
+    def test_pieces_without_a_defined_flow_follow_the_flow_of_the_source(self):
+        self.assertEqual(
+            what_happens("B", "A", Decimal("4"), self._t(("UNDEFINED_FLOW", 4)), "un"),
+            "A A entrega 4 un prontas à B. Em troca, passam a ser da A (eram da B): 4 un ainda sem fluxo definido (seguem o fluxo da origem).",
+        )
+
     def test_zero_quantities_are_left_out_and_no_detail_gives_only_the_first_sentence(self):
         self.assertEqual(what_happens("B", "A", Decimal("2"), self._t(("TO_PRODUCE", 0)), "kg"), "A A entrega 2 kg prontas à B.")
         self.assertEqual(what_happens("B", "A", Decimal("2"), [], "kg"), "A A entrega 2 kg prontas à B.")
