@@ -8,6 +8,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtWidgets import QApplication, QCheckBox, QLabel
 
 from app.ui.animations import motion_duration, reduced_motion, set_reduced_motion
+from app.ui.icons import IconColorRole
 from app.ui.galvanization_items_page import GalvanizationItemsPage, GalvanizationLoadsPage
 from app.ui.production_items_page import ProductionItemsPage
 from app.ui.settings_page import SettingsPage
@@ -58,6 +59,15 @@ class ReduceMotionSettingTests(unittest.TestCase):
         page = SettingsPage(FakeSettingsService(admin=True))
         page.reduce_motion_check.setChecked(True)
         self.assertTrue(reduced_motion())
+
+    def test_active_category_icon_switches_to_the_color_over_the_accent_pill(self):
+        page = SettingsPage(MotionSettingsService())
+        page.select_category("users")
+        self.assertEqual(page.category_buttons["users"]._color_role, IconColorRole.ON_ACCENT)
+        self.assertEqual(page.category_buttons["appearance"]._color_role, IconColorRole.PRIMARY)
+        page.select_category("appearance")
+        self.assertEqual(page.category_buttons["appearance"]._color_role, IconColorRole.ON_ACCENT)
+        self.assertEqual(page.category_buttons["users"]._color_role, IconColorRole.PRIMARY)
 
     def test_settings_menu_texts_are_accented_but_category_keys_are_not(self):
         page = SettingsPage(MotionSettingsService())

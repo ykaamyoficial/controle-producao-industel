@@ -344,7 +344,11 @@ class SettingsPage(QWidget):
         if key == "notifications" and self.notification_preferences_widget is not None:
             self.notification_preferences_widget.ensure_loaded()
         for category, button in self.category_buttons.items():
-            button.setProperty("active", "true" if category == key else "false")
+            active = category == key
+            button.setProperty("active", "true" if active else "false")
+            # Item ativo e pilula cheia na cor de destaque: o icone troca para a
+            # cor sobre o destaque (igual a barra lateral), senao some.
+            button.set_color_role(IconColorRole.ON_ACCENT if active else IconColorRole.PRIMARY)
             button.style().unpolish(button)
             button.style().polish(button)
 
