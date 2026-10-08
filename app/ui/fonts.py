@@ -9,6 +9,7 @@ carregar, o Qt cai sozinho para Segoe UI - nunca impede o app de abrir.
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 
 from PySide6.QtGui import QFontDatabase
@@ -44,3 +45,34 @@ def load_app_fonts() -> str:
 def ui_font_family() -> str:
     """Familia em uso, para componentes pintados a mao (QFont explicito)."""
     return _loaded_family or FALLBACK_FONT_FAMILY
+
+
+# ---- escala da fonte -------------------------------------------------------
+# Todo o texto do programa, menos os titulos, e um pouco menor que o desenho
+# original (pedido do usuario em 08/10/2026). Muda so este numero para ajustar.
+FONT_SCALE = 0.92
+MIN_FONT_PX = 9
+
+_QSS_BLOCK = re.compile(r"([^{}]+)\{([^{}]*)\}")
+_QSS_FONT_SIZE = re.compile(r"(font-size:\s*)(\d+(?:\.\d+)?)px")
+# Regras cujo seletor tem objectName terminado em Title/Heading mantem o tamanho.
+_TITLE_SELECTOR = re.compile(r"#\w*(?:Title|Heading)\b")
+
+
+def scaled_px(px: float) -> int:
+    """Tamanho de fonte em pixels depois da escala (para componentes pintados)."""
+    return max(MIN_FONT_PX, round(px * FONT_SCALE))
+
+
+def scale_qss_fonts(qss: str) -> str:
+    """Aplica a escala a todo `font-size: Npx` da folha de estilo, exceto nas
+    regras de titulo (FilterTitle, DetailTitle, PanelTitle, ...)."""
+
+    def scale_block(match: re.Match) -> str:
+        selector, body = match.group(1), match.group(2)
+        if _TITLE_SELECTOR.search(selector):
+            return match.group(0)
+        body = _QSS_FONT_SIZE.sub(lambda m: f"{m.group(1)}{scaled_px(float(m.group(2)))}px", body)
+        return f"{selector}{{{body}}}"
+
+    return _QSS_BLOCK.sub(scale_block, qss)

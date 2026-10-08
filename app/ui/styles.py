@@ -3,6 +3,7 @@ from __future__ import annotations
 import colorsys
 
 from app.services.backend_adapter import legacy
+from app.ui.fonts import scale_qss_fonts
 from app.ui.theme_tokens import contrast_ratio, mix, set_active_palette, ui_tokens, with_alpha
 
 
@@ -29,6 +30,10 @@ def chrome_bg_color(palette: dict) -> str:
 
 
 def app_stylesheet(palette: dict) -> str:
+    return scale_qss_fonts(_build_stylesheet(palette))
+
+
+def _build_stylesheet(palette: dict) -> str:
     bg = palette["bg"]
     surface = palette["surface"]
     surface_alt = palette["surface_alt"]
