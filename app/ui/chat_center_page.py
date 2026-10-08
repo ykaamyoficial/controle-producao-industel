@@ -19,10 +19,12 @@ from PySide6.QtWidgets import (
 
 from app.ui.animations import fade_in
 from app.ui.background_worker import start_worker
+from app.ui.components.app_icon_button import AppIconButton
 from app.ui.components.modern_button import ModernButton
 from app.ui.components.style_state import StatusDot
 from app.ui.components.toast_notification import ToastNotification
 from app.ui.dialog_utils import apply_large_dialog_geometry, style_dialog_from_parent
+from app.ui.icons import AppIcons, IconSize
 from app.ui.resilience import show_operation_error
 from app.ui.proposal_chat_dialog import ChatConversationPanel
 from app.ui.styles import status_color
@@ -91,7 +93,22 @@ class ChatCenterPage(QWidget):
         title = QLabel("\U0001F4AC Chats")
         title.setObjectName("FilterTitle")
         title.setProperty("tone", "accent")
-        root.addWidget(title)
+        # X no canto superior direito; so aparece quando a pagina esta num
+        # dialogo (set_close_handler), onde nao ha barra de titulo do Windows.
+        self.close_button = AppIconButton(
+            AppIcons.CLOSE,
+            palette=self.service.palette,
+            size=IconSize.LG,
+            tooltip="Fechar a central de chats",
+        )
+        self.close_button.setFixedSize(36, 36)
+        self.close_button.setVisible(False)
+        header = QHBoxLayout()
+        header.setContentsMargins(0, 0, 0, 0)
+        header.addWidget(title)
+        header.addStretch()
+        header.addWidget(self.close_button)
+        root.addLayout(header)
 
         self.left_column = self._build_left_column()
         self.center_column = self._build_center_column()
@@ -107,6 +124,11 @@ class ChatCenterPage(QWidget):
         self.splitter.setStretchFactor(1, 7)
         self.splitter.setSizes([CONVERSATION_LIST_WIDTH, max(360, self.width() - CONVERSATION_LIST_WIDTH)])
         root.addWidget(self.splitter, 1)
+
+    def set_close_handler(self, handler) -> None:
+        """Mostra o X de fechar e liga ele a `handler` (o dialogo que hospeda)."""
+        self.close_button.clicked.connect(lambda _checked=False: handler())
+        self.close_button.setVisible(True)
 
     def _build_left_column(self) -> QFrame:
         container = QFrame()
@@ -529,6 +551,7 @@ class ChatCenterDialog(QDialog):
             message_id=message_id,
         )
         root.addWidget(self.page, 1)
+        self.page.set_close_handler(self.reject)
 
         self.setWindowTitle("Chats")
 

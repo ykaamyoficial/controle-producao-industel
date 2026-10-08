@@ -150,6 +150,31 @@ class ChatCenterPageTargetTests(unittest.TestCase):
             self.assertFalse(thread.isRunning())
         dialog.deleteLater()
 
+    def test_dialog_has_a_close_x_in_the_top_right_corner(self):
+        # O dialogo e sem moldura do Windows: sem este X nao havia como fechar
+        # a Central de Chats com o mouse.
+        service = FakeService()
+        dialog = ChatCenterDialog(service, None, proposal_id=42)
+        dialog.show()
+        self._pump(dialog.page, cycles=3)
+        button = dialog.page.close_button
+        self.assertFalse(button.isHidden())
+        self.assertEqual(button.toolTip(), "Fechar a central de chats")
+        # No canto superior direito do dialogo.
+        top_right = button.mapTo(dialog, button.rect().topRight())
+        self.assertGreater(top_right.x(), dialog.width() * 0.9)
+        self.assertLess(top_right.y(), 60)
+        self.assertTrue(dialog.isVisible())
+        button.click()
+        self.assertFalse(dialog.isVisible())
+        self.assertEqual(dialog.result(), ChatCenterDialog.Rejected)
+        self.assertTrue(dialog.page._closing)
+        dialog.deleteLater()
+
+    def test_page_outside_a_dialog_has_no_close_button(self):
+        page = self._build_page(FakeService())
+        self.assertTrue(page.close_button.isHidden())
+
     def test_opening_without_target_shows_empty_state(self):
         service = FakeService()
         page = self._build_page(service)
