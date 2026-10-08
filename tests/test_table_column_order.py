@@ -33,6 +33,18 @@ class TableColumnOrderTests(unittest.TestCase):
                 self.assertEqual(keys[proposal_index + 2], "cliente")
                 self.assertEqual(keys[proposal_index + 3], status_key)
 
+    def test_expedition_table_has_the_invoice_number_right_after_obra_site(self):
+        keys = [key for key, _label in AREA_COLUMNS["EXPEDICAO"]]
+        self.assertEqual(keys[-2:], ["obra_site", "numero_nf"])
+        self.assertEqual(dict(AREA_COLUMNS["EXPEDICAO"])["numero_nf"], "Nº da NF")
+
+    def test_fiscal_table_replaces_the_entry_date_column_by_the_invoice_number(self):
+        columns = dict(FiscalProcessTableModel.columns)
+        self.assertNotIn("data_entrada_fiscal", columns)
+        keys = [key for key, _label in FiscalProcessTableModel.columns]
+        self.assertEqual(keys[keys.index("obra_site") + 1], "numero_nf")
+        self.assertEqual(columns["numero_nf"], "Nº da NF")
+
     def test_fiscal_table_shows_status_immediately_after_client(self):
         keys = [key for key, _label in FiscalProcessTableModel.columns]
 
@@ -60,7 +72,7 @@ class TableColumnOrderTests(unittest.TestCase):
                 "cliente",
                 "status_fiscal",
                 "obra_site",
-                "data_entrada_fiscal",
+                "numero_nf",
                 "data_ultima_emissao",
                 "pendencia_critica",
                 "acoes",

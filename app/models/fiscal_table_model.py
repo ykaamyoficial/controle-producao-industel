@@ -87,7 +87,7 @@ class FiscalProcessTableModel(QAbstractTableModel):
         ("cliente", "Cliente"),
         ("status_fiscal", "Status Fiscal"),
         ("obra_site", "Obra/Site"),
-        ("data_entrada_fiscal", "Entrada Fiscal"),
+        ("numero_nf", "Nº da NF"),
         ("data_ultima_emissao", "Ultima emissao"),
         ("pendencia_critica", "Alerta"),
         ("acoes", "Acoes"),

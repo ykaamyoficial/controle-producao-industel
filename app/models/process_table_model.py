@@ -52,7 +52,7 @@ AREA_COLUMNS = {
     "EXPEDICAO": [
         ("status_icon", ""),
         ("proposta", "Proposta"), ("chat_icon", ""), ("cliente", "Cliente"), ("status_expedicao", "Etapa/Status"),
-        ("prazo_entrega", "Prazo"), ("obra_site", "Obra/Site"),
+        ("prazo_entrega", "Prazo"), ("obra_site", "Obra/Site"), ("numero_nf", "Nº da NF"),
     ],
     "ALMOXARIFADO": [
         ("status_icon", ""),

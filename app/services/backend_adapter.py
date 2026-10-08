@@ -659,6 +659,14 @@ class BackendService:
             combined['proposal_number'] = display
             combined['grouped_partial'] = len(ids) > 1
             combined['group_partial_numbers'] = partials
+            # NFs de todas as parciais do grupo, sem repetir.
+            invoice_numbers: list[str] = []
+            for row in group:
+                for number in str(row.get('numero_nf') or '').split(','):
+                    number = number.strip()
+                    if number and number not in invoice_numbers:
+                        invoice_numbers.append(number)
+            combined['numero_nf'] = ', '.join(invoice_numbers)
             for numeric_key in ('quantidade_itens', 'item_count', 'itens_pendentes', 'quantidade_disponivel', 'quantidade_separada', 'quantidade_entregue', 'saldo_pendente'):
                 values = [row.get(numeric_key) for row in group if row.get(numeric_key) not in (None, '')]
                 if values and all(isinstance(value, (int, float)) for value in values):

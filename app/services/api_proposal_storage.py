@@ -2133,6 +2133,13 @@ def _partial_pending_weight(row: dict[str, Any]) -> str:
     return "0.0000"
 
 
+def _invoice_numbers_text(row: dict[str, Any]) -> str:
+    """Numeros das NFs da proposta, separados por virgula ("" sem NF). APIs
+    anteriores a esse campo nao mandam `invoice_numbers`: fica vazio."""
+    numbers = (str(number).strip() for number in (row.get("invoice_numbers") or []) if number is not None)
+    return ", ".join(number for number in numbers if number)
+
+
 def _api_expedition_to_process(row: dict[str, Any]) -> dict[str, Any]:
     process = _api_proposal_to_process(row)
     status = row.get("shipping_status") or row.get("current_status") or ""
@@ -2150,6 +2157,7 @@ def _api_expedition_to_process(row: dict[str, Any]) -> dict[str, Any]:
             "quantidade_entregue": _decimal_text(row.get("delivered_quantity")),
             "saldo_pendente": _decimal_text(row.get("pending_quantity")),
             "origem_expedicao": ", ".join(row.get("origins") or []),
+            "numero_nf": _invoice_numbers_text(row),
             "peso": _decimal_text(row.get("available_quantity")),
             "atualizado_em": _datetime_br(row.get("updated_at")),
         }
@@ -2304,6 +2312,7 @@ def _api_fiscal_record_to_legacy(row: dict[str, Any]) -> dict[str, Any]:
         "data_entrada_fiscal": _date_br(row.get("entry_date")),
         "data_ultima_emissao": _datetime_br(row.get("last_emission_at")),
         "data_retirada_nf": _datetime_br(row.get("invoice_withdrawn_at")),
+        "numero_nf": _invoice_numbers_text(row),
         "status_expedicao": row.get("shipping_status") or "",
         "quantidade_itens": row.get("item_count", 0),
         "itens_pendentes": row.get("pending_items", 0),

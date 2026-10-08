@@ -276,6 +276,7 @@ class ModernTable(QTableView):
             "proposta": 130,
             "pedido_compra": 112,
             "obra_site": 190,
+            "numero_nf": 130,
             "peso": 84,
             "progresso_peso": 125,
             "lote": 82,
