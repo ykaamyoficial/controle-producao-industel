@@ -8,7 +8,6 @@ from PySide6.QtWidgets import QAbstractItemView, QDialog, QFileDialog, QComboBox
 from app.controllers.process_controller import ProcessController
 from app.models.process_table_model import ProcessTableModel
 from app.services.app_logging import get_logger
-from app.services.remanagement_flow_state import RemanagementFlowState
 from app.ui.action_center.batch_action_center import BatchProposalActionCenter
 from app.ui.background_worker import start_worker
 from app.ui.refresh_coordinator import RefreshCoordinator
@@ -31,14 +30,10 @@ from app.ui.components.toast_notification import ToastNotification
 from app.ui.resilience import show_operation_error
 from app.ui.process_form_dialog import ProcessFormDialog
 from app.ui.batch_status_dialog import BatchStatusDialog
-from app.ui.remanagement_allocation_dialog import RemanagementAllocationStepDialog
-from app.ui.remanagement_availability_dialog import RemanagementAvailabilityStepDialog
-from app.ui.remanagement_destination_step_dialog import RemanagementDestinationStepDialog
-from app.ui.remanagement_item_selection_dialog import RemanagementItemSelectionStepDialog
-from app.ui.remanagement_review_dialog import RemanagementReviewStepDialog
 from app.ui.flow_review_dialog import FlowReviewDialog
 from app.ui.process_detail_dialog import ProcessDetailDialog
 from app.ui.chat_center_page import ChatCenterDialog
+from app.ui.remanagement_wizard import RemanagementWizardDialog
 from app.ui.batch_selection_review_dialog import BatchSelectionReviewDialog
 
 log = get_logger("process_page")
@@ -778,89 +773,17 @@ class ProcessPage(QWidget):
             self.refresh()
 
     def open_early_remanagement_delivery(self):
-        # Novo fluxo de Remanejamento: Etapa 1 (destino) -> Etapa 2 (itens do
-        # destino) -> Etapa 3 (busca automatica na Expedicao) -> Etapa 4
-        # (alocacao por origem) -> Etapa 6 (revisao/simulacao) -> Etapa 7
-        # (persistencia transacional real, dentro do proprio dialogo da
-        # Etapa 6 - ver `RemanagementReviewStepDialog._confirm_clicked`). A
-        # ponte para a tela legada foi removida: o novo fluxo agora grava de
-        # fato. As telas compartilham um unico `RemanagementFlowState` para
-        # que "Voltar" preserve o que ja foi escolhido.
+        # Remanejamento em uma unica janela com quatro passos (destino, itens,
+        # origem do material, revisao). A gravacao transacional acontece na
+        # confirmacao do ultimo passo - ver `ReviewPage.commit`.
         if not self._can_edit_area("EXPEDICAO"):
             ToastNotification(self.window(), "Seu usuário não pode realizar remanejamentos.", "error")
             return
-        flow_state = RemanagementFlowState()
-        stage = "destination"
-        while True:
-            if stage == "destination":
-                step1 = RemanagementDestinationStepDialog(self.service, self, state=flow_state)
-                if step1.exec() != QDialog.Accepted:
-                    return
-                stage = "items"
-                continue
-
-            if stage == "items":
-                step2 = RemanagementItemSelectionStepDialog(self.service, self, flow_state)
-                if step2.load_error:
-                    ToastNotification(self.window(), step2.load_error, "error")
-                    stage = "destination"
-                    continue
-                result = step2.exec()
-                if result == RemanagementItemSelectionStepDialog.RESULT_BACK:
-                    stage = "destination"
-                    continue
-                if result != QDialog.Accepted:
-                    return
-                stage = "availability"
-                continue
-
-            if stage == "availability":
-                step3 = RemanagementAvailabilityStepDialog(self.service, self, flow_state)
-                if step3.load_error:
-                    ToastNotification(self.window(), step3.load_error, "error")
-                    stage = "items"
-                    continue
-                result = step3.exec()
-                if result == RemanagementAvailabilityStepDialog.RESULT_BACK:
-                    stage = "items"
-                    continue
-                if result != QDialog.Accepted:
-                    return
-                stage = "allocation"
-                continue
-
-            if stage == "allocation":
-                step4 = RemanagementAllocationStepDialog(self.service, self, flow_state)
-                if step4.load_error:
-                    ToastNotification(self.window(), step4.load_error, "error")
-                    stage = "availability"
-                    continue
-                result = step4.exec()
-                if result == RemanagementAllocationStepDialog.RESULT_BACK:
-                    stage = "availability"
-                    continue
-                if result != QDialog.Accepted:
-                    return
-                stage = "review"
-                continue
-
-            if stage == "review":
-                step6 = RemanagementReviewStepDialog(self.service, self, flow_state)
-                if step6.load_error:
-                    ToastNotification(self.window(), step6.load_error, "error")
-                    stage = "allocation"
-                    continue
-                result = step6.exec()
-                if result == RemanagementReviewStepDialog.RESULT_BACK:
-                    stage = "allocation"
-                    continue
-                if result != QDialog.Accepted:
-                    return
-                self.refresh()
-                ToastNotification(self.window(), "Remanejamento compensado registrado com sucesso.", "success")
-                return
-
+        dialog = RemanagementWizardDialog(self.service, self)
+        if dialog.exec() != QDialog.Accepted:
             return
+        self.refresh()
+        ToastNotification(self.window(), "Remanejamento compensado registrado com sucesso.", "success")
 
     def open_context_menu(self, position):
         index = self.table.indexAt(position)
