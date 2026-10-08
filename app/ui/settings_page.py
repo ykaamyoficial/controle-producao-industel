@@ -6,6 +6,7 @@ import os
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QComboBox,
     QFrame,
     QHBoxLayout,
@@ -21,6 +22,7 @@ from app.services.app_logging import get_logger
 from app.services.app_paths import get_logs_dir
 from app.services.network_diagnostics import diagnose_update_endpoint
 from app.services.update_distribution_client import check_for_updates, diagnostic_probe_url
+from app.ui.animations import set_reduced_motion
 from app.ui.background_worker import start_worker
 from app.ui.components.app_icon_button import AppIconButton
 from app.ui.components.modern_button import ModernButton
@@ -58,7 +60,7 @@ class SettingsPage(QWidget):
         sidebar_layout.setContentsMargins(16, 18, 16, 18)
         sidebar_layout.setSpacing(7)
 
-        menu_title = QLabel("CONFIGURACOES")
+        menu_title = QLabel("CONFIGURAÇÕES")
         menu_title.setObjectName("SidebarGroupLabel")
         sidebar_layout.addWidget(menu_title)
 
@@ -74,7 +76,7 @@ class SettingsPage(QWidget):
         visual = self._add_category(
             sidebar_layout,
             "appearance",
-            "Aparencia",
+            "Aparência",
             AppIcons.SUN,
             "Visual do sistema",
             "Paleta de cores",
@@ -90,17 +92,31 @@ class SettingsPage(QWidget):
         visual.addWidget(self.palette_combo)
         self._add_action(visual, apply_visual)
 
+        # Preferencia de acessibilidade, vale para qualquer usuario (nao depende
+        # da permissao de editar configuracoes) e e aplicada na hora.
+        visual.addSpacing(12)
+        self.reduce_motion_check = QCheckBox("Reduzir animações")
+        self.reduce_motion_check.setChecked(bool((getattr(self.service, "config", None) or {}).get("reduce_motion", False)))
+        self.reduce_motion_check.toggled.connect(self._on_reduce_motion_toggled)
+        motion_hint = QLabel(
+            "Desliga transições e brilhos de carregamento. Útil em computadores lentos ou quando o movimento incomoda."
+        )
+        motion_hint.setObjectName("KeyLabel")
+        motion_hint.setWordWrap(True)
+        visual.addWidget(self.reduce_motion_check)
+        visual.addWidget(motion_hint)
+
         users_description = (
-            "Usuarios e permissoes sao autenticados pela API/PostgreSQL."
+            "Usuários e permissões são autenticados pela API/PostgreSQL."
             if self.service.official_proposals_enabled()
-            else "Cadastre usuarios, perfis e areas que cada pessoa pode alterar."
+            else "Cadastre usuários, perfis e áreas que cada pessoa pode alterar."
         )
         users = self._add_category(
             sidebar_layout,
             "users",
-            "Usuarios e acesso",
+            "Usuários e acesso",
             AppIcons.USERS,
-            "Usuarios e acesso",
+            "Usuários e acesso",
             users_description,
         )
         self.users_management = None
@@ -128,7 +144,7 @@ class SettingsPage(QWidget):
         if self.service.can_admin():
             self._add_divider(data)
             api_title = QLabel("Integração com API do sistema")
-            api_title.setStyleSheet("font-size: 15px; font-weight: 800;")
+            api_title.setObjectName("PanelTitle")
             data.addWidget(api_title)
             api_text = QLabel(self._api_panel_text())
             api_text.setWordWrap(True)
@@ -150,10 +166,10 @@ class SettingsPage(QWidget):
             nomus = self._add_category(
                 sidebar_layout,
                 "nomus",
-                "Integracao Nomus",
+                "Integração Nomus",
                 AppIcons.SETTINGS,
-                "Integracao Nomus",
-                "Configure a chave REST e valide tecnicamente o acesso. Nenhuma proposta sera importada nesta etapa.",
+                "Integração Nomus",
+                "Configure a chave REST e valide tecnicamente o acesso. Nenhuma proposta será importada nesta etapa.",
             )
             self.nomus_settings = NomusIntegrationSettingsWidget(
                 self,
@@ -165,10 +181,10 @@ class SettingsPage(QWidget):
         notifications = self._add_category(
             sidebar_layout,
             "notifications",
-            "Notificacoes",
+            "Notificações",
             AppIcons.BELL,
-            "Notificacoes",
-            "Escolha por onde cada tipo de aviso chega (no app, bandeja, e-mail) e o horario de silêncio.",
+            "Notificações",
+            "Escolha por onde cada tipo de aviso chega (no app, bandeja, e-mail) e o horário de silêncio.",
         )
         self.notification_preferences_widget = None
         if hasattr(self.service, "notification_preferences"):
@@ -180,9 +196,9 @@ class SettingsPage(QWidget):
         updates = self._add_category(
             sidebar_layout,
             "updates",
-            "Atualizacoes",
+            "Atualizações",
             AppIcons.REFRESH,
-            "Atualizacoes",
+            "Atualizações",
             "",
         )
         updates.addWidget(QLabel(f"Versão atual: {APP_VERSION}"))
@@ -210,9 +226,9 @@ class SettingsPage(QWidget):
         system_info = self._add_category(
             sidebar_layout,
             "system_info",
-            "Informacoes do sistema",
+            "Informações do sistema",
             AppIcons.INFO,
-            "Informacoes do sistema",
+            "Informações do sistema",
             "",
         )
         system_info.addWidget(QLabel(f"Usuário logado: {self.service.user_name()}"))
@@ -228,15 +244,15 @@ class SettingsPage(QWidget):
         support = self._add_category(
             sidebar_layout,
             "support",
-            "Suporte e diagnostico",
+            "Suporte e diagnóstico",
             AppIcons.SETTINGS,
-            "Suporte e diagnostico",
+            "Suporte e diagnóstico",
             "",
         )
         support_text = QLabel(
             "Valide API, atualização e logs sem interromper o trabalho."
             if self.service.official_proposals_enabled()
-            else "Valide banco, atualizacao e logs sem interromper o trabalho."
+            else "Valide banco, atualização e logs sem interromper o trabalho."
         )
         support_text.setWordWrap(True)
         test_update = ModernButton("Testar servidor de atualização", "refresh")
@@ -281,7 +297,8 @@ class SettingsPage(QWidget):
         layout.setSpacing(12)
         layout.setAlignment(Qt.AlignTop)
         label = QLabel(title)
-        label.setStyleSheet("font-size: 22px; font-weight: 800;")
+        label.setObjectName("FilterTitle")
+        label.setProperty("tone", "accent")
         layout.addWidget(label)
         if subtitle:
             caption = QLabel(subtitle)
@@ -336,7 +353,7 @@ class SettingsPage(QWidget):
             api = self.service.config.get("desktop_api") or {}
             return (
                 "Banco operacional:\n"
-                f"PostgreSQL via API ({api.get('base_url', 'API nao configurada')})"
+                f"PostgreSQL via API ({api.get('base_url', 'API não configurada')})"
             )
         return "Banco operacional:\nPostgreSQL via API"
 
@@ -345,7 +362,7 @@ class SettingsPage(QWidget):
             return (
                 "PostgreSQL oficial ativo.\n"
                 "O desktop acessa os dados somente pela API do sistema.\n"
-                "Backups e restauracoes devem ser feitos no servidor PostgreSQL."
+                "Backups e restaurações devem ser feitos no servidor PostgreSQL."
             )
         return "PostgreSQL oficial ativo via API do sistema."
 
@@ -353,10 +370,20 @@ class SettingsPage(QWidget):
         api = self.service.config.get("desktop_api") or {}
         if self.service.official_proposals_enabled():
             return (
-                "Modo oficial ativo: propostas, producao, galvanizacao, expedicao e fiscal "
-                f"usam PostgreSQL pela API em {api.get('base_url', 'API nao configurada')}."
+                "Modo oficial ativo: propostas, produção, galvanização, expedição e fiscal "
+                f"usam PostgreSQL pela API em {api.get('base_url', 'API não configurada')}."
             )
-        return "Diagnostico para validar a API REST antes de ativar a operacao oficial."
+        return "Diagnóstico para validar a API REST antes de ativar a operação oficial."
+
+    def _on_reduce_motion_toggled(self, checked: bool) -> None:
+        set_reduced_motion(checked)
+        save = getattr(self.service, "save_reduce_motion", None)
+        if not callable(save):
+            return
+        try:
+            save(checked)
+        except Exception as exc:
+            QMessageBox.warning(self, "Configurações", f"Não foi possível salvar a preferência: {exc}")
 
     def apply_palette(self):
         if not self.service.can_edit("settings"):

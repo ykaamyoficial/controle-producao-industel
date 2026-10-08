@@ -1643,6 +1643,11 @@ class BackendService:
         # outras telas/threads desde que este BackendService foi inicializado).
         self.config = update_app_config({'color_palette': palette_name})
 
+    def save_reduce_motion(self, enabled: bool) -> None:
+        """Preferencia de acessibilidade: com ela ligada toda animacao da
+        interface dura zero (ver app/ui/animations.py)."""
+        self.config = update_app_config({'reduce_motion': bool(enabled)})
+
     def toggle_palette(self) -> str:
         next_palette = 'escuro' if self.palette_name == 'claro' else 'claro'
         self.save_palette(next_palette)
