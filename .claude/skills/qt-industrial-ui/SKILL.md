@@ -41,7 +41,7 @@ Em dúvida entre "mais bonito" e "mais parecido com hoje", escolha o parecido co
 
 ## Componentes
 
-Já existem em `app/ui/components/` (confira com `python scripts/ui_gallery.py`, que mostra todos nos dois temas sem precisar logar; `--moldura` mostra a página Controle Geral real e `--moldura --detalhes N` abre Detalhes da proposta por cima):
+Já existem em `app/ui/components/` (confira com `python scripts/ui_gallery.py`, que mostra todos nos dois temas sem precisar logar; `--moldura` mostra a página Controle Geral real, `--moldura --detalhes N` abre Detalhes da proposta por cima, `--painel geral|executivo|relatorios` mostra os painéis e `--chat` as mensagens do chat; `--altura N` mostra a página inteira):
 
 - `ModernButton(texto, icone, accent=..., variant="primary|secondary|ghost|danger")`.
 - `SegmentedControl`, `CountTabs`, `SkeletonRows`, `EmptyState(..., action=botao)`.
@@ -49,6 +49,9 @@ Já existem em `app/ui/components/` (confira com `python scripts/ui_gallery.py`,
 - `StatusBadge(texto, fundo, texto_cor)`, `area_badge(texto, cor)`, `neutral_badge(texto, palette)`; em `QTableWidget`, `BadgeColumnDelegate` + `set_status_badge(item, status, palette)`.
 - `detail_widgets.py`: `make_panel()`, `kv_grid()`, `block_grid()`, `stat_block()`, `note_box()`, `ThinProgressBar`, `IconChip`, `FlowTrail`, `CountTabWidget` (abas + páginas com a API do `QTabWidget`).
 - `dialog_shell.py`: `dialog_header(titulo, subtitulo, status=[...], actions=[...])`, `dialog_footer(left=[...], right=[...])`, `StepIndicator(passo, total)`, `set_notice_kind()`, `set_validation_state()`, `standardize_tables()`. **Todo diálogo novo monta o topo com `dialog_header` e o rodapé com `dialog_footer`**; `dialog_header` aceita o `QLabel` que a tela já tinha, então atributos que testes consultam continuam existindo.
+- `page_header.py`: `page_header(titulo, subtitulo, side=[...], actions=[...])` / `setup_page_header(frame, ...)` - faixa de topo das páginas de painel e relatório (título na cor de destaque, ações à direita, `frame.body_layout` para os filtros). Painel de conteúdo: `make_panel()`; painel interno suave: objectName `SoftPanel`.
+- `style_state.py`: `set_style_state(widget, active=True, ...)` troca estado por propriedade e reaplica o estilo (nunca reescreva stylesheet em tempo de execução); `StatusDot(cor)` é o ponto de cor pintado. `status_badge.py` tem também `StageChip` (etapa de linha do tempo) e `StatusBadge.colors()`; `avatar.py` tem `AvatarLabel`.
+- Chat: balões, cartões, anexos e composição são estilizados em `styles.py` por nome de objeto e propriedade (`tone`, `mentionsMe`, `dropActive`, `active`, `card`); o visualizador de mídia usa os tokens fixos `media_*`/`overlay*`. Galeria: `python scripts/ui_gallery.py --chat`.
 - Casca e véu de diálogo (`dialog_scrim.py`, `install_dialog_shell`), ligados sozinhos por `style_dialog_from_parent()`: sem moldura nativa (só com janela principal por trás), cantos de 16 px e tabelas padronizadas. Não chame `apply_frameless_rounded_dialog` à mão.
 - Animação de atributo pintado: `animate_value()` em `app/ui/animations.py`.
 
