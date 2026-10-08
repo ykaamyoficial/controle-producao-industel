@@ -276,8 +276,11 @@ def main():
     app.setWindowIcon(app_icon())
 
     from app.ui.fonts import load_app_fonts
+    from app.ui.wheel_guard import install_combo_wheel_guard
 
     load_app_fonts()
+    # A roda do mouse nao troca a opcao de um combo (rota, status...): rola a tela.
+    install_combo_wheel_guard(app)
 
     if not run_startup_bootstrap():
         return 0
