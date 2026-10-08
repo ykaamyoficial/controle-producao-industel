@@ -615,6 +615,109 @@ class FramePreview(QWidget):
         self.chat_button.raise_()
 
 
+class ChatPreview(QWidget):
+    """Mensagens do chat (baloes, respostas, perguntas, nota interna, anexos)
+    montadas com o tema real, sem API. Mostra cada tipo de entrada uma vez."""
+
+    CURRENT_USER = 1
+
+    def __init__(self, palette_name: str):
+        super().__init__()
+        from PySide6.QtWidgets import QScrollArea
+
+        self.service = _PanelService(palette_name)
+        self.service.can_admin_chat = lambda: False
+        self.setObjectName("AppRoot")
+        self.setWindowTitle("Prévia do chat")
+        self.setStyleSheet(app_stylesheet(self.service.palette))
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        scroll = QScrollArea()
+        scroll.setObjectName("ChatScrollArea")
+        scroll.setWidgetResizable(True)
+        outer.addWidget(scroll)
+        content = QWidget()
+        column = QVBoxLayout(content)
+        column.setContentsMargins(24, 16, 24, 16)
+        column.setSpacing(8)
+        scroll.setWidget(content)
+        self.widgets = []
+        for kind, entry, grouped in self._entries():
+            self._add(column, kind, entry, grouped)
+        column.addStretch()
+
+    @staticmethod
+    def _entry(entry_id, body, author=2, kind="MENSAGEM", **extra):
+        row = {
+            "id": entry_id, "source": "chat", "entry_kind": kind, "author_user_id": author,
+            "author_name": "Henrique Lara" if author == 1 else "Marcos Silva", "author_sector": "" if author == 1 else "Almoxarifado",
+            "mentioned_user_id": None, "mentioned_user_name": None, "question_status": None,
+            "answered_message_id": None, "body": body, "area": None,
+            "created_at": "2026-10-07T10:2%dZ" % (entry_id % 10), "seen_by_count": 0, "attachments": [],
+        }
+        row.update(extra)
+        return row
+
+    def _entries(self):
+        e = self._entry
+        document = {"id": 501, "message_id": 4, "original_filename": "Projeto_CP05672_rev3.pdf", "category": "document", "file_size": 2_400_000}
+        image = {"id": 502, "message_id": 5, "original_filename": "foto_carga.png", "category": "image", "file_size": 120_000}
+        question = e(8, "Marcos, o parafuso M16 do CP 05672 chegou?", author=1, kind="PERGUNTA", mentioned_user_id=2,
+                     mentioned_user_name="Marcos Silva", question_status="AGUARDANDO_RESPOSTA", due_at="2026-10-08T17:00:00Z")
+        answered = e(9, "Chegou ontem, já separei.", author=2, kind="PERGUNTA", mentioned_user_id=1,
+                     mentioned_user_name="Henrique Lara", question_status="RESPONDIDA", viewed_at="2026-10-07T10:25:00Z")
+        original = e(1, "Carga CG-0412 retornou da galvanização, pode separar.")
+        return [
+            ("day", "Hoje", False),
+            ("other", e(1, "Carga CG-0412 retornou da galvanização, pode separar."), False),
+            ("other", e(2, "Confirmo o peso depois da conferência."), True),
+            ("own", e(3, "Perfeito, aviso a expedição.", author=1, seen_by_count=2), False),
+            ("other", e(4, "Segue o desenho revisado.", attachments=[document]), False),
+            ("other", e(5, "Olha a foto da carga.", attachments=[image]), False),
+            ("other", e(6, "@Henrique Lara pode liberar a retirada?", mentioned_user_id=1, mentioned_user_name="Henrique Lara"), False),
+            ("reply", e(7, "Libero assim que a NF sair.", author=1, answered_message_id=1, _reply_original=original), False),
+            ("question", question, False),
+            ("question", answered, False),
+            ("note", e(10, "Cliente pediu para antecipar a entrega em 2 dias.", author=1, kind="NOTA_INTERNA", area="EXPEDICAO",
+                       is_important=True, mentioned_user_id=2, mentioned_user_name="Marcos Silva"), False),
+        ]
+
+    def _add(self, column, kind, entry, grouped):
+        from app.ui.components.timeline_entries import (
+            CurrentUserMessageWidget,
+            DirectedQuestionWidget,
+            InternalNoteWidget,
+            OtherUserMessageWidget,
+            ReplyMessageWidget,
+            TimelineDaySeparator,
+        )
+
+        names = ["Henrique Lara", "Marcos Silva"]
+        if kind == "day":
+            column.addWidget(TimelineDaySeparator(entry, self.service))
+            return
+        factory = {
+            "other": OtherUserMessageWidget, "own": CurrentUserMessageWidget, "reply": ReplyMessageWidget,
+            "question": DirectedQuestionWidget, "note": InternalNoteWidget,
+        }[kind]
+        widget = factory(entry, self.service, self.CURRENT_USER, names, grouped)
+        if hasattr(widget, "set_max_bubble_width"):
+            widget.set_max_bubble_width(520)
+        # Igual ao ChatConversationPanel._wrap_row: a linha e um QWidget, nao um
+        # layout solto (layout solto com avatar+stretch reparte altura sobrando).
+        wrapper = QWidget()
+        row = QHBoxLayout(wrapper)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(0)
+        if kind in ("own", "reply"):
+            row.addStretch()
+        row.addWidget(widget)
+        if kind in ("other",):
+            row.addStretch()
+        column.addWidget(wrapper)
+        self.widgets.append(widget)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--tema", choices=tuple(OFFICIAL_COLOR_PALETTES), default="claro")
@@ -625,6 +728,7 @@ def main() -> int:
         default="normal",
         help="com --moldura: estado da pagina Controle Geral (banner mostra tambem o resumo de login e o aviso)",
     )
+    parser.add_argument("--chat", action="store_true", help="mostra as mensagens do chat (baloes, cartoes, anexos)")
     parser.add_argument(
         "--painel",
         choices=("geral", "executivo", "relatorios"),
@@ -643,6 +747,18 @@ def main() -> int:
 
     app = QApplication(sys.argv[:1])
     family = load_app_fonts()
+    if args.chat:
+        chat = ChatPreview(args.tema)
+        chat.resize(900, max(args.altura, 1000))
+        chat.show()
+        if args.shot:
+            def capture_chat():
+                chat.grab().save(args.shot)
+                print(f"fonte={family} salvo={args.shot}")
+                app.quit()
+
+            QTimer.singleShot(900, capture_chat)
+        return app.exec()
     if args.moldura or args.painel:
         preview = FramePreview(args.tema, args.estado, args.painel or "controle")
         preview.resize(1366, args.altura)
