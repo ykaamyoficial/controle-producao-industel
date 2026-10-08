@@ -12,7 +12,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from app.replica import proposals_view
+from app.replica import expedition_items_view, proposals_view
 from app.replica.replica_db import ReplicaDatabase
 from app.replica.sync_engine import MODE_INCREMENTAL, ReplicaSyncEngine, SyncApiClient
 from api.tests import test_expedition_fiscal_read_path as read_path
@@ -45,6 +45,27 @@ PROPOSAL_CASES = (
     {"search": "site", "customer": "alfa", "limit": 200},
     {"search": "%", "limit": 200},
     {"search": "nao-existe", "limit": 200},
+)
+
+
+EXPEDITION_ITEM_CASES = (
+    {},
+    {"pending_only": False},
+    {"status": "SEPARADO"},
+    {"status": "em_separacao", "pending_only": False},
+    {"status": "ENTREGUE", "pending_only": False},
+    {"search": "beta"},
+    {"search": "  EXP-C "},
+    {"search": "1001"},
+    {"search": "1002", "pending_only": False},
+    {"search": "cod"},
+    {"search": "linha 2"},
+    {"search": "%"},
+    {"search": "nao-existe"},
+    {"search": "beta", "status": "EM_SEPARACAO"},
+    {"limit": 2, "offset": 1},
+    {"limit": 3, "offset": 0, "pending_only": False},
+    {"limit": 5, "offset": 50},
 )
 
 
@@ -82,6 +103,41 @@ class ReplicaViewsParityTests(unittest.TestCase):
                 response = self.client.get("/api/v1/proposals", params=params, headers=self.headers)
                 self.assertEqual(response.status_code, 200, response.text)
                 self.assertEqual(proposals_view.list_proposals(database, **params), response.json())
+
+    def assertExpeditionItemsParity(self, database):
+        for params in EXPEDITION_ITEM_CASES:
+            with self.subTest(params=params):
+                self.assertTrue(expedition_items_view.can_serve(params))
+                response = self.client.get("/api/v1/shipping/items", params=params, headers=self.headers)
+                self.assertEqual(response.status_code, 200, response.text)
+                self.assertEqual(expedition_items_view.list_expedition_items(database, **params), response.json())
+
+    def test_expedition_items_list_from_replica_matches_the_api(self):
+        ids = self._build_scenario()
+        # Uma entrega parcial: o item 1 de EXP-B sai (ENTREGUE) e o 2 continua pendente.
+        detail = self.client.get(f"/api/v1/shipping/proposals/{ids['B']}", headers=self.headers).json()
+        separated = self._post(f"/api/v1/shipping/proposals/{ids['B']}/separate-items", {"version": detail["version"]})
+        first = sorted(separated["items"], key=lambda row: row["item_number"])[0]
+        self._post(f"/api/v1/shipping/proposals/{ids['B']}/deliver-items", {"version": separated["version"], "items": [{"expedition_item_id": first["id"]}]})
+        database, engine = self._replica()
+        engine.sync_once()
+        self.assertGreater(self.client.get("/api/v1/shipping/items", headers=self.headers).json()["total"], 0)
+        self.assertGreater(self.client.get("/api/v1/shipping/items", params={"pending_only": False}, headers=self.headers).json()["total"], 0)
+        self.assertExpeditionItemsParity(database)
+
+    def test_expedition_items_parity_holds_after_incremental_changes(self):
+        ids = self._build_scenario()
+        database, engine = self._replica()
+        engine.sync_once()
+        detail = self.client.get(f"/api/v1/shipping/proposals/{ids['E']}", headers=self.headers).json()
+        started = self._post(f"/api/v1/shipping/proposals/{ids['E']}/start-separation", {"version": detail["version"]})
+        self._post(f"/api/v1/shipping/proposals/{ids['E']}/separate-items", {"version": started["version"]})
+        proposal_a = self.client.get(f"/api/v1/proposals/{ids['A']}", headers=self.headers).json()
+        self._post(f"/api/v1/proposals/{ids['A']}/cancel", {"version": proposal_a["version"], "reason": "Cancelada no teste de paridade"})
+        self._ready("EXP-NOVA", [_item_payload("1", requires_galvanization=False)], "Novo Cliente Ltda")
+        result = engine.sync_once()
+        self.assertEqual(result.mode, MODE_INCREMENTAL)
+        self.assertExpeditionItemsParity(database)
 
     def test_general_control_list_from_replica_matches_the_api(self):
         self._build_scenario()

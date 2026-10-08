@@ -900,15 +900,34 @@ class ExpeditionProposalDetail(ExpeditionProposalSummary):
     items: list[ExpeditionItemSummary] = Field(default_factory=list)
 
 
-class ExpeditionItemRow(ExpeditionItemSummary):
-    """Item da Expedicao com a proposta a que pertence (aba "Itens em expedicao")."""
+class ExpeditionItemRow(BaseModel):
+    """Item da Expedicao com a proposta a que pertence (aba "Itens em expedicao").
 
+    So dados e a diferenca de saldo: nada que exija regra de negocio (peso,
+    status calculado), porque a mesma lista tambem e montada no Desktop a partir
+    da replica local (`app/replica/expedition_items_view.py`) e as duas
+    respostas precisam ser identicas."""
+
+    id: int
+    proposal_id: int
+    proposal_item_id: int
+    item_number: str
+    product_code: str | None = None
+    description: str
+    unit: str | None = None
+    available_quantity: Decimal
+    separated_quantity: Decimal
+    delivered_quantity: Decimal
+    remanaged_quantity: Decimal
+    pending_quantity: Decimal
+    origin: str
+    status: str
+    version: int
     proposal_number: str
     proposal_version: int
     customer_name: str
     project_name: str | None = None
     lot: str | None = None
-    unit: str | None = None
 
 
 class PaginatedExpeditionItemResponse(BaseModel):

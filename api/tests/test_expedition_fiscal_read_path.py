@@ -275,7 +275,7 @@ class ExpeditionFiscalReadPathTests(unittest.TestCase):
         for key in (
             "id", "proposal_id", "proposal_version", "proposal_number", "customer_name", "project_name", "lot", "item_number",
             "product_code", "description", "unit", "available_quantity", "separated_quantity", "delivered_quantity",
-            "remanaged_quantity", "pending_quantity", "total_weight", "origin", "status", "version",
+            "remanaged_quantity", "pending_quantity", "origin", "status", "version",
         ):
             self.assertIn(key, first)
         self.assertEqual((first["proposal_number"], first["customer_name"], first["unit"]), ("EXP-A", "Alfa Ltda", "un"))

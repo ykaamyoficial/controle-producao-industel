@@ -991,6 +991,10 @@ async def list_expedition_items(
     entram tambem os ja entregues, mas so das propostas que continuam na lista
     de Expedicao (com ao menos um item pendente), para a consulta nao varrer o
     historico inteiro. Filtro, ordenacao e paginacao rodam no SQL.
+
+    A lista tambem e montada no Desktop, a partir da replica local
+    (`app/replica/expedition_items_view.py`); `api/tests/test_replica_views_parity.py`
+    exige respostas identicas. Por isso a regra aqui fica em filtro e ordem.
     """
     conditions = [
         Proposal.active.is_(True),
@@ -1023,10 +1027,12 @@ async def list_expedition_items(
     total = (await session.execute(select(func.count()).select_from(source.subquery()))).scalar_one()
     rows = (await session.execute(
         source
+        # Ordem so por situacao e ids (nada de texto): o Desktop reproduz a mesma
+        # ordem na replica local, e a collation do PostgreSQL ele nao reproduz.
         .order_by(
             case(_EXPEDITION_SORT_ORDER, value=ExpeditionItem.status, else_=99),
-            Proposal.proposal_number,
-            ProposalItem.item_number,
+            Proposal.id,
+            ProposalItem.id,
             ExpeditionItem.id,
         )
         .limit(limit)
@@ -3368,8 +3374,6 @@ def _expedition_item_row(item: ExpeditionItem, proposal: Proposal, proposal_item
         delivered_quantity=item.delivered_quantity,
         remanaged_quantity=item.remanaged_quantity,
         pending_quantity=max(Decimal("0.0000"), pending),
-        unit_weight=normalize_known_weight(proposal_item.unit_weight),
-        total_weight=calculate_known_weight(item.available_quantity, proposal_item.unit_weight),
         origin=item.origin,
         status=item.status,
         version=item.version,
