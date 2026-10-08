@@ -5,7 +5,7 @@
 # descompacta em %TEMP% a cada abertura (lento e mais sujeito a antivirus).
 
 a = Analysis(
-    ['app\launcher\launcher.py'],
+    ['app/launcher/launcher.py'],
     pathex=[],
     binaries=[],
     datas=[],
@@ -26,7 +26,7 @@ exe = EXE(
     [],
     exclude_binaries=True,
     name='ControleProducao',
-    icon='app\assets\images\Logo_Industel_Icone.ico',
+    icon='app/assets/images/Logo_Industel_Icone.ico',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

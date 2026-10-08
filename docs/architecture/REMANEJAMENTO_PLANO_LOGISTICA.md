@@ -79,6 +79,9 @@ Regra de ouro: **o remanejamento nunca muda o total de peças nem o estágio de 
 - **D1 — Quais peças em andamento vão para a cedente?** **As mais adiantadas.** (A destino fica com as menos adiantadas e demora mais para completar; foi a escolha do Henrique.)
 - **D2 — Peça já separada na Expedição pode ser cedida?** **Sim.** Continua pronta; a separação da cedente é refeita para o que sobrou.
 - **D3 — Ordem de execução.** **Por etapas, galvanizados no fim**: o remanejamento atual de itens sem galvanização continua funcionando durante o trabalho.
+- **D4 — Onde a cedente aparece.** **Nas duas telas**: na Expedição com as prontas que sobraram e na Galvanização (ou Produção) com as peças que recebeu, até elas voltarem; ao voltarem juntam-se às prontas.
+- **D5 — Peça dentro de uma carga que já saiu.** **Pode trocar de dono dentro da carga**: a carga continua a mesma (motorista, dados), passa a listar essas peças no nome da nova proposta, o retorno vale para ela e tudo fica no histórico.
+- **D6 — Remanejamentos antigos.** **Ficam como estão**: só os novos seguem a regra nova; nenhum dado já gravado é reescrito.
 
 ## 9. Ordem de execução proposta
 
@@ -114,4 +117,26 @@ Tudo desenvolvido e testado na API de desenvolvimento; a API oficial só recebe 
 - **O que não mudou:** itens galvanizados continuam bloqueados como origem (liberam na Fase E); o estado da cedente depois de ceder continua o de hoje (muda na Fase C); nenhum dado já gravado foi alterado.
 - **Persistência dos estágios 2 e 3** (fabricada aguardando galvanização e dentro de carga): a tabela que registra a troca nesses estágios **fica para a Fase C**, junto com Produção e Galvanização que vão ler essa troca. Criá-la agora deixaria dado sem nenhum consumidor.
 - Testes: `api/tests/test_stage_swap.py` (20 casos puros: ordem D1, várias origens, reposição recebida, falta de peças, e cada tipo de violação de conservação) e 4 integrações em `test_proposals_integration.py` (revisão mostra a troca; confirmação troca o dono e o total por estágio se mantém nos dois itens; falha simulada da conferência desfaz tudo e o mesmo pedido depois grava; destino sem peças em andamento é recusado). Os 23 testes de remanejamento que já existiam continuam passando.
+
+### Fase C — desenho (08/10/2026; em andamento)
+
+O sistema já cobre o item **sem galvanização**: a cedente fica na Expedição com as prontas que sobraram, entra na lista de itens de Produção pela reposição recebida (`production_reallocated_in_pending`) e, quando a reposição é concluída, soma ao disponível da Expedição (junta). O que falta é o item **galvanizado**, e por isso a Fase C se concentra nele. Pontos do código que hoje impedem:
+
+1. A reposição concluída entra **direto** na Expedição (`complete_production_items`), pulando a galvanização.
+2. As peças já fabricadas que o destino tem (aguardando galvanização ou dentro de carga) não têm como mudar de dono: só existe a transferência da obrigação de **fabricar**.
+3. Três pontos usam `item.quantity` como "o que passa pela galvanização": disponível para carga, validação da carga e a conta do retorno (`galvanized`). Com troca de dono essa quantidade muda.
+
+**Solução: quantidade da esteira (`pipeline`).** Para itens galvanizados, "quantas peças este item leva pela galvanização" passa a ser
+
+    esteira = pedido − obrigação cedida + peças já fabricadas recebidas − peças já fabricadas cedidas + reposição concluída recebida
+
+Sem nenhuma troca, a esteira é igual ao pedido, então **nada muda para os itens que nunca foram remanejados**. Com troca, os três pontos acima passam a usar a esteira, e o "junta de novo" sai da conta: o disponível da Expedição do item galvanizado é `retornado + pronto recebido`, menos o que foi cedido.
+
+**Dados.** Tabela nova `remanagement_stage_transfers` (estágio `AWAITING_GALVANIZATION` ou `IN_GALVANIZATION`, quantidade, item de origem e de destino, carga e linhas de carga envolvidas). Para o estágio `IN_GALVANIZATION` a gravação **move as peças entre as linhas da carga** (a do destino diminui o enviado, a da cedente na mesma carga aumenta); linha que zera é desativada, nunca apagada. O estágio `TO_PRODUCE` continua sendo a transferência de obrigação que já existe.
+
+**Etapas da Fase C** (cada uma testada e commitada):
+
+- **C1 — esteira e leitura:** migração e modelo da tabela; conta da esteira; controle de peças por estágio, disponibilidade para carga, validação da carga e retorno usando a esteira; disponível da Expedição do galvanizado com o pronto recebido. Itens sem troca ficam idênticos (provado pelo script de conferência e pelos testes existentes).
+- **C2 — gravar a troca no galvanizado:** aplicar as transferências (linhas de carga e tabela), concluir a reposição galvanizada seguindo para a galvanização e ressincronizar o estado das duas propostas. Tudo atrás de uma chave que mantém o galvanizado bloqueado até a Fase E; os testes ligam a chave.
+- **C3 — estados da cedente e do destino (R4–R6) e testes de cenário de ponta a ponta:** cedeu tudo, cedeu parte e voltou, duas cedentes, uma cedente para dois destinos, propostas com filhas (por enquanto recusadas com mensagem clara).
 

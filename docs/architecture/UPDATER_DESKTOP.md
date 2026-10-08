@@ -319,7 +319,107 @@ existente, preservando o comportamento anterior como rede de segurança.
 Testado com `ShellExecuteW` mockado (`tests/test_updater_elevation.py`); o
 prompt UAC real não é verificável de forma automatizada.
 
+## Layout versionado (substitui o swap de pasta plana)
+
+**Por que mudou.** No layout plano o Updater renomeava `install_dir` inteiro
+(`install_dir -> backup`, `staging -> install_dir`). Qualquer processo vivo
+dentro da pasta travava o rename com sharing violation. O Updater só esperava
+o `parent_pid` (janela principal); o agente de bandeja (`ControleProducao.exe
+--notifier`, iniciado pela pasta Startup) e o próprio `Updater.exe` (que rodava
+de dentro de `install_dir`) continuavam segurando arquivos. O instalador Inno
+tinha o mesmo defeito: não fechava o `--notifier`. Resultado: a atualização
+abortava, fechava o programa sem atualizar, ou o instalador exigia matar
+processos pelo Gerenciador de Tarefas.
+
+**Como é agora.**
+
+```
+<instalacao>\
+  ControleProducao.exe     launcher (Launcher.spec) -- estável, quase nunca muda
+  current.json             ponteiro: {"version", "dir", "previous_version", ...}
+  versions\<semver>\       árvore completa de cada versão
+      ControleProducaoApp.exe, Updater.exe, _internal\
+```
+
+- Atalhos, Startup (`--notifier`), toasts e o próprio Updater apontam para o
+  launcher (`app_paths.get_launcher_path()`), que lê `current.json` e abre a
+  versão ativa. Se o ponteiro estiver corrompido, escolhe a maior versão
+  instalada (`versions.resolve_active_version`).
+- **Nenhuma pasta em uso é renomeada ou apagada.** Instalar = criar uma pasta
+  nova; ativar = regravar `current.json` de forma atômica; desfazer = regravar
+  com a versão anterior.
+- Dados persistentes continuam em `%ProgramData%\Industel\ControleProducao`
+  (a allowlist de `persistence.py` e o backup por rename só existem no fluxo
+  legado).
+
+**Duas fases** (`app/updater/versioned.py`, `Updater.exe --request <json> --stage|--activate`):
+
+1. `--stage` roda **com o Desktop aberto**: copia/verifica o pacote
+   (SHA-256/tamanho do manifest), extrai para `versions\<v>.tmp`, valida
+   (`ControleProducaoApp.exe` presente, `VERSION` confere) e renomeia para
+   `versions\<v>`. Escreve `updater/status/<request_id>.json`
+   (`UpdateStatus`); o `UpdateCoordinator` lê esse arquivo e alimenta a barra
+   de progresso do diálogo, com erros legíveis. Falha aqui não altera nada.
+2. `--activate` roda depois que a fase 1 deu `STAGED` (o coordenador encadeia
+   as duas após o clique em "Atualizar agora"): grava `current.json`, grava
+   `updater/quit.request`, espera a saída cooperativa e **encerra à força todo
+   processo cujo executável esteja sob a raiz da instalação**
+   (`process_control.stop_processes_under`), abre o launcher com
+   `--post-update <id>` e espera o handshake. Sem handshake: ponteiro volta
+   para a versão anterior, o processo novo é encerrado e a versão anterior
+   reabre (`ROLLED_BACK`).
+
+Como o ponteiro muda antes de os processos antigos saírem, **um processo que
+não fecha não impede mais a atualização**. A janela principal e o agente
+`--notifier` observam `quit.request` (`app/services/update_quit_watcher.py`) e
+saem de forma limpa; o pedido só vale para processos iniciados antes dele e
+por 180 s, para um arquivo esquecido nunca fechar uma instância nova.
+
+**Elevação.** `--stage` precisa gravar em `versions\` (pasta da instalação),
+então o UAC aparece uma vez, com o diálogo ainda na tela. O instalador deixa só
+o `current.json` gravável por usuários (`icacls ... S-1-5-32-545:(M)`), então
+`--activate` não pede UAC de novo.
+
+**Retenção.** Após o sucesso ficam a versão ativa e a anterior; as demais e
+restos `*.tmp` são removidos (`versions.cleanup_old_versions`); o que ainda
+estiver em uso é adiado para a próxima limpeza.
+
+**Instalador (`installer/ControleProducao.iss`).** Instala o launcher na raiz
+e o app em `versions\<MyAppVersion>`, remove `_internal` e `Updater.exe` do
+layout antigo, escreve `current.json`, e um `[Code]` encerra
+`ControleProducao.exe`, `ControleProducaoApp.exe` e `Updater.exe` (inclusive o
+`--notifier`) antes de copiar (`PrepareToInstall`) e antes de desinstalar.
+
+**Pacote de atualização** (`scripts/build_update_package.py`): ZIP da árvore de
+UMA versão (`ControleProducaoApp.exe` na raiz do ZIP), sem o launcher.
+
+**Migração das máquinas em 2.8.x.** O atualizador antigo dessas máquinas é o
+que falha; ele não pode ser corrigido remotamente, e um pacote do layout novo
+é reprovado por ele (rollback automático, `ControleProducao.exe` ausente).
+Por isso a primeira versão com o layout novo deve ser **instalada uma vez pelo
+instalador novo** (que já fecha o `--notifier`) e **não** ser publicada no feed
+de atualização (`GET /updates/desktop`) para clientes 2.8.x. Depois disso todas
+as atualizações usam o fluxo versionado. `scripts/recuperar_atualizacao.bat`
+encerra os processos e abre o instalador para quem falhar mesmo assim.
+
+**Verificação feita (2026-10-08).** Build real (PyInstaller) do launcher,
+Updater e app, montados no layout num diretório isolado (dados, APPDATA e
+Startup redirecionados) com um processo "teimoso" vivo na pasta antiga: launcher
+abre a versão apontada; `--stage` prepara com o app aberto sem fechar nada;
+`--activate` conclui `SUCCESS` apesar do processo teimoso (encerrado à força),
+ponteiro `2.9.0` com anterior `2.8.0`, nada rodando da pasta antiga; pacote com
+executável inválido termina `ROLLED_BACK` com a versão anterior reaberta (15/15
+verificações). O `.iss` compila (ISCC). **Não verificado**: instalação real
+pelo `.exe` (exige admin e encerraria o programa em uso), UAC real em usuário
+não-admin, e antivírus/Defender contra o launcher sem assinatura.
+
 ## Riscos/pendências
+- **Sem assinatura de código** (decisão: sem certificado): launcher/Updater
+  novos podem ser marcados por antivírus ou SmartScreen. Mitigar com exclusão
+  da pasta de instalação por GPO e envio de falso positivo à Microsoft.
+- **Disco**: ficam a versão ativa e a anterior lado a lado.
+- **Launcher**: um bug nele afeta todas as máquinas; é mínimo, testado
+  (`tests/test_launcher.py`) e se autorrepara por `resolve_active_version`.
 - **Antivírus/EDR**: a detecção de sharing violation existe (retry +
   `SwapError.sharing_violation`), mas o comportamento real contra um
   antivírus específico interceptando o arquivo recém-extraído não pôde ser

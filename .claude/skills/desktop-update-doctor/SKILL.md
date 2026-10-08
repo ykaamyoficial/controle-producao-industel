@@ -21,22 +21,28 @@ palpite; confirme a causa em log/journal/processos primeiro (secao 1).
 | Ponto unico que dispara update | `app/services/update_coordinator.py` |
 | Dialogo e progresso | `app/ui/update_dialog.py` |
 | Updater (entry, elevacao) | `app/updater/__main__.py`, `elevation.py` |
-| Maquina de estados | `app/updater/orchestrator.py` |
+| Layout versionado (ponteiro, versoes, limpeza) | `app/updater/versions.py` |
+| Atualizacao em duas fases (`--stage` / `--activate`) | `app/updater/versioned.py`, `status.py`, `quit_signal.py` |
+| Launcher (`ControleProducao.exe` na raiz) | `app/launcher/launcher.py`, `Launcher.spec` |
+| Maquina de estados do fluxo plano (legado) | `app/updater/orchestrator.py` |
 | Processos (espera, kill, launch) | `app/updater/process_control.py` |
 | Troca de pastas | `app/updater/swap.py` |
 | Agente de bandeja (mesmo exe, `--notifier`) | `app/services/notifier_agent.py`, `app/main.py` |
 | Instalador | `installer/ControleProducao.iss` |
 | Pacote ZIP / manifest | `scripts/build_update_package.py`, `scripts/generate_release_manifest.py` |
-| Dados do Updater em runtime | `<AppData>/updater/{logs,journal,staging,backup,downloads,manifest,quarantine}` (`app/updater/paths.py`) |
+| Dados do Updater em runtime | `<ProgramData>/updater/{logs,status,handshake,downloads,manifest,quarantine,quit.request}` (`app/updater/paths.py`); `journal/staging/backup` so no fluxo plano legado |
+| Arquitetura e verificacao feita | `docs/architecture/UPDATER_DESKTOP.md` (secao "Layout versionado") |
 
 ## 1. Diagnostico (somente leitura)
 
 Na maquina que falhou, nesta ordem:
 
-1. **Journal**: ultimo arquivo em `updater/journal/`. Estado final e `last_step`/`error_code`
-   dizem ONDE parou (`DOWNLOADING`, `WAITING_APP_EXIT`, `APPLYING`, `RESTARTING`...).
-   Ausencia de journal = o Updater nem chegou a rodar (falha no `UpdateCoordinator`,
-   no lancamento, ou UAC recusado).
+1. **Status**: `updater/status/<request_id>.json` (layout versionado) traz `phase`
+   (`STAGING`, `STAGED`, `ACTIVATING`, `RESTARTING`, `SUCCESS`, `FAILED`, `ROLLED_BACK`),
+   `message` e `error`. Ausencia de status = o Updater nem chegou a rodar (falha no
+   `UpdateCoordinator`, no lancamento, ou UAC recusado). Confira tambem `current.json`
+   (versao ativa e `previous_version`) e as pastas em `versions\`. No layout plano
+   legado (2.8.x e anteriores) use o journal em `updater/journal/`.
 2. **Log do Updater**: `updater/logs/`. Procure `update_elevation_*`,
    `Falha ao mover a instalacao atual para backup`, `sharing_violation`,
    `nao encerrou dentro do timeout`, `handshake`.
@@ -95,13 +101,18 @@ Marque cada item com evidencia (comando + saida), nunca de memoria.
 
 - [ ] `APP_VERSION` (`app/version.py`) == `MyAppVersion` e `OutputBaseFilename` no `.iss`
       (`tests/test_installer_version_consistency.py`).
-- [ ] `dist/ControleProducao/` e `dist/Updater/` construidos da MESMA versao.
-- [ ] `Updater.exe` presente na raiz do pacote ZIP e na pasta instalada.
+- [ ] `dist/ControleProducao/` (com `ControleProducaoApp.exe`), `dist/Updater/` e `dist/Launcher/`
+      (`python -m PyInstaller Launcher.spec`) construidos da MESMA versao.
+- [ ] Use caminhos CURTOS no build (`--distpath`/`--workpath`): o PyInstaller falha com WinError 206
+      em pastas profundas.
+- [ ] `Updater.exe` presente na raiz do pacote ZIP e em `versions\<v>` na pasta instalada.
 - [ ] Pacote de update e ZIP (`scripts/build_update_package.py`), com arquivo `VERSION`.
 - [ ] Manifest gerado com `--artifact <...>-update.zip --content-type application/zip`
       (nao o `.exe` do instalador).
 - [ ] SHA-256 e tamanho do manifest conferem com o arquivo a publicar.
-- [ ] `.iss` fecha processos (principio 8).
+- [ ] `.iss` fecha processos (principio 8) e compila (`ISCC.exe installer\ControleProducao.iss`).
+- [ ] 1a versao com o layout novo NAO esta no feed para clientes 2.8.x (o atualizador antigo
+      reprova o pacote); instalar uma vez pelo instalador novo.
 - [ ] Suite: `python -m pytest tests/test_updater_*.py tests/test_update_*.py tests/test_manifest_*.py tests/test_installer_version_consistency.py -q`
       (suite Desktop tem timeout; hang = `test-doctor`).
 
@@ -118,6 +129,11 @@ Atualizar de N-1 para N em CADA combinacao, registrando resultado final do journ
 | sim | ligada | sim | pacote corrompido | falha de hash na tela, app antigo intacto |
 | sim | ligada | sim | matar Updater no meio | proxima execucao recupera (rollback) |
 
+Para automatizar parte disso, monte o layout num diretorio isolado (dados, `APPDATA`,
+`ProgramData`, `CONTROLE_PRODUCAO_DATA_DIR` redirecionados e `QT_QPA_PLATFORM=offscreen`, para nao
+tocar no Startup nem na instalacao real) e rode `Updater.exe --request <json> --stage` e `--activate`
+com um processo "teimoso" vivo na pasta antiga; esperado `STAGED` e depois `SUCCESS`.
+
 Mais o caminho do instalador: rodar `ControleProducaoSetup-N.exe` por cima, com
 bandeja e janela abertas, SEM encerrar nada manualmente.
 
@@ -130,14 +146,20 @@ Release so esta pronto quando o feed REALMENTE entrega:
 - Baixar `package_url` e recalcular SHA-256 == manifest.
 - Um Desktop N-1 de teste enxerga o aviso, baixa, aplica e confirma o handshake.
 
-## 6. Recuperacao manual (`MANUAL_INTERVENTION_REQUIRED`)
+## 6. Recuperacao manual
 
-1. Pare todos os `ControleProducao.exe` e `Updater.exe`.
-2. Confira `updater/backup/<request_id>/` (instalacao anterior) e a pasta de quarentena.
-3. Se `install_dir` nao existe ou esta incompleto: restaurar o backup por rename.
-4. Se nao ha backup: rodar o instalador da ultima versao conhecida (dados vivem
-   fora de `install_dir`, em `%ProgramData%\Industel\ControleProducao`).
-5. Registrar o ocorrido em `docs/architecture/` (skill `fase-report`).
+Layout versionado:
+1. Rode `scripts/recuperar_atualizacao.bat` como administrador (encerra
+   `ControleProducao.exe`, `ControleProducaoApp.exe` e `Updater.exe`; opcionalmente abre o instalador).
+2. Se o programa nao abre: confira `current.json` e `versions\`. O launcher se autorrepara
+   escolhendo a maior versao com `ControleProducaoApp.exe`; se nenhuma existir, rode o instalador.
+3. Dados vivem fora da instalacao, em `%ProgramData%\Industel\ControleProducao`.
+
+Layout plano legado (`MANUAL_INTERVENTION_REQUIRED`): pare os processos, confira
+`updater/backup/<request_id>/` e a quarentena, restaure o backup por rename ou rode o
+instalador da ultima versao conhecida.
+
+Depois registre o ocorrido em `docs/architecture/` (skill `fase-report`).
 
 ## 7. Limites
 

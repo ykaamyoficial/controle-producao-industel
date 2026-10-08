@@ -28,9 +28,12 @@ def install_root_from_executable(executable: str | Path) -> Path:
 
 
 def launch(install_root: Path, args: list[str], *, popen=subprocess.Popen) -> int:
+    # Durante a atualizacao automatica (--post-update) quem relata a falha e o
+    # Updater (com rollback); uma caixa de mensagem aqui ficaria presa na tela.
+    show_error = _show_error if "--post-update" not in args else (lambda message: print(message, file=sys.stderr))
     version = resolve_active_version(install_root)
     if version is None:
-        _show_error(
+        show_error(
             "Nenhuma versao do programa foi encontrada.\n"
             "Execute o instalador do Controle de Producao para reparar a instalacao."
         )
@@ -43,7 +46,7 @@ def launch(install_root: Path, args: list[str], *, popen=subprocess.Popen) -> in
             close_fds=True,
         )
     except OSError as exc:
-        _show_error(f"Nao foi possivel abrir a versao {version}:\n{exc}")
+        show_error(f"Nao foi possivel abrir a versao {version}:\n{exc}")
         return 1
     return 0
 

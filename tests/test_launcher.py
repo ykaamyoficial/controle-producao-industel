@@ -54,6 +54,13 @@ class LauncherTests(unittest.TestCase):
             self.assertEqual(launcher.launch(self.root, [], popen=popen), 1)
         self.assertIn("boom", show.call_args.args[0])
 
+    def test_never_opens_a_message_box_during_automatic_update(self):
+        self._install("2.8.0")
+        popen = mock.Mock(side_effect=OSError("boom"))
+        with mock.patch.object(launcher, "_show_error") as show:
+            self.assertEqual(launcher.launch(self.root, ["--post-update", "abc"], popen=popen), 1)
+        show.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()
