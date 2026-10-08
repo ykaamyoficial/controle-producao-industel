@@ -58,6 +58,10 @@ class StatusBadge(QLabel):
         self._foreground = fg
         self.update()
 
+    def colors(self) -> tuple[str, str]:
+        """(fundo, texto) atuais do selo."""
+        return self._background, self._foreground
+
     def _font(self) -> QFont:
         font = QFont(self.font())
         font.setPixelSize(12)
@@ -88,4 +92,46 @@ class StatusBadge(QLabel):
         painter.setFont(self._font())
         painter.setPen(_to_color(self._foreground))
         painter.drawText(self.rect(), Qt.AlignCenter, self.text())
+        painter.end()
+
+
+class StageChip(QLabel):
+    """Etapa de uma linha do tempo (ex.: etapas de uma carga): "current" na cor
+    do status, "done" em superficie alternativa e "pending" so com contorno.
+    Pintada a mao: a cor da etapa atual vem do status, que e dinamico."""
+
+    def __init__(self, text: str, state: str, bg: str | None = None, fg: str | None = None, parent=None):
+        super().__init__(text, parent)
+        self.setObjectName("StageChip")
+        self.state = state
+        self._background = bg
+        self._foreground = fg
+        self.setAlignment(Qt.AlignCenter)
+        self.setMinimumHeight(36)
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        from app.ui.theme_tokens import active_tokens
+
+        tokens = active_tokens()
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        font = QFont(self.font())
+        if self.state == "current" and self._background:
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(_to_color(self._background))
+            text_color = _to_color(self._foreground or tokens["text"])
+            font.setWeight(QFont.Weight.Bold)
+        elif self.state == "done":
+            painter.setPen(_to_color(tokens["border"]))
+            painter.setBrush(_to_color(tokens["surface_alt"]))
+            text_color = _to_color(tokens["text"])
+        else:
+            painter.setPen(_to_color(tokens["border"]))
+            painter.setBrush(Qt.NoBrush)
+            text_color = _to_color(tokens["muted"])
+        painter.drawRoundedRect(rect, 9, 9)
+        painter.setFont(font)
+        painter.setPen(text_color)
+        painter.drawText(self.rect().adjusted(8, 0, -8, 0), Qt.AlignCenter | Qt.TextWordWrap, self.text())
         painter.end()

@@ -10,6 +10,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from app.services.backend_adapter import OFFICIAL_COLOR_PALETTES
+from app.ui.components.status_badge import StatusBadge
 from app.ui.galvanization_load_dialog import GalvanizationLoadManagerDialog, GalvanizationReturnDialog
 
 
@@ -280,7 +281,10 @@ class GalvanizationLoadManagerDialogTests(unittest.TestCase):
         self.assertFalse(dialog.table.item(0, 0).icon().isNull())
         self.assertIn("aguardando", dialog.table.item(0, 0).toolTip().lower())
         self.assertIsNotNone(dialog.table.cellWidget(0, 2))
-        self.assertIn("border-radius", dialog.table.cellWidget(0, 2).styleSheet())
+        badge = dialog.table.cellWidget(0, 2).findChild(StatusBadge)
+        self.assertIsNotNone(badge)
+        self.assertEqual(badge.styleSheet(), "")
+        self.assertTrue(all(badge.colors()))
 
     def test_overdue_load_uses_current_date_rule(self):
         with patch("app.ui.galvanization_load_dialog.current_date", return_value=date(2026, 7, 21)):

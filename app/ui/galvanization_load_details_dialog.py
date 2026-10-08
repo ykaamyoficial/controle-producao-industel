@@ -26,7 +26,7 @@ from app.services.app_logging import get_logger
 from app.ui.background_worker import start_worker
 from app.ui.components.kpi_card import KpiCard
 from app.ui.components.modern_button import ModernButton
-from app.ui.components.status_badge import StatusBadge
+from app.ui.components.status_badge import StageChip, StatusBadge
 from app.ui.components.detail_widgets import CountTabWidget
 from app.ui.dialog_utils import apply_large_dialog_geometry, style_dialog_from_parent
 from app.ui.icons import make_icon
@@ -210,29 +210,19 @@ class LoadSummaryTab(_DataTab):
         except ValueError:
             current_index = -1
         for index, stage in enumerate(LOAD_STAGES):
-            label = QLabel(self.service.load_status_label(stage))
-            label.setAlignment(Qt.AlignCenter)
-            label.setMinimumHeight(36)
+            stage_text = self.service.load_status_label(stage)
             if index == current_index:
                 bg, fg = status_color(stage, self.palette, "GALVANIZACAO")
-                label.setStyleSheet(
-                    f"background: {bg}; color: {fg}; border-radius: 9px; padding: 7px 10px; font-weight: 700;"
-                )
+                label = StageChip(stage_text, "current", bg, fg)
             elif current_index >= 0 and index < current_index:
-                label.setStyleSheet(
-                    f"background: {self.palette.get('surface_alt')}; color: {self.palette.get('text')}; "
-                    f"border: 1px solid {self.palette.get('border')}; border-radius: 9px; padding: 7px 10px;"
-                )
+                label = StageChip(stage_text, "done")
             else:
-                label.setStyleSheet(
-                    f"color: {self.palette.get('muted')}; border: 1px solid {self.palette.get('border')}; "
-                    "border-radius: 9px; padding: 7px 10px;"
-                )
+                label = StageChip(stage_text, "pending")
             self.timeline_layout.addWidget(label, 1)
             if index < len(LOAD_STAGES) - 1:
                 arrow = QLabel("›")
+                arrow.setObjectName("StageArrow")
                 arrow.setAlignment(Qt.AlignCenter)
-                arrow.setStyleSheet(f"color: {self.palette.get('muted')}; font-size: 18px;")
                 self.timeline_layout.addWidget(arrow)
 
 
@@ -667,9 +657,7 @@ class GalvanizationLoadDetailsDialog(QDialog):
         status_label = self.service.load_status_label(status) or "—"
         badge_bg, badge_fg = status_color(status, self.service.palette, "GALVANIZACAO")
         self.status_badge.setText(status_label)
-        self.status_badge.setStyleSheet(
-            f"background: {badge_bg}; color: {badge_fg}; border-radius: 9px; padding: 4px 9px; font-weight: 700;"
-        )
+        self.status_badge.set_colors(badge_bg, badge_fg)
         self.header_values["motorista"].setText(_text(load.get("motorista")))
         self.header_values["peso"].setText(_weight(load.get("peso_informado_carga")))
         self.header_values["propostas"].setText(str(load.get("proposal_count") or len(self.details.get("proposals", []))))

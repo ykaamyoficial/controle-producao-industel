@@ -287,8 +287,9 @@ class GalvanizationLoadDetailsDialogTests(unittest.TestCase):
         denied_dialog = self._dialog(FakeDetailsService(theme="escuro", details=waiting, can_edit=False))
         self.assertFalse(denied_dialog.actions_button.isEnabled())
         self.assertIsNone(denied_dialog.actions_button.menu())
-        self.assertIn("background:", waiting_dialog.status_badge.styleSheet())
-        self.assertIn("background:", denied_dialog.status_badge.styleSheet())
+        for dialog in (waiting_dialog, denied_dialog):
+            self.assertEqual(dialog.status_badge.styleSheet(), "")
+            self.assertTrue(all(dialog.status_badge.colors()))
 
     def test_official_adapter_centralizes_available_load_actions(self):
         service = BackendService.__new__(BackendService)

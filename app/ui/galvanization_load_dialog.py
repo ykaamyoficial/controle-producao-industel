@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QTableWidgetItem,
     QTextEdit,
     QVBoxLayout,
+    QWidget,
 )
 
 from app.ui.components.modern_button import ModernButton
@@ -28,7 +29,8 @@ from app.ui.components.detail_widgets import CountTabWidget, make_panel, note_bo
 from app.ui.components.dialog_shell import dialog_footer, dialog_header
 from app.ui.dialog_utils import apply_large_dialog_geometry, style_dialog_from_parent
 from app.ui.icons import IconSize, make_icon, status_icon
-from app.ui.styles import status_color
+from app.ui.components.status_badge import StatusBadge
+from app.ui.styles import _contrast_text, status_color
 from app.ui.table_utils import configure_wrapping_table, item_product_code, resize_rows_to_contents
 
 
@@ -1696,22 +1698,21 @@ class GalvanizationLoadManagerDialog(QDialog):
             filtered.append(row)
         return filtered
 
-    def _status_badge_widget(self, row_data: dict, label: str) -> QLabel:
+    def _status_badge_widget(self, row_data: dict, label: str) -> QWidget:
         status = row_data.get("status") or ""
         if self._is_load_overdue(row_data):
             color = self.service.palette.get("danger", "#dc2626")
-            foreground = "#ffffff"
+            foreground = _contrast_text(color)
         else:
             color, foreground = status_color(status, self.service.palette, "GALVANIZACAO")
-        badge = QLabel(label or "-")
-        badge.setAlignment(Qt.AlignCenter)
+        badge = StatusBadge(label or "-", color, foreground)
         badge.setToolTip(label or "-")
-        badge.setMinimumHeight(22)
-        badge.setStyleSheet(
-            f"background: {color}; color: {foreground}; border-radius: 9px; "
-            "padding: 2px 6px; font-weight: 800;"
-        )
-        return badge
+        # O selo fica centrado na celula, com a altura padrao de selo.
+        host = QWidget()
+        host_layout = QHBoxLayout(host)
+        host_layout.setContentsMargins(6, 0, 6, 0)
+        host_layout.addWidget(badge, 0, Qt.AlignCenter)
+        return host
 
     def _load_status_visual(self, row_data: dict) -> tuple[str, str]:
         """Retorna (status_para_icone, tooltip). A cor nao e mais escolhida
