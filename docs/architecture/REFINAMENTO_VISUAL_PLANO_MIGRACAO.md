@@ -329,7 +329,7 @@ As ondas 6 e 7 precisam de protótipo aprovado antes de começar.
 - Selos sólidos; verde, amarelo e laranja do tema claro escurecidos para o texto branco ficar legível.
 - Telas sobrepostas seguem o padrão de "Detalhes da proposta".
 - A pasta `prototipos/` é versionada no repositório como referência visual.
-- Cabeçalho de tabela alinhado à esquerda (números à direita).
+- Cabeçalho de tabela alinhado à esquerda (números à direita). **Revisto em 08/10/2026:** nas tabelas operacionais (`ModernTable`) título e texto de todas as colunas ficam centralizados, e a coluna Proposta ficou mais estreita (112 px); tabelas de diálogo continuam à esquerda.
 - Filtros das páginas sem rótulo ao lado do campo.
 - Descrição longa de item **quebra em várias linhas**, como hoje. O protótipo de Detalhes corta com "..." na aba Itens; nesse ponto vale o comportamento atual (`configure_wrapping_table`), não o protótipo.
 
