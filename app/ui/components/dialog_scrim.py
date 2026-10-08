@@ -57,6 +57,27 @@ class DialogScrim(QWidget):
         painter.end()
 
 
+class _ScrimHolder:
+    """Quem segura o veu, fora de qualquer QObject. O sinal `destroyed` do
+    dialogo nao pode ser ligado a um metodo de um filho dele: o filho ja esta
+    sendo destruido quando o sinal sai, o PySide nao acha o slot ("Slot ...
+    not found") e o processo pode cair com violacao de acesso. Ligado a um
+    objeto Python comum, a liberacao roda sem tocar em objeto C++ destruido."""
+
+    def __init__(self, owner: QWidget):
+        self.owner = owner
+        self.scrim: DialogScrim | None = None
+
+    def release(self, *_args) -> None:
+        scrim, self.scrim = self.scrim, None
+        if scrim is None:
+            return
+        try:
+            scrim.release()
+        except RuntimeError:
+            pass
+
+
 class _ScrimBinding(QObject):
     """Acompanha um dialogo: segura o veu enquanto ele estiver visivel e
     garante a liberacao em qualquer forma de fechamento (accept, reject, Esc,
@@ -64,10 +85,9 @@ class _ScrimBinding(QObject):
 
     def __init__(self, dialog: QDialog, owner: QWidget):
         super().__init__(dialog)
-        self._owner = owner
-        self._scrim: DialogScrim | None = None
+        self._holder = _ScrimHolder(owner)
         dialog.installEventFilter(self)
-        dialog.destroyed.connect(self._release)
+        dialog.destroyed.connect(self._holder.release)
 
     def eventFilter(self, watched, event):  # noqa: N802 (Qt override)
         event_type = event.type()
@@ -78,31 +98,26 @@ class _ScrimBinding(QObject):
         return False
 
     def _acquire(self, dialog: QDialog) -> None:
-        if self._scrim is not None:
+        holder = self._holder
+        if holder.scrim is not None:
             return
         try:
             # So dialogo modal: um dialogo nao modal deixa a janela de tras em
             # uso, e o veu bloquearia os cliques nela.
-            if not dialog.isModal() or not self._owner.isVisible():
+            if not dialog.isModal() or not holder.owner.isVisible():
                 return
-            scrim = getattr(self._owner, "_dialog_scrim", None)
+            scrim = getattr(holder.owner, "_dialog_scrim", None)
             if scrim is None:
-                scrim = DialogScrim(self._owner)
-                self._owner._dialog_scrim = scrim
+                scrim = DialogScrim(holder.owner)
+                holder.owner._dialog_scrim = scrim
             scrim.acquire()
-            self._scrim = scrim
+            holder.scrim = scrim
         except RuntimeError:
             # Janela dona ja destruida pelo Qt.
-            self._scrim = None
+            holder.scrim = None
 
     def _release(self, *_args) -> None:
-        scrim, self._scrim = self._scrim, None
-        if scrim is None:
-            return
-        try:
-            scrim.release()
-        except RuntimeError:
-            pass
+        self._holder.release()
 
 
 def attach_dialog_scrim(dialog: QDialog, owner: QWidget | None) -> None:

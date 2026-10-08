@@ -5,6 +5,7 @@ import unittest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PySide6.QtCore import QEvent
 from PySide6.QtWidgets import QApplication, QDialog, QWidget
 
 from app.services.backend_adapter import OFFICIAL_COLOR_PALETTES
@@ -147,6 +148,29 @@ class VisualFoundationWidgetTests(unittest.TestCase):
         self.app.processEvents()
         self.assertFalse(scrim.isVisible())
         dialog.deleteLater()
+        owner.close()
+
+    def test_destroying_a_visible_dialog_releases_the_scrim_without_touching_dead_qobjects(self):
+        # O sinal destroyed nao pode ir para um slot de filho do proprio dialogo:
+        # o PySide imprimia "Slot '_ScrimBinding::' not found" e o processo podia
+        # cair com violacao de acesso. A liberacao agora roda num objeto Python.
+        owner = QWidget()
+        owner.resize(400, 300)
+        owner.show()
+        dialog = QDialog(owner)
+        dialog.setModal(True)
+        style_dialog_from_parent(dialog, owner)
+        dialog.show()
+        self.app.processEvents()
+        scrim = owner.findChild(DialogScrim)
+        self.assertTrue(scrim.isVisible())
+        binding = dialog._scrim_binding
+        self.assertIsNotNone(binding._holder.scrim)
+        dialog.deleteLater()
+        self.app.sendPostedEvents(None, QEvent.DeferredDelete)
+        self.app.processEvents()
+        self.assertFalse(scrim.isVisible())
+        self.assertIsNone(binding._holder.scrim)
         owner.close()
 
     def test_non_modal_dialog_and_hidden_owner_do_not_dim(self):
