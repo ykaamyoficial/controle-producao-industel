@@ -531,3 +531,10 @@ class ChatCenterDialog(QDialog):
         root.addWidget(self.page, 1)
 
         self.setWindowTitle("Chats")
+
+    def done(self, result: int) -> None:  # noqa: N802 (Qt override)
+        # Fechar o dialogo (Fechar, Esc, X) nao dispara closeEvent na pagina
+        # filha: sem isto as threads de carga da conversa seguiam vivas depois
+        # de o dialogo sumir. Para timers, cancela envios e espera as threads.
+        self.page.cleanup()
+        super().done(result)

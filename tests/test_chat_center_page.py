@@ -7,7 +7,7 @@ from PySide6.QtCore import QThread
 from PySide6.QtWidgets import QApplication
 
 from app.services.backend_adapter import OFFICIAL_COLOR_PALETTES
-from app.ui.chat_center_page import ChatCenterPage
+from app.ui.chat_center_page import ChatCenterDialog, ChatCenterPage
 
 
 class FakeService:
@@ -129,6 +129,26 @@ class ChatCenterPageTargetTests(unittest.TestCase):
         service = FakeService()
         page = self._build_page(service, proposal_id=42, message_id=99)
         self.assertEqual(page.panel._pending_focus_message_id, 99)
+
+    def test_closing_the_dialog_stops_the_page_timers_and_threads(self):
+        # Fechar o dialogo nao dispara closeEvent na pagina filha. Sem o
+        # cleanup em done(), as threads de carga seguiam vivas depois de o
+        # dialogo sumir e o processo caia (violacao de acesso) ao abrir e
+        # fechar o chat em sequencia, p. ex. clicando numa notificacao.
+        service = FakeService()
+        service.conversations = [_conversation(1, 42)]
+        dialog = ChatCenterDialog(service, None, proposal_id=42)
+        dialog.show()
+        self._pump(dialog.page, cycles=5)
+        panel = dialog.page.panel
+        self.assertIsNotNone(panel)
+        dialog.accept()
+        self.assertTrue(dialog.page._closing)
+        self.assertTrue(panel._closing)
+        self.assertFalse(panel._poll_timer.isActive())
+        for thread in dialog.findChildren(QThread):
+            self.assertFalse(thread.isRunning())
+        dialog.deleteLater()
 
     def test_opening_without_target_shows_empty_state(self):
         service = FakeService()
