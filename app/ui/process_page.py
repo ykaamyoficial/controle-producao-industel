@@ -8,6 +8,8 @@ from PySide6.QtWidgets import QAbstractItemView, QDialog, QFileDialog, QComboBox
 from app.controllers.process_controller import ProcessController
 from app.models.process_table_model import ProcessTableModel
 from app.services.app_logging import get_logger
+from app.services.remanagement_badges import LINKS_KEY as REMANAGEMENT_LINKS_KEY, SITUATION_KEY as REMANAGEMENT_SITUATION_KEY
+from app.ui.format_utils import format_proposal_label
 from app.ui.action_center.batch_action_center import BatchProposalActionCenter
 from app.ui.background_worker import start_worker
 from app.ui.refresh_coordinator import RefreshCoordinator
@@ -33,6 +35,7 @@ from app.ui.batch_status_dialog import BatchStatusDialog
 from app.ui.flow_review_dialog import FlowReviewDialog
 from app.ui.process_detail_dialog import ProcessDetailDialog
 from app.ui.chat_center_page import ChatCenterDialog
+from app.ui.remanagement_info_dialog import RemanagementInfoDialog
 from app.ui.remanagement_wizard import RemanagementWizardDialog
 from app.ui.batch_selection_review_dialog import BatchSelectionReviewDialog
 
@@ -271,6 +274,7 @@ class ProcessPage(QWidget):
         self.table.setModel(self.proxy)
         self.table.status_shortcut_requested.connect(self.change_status_for_id)
         self.table.chat_shortcut_requested.connect(self.open_chat_for_id)
+        self.table.remanagement_mark_requested.connect(self.open_remanagement_info_for_id)
         self.table.clicked.connect(self._handle_table_click)
         self.table.doubleClicked.connect(self._handle_table_double_click)
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -740,6 +744,16 @@ class ProcessPage(QWidget):
             self.refresh()
             if not dialog.success_message:
                 ToastNotification(self.window(), "Ação registrada com sucesso.", "success")
+
+    def open_remanagement_info_for_id(self, process_id: int):
+        """Clique no icone de remanejamento ao lado da proposta: mostra para onde as pecas foram."""
+        row = next((row for row in self.model.rows if int(row.get("id") or 0) == int(process_id)), None)
+        if row is None or not row.get(REMANAGEMENT_SITUATION_KEY):
+            return
+        dialog = RemanagementInfoDialog(
+            format_proposal_label(row.get("proposta")), row.get(REMANAGEMENT_SITUATION_KEY), list(row.get(REMANAGEMENT_LINKS_KEY) or []), self,
+        )
+        dialog.exec()
 
     def open_chat_for_id(self, process_id: int):
         dialog = ChatCenterDialog(self.service, self, proposal_id=process_id)

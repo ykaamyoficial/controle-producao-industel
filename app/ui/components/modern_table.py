@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import date
 
 from PySide6.QtCore import QPointF, QRectF, QSortFilterProxyModel, Qt, Signal
@@ -19,6 +20,44 @@ TABLE_HEADER_HEIGHT = 34
 _BADGE_HEIGHT = 22
 _DEADLINE_KEYS = {"prazo_entrega"}
 _DEADLINE_WARNING_DAYS = 7
+
+# Marca de remanejamento junto do codigo da proposta (Fase D do plano de logistica): icone + letras
+# do codigo em vermelho; o clique no icone mostra para onde as pecas foram. O modelo responde a este
+# papel com True na celula "proposta" das linhas marcadas.
+REMANAGEMENT_MARK_ROLE = Qt.UserRole + 4
+_MARK_ICON_SIZE = 14
+_MARK_GAP = 6
+
+
+def split_proposal_label(text: str) -> tuple[str, str]:
+    """"CP 05430" -> ("CP", " 05430"): so as letras do codigo ficam em vermelho, o numero nao."""
+    match = re.match(r"^([^\W\d_]+)(.*)$", text, re.S)
+    return (match.group(1), match.group(2)) if match else ("", text)
+
+
+def remanagement_mark_geometry(rect: QRectF, text: str, font: QFont) -> tuple[QRectF, QRectF, QRectF]:
+    """Onde ficam, na celula da proposta, o icone, as letras vermelhas e o resto do codigo.
+    O bloco inteiro fica centralizado (como todo texto das tabelas operacionais); se nao couber, o
+    numero e cortado com reticencias e o icone e as letras continuam inteiros. Usado pelo desenho e
+    pelo clique, para os dois concordarem."""
+    metrics = QFontMetricsF(font)
+    letters, rest = split_proposal_label(text)
+    letters_width = metrics.horizontalAdvance(letters)
+    available = max(0.0, rect.width() - 12 - _MARK_ICON_SIZE - _MARK_GAP - letters_width)
+    rest = metrics.elidedText(rest, Qt.ElideRight, available)
+    rest_width = metrics.horizontalAdvance(rest)
+    block = _MARK_ICON_SIZE + _MARK_GAP + letters_width + rest_width
+    x = rect.x() + max(6.0, (rect.width() - block) / 2)
+    icon = QRectF(x, rect.center().y() - _MARK_ICON_SIZE / 2, _MARK_ICON_SIZE, _MARK_ICON_SIZE)
+    letters_rect = QRectF(icon.right() + _MARK_GAP, rect.y(), letters_width, rect.height())
+    rest_rect = QRectF(letters_rect.right(), rect.y(), rest_width, rect.height())
+    return icon, letters_rect, rest_rect
+
+
+def remanagement_mark_hotspot(rect: QRectF, text: str, font: QFont) -> QRectF:
+    """Area clicavel: o icone e as letras vermelhas, com uma folga para facilitar o clique."""
+    icon, letters_rect, _rest = remanagement_mark_geometry(rect, text, font)
+    return icon.united(letters_rect).adjusted(-4, -rect.height() / 2 + 8, 4, rect.height() / 2 - 8)
 
 
 def deadline_alert(row: dict | None, today: date | None = None) -> tuple[str, str]:
@@ -166,24 +205,8 @@ class StatusBadgeDelegate(QStyledItemDelegate):
             painter.drawPixmap(int(rect.center().x() - size / 2), int(center_y - size / 2), pix)
             painter.restore()
             return
-        if key == "selo_remanejamento":
-            # Selo de remanejamento (Fase D): so pinta quando a proposta esta marcada; vazio = inteira.
-            text = str(index.data(Qt.DisplayRole) or "")
-            if not text:
-                return
-            bg, fg = status_color(str(index.data(Qt.UserRole + 2) or ""), self.service.palette, "")
-            painter.save()
-            badge = QRectF(rect.x() + 8, center_y - _BADGE_HEIGHT / 2, max(20.0, rect.width() - 16), _BADGE_HEIGHT)
-            font = QFont(option.font)
-            font.setWeight(QFont.Weight.DemiBold)
-            painter.setRenderHint(QPainter.Antialiasing)
-            painter.setPen(Qt.NoPen)
-            painter.setBrush(QBrush(QColor(bg)))
-            painter.drawRoundedRect(badge, _BADGE_HEIGHT / 2, _BADGE_HEIGHT / 2)
-            painter.setFont(font)
-            painter.setPen(QPen(QColor(fg)))
-            painter.drawText(badge, Qt.AlignCenter, QFontMetricsF(font).elidedText(text, Qt.ElideRight, max(20.0, badge.width() - 14)))
-            painter.restore()
+        if key == "proposta" and index.data(REMANAGEMENT_MARK_ROLE):
+            self._paint_remanagement_proposal(painter, option, index)
             return
         if key and ("status" in key or key == "localizacao_atual"):
             text = index.data(Qt.DisplayRole) or "-"
@@ -215,6 +238,27 @@ class StatusBadgeDelegate(QStyledItemDelegate):
                 self._paint_deadline(painter, option, str(index.data(Qt.DisplayRole) or ""), alert, kind)
                 return
         super().paint(painter, option, index)
+
+    def _paint_remanagement_proposal(self, painter: QPainter, option: QStyleOptionViewItem, index) -> None:
+        """Codigo da proposta com o icone de remanejamento antes e as letras em vermelho (token danger)."""
+        tokens = self._tokens()
+        font = QFont(option.font)
+        font.setWeight(QFont.Weight.DemiBold)
+        text = str(index.data(Qt.DisplayRole) or "")
+        icon, letters_rect, rest_rect = remanagement_mark_geometry(QRectF(option.rect), text, font)
+        letters, rest = split_proposal_label(text)
+        metrics = QFontMetricsF(font)
+        rest = metrics.elidedText(rest, Qt.ElideRight, rest_rect.width() + 0.5)
+        painter.save()
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.drawPixmap(int(icon.x()), int(icon.y()), make_icon("refresh", tokens["accent"], _MARK_ICON_SIZE).pixmap(_MARK_ICON_SIZE, _MARK_ICON_SIZE))
+        painter.setFont(font)
+        painter.setPen(QPen(QColor(tokens["danger"])))
+        painter.drawText(letters_rect, Qt.AlignVCenter | Qt.AlignLeft, letters)
+        # O numero usa a mesma cor do texto das demais celulas (a do estilo), so as letras ficam vermelhas.
+        painter.setPen(QPen(option.palette.text().color()))
+        painter.drawText(rest_rect, Qt.AlignVCenter | Qt.AlignLeft, rest)
+        painter.restore()
 
     def _paint_deadline(self, painter: QPainter, option: QStyleOptionViewItem, text: str, alert: str, kind: str) -> None:
         """Data do prazo + aviso ("vencido ha X d" / "em X d"). Vencido leva
@@ -249,6 +293,8 @@ class StatusBadgeDelegate(QStyledItemDelegate):
 class ModernTable(QTableView):
     status_shortcut_requested = Signal(int)
     chat_shortcut_requested = Signal(int)
+    # Clique no icone de remanejamento ao lado da proposta; leva o id da proposta da linha.
+    remanagement_mark_requested = Signal(int)
 
     def __init__(self, service, parent=None):
         super().__init__(parent)
@@ -301,7 +347,7 @@ class ModernTable(QTableView):
             "id": 54,
             "tipo_processo": 86,
             "cliente": 200,
-            "proposta": 112,
+            "proposta": 132,
             "pedido_compra": 112,
             "obra_site": 190,
             "numero_nf": 130,
@@ -316,7 +362,6 @@ class ModernTable(QTableView):
             "data_retorno_galv": 112,
             "almoxarifado_info": 115,
             "necessita_almoxarifado": 115,
-            "selo_remanejamento": 185,
             "status_localizacao": 210,
             "localizacao_atual": 175,
             "status_producao": 215,
@@ -386,6 +431,15 @@ class ModernTable(QTableView):
         source_index = model.mapToSource(proxy_index) if hasattr(model, "mapToSource") else proxy_index
         return model.sourceModel().process_id_at(source_index.row()) if hasattr(model, "sourceModel") else model.process_id_at(source_index.row())
 
+    def _on_remanagement_mark(self, index, position) -> bool:
+        """True quando `position` esta sobre o icone/letras de remanejamento da celula da proposta."""
+        if not index.isValid() or not index.data(REMANAGEMENT_MARK_ROLE):
+            return False
+        font = QFont(self.font())
+        font.setWeight(QFont.Weight.DemiBold)
+        rect = QRectF(self.visualRect(index))
+        return remanagement_mark_hotspot(rect, str(index.data(Qt.DisplayRole) or ""), font).contains(QPointF(position))
+
     def mousePressEvent(self, event):
         index = self.indexAt(event.position().toPoint())
         if self.status_shortcut_enabled and index.isValid():
@@ -399,6 +453,9 @@ class ModernTable(QTableView):
                 if source_index.data(Qt.UserRole + 1) == "chat_icon":
                     self.chat_shortcut_requested.emit(process_id)
                     return
+                if self._on_remanagement_mark(index, event.position()):
+                    self.remanagement_mark_requested.emit(process_id)
+                    return
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
@@ -411,6 +468,6 @@ class ModernTable(QTableView):
             else:
                 model = self.model()
                 source_index = model.mapToSource(index) if hasattr(model, "mapToSource") else index
-                shortcut_cell = source_index.data(Qt.UserRole + 1) == "chat_icon"
+                shortcut_cell = source_index.data(Qt.UserRole + 1) == "chat_icon" or self._on_remanagement_mark(index, event.position())
         self.setCursor(Qt.PointingHandCursor if shortcut_cell else Qt.ArrowCursor)
         super().mouseMoveEvent(event)
