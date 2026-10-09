@@ -61,7 +61,7 @@ Pensando peça a peça, depois do remanejamento cada pedido tem **dois lotes de 
 
 **Operação por linha de remanejamento** (origem X do pedido S, destino Y do pedido D, `q` peças):
 1. `X` perde `q` peças prontas: nasce a linha **Y1** (identidade do pedido D: número do item, descrição, observações; quantidade `q`) levando as `q` peças prontas (a disponibilidade da Expedição é dividida; a separação da origem é refeita, como hoje — D2).
-2. `Y` perde `q` peças em andamento, escolhidas **das mais adiantadas** (D1) — uma linha **X2** por estágio (identidade do pedido S, quantidade igual às peças daquele estágio): em carga (as linhas de carga são divididas dentro da mesma carga, D5), aguardando galvanização, a fabricar. O fluxo de cada linha segue o **caminho das peças** (D7–D9): a linha X2 de peças a fabricar nasce marcada como "produzir internamente", mesmo que a linha original da origem não produza.
+2. `Y` perde `q` peças em andamento, escolhidas **das mais adiantadas** (D1) — uma linha **X2** por estágio (identidade do pedido S, quantidade igual às peças daquele estágio): em carga (as linhas de carga são divididas dentro da mesma carga, D5), aguardando galvanização, a fabricar. As peças já fabricadas **mantêm o estágio**; as peças a fabricar seguem o **fluxo de galvanização do pedido a que agora servem** (como hoje), e a linha X2 nasce marcada como "produzir internamente", mesmo que a linha original da origem não produza (D7–D9).
 3. Linha que perderia **todas** as peças é **reaproveitada** (não vira linha vazia): continua com o mesmo número, id e histórico e passa a levar o lote que chegou.
 4. **Realinhar as famílias** (seção 4) agrupando as linhas por situação e criando/movendo as filhas.
 
@@ -118,3 +118,18 @@ Tudo continua sendo desenvolvido e testado só na API de desenvolvimento; a API 
 Tomadas pelo Henrique: **D10** dividir o item em dois quando sai parte da quantidade; **D11** o destino também divide; **D12** nomes P1/P2 confirmados (uma filha por lugar); **D13** ajustar os remanejamentos da base de teste, só nela.
 
 Pendente (recomendação nossa): **D14 — motor novo "por linhas"** (seção 5), com a Fase P0 como prova de conceito antes de seguir, em vez de manter o motor de transferências e dividir depois. Recomendação: **sim**.
+
+## 10. Simulador para testar antes de implementar (09/10/2026)
+
+Protótipo **isolado** em `prototipos/remanejamento_parciais/` (não importa `app/` nem `api/`, não usa API nem banco; dados fictícios): `modelo.py` (regras em memória) e `simulador.py` (tela). Serve para o Henrique conferir na prática, com o **mesmo cenário**, o remanejamento **como é hoje** (a proposta continua uma só, aparecendo em várias listas) e **como proposto** (P1, P2…, mãe como referência, partes se juntando, mãe renascendo).
+
+```text
+python prototipos/remanejamento_parciais/simulador.py
+python prototipos/remanejamento_parciais/simulador.py --cenario 2 --modo hoje --tema escuro
+```
+
+- **Cenários:** 1) itens inteiros (como a CP 05493 e a CP 05640 da base de teste); 2) parte da quantidade (5 de 10) com peças em carga, aguardando carga e a fabricar na mesma linha; 3) cedeu tudo (remanejar os dois itens de uma vez); 4) livre, com quatro propostas de fluxos diferentes.
+- **O que dá para fazer:** *Remanejar…* (monta a lista de itens como o assistente e mostra o resultado previsto antes de confirmar), *Concluir produção*, *Enviar para galvanização*, *Retornar carga*, *Entregar*, *Desfazer* e *Reiniciar*; trocar de modo recarrega o cenário. A aba **Famílias** mostra mãe, partes e itens; a marca vermelha com o ícone abre a janelinha "para onde foram as peças"; a faixa verde confere o tempo todo que nenhuma peça nasceu ou sumiu e que o pedido de cada item continua igual ao original.
+- **Variante para testar:** "Destino também por lugar" divide o destino em uma parte por lugar (como a origem). Por padrão só o que chegou pronto vira parte e o resto continua na proposta (R-P3); no cenário 2 isso deixa a CP 05710 aparecendo em Produção e Galvanização ao mesmo tempo, o que a variante evita.
+- **O que ele não faz:** não conta fiscal (NF), pesos nem a ordem de travas do banco; o modo "Como é hoje" mostra o que o Henrique vê na tela hoje, não a conta interna por estágio.
+- **Testes:** `tests/test_prototipo_remanejamento.py` (23 casos: regras, cenários, conservação, variante, janela e clique na marca).
