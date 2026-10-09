@@ -746,7 +746,7 @@ class ProcessPage(QWidget):
                 ToastNotification(self.window(), "Ação registrada com sucesso.", "success")
 
     def open_remanagement_info_for_id(self, process_id: int):
-        """Clique no icone de remanejamento ao lado da proposta: mostra para onde as pecas foram."""
+        """Clique no icone ou no codigo vermelho da proposta marcada: mostra para onde as pecas foram."""
         row = next((row for row in self.model.rows if int(row.get("id") or 0) == int(process_id)), None)
         if row is None or not row.get(REMANAGEMENT_SITUATION_KEY):
             return

@@ -19,9 +19,7 @@ from app.services.backend_adapter import OFFICIAL_COLOR_PALETTES, BackendService
 from app.services.remanagement_badges import (
     LINKS_KEY, SITUATION_KEY, TIP_KEY, decorate_rows, describe_link, index_badges, situation_label,
 )
-from app.ui.components.modern_table import (
-    REMANAGEMENT_MARK_ROLE, remanagement_mark_geometry, remanagement_mark_hotspot, split_proposal_label,
-)
+from app.ui.components.modern_table import REMANAGEMENT_MARK_ROLE, remanagement_mark_geometry, remanagement_mark_hotspot
 from app.ui.components.operational_table import configure_operational_table  # noqa: F401 (garante o import do pacote)
 from app.ui.process_page import ProcessPage
 from app.ui.remanagement_info_dialog import RemanagementInfoDialog
@@ -78,13 +76,6 @@ class IndexAndDecorateTests(unittest.TestCase):
 
     def test_no_badges_leaves_the_rows_untouched(self):
         self.assertEqual(decorate_rows([{"id": 1}], {}), [{"id": 1}])
-
-
-class LabelSplitTests(unittest.TestCase):
-    def test_only_the_letters_of_the_code_are_split_from_the_number(self):
-        self.assertEqual(split_proposal_label("CP 05430"), ("CP", " 05430"))
-        self.assertEqual(split_proposal_label("CP05378-1,2"), ("CP", "05378-1,2"))
-        self.assertEqual(split_proposal_label("05430"), ("", "05430"))
 
 
 class FakeService:
@@ -148,7 +139,7 @@ class ModelTests(unittest.TestCase):
         self.assertEqual(model.data(marked, Qt.DisplayRole), "CP 05507")
         tip = model.data(marked, Qt.ToolTipRole)
         self.assertIn("Cedeu peças prontas para a CP 05600 (RM-000001)", tip)
-        self.assertIn("Clique no ícone", tip)
+        self.assertIn("Clique na proposta", tip)
         self.assertEqual(model.data(whole, Qt.ToolTipRole), "CP 05800")
 
 
@@ -162,24 +153,23 @@ class GeometryTests(unittest.TestCase):
         self.font.setWeight(QFont.Weight.DemiBold)
         self.cell = QRectF(0, 0, 124, 40)
 
-    def test_icon_comes_first_then_the_red_letters_then_the_number_and_the_block_is_centered(self):
-        icon, letters, rest = remanagement_mark_geometry(self.cell, "CP 05430", self.font)
-        self.assertLess(icon.right(), letters.left())
-        self.assertLessEqual(letters.right(), rest.left() + 0.01)
-        left_margin, right_margin = icon.left() - self.cell.left(), self.cell.right() - rest.right()
+    def test_icon_comes_first_then_the_code_and_the_block_is_centered(self):
+        icon, code = remanagement_mark_geometry(self.cell, "CP 05430", self.font)
+        self.assertLess(icon.right(), code.left())
+        left_margin, right_margin = icon.left() - self.cell.left(), self.cell.right() - code.right()
         self.assertAlmostEqual(left_margin, right_margin, delta=1.0)
 
-    def test_the_hotspot_covers_the_icon_and_the_letters_but_not_the_number(self):
-        icon, letters, rest = remanagement_mark_geometry(self.cell, "CP 05430", self.font)
+    def test_the_hotspot_covers_the_icon_and_the_whole_code(self):
+        icon, code = remanagement_mark_geometry(self.cell, "CP 05430", self.font)
         hotspot = remanagement_mark_hotspot(self.cell, "CP 05430", self.font)
         self.assertTrue(hotspot.contains(icon.center()))
-        self.assertTrue(hotspot.contains(letters.center()))
-        self.assertFalse(hotspot.contains(rest.center()))
+        self.assertTrue(hotspot.contains(code.center()))
+        self.assertFalse(hotspot.contains(self.cell.left() + 1, self.cell.center().y()))
 
-    def test_a_long_code_is_cut_in_the_number_and_never_leaves_the_cell(self):
+    def test_a_long_code_is_cut_and_never_leaves_the_cell(self):
         narrow = QRectF(0, 0, 80, 40)
-        _icon, _letters, rest = remanagement_mark_geometry(narrow, "CP 05378-1,2,3,4", self.font)
-        self.assertLessEqual(rest.right(), narrow.right())
+        _icon, code = remanagement_mark_geometry(narrow, "CP 05378-1,2,3,4", self.font)
+        self.assertLessEqual(code.right(), narrow.right())
 
 
 class ListTests(unittest.TestCase):
@@ -211,14 +201,14 @@ class ListTests(unittest.TestCase):
         index, rect = self._cell(page, row)
         font = QFont(page.table.font())
         font.setWeight(QFont.Weight.DemiBold)
-        icon, _letters, _rest = remanagement_mark_geometry(rect, "CP 05507", font)
+        icon, _code = remanagement_mark_geometry(rect, "CP 05507", font)
         # O patch precisa ser no modulo da pagina: sem ele o clique abre o dialogo de verdade e trava o teste.
         with patch("app.ui.process_page.RemanagementInfoDialog") as dialog:
             QTest.mouseClick(page.table.viewport(), Qt.LeftButton, Qt.NoModifier, QPoint(int(icon.center().x()), int(icon.center().y())))
         self.assertEqual(asked, [10])
         dialog.return_value.exec.assert_called_once()
 
-    def test_clicking_the_number_or_a_proposal_without_mark_does_not(self):
+    def test_clicking_the_red_code_does_the_same_and_a_proposal_without_mark_does_nothing(self):
         page = self._page()
         asked = []
         page.table.remanagement_mark_requested.connect(asked.append)
@@ -226,14 +216,15 @@ class ListTests(unittest.TestCase):
         font.setWeight(QFont.Weight.DemiBold)
         row = self._marked_proxy_row(page, 10)
         _index, rect = self._cell(page, row)
-        _icon, _letters, rest = remanagement_mark_geometry(rect, "CP 05507", font)
+        _icon, code = remanagement_mark_geometry(rect, "CP 05507", font)
         whole_row = self._marked_proxy_row(page, 99)
         _index, whole_rect = self._cell(page, whole_row)
         with patch("app.ui.process_page.RemanagementInfoDialog") as dialog:
-            QTest.mouseClick(page.table.viewport(), Qt.LeftButton, Qt.NoModifier, QPoint(int(rest.center().x()), int(rest.center().y())))
-            QTest.mouseClick(page.table.viewport(), Qt.LeftButton, Qt.NoModifier, QPoint(int(whole_rect.center().x()) - 25, int(whole_rect.center().y())))
-        self.assertEqual(asked, [])
-        dialog.assert_not_called()
+            QTest.mouseClick(page.table.viewport(), Qt.LeftButton, Qt.NoModifier, QPoint(int(code.center().x()), int(code.center().y())))
+            self.assertEqual(asked, [10])
+            QTest.mouseClick(page.table.viewport(), Qt.LeftButton, Qt.NoModifier, QPoint(int(whole_rect.center().x()), int(whole_rect.center().y())))
+        self.assertEqual(asked, [10])
+        dialog.return_value.exec.assert_called_once()
 
     def test_the_page_opens_the_info_dialog_with_the_links_of_the_row(self):
         page = self._page()
@@ -253,7 +244,7 @@ class ListTests(unittest.TestCase):
             page.open_remanagement_info_for_id(12345)
         dialog.assert_not_called()
 
-    def test_only_the_letters_of_the_marked_proposals_are_painted_in_red(self):
+    def test_the_whole_code_of_the_marked_proposals_is_painted_in_red_and_the_others_are_not(self):
         for theme in ("claro", "escuro"):
             with self.subTest(theme=theme):
                 page = self._page(theme)

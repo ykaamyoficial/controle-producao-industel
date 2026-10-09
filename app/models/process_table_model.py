@@ -157,7 +157,7 @@ class ProcessTableModel(QAbstractTableModel):
             if key == "proposta" and row.get(REMANAGEMENT_SITUATION_KEY):
                 # Proposta marcada por remanejamento (listas de Producao, Galvanizacao e Expedicao).
                 tip = row.get(REMANAGEMENT_TIP_KEY, "")
-                return "\n".join(part for part in (tip, "Clique no ícone para ver para onde foram as peças.") if part)
+                return "\n".join(part for part in (tip, "Clique na proposta para ver para onde foram as peças.") if part)
             return self.data(index, Qt.DisplayRole)
         if role == Qt.TextAlignmentRole:
             if key in {"batch_select", "id", "peso", "peso_parcial", "saldo_pendente"}:
