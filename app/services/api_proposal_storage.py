@@ -2520,6 +2520,10 @@ def _api_history_to_legacy(row: dict[str, Any]) -> dict[str, Any]:
         "usuario": row.get("actor_name") or (f"Usuario {row.get('actor_user_id')}" if row.get("actor_user_id") else "-"),
         "computador": "API",
         "observacao": row.get("observation") or row.get("event_type") or "",
+        "titulo": row.get("title") or "",
+        "detalhe": row.get("detail") or "",
+        "quantidade": int(row.get("count") or 1),
+        "status_real_novo": row.get("to_status") or "",
         "origem": row.get("source") or "",
         "request_id": row.get("request_id") or "",
     }
