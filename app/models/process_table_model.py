@@ -5,6 +5,7 @@ from typing import Any
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
 from PySide6.QtGui import QBrush, QColor
 
+from app.services.remanagement_badges import ROW_KEY as REMANAGEMENT_BADGE_KEY, TOOLTIP_KEY as REMANAGEMENT_TOOLTIP_KEY, badge_label
 from app.ui.components.batch_selection import BatchSelectionController
 from app.ui.format_utils import format_proposal_label
 
@@ -30,6 +31,9 @@ DEFAULT_COLUMNS = [
 ]
 
 
+# Producao, Galvanizacao e Expedicao ganham a coluna "Remanejamento" (Fase D do plano de
+# logistica): selo "Substituida" / "Parcialmente substituida" / "Recebeu remanejamento" enquanto a
+# proposta nao esta inteira de novo; vazia nas demais. O Controle Geral nao tem a coluna.
 # Cada area usa a MESMA coluna "status_<area>" de sempre (preserva a chave
 # esperada por telas/testes que dependem dela, ex. `test_table_column_order`)
 # como badge unico de Etapa/Status daquela area - sem duplicar Controle
@@ -42,16 +46,19 @@ AREA_COLUMNS = {
     "PRODUCAO": [
         ("status_icon", ""),
         ("proposta", "Proposta"), ("chat_icon", ""), ("cliente", "Cliente"), ("status_producao", "Etapa/Status"),
+        ("selo_remanejamento", "Remanejamento"),
         ("prazo_entrega", "Prazo"), ("obra_site", "Obra/Site"),
     ],
     "GALVANIZACAO": [
         ("status_icon", ""),
         ("proposta", "Proposta"), ("chat_icon", ""), ("cliente", "Cliente"), ("status_galvanizacao", "Etapa/Status"),
+        ("selo_remanejamento", "Remanejamento"),
         ("prazo_entrega", "Prazo"), ("obra_site", "Obra/Site"),
     ],
     "EXPEDICAO": [
         ("status_icon", ""),
         ("proposta", "Proposta"), ("chat_icon", ""), ("cliente", "Cliente"), ("status_expedicao", "Etapa/Status"),
+        ("selo_remanejamento", "Remanejamento"),
         ("prazo_entrega", "Prazo"), ("obra_site", "Obra/Site"), ("numero_nf", "Nº da NF"),
     ],
     "ALMOXARIFADO": [
@@ -141,6 +148,8 @@ class ProcessTableModel(QAbstractTableModel):
                 return ""
             if key == "proposta":
                 return format_proposal_label(row.get(key))
+            if key == REMANAGEMENT_BADGE_KEY:
+                return badge_label(row.get(key))
             return self.service.display_cell(key, row.get(key), row)
         if role == Qt.ToolTipRole:
             if key == "status_icon":
@@ -150,6 +159,8 @@ class ProcessTableModel(QAbstractTableModel):
             if key == "chat_icon":
                 unread = row.get("_chat_unread", 0)
                 return f"{unread} mensagem(ns) nao lida(s)" if unread else "Abrir chat da proposta"
+            if key == REMANAGEMENT_BADGE_KEY:
+                return row.get(REMANAGEMENT_TOOLTIP_KEY, "")
             return self.data(index, Qt.DisplayRole)
         if role == Qt.TextAlignmentRole:
             if key in {"batch_select", "id", "peso", "peso_parcial", "saldo_pendente"}:

@@ -1276,6 +1276,10 @@ STATUS_CATEGORY_BY_STATUS = {
     "NAO_LIBERADO": "neutral",
     "LIBERADO_PRODUCAO": "waiting",
     "CANCELADA": "danger",
+    # Selos de remanejamento das listas (Fase D do plano de logistica).
+    "REMANEJAMENTO_SUBSTITUIDA": "progress",
+    "REMANEJAMENTO_PARCIALMENTE_SUBSTITUIDA": "attention",
+    "REMANEJAMENTO_RECEBEU": "waiting",
     "NAO_INICIADO": "waiting",
     "ITEM_PENDENTE_FABRICACAO": "attention",
     "INICIADO": "progress",

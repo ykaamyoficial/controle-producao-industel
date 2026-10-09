@@ -9,6 +9,7 @@ from urllib.parse import urlparse, urlunparse
 from app.integrations.api.exceptions import ApiBusinessError
 from app.services.api_proposal_storage import OfficialProposalApiStorage, api_permission_level, user_message_for_api_error
 from app.services.api_reports import ApiExecutiveDashboardService, ApiOperationalReportsService
+from app.services.remanagement_badges import decorate_rows as decorate_remanagement_rows, index_badges as index_remanagement_badges
 from app.services.status_sorting import sort_fiscal_rows, sort_process_rows
 from app.services.app_paths import ensure_app_data_dirs, get_config_example_path, get_config_path
 from app.services.app_logging import get_logger
@@ -576,7 +577,7 @@ class BackendService:
         if area == 'PRODUCAO':
             try:
                 rows = self.official_proposal_storage.list_production_proposals(search=filters.get('text') or None, status=filters.get('status') or None, limit=200, offset=0)
-                return sort_process_rows(area, self._merge_partial_operational_rows(rows, area))
+                return sort_process_rows(area, self._with_remanagement_badges(self._merge_partial_operational_rows(rows, area)))
             except Exception as exc:
                 raise AppError(user_message_for_api_error(exc)) from exc
         if area == 'EXPEDICAO':
@@ -585,12 +586,12 @@ class BackendService:
                 status_filter = (filters.get('status') or '').strip().upper()
                 if status_filter:
                     rows = [row for row in rows if (row.get('status_expedicao') or row.get('current_status') or '').upper() == status_filter]
-                return sort_process_rows(area, self._merge_partial_operational_rows(rows, area))
+                return sort_process_rows(area, self._with_remanagement_badges(self._merge_partial_operational_rows(rows, area)))
             except Exception as exc:
                 raise AppError(user_message_for_api_error(exc)) from exc
         if area == 'GALVANIZACAO':
             try:
-                return sort_process_rows(area, self._official_galvanization_rows(filters))
+                return sort_process_rows(area, self._with_remanagement_badges(self._official_galvanization_rows(filters)))
             except Exception as exc:
                 raise AppError(user_message_for_api_error(exc)) from exc
         if area == 'PARCIAIS':
@@ -607,6 +608,21 @@ class BackendService:
 
     def sort_process_rows(self, area: str | None, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return sort_process_rows(area, rows)
+
+    def _with_remanagement_badges(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Marca nas linhas das listas de Producao, Galvanizacao e Expedicao as propostas que ainda estao
+        fora do lugar por causa de um remanejamento. O selo e so um enfeite: se a API nao responder (ou for
+        uma versao anterior, sem o endpoint), a lista aparece normal, sem selos."""
+        try:
+            badges = self._cached_read(
+                'remanagement_badges',
+                lambda: index_remanagement_badges(self.official_proposal_storage.remanagement_badges()),
+                ttl=2.0,
+            )
+        except Exception:
+            log.debug('Selos de remanejamento indisponiveis; listas seguem sem selo', exc_info=True)
+            return rows
+        return decorate_remanagement_rows(rows, badges)
 
     def _merge_partial_operational_rows(self, rows: list[dict[str, Any]], area: str) -> list[dict[str, Any]]:
         """Une filhas somente no mesmo bloco operacional.

@@ -166,6 +166,25 @@ class StatusBadgeDelegate(QStyledItemDelegate):
             painter.drawPixmap(int(rect.center().x() - size / 2), int(center_y - size / 2), pix)
             painter.restore()
             return
+        if key == "selo_remanejamento":
+            # Selo de remanejamento (Fase D): so pinta quando a proposta esta marcada; vazio = inteira.
+            text = str(index.data(Qt.DisplayRole) or "")
+            if not text:
+                return
+            bg, fg = status_color(str(index.data(Qt.UserRole + 2) or ""), self.service.palette, "")
+            painter.save()
+            badge = QRectF(rect.x() + 8, center_y - _BADGE_HEIGHT / 2, max(20.0, rect.width() - 16), _BADGE_HEIGHT)
+            font = QFont(option.font)
+            font.setWeight(QFont.Weight.DemiBold)
+            painter.setRenderHint(QPainter.Antialiasing)
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QBrush(QColor(bg)))
+            painter.drawRoundedRect(badge, _BADGE_HEIGHT / 2, _BADGE_HEIGHT / 2)
+            painter.setFont(font)
+            painter.setPen(QPen(QColor(fg)))
+            painter.drawText(badge, Qt.AlignCenter, QFontMetricsF(font).elidedText(text, Qt.ElideRight, max(20.0, badge.width() - 14)))
+            painter.restore()
+            return
         if key and ("status" in key or key == "localizacao_atual"):
             text = index.data(Qt.DisplayRole) or "-"
             raw = index.data(Qt.UserRole + 2) or text
@@ -297,6 +316,7 @@ class ModernTable(QTableView):
             "data_retorno_galv": 112,
             "almoxarifado_info": 115,
             "necessita_almoxarifado": 115,
+            "selo_remanejamento": 185,
             "status_localizacao": 210,
             "localizacao_atual": 175,
             "status_producao": 215,

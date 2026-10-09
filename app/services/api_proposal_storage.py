@@ -1148,6 +1148,13 @@ class OfficialProposalApiStorage:
         finally:
             client.close()
 
+    def remanagement_badges(self) -> dict[str, Any]:
+        client, proposals, token = self._client()
+        try:
+            return proposals.remanagement_badges(token)
+        finally:
+            client.close()
+
     def remanagement_destination_items(self, destination_id: int) -> list[dict[str, Any]]:
         client, proposals, token = self._client()
         try:

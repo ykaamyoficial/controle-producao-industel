@@ -161,6 +161,9 @@ class ProposalsApiClient:
         data = self.client.get(f"/api/v1/shipping/remanagements/compatible-items?{params}", access_token=access_token).data
         return data if isinstance(data, list) else []
 
+    def remanagement_badges(self, access_token: str) -> dict[str, Any]:
+        return self.client.get("/api/v1/shipping/remanagements/badges", access_token=access_token).data
+
     def remanagement_destination_items(self, access_token: str, destination_proposal_id: int) -> list[dict[str, Any]]:
         params = urlencode({"destination_proposal_id": destination_proposal_id})
         data = self.client.get(f"/api/v1/shipping/remanagements/destination-items?{params}", access_token=access_token).data
