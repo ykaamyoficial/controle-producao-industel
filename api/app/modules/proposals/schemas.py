@@ -185,6 +185,9 @@ class ProposalHistoryItem(BaseModel):
     actor_user_id: int | None = None
     actor_name: str | None = None
     observation: str | None = None
+    title: str | None = None
+    detail: str | None = None
+    count: int = 1
     request_id: str | None = None
     created_at: datetime
 

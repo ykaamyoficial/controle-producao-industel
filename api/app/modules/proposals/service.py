@@ -4061,7 +4061,7 @@ async def list_proposal_history(
         rows.append(_proposal_history_item("fiscal", event, event_proposal_id, proposals_by_id, users_by_id, area="FISCAL"))
 
     rows.sort(key=lambda item: (item.created_at, item.source, item.id), reverse=True)
-    return rows[offset:offset + limit]
+    return _group_history_rows(rows)[offset:offset + limit]
 
 
 def _proposal_history_item(
@@ -4088,6 +4088,11 @@ def _proposal_history_item(
         actor_user_id=event.actor_user_id,
         actor_name=actor.display_name if actor else None,
         observation=_history_observation(metadata),
+        title=_activity_headline(
+            event.event_type, actor.display_name if actor else None, metadata,
+            getattr(event, "from_status", None), getattr(event, "to_status", None),
+        ),
+        detail=_history_detail(metadata),
         request_id=event.request_id,
         created_at=event.created_at,
     )
@@ -4110,6 +4115,11 @@ def _actor_label(actor_name: str | None) -> str:
 def _reason_suffix(metadata: dict) -> str:
     reason = metadata.get("reason")
     return f" ({reason})" if reason else ""
+
+
+def _code_suffix(metadata: dict) -> str:
+    code = metadata.get("code")
+    return f" ({code})" if code else ""
 
 
 ACTIVITY_TEMPLATES = {
@@ -4168,7 +4178,91 @@ ACTIVITY_TEMPLATES = {
     "FISCAL_BATCH_CONFIRMED": lambda who, md: f"{who} confirmou o lote de emissoes fiscais.",
     "FISCAL_INVOICE_ITEM_CANCELLED": lambda who, md: f"{who} cancelou um item da nota fiscal{_reason_suffix(md)}.",
     "FISCAL_INVOICE_WITHDRAWN": lambda who, md: f"{who} registrou a retirada da nota fiscal.",
+    "PROPOSAL_ITEM_CREATED": lambda who, md: (
+        f"{who} incluiu o item {md['item_number']} na proposta." if md.get("item_number") else f"{who} incluiu um item na proposta."
+    ),
+    "PROPOSAL_ITEM_DELETED": lambda who, md: (
+        f"{who} excluiu o item {md['item_number']} da proposta." if md.get("item_number") else f"{who} excluiu um item da proposta."
+    ),
+    "EXPEDITION_ITEM_RETURNED_TO_PRODUCTION": lambda who, md: (
+        f"{who} devolveu {format_quantity(md.get('quantity'))} unidade(s) da expedicao para a producao{_reason_suffix(md)}."
+    ),
+    "COMPENSATED_REMANAGEMENT_READY_SENT": lambda who, md: (
+        f"{who} cedeu {format_quantity(md.get('quantity'))} unidade(s) prontas para outra proposta (remanejamento)."
+    ),
+    "COMPENSATED_REMANAGEMENT_READY_RECEIVED": lambda who, md: (
+        f"{who} recebeu {format_quantity(md.get('quantity'))} unidade(s) prontas de outra proposta (remanejamento)."
+    ),
+    "GALVANIZATION_ITEM_OWNER_CHANGED": lambda who, md: (
+        f"{who} {'passou' if md.get('direction') == 'OUT' else 'recebeu'} {format_quantity(md.get('quantity'))} unidade(s) "
+        f"{'para outra proposta' if md.get('direction') == 'OUT' else 'de outra proposta'} na carga de galvanizacao (remanejamento)."
+    ),
+    "COMPENSATED_REMANAGEMENT_APPLIED": lambda who, md: (
+        f"{who} remanejou itens desta proposta para outra{_code_suffix(md)}{_reason_suffix(md)}."
+    ),
+    "COMPENSATED_REMANAGEMENT_RECEIVED": lambda who, md: (
+        f"{who} recebeu itens remanejados de outra proposta{_code_suffix(md)}{_reason_suffix(md)}."
+    ),
+    "EXPEDITION_RETURN_TO_PRODUCTION": lambda who, md: f"{who} devolveu itens da expedicao para a producao{_reason_suffix(md)}.",
+    "REALLOCATED_PRODUCTION_COMPLETED": lambda who, md: (
+        f"{who} concluiu a producao de {format_quantity(md.get('quantity'))} unidade(s) remanejadas."
+    ),
+    "GALVANIZATION_PROPOSAL_RETURN_RECALCULATED": lambda who, md: f"{who} recalculou o retorno da galvanizacao da proposta.",
+    "GALVANIZATION_RETURN_RECORDED_AFTER_CANCELLATION": lambda who, md: f"{who} registrou o retorno da galvanizacao apos o cancelamento.",
 }
+
+# Frase para varios eventos iguais (mesmo autor e mesma requisicao) numa linha so.
+# Tipos fora desta tabela usam a frase singular com o total no fim.
+ACTIVITY_GROUP_TEMPLATES = {
+    "PRODUCTION_ITEM_FLOW_UPDATED": lambda who, n: f"{who} definiu o fluxo de producao de {n} itens.",
+    "PRODUCTION_ITEM_COMPLETED": lambda who, n: f"{who} concluiu a producao de {n} itens.",
+    "PRODUCTION_ITEM_WEIGHT_UPDATED": lambda who, n: f"{who} atualizou o peso de {n} itens.",
+    "PROPOSAL_ITEM_CREATED": lambda who, n: f"{who} incluiu {n} itens na proposta.",
+    "PROPOSAL_ITEM_DELETED": lambda who, n: f"{who} excluiu {n} itens da proposta.",
+    "PROPOSAL_ITEM_UPDATED": lambda who, n: f"{who} editou {n} itens da proposta.",
+    "GALVANIZATION_ITEM_SENT": lambda who, n: f"{who} enviou {n} itens para galvanizacao.",
+    "GALVANIZATION_ITEM_RETURNED": lambda who, n: f"{who} registrou o retorno de {n} itens da galvanizacao.",
+    "EXPEDITION_ITEM_SEPARATED": lambda who, n: f"{who} separou {n} itens para entrega.",
+    "EXPEDITION_ITEM_DELIVERED": lambda who, n: f"{who} registrou a entrega de {n} itens.",
+}
+
+
+def _history_detail(metadata: dict) -> str | None:
+    """Complemento legivel do evento: so campos conhecidos e em texto simples,
+    nunca o dict de metadata (diferente de _history_observation)."""
+    for key in ("observation", "reason"):
+        value = metadata.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _group_headline(event_type: str, actor_name: str | None, count: int, single_headline: str) -> str:
+    template = ACTIVITY_GROUP_TEMPLATES.get(event_type)
+    if template is not None:
+        return template(_actor_label(actor_name), count)
+    return f"{single_headline.rstrip('.')} ({count} registros)."
+
+
+def _group_history_rows(rows: list[ProposalHistoryItem]) -> list[ProposalHistoryItem]:
+    """Funde linhas seguidas do mesmo evento, autor, proposta e requisicao (ou,
+    sem requisicao, do mesmo segundo) - um lote de itens vira uma linha."""
+    heads: dict[tuple, ProposalHistoryItem] = {}
+    singles: dict[tuple, str] = {}
+    for row in rows:
+        key = (
+            row.proposal_id, row.source, row.event_type, row.actor_user_id, row.to_status,
+            row.request_id or row.created_at.replace(microsecond=0).isoformat(),
+        )
+        head = heads.get(key)
+        if head is None:
+            heads[key] = row
+            singles[key] = row.title or ""
+            continue
+        head.count += 1
+        head.detail = None
+        head.title = _group_headline(head.event_type, head.actor_name, head.count, singles[key])
+    return list(heads.values())
 
 
 def _activity_headline(event_type: str, actor_name: str | None, metadata: dict, from_status: str | None, to_status: str | None) -> str:
