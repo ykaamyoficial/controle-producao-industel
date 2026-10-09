@@ -6,7 +6,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QWidget,
 )
 
-from app.services.remanagement_flow_state import review_from_api
+from app.services.remanagement_flow_state import part_sentence, review_from_api
 from app.ui.components.detail_widgets import ThinProgressBar, block_grid, make_panel
 from app.ui.components.dialog_shell import TABLE_HEADER_HEIGHT, TABLE_ROW_HEIGHT, info_notice, set_notice_kind, standardize_tables
 from app.ui.components.modern_button import ModernButton
@@ -65,7 +65,8 @@ class ReviewPage(WizardPage):
         self.info_notice = info_notice(
             "Esta operação NÃO registra entrega ao cliente. Ela passa o material pronto da proposta de origem para a de "
             "destino e, em troca, passa para a origem o mesmo número de peças que o destino ainda tem em andamento "
-            "(fabricação ou galvanização), no estágio em que estão."
+            "(fabricação ou galvanização), no estágio em que estão. Quando só parte dos itens troca de lugar, a proposta "
+            "se divide em partes (-1, -2…), como nas parciais."
         )
         self.root.addWidget(self.info_notice)
 
@@ -103,6 +104,14 @@ class ReviewPage(WizardPage):
         self.revalidate_button = revalidate
         summary_layout.addWidget(revalidate, 0, Qt.AlignLeft)
         side.addWidget(self.summary_panel)
+
+        # Remanejamento por linhas: o que acontece com cada proposta (a propria, as partes, a referencia).
+        self.parts_panel, parts_layout = make_panel("Como ficam as propostas")
+        self.parts_holder = QVBoxLayout()
+        self.parts_holder.setSpacing(6)
+        parts_layout.addLayout(self.parts_holder)
+        self.parts_panel.setVisible(False)
+        side.addWidget(self.parts_panel)
 
         self.reason_panel, reason_layout = make_panel("Motivo do remanejamento *")
         self.reason_edit = QTextEdit()
@@ -204,10 +213,24 @@ class ReviewPage(WizardPage):
                     if child.widget() is not None:
                         child.widget().deleteLater()
 
+    def _render_parts(self, result) -> None:
+        while self.parts_holder.count():
+            item = self.parts_holder.takeAt(0)
+            if item.widget() is not None:
+                item.widget().deleteLater()
+        parts = list(getattr(result, "parts", None) or []) if result is not None and getattr(result, "engine", "") == "ROWS" else []
+        for part in parts:
+            label = QLabel(part_sentence(part))
+            label.setObjectName("ValueLabel")
+            label.setWordWrap(True)
+            self.parts_holder.addWidget(label)
+        self.parts_panel.setVisible(bool(parts))
+
     def _render_result(self):
         result = self._result
         self._clear_groups()
         self._clear_summary()
+        self._render_parts(result)
         self.warnings_label.setVisible(False)
         if result is None:
             self.validity_changed.emit()

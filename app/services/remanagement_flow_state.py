@@ -199,11 +199,41 @@ class RemanagementReviewError:
     source_item_id: int | None
 
 
+PART_PLACE_LABELS = {"PRODUCAO": "Produção", "GALVANIZACAO": "Galvanização", "EXPEDICAO": "Expedição"}
+
+
+@dataclass(frozen=True)
+class RemanagementReviewPartView:
+    """Como uma proposta fica depois do remanejamento por linhas: ela mesma, uma parte (filha) ou so a
+    referencia (mae) no Controle Geral."""
+
+    proposal_number: str
+    role: str  # ORIGEM | DESTINO
+    place: str  # PRODUCAO | GALVANIZACAO | EXPEDICAO | REFERENCIA
+    item_numbers: list[str]
+    quantity: Decimal
+    is_part: bool = False
+
+
+def part_sentence(part: RemanagementReviewPartView) -> str:
+    """Uma frase simples sobre o que acontece com a proposta (ou a parte) depois do remanejamento."""
+    from app.ui.numeric_utils import format_decimal
+
+    if part.place == "REFERENCIA":
+        return f"{part.proposal_number}: vira só referência no Controle Geral; as partes abaixo seguem sozinhas."
+    place = PART_PLACE_LABELS.get(part.place, part.place.title())
+    numbers = part.item_numbers
+    items = "o item " + numbers[0] if len(numbers) == 1 else ("os itens " + ", ".join(numbers[:-1]) + " e " + numbers[-1] if numbers else "sem itens")
+    kind = "parte" if part.is_part else ("origem" if part.role == "ORIGEM" else "destino")
+    return f"{part.proposal_number} ({kind}): {place} — {items} (total {format_decimal(part.quantity)})."
+
+
 @dataclass(frozen=True)
 class RemanagementReviewResult:
     """Resultado da revisao/simulacao (Fase 6) - somente leitura, nada aqui
     foi persistido. `valid` so e True quando nao ha `errors` e ha ao menos um
-    item com alocacao (mesma regra do motor de compensacao)."""
+    item com alocacao (mesma regra do motor de compensacao). No remanejamento
+    por linhas (`engine == "ROWS"`), `parts` diz o que acontece com cada proposta."""
 
     destination_proposal_id: int
     valid: bool
@@ -211,6 +241,8 @@ class RemanagementReviewResult:
     errors: list[RemanagementReviewError]
     summary: RemanagementReviewSummary
     items: list[RemanagementReviewItem]
+    engine: str = "TRANSFER"
+    parts: list[RemanagementReviewPartView] = field(default_factory=list)
 
 
 def review_from_api(payload: dict) -> RemanagementReviewResult:
@@ -273,6 +305,15 @@ def review_from_api(payload: dict) -> RemanagementReviewResult:
         errors=errors,
         summary=summary,
         items=items,
+        engine=str(payload.get("engine") or "TRANSFER"),
+        parts=[
+            RemanagementReviewPartView(
+                proposal_number=str(part.get("proposal_number") or ""), role=str(part.get("role") or ""), place=str(part.get("place") or ""),
+                item_numbers=[str(number) for number in part.get("item_numbers") or []], quantity=parse_decimal(part.get("quantity"), "0"),
+                is_part=bool(part.get("is_part")),
+            )
+            for part in payload.get("parts") or []
+        ],
     )
 
 

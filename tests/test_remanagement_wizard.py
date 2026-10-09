@@ -78,6 +78,7 @@ class FakeWizardService:
         self.confirm_response = {"operation_id": "op-1", "status": "CONFIRMED"}
         # Pecas do destino que passam para a origem (resposta nova da API); None = resposta antiga, sem o campo.
         self.stage_transfers: list[dict] | None = None
+        self.parts: list[dict] | None = None  # remanejamento por linhas: o que acontece com cada proposta
 
     def early_delivery_destination_candidates(self, search: str = ""):
         self.destination_calls += 1
@@ -158,6 +159,8 @@ class FakeWizardService:
                 "not_allocated_items": sum(i["status"] == "NAO_ALOCADO" for i in review_items), "invalid_items": 0,
             },
             "items": review_items,
+            "engine": "ROWS" if self.parts is not None else "TRANSFER",
+            "parts": list(self.parts or []),
         }
 
     def remanagement_confirm(self, operation_id, destination_id, items, allocations, reason):
@@ -835,6 +838,28 @@ class ReviewPageTests(QtCase):
         rows = {first.item(row, 0).text(): [first.item(row, c).text() for c in (1, 2, 3)] for row in range(first.rowCount())}
         self.assertEqual(rows["CP05401"], ["15 UN", "20 → 5", "15 UN"])
         self.assertEqual(rows["CP05301"], ["5 UN", "5 → 0", "5 UN"])
+
+    def test_review_shows_what_happens_with_each_proposal_when_the_engine_splits_them(self):
+        service = FakeWizardService()
+        service.parts = [
+            {"proposal_number": "CP05401", "role": "ORIGEM", "place": "REFERENCIA", "item_numbers": [], "quantity": "0", "is_part": False},
+            {"proposal_number": "CP05401-1", "role": "ORIGEM", "place": "EXPEDICAO", "item_numbers": ["1", "2", "4"], "quantity": "7", "is_part": True},
+            {"proposal_number": "CP05401-2", "role": "ORIGEM", "place": "PRODUCAO", "item_numbers": ["3"], "quantity": "1", "is_part": True},
+            {"proposal_number": "CP05385", "role": "DESTINO", "place": "PRODUCAO", "item_numbers": ["1", "2"], "quantity": "5", "is_part": False},
+        ]
+        page, _ = _review_page(service)
+        self.assertFalse(page.parts_panel.isHidden())
+        texts = [page.parts_holder.itemAt(i).widget().text() for i in range(page.parts_holder.count())]
+        self.assertEqual(texts, [
+            "CP05401: vira só referência no Controle Geral; as partes abaixo seguem sozinhas.",
+            "CP05401-1 (parte): Expedição — os itens 1, 2 e 4 (total 7).",
+            "CP05401-2 (parte): Produção — o item 3 (total 1).",
+            "CP05385 (destino): Produção — os itens 1 e 2 (total 5).",
+        ])
+
+    def test_review_without_the_rows_engine_has_no_parts_panel(self):
+        page, _ = _review_page(FakeWizardService())
+        self.assertTrue(page.parts_panel.isHidden())
 
     def test_review_explains_in_plain_words_which_pieces_change_owner(self):
         service = FakeWizardService()
