@@ -4,6 +4,10 @@ O remanejamento acontece mesmo que o fluxo de cada proposta seja outro: as pecas
 dono seguem o caminho que ja seguiam, o destino pode ainda estar sem fluxo definido (e continua
 assim) e a origem que nao fabrica passa a ficar devendo a reposicao. Em todos os passos a conta de
 cada item fecha e o total das duas propostas nao muda.
+
+Tambem cobre os selos de remanejamento das listas (Fase D): a proposta que cedeu fica
+"Substituida" ou "Parcialmente substituida", a que recebeu fica "Recebeu remanejamento", e o selo
+some quando as pecas voltam e a proposta fica inteira.
 """
 
 from __future__ import annotations
@@ -121,6 +125,7 @@ class DifferentFlowsRemanagementTests(unittest.TestCase):
         self.assertEqual(self._numbers(self._stages(source["id"])), ("4.0000", "0.0000", "0.0000", "6.0000", "0.0000"))
         self.assertEqual(self._numbers(self._stages(destination["id"])), ("6.0000", "0.0000", "0.0000", "4.0000", "0.0000"))
         self.assertEqual(self._total(source["id"], destination["id"]), before)
+        self.assertEqual(self._badge(source["id"])["status"], "PARCIALMENTE_SUBSTITUIDA")
         # Cada item continua com o fluxo que tinha.
         source_item = self._get(f"/api/v1/proposals/{source['id']}")["items"][0]
         self.assertEqual((source_item["produce_internally"], source_item["requires_galvanization"]), ("NAO", "SIM"))
@@ -137,9 +142,12 @@ class DifferentFlowsRemanagementTests(unittest.TestCase):
         # Fabricada: segue o fluxo da PROPRIA origem (galvanizacao), nao entra pronta direto.
         self.assertEqual(self._numbers(self._stages(source["id"])), ("0.0000", "4.0000", "0.0000", "6.0000", "0.0000"))
         load = self._send(source_item_id, "4.0000")
+        self.assertEqual(self._badge(source["id"])["status"], "PARCIALMENTE_SUBSTITUIDA")
         self._return(load["id"], source["id"])
         self.assertEqual(self._numbers(self._stages(source["id"])), ("0.0000", "0.0000", "0.0000", "10.0000", "0.0000"))
         self.assertEqual(self._total(source["id"], destination["id"]), before)
+        # Enquanto a reposicao esta na galvanizacao a origem segue marcada; ao voltar, fica inteira.
+        self.assertIsNone(self._badge(source["id"]))
 
     # ---- destino sem fluxo definido ------------------------------------------------------------------------------
     def test_a_destination_without_a_defined_flow_receives_the_pieces_and_keeps_the_flow_undefined(self):
@@ -225,6 +233,52 @@ class DifferentFlowsRemanagementTests(unittest.TestCase):
         self._post(f"/api/v1/production/proposals/{source['id']}/complete-items", {"version": started["version"], "item_ids": [source_item_id]})
         self.assertEqual(self._numbers(self._stages(source["id"])), ("0.0000", "0.0000", "0.0000", "10.0000", "0.0000"))
         self.assertEqual(self._total(source["id"], destination["id"]), before)
+
+
+    # ---- selos nas listas (Fase D) ---------------------------------------------------------------------------------
+    def _badge(self, proposal_id):
+        rows = self._get("/api/v1/shipping/remanagements/badges")["items"]
+        return next((row for row in rows if row["proposal_id"] == proposal_id), None)
+
+    def test_badges_follow_the_remanagement_until_both_proposals_are_whole_again(self):
+        source, source_item_id = self._simple_source("FLX-A6")
+        destination = self._proposal("FLX-B6", produce=True, galvanize=False)
+        destination_item_id = destination["items"][0]["id"]
+        self.assertIsNone(self._badge(source["id"]))
+        self.assertIsNone(self._badge(destination["id"]))
+
+        payload = self._payload(destination, destination_item_id, source, source_item_id, "4.0000", "flx-op-0006")
+        self._post("/api/v1/shipping/remanagements/confirm", payload)
+
+        gave = self._badge(source["id"])
+        self.assertEqual(gave["status"], "PARCIALMENTE_SUBSTITUIDA")
+        self.assertEqual([(entry["direction"], entry["counterpart_proposal_number"]) for entry in gave["entries"]], [("CEDEU", "FLX-B6")])
+        received = self._badge(destination["id"])
+        self.assertEqual(received["status"], "RECEBEU")
+        self.assertEqual([(entry["direction"], entry["counterpart_proposal_number"]) for entry in received["entries"]], [("RECEBEU", "FLX-A6")])
+        self.assertTrue(gave["entries"][0]["code"].startswith("RM-"))
+        self.assertEqual(gave["entries"][0]["code"], received["entries"][0]["code"])
+
+        # A fabrica a reposicao: volta a ter as 10 prontas e o selo some. B continua esperando as 6.
+        current = self._get(f"/api/v1/proposals/{source['id']}")
+        started = self._post(f"/api/v1/production/proposals/{source['id']}/start", {"version": current["version"]})
+        self._post(f"/api/v1/production/proposals/{source['id']}/complete-items", {"version": started["version"], "item_ids": [source_item_id]})
+        self.assertIsNone(self._badge(source["id"]))
+        self.assertEqual(self._badge(destination["id"])["status"], "RECEBEU")
+
+        # B fabrica as 6 que lhe restam: tem as 10 e tambem fica inteira.
+        self._produce(self._get(f"/api/v1/proposals/{destination['id']}"))
+        self.assertIsNone(self._badge(destination["id"]))
+
+    def test_a_proposal_that_gave_everything_is_substituted_and_the_fully_served_destination_has_no_badge(self):
+        source, source_item_id = self._simple_source("FLX-A7")
+        destination = self._proposal("FLX-B7", produce=True, galvanize=False)
+        destination_item_id = destination["items"][0]["id"]
+        self._post("/api/v1/shipping/remanagements/confirm", self._payload(destination, destination_item_id, source, source_item_id, "10.0000", "flx-op-0007"))
+
+        self.assertEqual(self._badge(source["id"])["status"], "SUBSTITUIDA")
+        # O destino recebeu as 10 que pediu: nada em andamento, esta inteiro.
+        self.assertIsNone(self._badge(destination["id"]))
 
 
 if __name__ == "__main__":

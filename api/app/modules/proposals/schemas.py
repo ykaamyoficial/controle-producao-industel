@@ -966,6 +966,27 @@ class StageLedgerResponse(BaseModel):
     anomalies: list[StageAnomalyRow]
 
 
+class RemanagementBadgeEntry(BaseModel):
+    """Um remanejamento que mantem a proposta marcada: o codigo, o que a proposta fez nele e com quem."""
+
+    code: str
+    direction: str  # CEDEU | RECEBEU
+    counterpart_proposal_number: str
+
+
+class RemanagementBadge(BaseModel):
+    """Selo de uma proposta nas listas: SUBSTITUIDA | PARCIALMENTE_SUBSTITUIDA | RECEBEU (some quando a proposta fica inteira)."""
+
+    proposal_id: int
+    proposal_number: str
+    status: str
+    entries: list[RemanagementBadgeEntry] = Field(default_factory=list)
+
+
+class RemanagementBadgesResponse(BaseModel):
+    items: list[RemanagementBadge]
+
+
 class PaginatedExpeditionItemResponse(BaseModel):
     items: list[ExpeditionItemRow]
     total: int

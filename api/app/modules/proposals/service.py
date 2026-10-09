@@ -72,6 +72,9 @@ from api.app.modules.proposals.schemas import (
     GalvanizationSyncBatch,
     ItemStageRow,
     StageAnomalyRow,
+    RemanagementBadge,
+    RemanagementBadgeEntry,
+    RemanagementBadgesResponse,
     StageLedgerResponse,
     PaginatedExpeditionItemResponse,
     PaginatedExpeditionResponse,
@@ -1081,6 +1084,72 @@ async def get_stage_ledger(session: AsyncSession, proposal_id: int) -> StageLedg
             for a in ledger.anomalies
         ],
     )
+
+
+async def list_remanagement_badges(session: AsyncSession) -> RemanagementBadgesResponse:
+    """Selos de remanejamento das listas de Producao, Galvanizacao e Expedicao (Fase D do plano).
+
+    So as propostas que ainda estao "fora do lugar" por causa de um remanejamento aparecem; quando todas
+    as pecas voltam a estar prontas ou entregues a proposta fica inteira e some daqui (regra em
+    `remanagement_badges.py`). Le so as propostas envolvidas em remanejamentos, nunca a base inteira.
+    Somente leitura."""
+    from api.app.modules.proposals import remanagement_badges as rules
+    from api.app.modules.proposals.stage_ledger import compute_item_stages, load_item_facts
+
+    source_proposal = aliased(Proposal)
+    destination_proposal = aliased(Proposal)
+    link_rows = (await session.execute(
+        select(
+            ProposalRemanagementItem.source_item_id, ProposalRemanagementItem.destination_item_id, ProposalRemanagement.code,
+            source_proposal.proposal_number, destination_proposal.proposal_number,
+        )
+        .join(ProposalRemanagement, ProposalRemanagement.id == ProposalRemanagementItem.remanagement_id)
+        .join(source_proposal, source_proposal.id == ProposalRemanagement.source_proposal_id)
+        .join(destination_proposal, destination_proposal.id == ProposalRemanagement.destination_proposal_id)
+        .where(ProposalRemanagement.status == "APPLIED")
+        .order_by(ProposalRemanagement.id, ProposalRemanagementItem.id)
+    )).all()
+    if not link_rows:
+        return RemanagementBadgesResponse(items=[])
+
+    involved_item_ids = sorted({int(item_id) for row in link_rows for item_id in (row[0], row[1])})
+    # Dono ATUAL de cada item (uma parcial pode ter levado o item para uma filha).
+    owner_of = {int(item_id): int(proposal_id) for item_id, proposal_id in (await session.execute(
+        select(ProposalItem.id, ProposalItem.proposal_id).where(ProposalItem.id.in_(involved_item_ids))
+    )).all()}
+    stages_by_proposal: dict[int, list] = {}
+    for facts in await load_item_facts(session, proposal_ids=sorted(set(owner_of.values()))):
+        stages_by_proposal.setdefault(facts.proposal_id, []).append(compute_item_stages(facts))
+
+    status_by_proposal: dict[int, str] = {}
+    open_gave: dict[int, set[int]] = {}
+    open_received: dict[int, set[int]] = {}
+    proposal_numbers: dict[int, str] = {}
+    for proposal_id, item_stages in stages_by_proposal.items():
+        status = rules.proposal_badge_status(item_stages)
+        if status is None:
+            continue
+        status_by_proposal[proposal_id] = status
+        proposal_numbers[proposal_id] = item_stages[0].proposal_number
+        open_gave[proposal_id] = {item.item_id for item in item_stages if rules.item_gave_open(item)}
+        open_received[proposal_id] = {item.item_id for item in item_stages if rules.item_received_open(item)}
+
+    entries: dict[int, dict[tuple[str, str, str], None]] = {proposal_id: {} for proposal_id in status_by_proposal}
+    for source_item_id, destination_item_id, code, source_number, destination_number in link_rows:
+        source_owner = owner_of.get(int(source_item_id))
+        if source_owner in status_by_proposal and int(source_item_id) in open_gave[source_owner]:
+            entries[source_owner][(code or "", rules.DIRECTION_GAVE, destination_number)] = None
+        destination_owner = owner_of.get(int(destination_item_id))
+        if destination_owner in status_by_proposal and int(destination_item_id) in open_received[destination_owner]:
+            entries[destination_owner][(code or "", rules.DIRECTION_RECEIVED, source_number)] = None
+
+    return RemanagementBadgesResponse(items=[
+        RemanagementBadge(
+            proposal_id=proposal_id, proposal_number=proposal_numbers[proposal_id], status=status,
+            entries=[RemanagementBadgeEntry(code=code, direction=direction, counterpart_proposal_number=counterpart) for code, direction, counterpart in entries[proposal_id]],
+        )
+        for proposal_id, status in sorted(status_by_proposal.items())
+    ])
 
 
 async def get_expedition_detail(session: AsyncSession, proposal_id: int) -> ExpeditionProposalDetail:

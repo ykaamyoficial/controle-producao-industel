@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, Query, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.app.database.session import get_db_session
-from api.app.modules.auth.dependencies import require_permission, require_superuser
+from api.app.modules.auth.dependencies import require_any_permission, require_permission, require_superuser
 from api.app.modules.auth.models import User
 from api.app.modules.auth.permissions import (
     AUDIT_VIEW,
@@ -57,6 +57,7 @@ from api.app.modules.proposals.schemas import (
     PaginatedPartialProposalResponse,
     PaginatedExpeditionItemResponse,
     PaginatedExpeditionResponse,
+    RemanagementBadgesResponse,
     StageLedgerResponse,
     PaginatedFiscalResponse,
     PaginatedProposalResponse,
@@ -440,6 +441,13 @@ async def get_remanagement_stage_ledger(proposal_id: int = Query(gt=0), session:
     """Pecas de cada item da proposta por estagio (a fabricar, aguardando galvanizacao, na
     galvanizacao, prontas, entregues) e as contas que nao fecham. So leitura."""
     return await service.get_stage_ledger(session, proposal_id)
+
+
+@router.get("/shipping/remanagements/badges", response_model=RemanagementBadgesResponse)
+async def get_remanagement_badges(session: AsyncSession = Depends(get_db_session), _actor: User = Depends(require_any_permission(PRODUCTION_VIEW, GALVANIZATION_VIEW, EXPEDITION_VIEW))):
+    """Selos de remanejamento das listas de Producao, Galvanizacao e Expedicao: so as propostas que ainda
+    estao fora do lugar por causa de um remanejamento (some quando ela fica inteira). So leitura."""
+    return await service.list_remanagement_badges(session)
 
 
 @router.get("/shipping/remanagements/destination-items", response_model=list[RemanagementDestinationItem])
