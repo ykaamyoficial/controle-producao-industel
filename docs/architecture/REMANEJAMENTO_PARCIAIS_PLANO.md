@@ -55,7 +55,7 @@ Outros pontos achados na análise:
 - **R-P6 — Parte da quantidade (D10).** Se o remanejamento leva 4 de 10 peças de um item, o item é **dividido em duas linhas**: 6 (que ficam) e 4 (que ficam no lugar do que foi substituído); cada linha cai na filha certa. A mesma divisão vale no destino (o item que recebeu 4 de 10 prontas vira uma linha de 4 prontas e outra de 6 em andamento).
 - **R-P7 — O pedido não muda.** Somando as linhas de um mesmo item do pedido (mesmo número de item na família), a quantidade pedida é sempre a original; o fiscal continua um `FiscalItem` por linha, acompanhando a linha.
 
-## 5. Arquitetura recomendada: "lotes físicos" (decisão técnica D14, pendente)
+## 5. Arquitetura recomendada: "lotes físicos" (decisão técnica D14, aprovada em 09/10/2026)
 
 Pensando peça a peça, depois do remanejamento cada pedido tem **dois lotes de peças em situações diferentes**: no pedido da origem, as peças que ficaram (prontas) e as que vieram do destino (em andamento); no pedido do destino, as que chegaram prontas e as que ele ainda espera. Cada lote vira **uma linha** com uma situação só. Assim as parciais do sistema funcionam sem nenhuma conta especial.
 
@@ -117,7 +117,7 @@ Tudo continua sendo desenvolvido e testado só na API de desenvolvimento; a API 
 
 Tomadas pelo Henrique: **D10** dividir o item em dois quando sai parte da quantidade; **D11** o destino também divide; **D12** nomes P1/P2 confirmados (uma filha por lugar); **D13** ajustar os remanejamentos da base de teste, só nela.
 
-Pendente (recomendação nossa): **D14 — motor novo "por linhas"** (seção 5), com a Fase P0 como prova de conceito antes de seguir, em vez de manter o motor de transferências e dividir depois. Recomendação: **sim**.
+**D14 — motor novo "por linhas"** (seção 5): aprovado pelo Henrique ("aprovado pode seguir", 09/10/2026) e implementado (seção 11). Fica atrás de uma chave, desligada por padrão no código e ligada na API de desenvolvimento.
 
 ## 10. Simulador para testar antes de implementar (09/10/2026)
 
@@ -133,3 +133,31 @@ python prototipos/remanejamento_parciais/simulador.py --cenario 2 --modo hoje --
 - **Variante para testar:** "Destino também por lugar" divide o destino em uma parte por lugar (como a origem). Por padrão só o que chegou pronto vira parte e o resto continua na proposta (R-P3); no cenário 2 isso deixa a CP 05710 aparecendo em Produção e Galvanização ao mesmo tempo, o que a variante evita.
 - **O que ele não faz:** não conta fiscal (NF), pesos nem a ordem de travas do banco; o modo "Como é hoje" mostra o que o Henrique vê na tela hoje, não a conta interna por estágio.
 - **Testes:** `tests/test_prototipo_remanejamento.py` (23 casos: regras, cenários, conservação, variante, janela e clique na marca).
+
+## 11. Implementação (09/10/2026, só na API de desenvolvimento)
+
+**Chave.** `REMANAGEMENT_BY_ROWS_ENABLED` (variável de ambiente / `Settings.remanagement_by_rows_enabled`; os testes ligam por patch em `remanagement.REMANAGEMENT_BY_ROWS_ENABLED`). Padrão **desligado** no código e **ligado** em `docker-compose.dev.yml`. Desligada, nada muda: o motor de transferências continua sendo o único.
+
+**Banco.** Migration `20261009_0036` (TRANSITIONAL): `proposal_remanagement_items.mode` (`TRANSFER` | `ROWS`, padrão `TRANSFER`) e `received_lot_item_id`. A coluna separa o que cada motor gravou: o livro de estágios e a disponibilidade derivada só leem `TRANSFER` nas contas de transferência.
+
+**Código (API, `api/app/modules/proposals/`).**
+- `item_lots.py`: peças viram linhas — `detach_ready`, `detach_in_flight`, `materialize_lot` (reaproveita a linha esvaziada como "carregadora"), `rejoin_rows`, `lot_flags` (flags do lote: pronto = produzido/galvanizado pela história; a fabricar = produz e segue o fluxo do pedido a que serve).
+- `remanagement_rows.py`: o motor (`apply_rows_engine`), `realign` (grupos de linhas: Produção < aguardando carga < em carga < Expedição; a origem vira mãe-referência com uma filha por lugar, o destino só destaca o que chegou pronto), conferência de conservação na família inteira (por produto e por estágio), `preview_parts`/`describe_parts` para a revisão e histórico (`COMPENSATED_REMANAGEMENT_APPLIED`/`RECEIVED` nas duas propostas, com as mesmas frases do motor antigo).
+- `service.py`: `confirm_remanagement_batch` escolhe o motor; `_merge_equal_status_partial_children` e `_reborn_parent_when_children_converge` juntam linhas de mesmo número (só se a necessidade de galvanização for igual; se não, as partes ficam separadas) e rodam também ao fim da produção de uma filha; revisão devolve `engine` e `parts`; marcas (`_rows_remanagement_badges`) saem da família — filha/mãe enquanto dividida, e a proposta inteira que cedeu tudo fica "Substituída" até as peças de troca ficarem prontas.
+- **Volta ao motor antigo (automática):** linha com histórico de transferências antigas (obrigação de fabricar, troca de estágio, item RM em modo `TRANSFER`) ou já faturada continua pelo motor de transferências (`rows_engine_applicable`).
+- **Variante não ativada:** `DESTINATION_SPLIT_BY_PLACE = False` (destino dividido por lugar, como a origem). O Henrique não escolheu; por padrão só o que chegou pronto vira parte (R-P3).
+
+**Desktop.** Passo de revisão do assistente mostra o painel "Como ficam as propostas" (`parts_panel`, frases em `part_sentence`), por exemplo "CP 05493 vira só referência…; CP 05493-1 (parte): Expedição — itens …; CP 05493-2 (parte): Produção — o item 3". Marca e janelinha continuam como na Fase D.
+
+**Testes.** `api/tests/test_remanagement_rows.py` (11 cenários de ponta a ponta: itens inteiros, mãe renascendo, parte da quantidade com estágios misturados, cedeu tudo, fluxos diferentes, duas origens, parte como origem, volta ao motor antigo, revisão, marcas, repetição da confirmação) e 2 testes no assistente (`tests/test_remanagement_wizard.py`).
+
+**Base de desenvolvimento (P5, D13).** Feito em 09/10/2026 só na dev (`controle_producao_dev`, porta 55432), com backup antes e ensaio numa cópia descartável: RM-000001 e RM-000002 foram desfeitos (nada tinha andado: obrigações com 0 concluído, sem entrega, sem NF) e regravados pelo motor novo, com os mesmos itens, motivos e códigos.
+
+| Antes (motor de transferências) | Depois (motor por linhas) |
+|---|---|
+| CP 05492 e CP 05493 apareciam inteiras em Expedição, com "pendente por remanejamento" | CP 05492 (cedeu os 8 itens) vai inteira para Produção, marca "Substituída" |
+| — | CP 05493 vira referência; CP 05493-1 (7 itens prontos) fica na Expedição; CP 05493-2 (item 3) vai para Produção |
+| CP 05643 recebeu os 8 itens | CP 05643 inteira em Expedição |
+| CP 05640 recebeu o item 3 | CP 05640 fica em Produção; CP 05640-1 (item 3 pronto) vai para Expedição |
+
+**Para a API oficial (porta 8000):** nada disto foi aplicado lá. Antes de qualquer subida: migration 0036 (`migration-check`), backup, versão, checklist de release, decidir a chave (`REMANAGEMENT_BY_ROWS_ENABLED`) e o que fazer com os remanejamentos antigos de lá (D6: ficam como estão).
