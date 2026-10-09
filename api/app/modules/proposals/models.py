@@ -348,6 +348,7 @@ class ProposalRemanagementItem(Base):
     __table_args__ = (
         CheckConstraint("quantity > 0", name="ck_proposal_remanagement_items_quantity_positive"),
         CheckConstraint("production_reallocated_quantity = quantity", name="ck_proposal_remanagement_items_compensation_equal"),
+        CheckConstraint("mode IN ('TRANSFER', 'ROWS')", name="ck_proposal_remanagement_items_mode"),
         Index("ix_proposal_remanagement_items_source", "source_item_id"),
         Index("ix_proposal_remanagement_items_destination", "destination_item_id"),
     )
@@ -369,6 +370,10 @@ class ProposalRemanagementItem(Base):
     weight_snapshot: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), nullable=True)
     product_code_snapshot: Mapped[str | None] = mapped_column(String(120), nullable=True)
     unit_snapshot: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    # TRANSFER: motor de transferencias (a linha guarda pecas de estagios diferentes e a conta e feita por
+    # transferencias). ROWS: remanejamento por linhas (cada lote de pecas vira uma linha propria).
+    mode: Mapped[str] = mapped_column(String(20), nullable=False, server_default="TRANSFER")
+    received_lot_item_id: Mapped[int | None] = mapped_column(ForeignKey("proposal_items.id", ondelete="SET NULL"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     remanagement: Mapped[ProposalRemanagement] = relationship(back_populates="items")

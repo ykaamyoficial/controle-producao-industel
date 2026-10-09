@@ -11,7 +11,7 @@ API_VERSION = "0.10.0"
 API_STAGE = "official-fiscal"
 API_CONTRACT_VERSION = "v1"
 SERVICE_NAME = "controle-producao-api"
-EXPECTED_DATABASE_REVISION = "20261008_0035"
+EXPECTED_DATABASE_REVISION = "20261009_0036"
 # Revisao mais antiga que este server_version ainda consegue operar (Fase 04, Secao 19).
 # Hoje e igual a EXPECTED_DATABASE_REVISION porque esta release depende da
 # hierarquia mae/filhas e nao possui tolerancia retroativa deliberada -- sera
@@ -62,6 +62,11 @@ class Settings(BaseSettings):
     # (desligado): so habilitar depois de confirmar que a frota suportada
     # ja envia X-Client-Version corretamente (rollout controlado).
     client_version_enforcement_enabled: bool = Field(default=False, alias="CLIENT_VERSION_ENFORCEMENT_ENABLED")
+
+    # Remanejamento por linhas (lotes fisicos) e parciais - plano em
+    # docs/architecture/REMANEJAMENTO_PARCIAIS_PLANO.md. Default desligado (segue o motor de transferencias);
+    # a dev liga por variavel de ambiente ate o plano ser aprovado para a API oficial.
+    remanagement_by_rows_enabled: bool = Field(default=False, alias="REMANAGEMENT_BY_ROWS_ENABLED")
 
     nomus_encryption_key: str = Field(default="", alias="NOMUS_ENCRYPTION_KEY")
 

@@ -319,14 +319,16 @@ async def load_item_facts(session: AsyncSession, *, proposal_ids: list[int] | No
         int(item_id): Decimal(str(total or "0"))
         for item_id, total in (await session.execute(
             select(ProposalRemanagementItem.source_item_id, func.sum(ProposalRemanagementItem.quantity))
-            .where(ProposalRemanagementItem.source_item_id.in_(item_ids)).group_by(ProposalRemanagementItem.source_item_id)
+            .where(ProposalRemanagementItem.source_item_id.in_(item_ids), ProposalRemanagementItem.mode == "TRANSFER")
+            .group_by(ProposalRemanagementItem.source_item_id)
         )).all()
     } if item_ids else {}
     received = {
         int(item_id): Decimal(str(total or "0"))
         for item_id, total in (await session.execute(
             select(ProposalRemanagementItem.destination_item_id, func.sum(ProposalRemanagementItem.quantity))
-            .where(ProposalRemanagementItem.destination_item_id.in_(item_ids)).group_by(ProposalRemanagementItem.destination_item_id)
+            .where(ProposalRemanagementItem.destination_item_id.in_(item_ids), ProposalRemanagementItem.mode == "TRANSFER")
+            .group_by(ProposalRemanagementItem.destination_item_id)
         )).all()
     } if item_ids else {}
 

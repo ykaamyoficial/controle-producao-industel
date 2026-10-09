@@ -56,6 +56,7 @@ services:
       LOGIN_LOCK_MINUTES: ${LOGIN_LOCK_MINUTES:-15}
       PASSWORD_MIN_LENGTH: ${PASSWORD_MIN_LENGTH:-4}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
+      REMANAGEMENT_BY_ROWS_ENABLED: ${REMANAGEMENT_BY_ROWS_ENABLED:-true}
       NOMUS_ENCRYPTION_KEY: ${NOMUS_ENCRYPTION_KEY:-dev-nomus-encryption-key-change-me}
       # Notificacoes multicanal (Fase 11) -- canal de e-mail (desligado por padrao).
       NOTIFICATIONS_EMAIL_ENABLED: ${NOTIFICATIONS_EMAIL_ENABLED:-false}

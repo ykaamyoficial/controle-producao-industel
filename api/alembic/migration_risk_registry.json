@@ -178,5 +178,10 @@
     "classification": "TRANSITIONAL",
     "summary": "Cria a tabela remanagement_stage_transfers, que registra a troca de dono de pecas ja fabricadas (aguardando galvanizacao ou dentro de uma carga) entre dois itens num remanejamento.",
     "justification": "Somente CREATE TABLE de uma tabela nova e vazia, com PK propria, CHECKs e FKs (para proposal_remanagement_items com ON DELETE CASCADE e para proposal_items, galvanization_loads, galvanization_load_items e users) mais tres CREATE INDEX; classificada TRANSITIONAL (nao ADDITIVE puro) apenas porque o scanner sinaliza as FKs da tabela nova, mesmo padrao de 20260908_0031. Nenhuma tabela, coluna, linha ou constraint existente e alterada; nenhum codigo anterior le a tabela e a ausencia de linhas significa 'esteira igual ao pedido'. O downgrade apenas remove a tabela e volta a revisao registrada para 20261006_0034."
+  },
+  "20261009_0036": {
+    "classification": "TRANSITIONAL",
+    "summary": "Adiciona proposal_remanagement_items.mode (TRANSFER = motor de transferencias ja existente, ROWS = remanejamento por linhas) e received_lot_item_id (linha que recebeu o lote pronto).",
+    "justification": "Duas ADD COLUMN: mode com server_default 'TRANSFER' (todas as linhas ja gravadas continuam sendo do motor antigo, sem backfill) e received_lot_item_id nullable; mais um CHECK que so aceita os dois valores e uma FK com ON DELETE SET NULL para proposal_items. Classificada TRANSITIONAL (e nao ADDITIVE puro) apenas porque o scanner sinaliza a FK nova numa tabela existente. Nenhum dado, coluna ou constraint existente e alterado, e o codigo antigo ignora as colunas novas. As consultas que somam remanejamentos para a disponibilidade da Expedicao e para o controle de pecas passam a filtrar mode = 'TRANSFER', entao uma linha ROWS nunca e contada em dobro. O downgrade remove as duas colunas e volta a revisao registrada para 20261008_0035."
   }
 }
