@@ -471,11 +471,11 @@ async def get_remanagement_compensation_plan(payload: RemanagementCompensationRe
 
 
 @router.post("/shipping/remanagements/review", response_model=RemanagementReviewResult)
-async def get_remanagement_review(payload: RemanagementReviewRequest, session: AsyncSession = Depends(get_db_session), _actor: User = Depends(require_permission(EXPEDITION_UPDATE))):
+async def get_remanagement_review(payload: RemanagementReviewRequest, session: AsyncSession = Depends(get_db_session), actor: User = Depends(require_permission(EXPEDITION_UPDATE))):
     """Fase 6: revisao/simulacao final, somente leitura - nunca chama
     `session.commit()`. Revalida saldos (mesma fonte da Fase 5) e valida o
     motivo antes de habilitar a confirmacao."""
-    return await service.simulate_remanagement_review(session, payload)
+    return await service.simulate_remanagement_review(session, payload, actor)
 
 
 @router.post("/shipping/remanagements/confirm", response_model=RemanagementConfirmResult, status_code=status.HTTP_201_CREATED)

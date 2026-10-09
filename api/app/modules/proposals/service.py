@@ -127,6 +127,7 @@ from api.app.modules.proposals.schemas import (
     RemanagementPreview,
     RemanagementReviewItem,
     RemanagementReviewRequest,
+    RemanagementReviewPart,
     RemanagementReviewResult,
     RemanagementReviewSource,
     RemanagementStageTransferRow,
@@ -1106,11 +1107,12 @@ async def list_remanagement_badges(session: AsyncSession) -> RemanagementBadgesR
         .join(ProposalRemanagement, ProposalRemanagement.id == ProposalRemanagementItem.remanagement_id)
         .join(source_proposal, source_proposal.id == ProposalRemanagement.source_proposal_id)
         .join(destination_proposal, destination_proposal.id == ProposalRemanagement.destination_proposal_id)
-        .where(ProposalRemanagement.status == "APPLIED")
+        .where(ProposalRemanagement.status == "APPLIED", ProposalRemanagementItem.mode == "TRANSFER")
         .order_by(ProposalRemanagement.id, ProposalRemanagementItem.id)
     )).all()
+    row_badges = await _rows_remanagement_badges(session)
     if not link_rows:
-        return RemanagementBadgesResponse(items=[])
+        return RemanagementBadgesResponse(items=row_badges)
 
     involved_item_ids = sorted({int(item_id) for row in link_rows for item_id in (row[0], row[1])})
     # Dono ATUAL de cada item (uma parcial pode ter levado o item para uma filha).
@@ -1143,13 +1145,101 @@ async def list_remanagement_badges(session: AsyncSession) -> RemanagementBadgesR
         if destination_owner in status_by_proposal and int(destination_item_id) in open_received[destination_owner]:
             entries[destination_owner][(code or "", rules.DIRECTION_RECEIVED, source_number)] = None
 
-    return RemanagementBadgesResponse(items=[
+    transfer_badges = [
         RemanagementBadge(
             proposal_id=proposal_id, proposal_number=proposal_numbers[proposal_id], status=status,
             entries=[RemanagementBadgeEntry(code=code, direction=direction, counterpart_proposal_number=counterpart) for code, direction, counterpart in entries[proposal_id]],
         )
         for proposal_id, status in sorted(status_by_proposal.items())
-    ])
+    ]
+    known = {badge.proposal_id for badge in transfer_badges}
+    return RemanagementBadgesResponse(items=sorted([*transfer_badges, *(b for b in row_badges if b.proposal_id not in known)], key=lambda b: b.proposal_id))
+
+
+async def _rows_remanagement_badges(session: AsyncSession) -> list[RemanagementBadge]:
+    """Marca das propostas de remanejamentos por linhas: enquanto a familia esta dividida (tem parte ativa).
+
+    * familia da ORIGEM: a parte que ainda espera pecas (producao, galvanizacao) esta "Substituida"; a parte que
+      continua pronta na Expedicao esta "Parcialmente substituida";
+    * familia do DESTINO: a mae (com o resto) e as partes estao "Recebeu remanejamento".
+    Quando a familia se junta de novo ninguem tem mais parte ativa e a marca some."""
+    from api.app.modules.proposals import remanagement_badges as rules
+    from api.app.modules.proposals.remanagement_rows import G_READY, _groups_of  # noqa: PLC2701
+
+    source_proposal = aliased(Proposal)
+    destination_proposal = aliased(Proposal)
+    headers = (await session.execute(
+        select(
+            ProposalRemanagement.code, ProposalRemanagement.source_proposal_id, ProposalRemanagement.destination_proposal_id,
+            source_proposal.proposal_number, destination_proposal.proposal_number,
+            func.coalesce(source_proposal.parent_proposal_id, source_proposal.id), func.coalesce(destination_proposal.parent_proposal_id, destination_proposal.id),
+        )
+        .join(source_proposal, source_proposal.id == ProposalRemanagement.source_proposal_id)
+        .join(destination_proposal, destination_proposal.id == ProposalRemanagement.destination_proposal_id)
+        .where(ProposalRemanagement.status == "APPLIED")
+        .where(exists().where(ProposalRemanagementItem.remanagement_id == ProposalRemanagement.id, ProposalRemanagementItem.mode == "ROWS"))
+        .order_by(ProposalRemanagement.id)
+    )).all()
+    if not headers:
+        return []
+    roots = sorted({int(row[5]) for row in headers} | {int(row[6]) for row in headers})
+    members = list((await session.execute(
+        select(Proposal).options(lazyload("*"), selectinload(Proposal.items))
+        .where(Proposal.active.is_(True), or_(Proposal.id.in_(roots), Proposal.parent_proposal_id.in_(roots)))
+    )).scalars().unique())
+    children_of: dict[int, list[Proposal]] = {}
+    for proposal in members:
+        if proposal.parent_proposal_id is not None:
+            children_of.setdefault(int(proposal.parent_proposal_id), []).append(proposal)
+    by_root: dict[int, list[Proposal]] = {root: [p for p in members if p.id == root or p.parent_proposal_id == root] for root in roots}
+
+    entries: dict[int, dict[tuple[str, str, str], None]] = {}
+    status: dict[int, str] = {}
+    numbers: dict[int, str] = {}
+    whole: dict[int, Proposal] = {}  # propostas que nao se dividiram: a marca depende das linhas que ainda nao estao prontas
+    for code, _source_id, _destination_id, source_number, destination_number, source_root, destination_root in headers:
+        source_root, destination_root = int(source_root), int(destination_root)
+        for root, direction, counterpart in ((source_root, rules.DIRECTION_GAVE, destination_number), (destination_root, rules.DIRECTION_RECEIVED, source_number)):
+            if children_of.get(root):
+                for proposal in by_root[root]:
+                    if proposal.id == root and not [i for i in proposal.items if i.active]:
+                        continue  # a mae-referencia nao aparece nas listas
+                    entries.setdefault(proposal.id, {})[(code or "", direction, counterpart)] = None
+                    numbers[proposal.id] = proposal.proposal_number
+                    status.setdefault(proposal.id, rules.PARTIALLY_SUBSTITUTED if direction == rules.DIRECTION_GAVE else rules.RECEIVED)
+            else:
+                proposal = next((p for p in by_root[root] if p.id == root), None)
+                if proposal is not None:
+                    whole.setdefault(proposal.id, proposal)
+                    entries.setdefault(proposal.id, {})[(code or "", direction, counterpart)] = None
+                    numbers[proposal.id] = proposal.proposal_number
+    # Parte da origem que ainda espera pecas (nao esta pronta) = Substituida.
+    waiting_rows = [p for p in members if status.get(p.id) == rules.PARTIALLY_SUBSTITUTED and p.parent_proposal_id is not None]
+    all_rows = [item for p in [*waiting_rows, *whole.values()] for item in p.items if item.active]
+    groups = await _groups_of(session, all_rows) if all_rows else {}
+    for proposal in waiting_rows:
+        if any(groups.get(item.id, (G_READY, ()))[0] != G_READY for item in proposal.items if item.active):
+            status[proposal.id] = rules.SUBSTITUTED
+    # Proposta inteira: quem cedeu tudo fica "Substituida" ate as pecas de troca ficarem prontas; quem recebeu e ainda tem
+    # linhas em andamento fica "Recebeu". Com tudo pronto a marca some.
+    for proposal in whole.values():
+        ready = [groups.get(item.id, (G_READY, ()))[0] == G_READY for item in proposal.items if item.active]
+        directions = {direction for _code, direction, _counterpart in entries[proposal.id]}
+        if all(ready):
+            entries.pop(proposal.id)
+        elif rules.DIRECTION_GAVE in directions:
+            status[proposal.id] = rules.PARTIALLY_SUBSTITUTED if any(ready) else rules.SUBSTITUTED
+        elif any(ready):
+            status[proposal.id] = rules.RECEIVED
+        else:
+            entries.pop(proposal.id)
+    return [
+        RemanagementBadge(
+            proposal_id=proposal_id, proposal_number=numbers[proposal_id], status=status[proposal_id],
+            entries=[RemanagementBadgeEntry(code=code, direction=direction, counterpart_proposal_number=counterpart) for code, direction, counterpart in entries[proposal_id]],
+        )
+        for proposal_id in sorted(entries)
+    ]
 
 
 async def get_expedition_detail(session: AsyncSession, proposal_id: int) -> ExpeditionProposalDetail:
@@ -1687,6 +1777,22 @@ async def confirm_remanagement_batch(session: AsyncSession, payload: Remanagemen
             )
         if not plan.lines:
             raise ApiError(error_codes.EXPEDITION_REMANAGEMENT_INVALID, "Nenhuma linha de compensacao valida para confirmar.", status_code=409)
+
+        # Remanejamento por linhas (lotes fisicos + parciais): so quando a chave esta ligada e todas as linhas
+        # envolvidas estao limpas; senao segue o motor de transferencias abaixo.
+        from api.app.modules.proposals import remanagement_rows
+
+        if await remanagement_rows.rows_engine_applicable(session, list(items_by_id.values())):
+            await remanagement_rows.apply_rows_engine(
+                session, payload=payload, actor=actor, request_id=request_id, preloaded=preloaded, destination=destination,
+                plan=plan, items_by_id=items_by_id,
+            )
+            await auth_repository.create_security_event(
+                session, "COMPENSATED_REMANAGEMENT_APPLIED", actor_user_id=actor.id, request_id=request_id,
+                details={"operation_id": payload.operation_id, "destination_proposal_id": destination.id, "source_proposal_ids": source_proposal_ids, "engine": "ROWS"},
+            )
+            await session.commit()
+            return _confirm_result_from_rows(payload.operation_id, await _get_remanagement_batch_by_operation_id(session, payload.operation_id))
 
         fresh_balances = await _batch_item_allocation_balances(session, list(items_by_id.values()))
 
@@ -2308,14 +2414,14 @@ async def build_remanagement_compensation_plan(session: AsyncSession, payload: R
     return _compensation_plan_response(plan)
 
 
-async def simulate_remanagement_review(session: AsyncSession, payload: RemanagementReviewRequest) -> RemanagementReviewResult:
+async def simulate_remanagement_review(session: AsyncSession, payload: RemanagementReviewRequest, actor: User | None = None) -> RemanagementReviewResult:
     """Fase 6 do novo fluxo de Remanejamento: revisao/simulacao final antes da
     confirmacao. Reusa a MESMA leitura de saldo da Fase 5
     (`_load_compensation_snapshots`, que ja consulta o saldo *atual* de cada
     origem/destino - isso e a revalidacao pedida na secao 16) e o MESMO motor
     de compensacao (`build_compensation_plan`); esta funcao apenas adiciona o
     comparativo antes/depois e a validacao do motivo. Nenhuma escrita."""
-    destination, requested_items, allocations, item_snapshots, _items_by_id = await _load_compensation_snapshots(
+    destination, requested_items, allocations, item_snapshots, items_by_id = await _load_compensation_snapshots(
         session,
         RemanagementCompensationRequest(destination_proposal_id=payload.destination_proposal_id, items=payload.items, allocations=payload.allocations),
     )
@@ -2332,9 +2438,15 @@ async def simulate_remanagement_review(session: AsyncSession, payload: Remanagem
         errors.append(CompensationError(code="REASON_REQUIRED", message="Informe o motivo do remanejamento."))
 
     # Quais pecas em andamento do destino passam para cada origem (estagio a estagio).
+    from api.app.modules.proposals import remanagement_rows
+
+    use_rows = bool(plan.products) and not plan.errors and await remanagement_rows.rows_engine_applicable(session, list(items_by_id.values()))
     swap_by_line: dict[tuple[int, int], list[RemanagementStageTransferRow]] = {}
     if plan.products:
-        _stages, swaps, swap_errors = await _stage_swaps_for_plan(session, plan)
+        if use_rows:
+            swaps, swap_errors = await remanagement_rows.rows_stage_swaps(session, plan)
+        else:
+            _stages, swaps, swap_errors = await _stage_swaps_for_plan(session, plan)
         for swap in swaps:
             swap_by_line[(swap.destination_item_id, swap.source_item_id)] = [
                 RemanagementStageTransferRow(stage=transfer.stage, quantity=transfer.quantity) for transfer in swap.transfers
@@ -2415,14 +2527,29 @@ async def simulate_remanagement_review(session: AsyncSession, payload: Remanagem
         not_allocated_items=not_allocated,
         invalid_items=invalid,
     )
+    parts: list[RemanagementReviewPart] = []
+    destination_id = int(destination.id)  # o rollback da previa expira os objetos da sessao
+    if use_rows and not errors and complete + partial > 0 and actor is not None:
+        # Roda o motor so para descobrir as partes que nascem (e descarta a transacao): o usuario ve, antes de
+        # confirmar, o que acontece com cada proposta.
+        try:
+            for part in await remanagement_rows.preview_parts(session, reason=reason, actor=actor, destination=destination, plan=plan, items_by_id=items_by_id):
+                parts.append(RemanagementReviewPart(**part))
+        except ApiError as exc:
+            detail = exc.details if isinstance(exc.details, dict) else {}
+            errors.append(CompensationError(code=str(detail.get("code") or exc.code), message=exc.message))
+        finally:
+            await session.rollback()
     valid = not errors and complete + partial > 0
     return RemanagementReviewResult(
-        destination_proposal_id=destination.id,
+        destination_proposal_id=destination_id,
         valid=valid,
         warnings=list(plan.warnings),
         errors=[CompensationPlanError(code=error.code, message=error.message, destination_item_id=error.destination_item_id, source_item_id=error.source_item_id) for error in errors],
         summary=summary,
         items=review_items,
+        engine="ROWS" if use_rows else "TRANSFER",
+        parts=parts,
     )
 
 
@@ -3381,6 +3508,10 @@ async def _merge_equal_status_partial_children(
     groups: dict[tuple, list[Proposal]] = {}
     for child in children:
         load_ids = tuple(sorted({int(row.load_id) for row in child.galvanization_load_items if row.active}))
+        if child.current_area == "EXPEDICAO" and child.source == "PARTIAL_REMANAGEMENT":
+            # Parte de remanejamento ja pronta na Expedicao: de qual carga as pecas vieram nao importa mais,
+            # as partes prontas se juntam (as de producao seguem a regra de sempre).
+            load_ids = ()
         key = (child.current_area, child.current_status, load_ids)
         groups.setdefault(key, []).append(child)
     for key, members in groups.items():
@@ -3389,15 +3520,10 @@ async def _merge_equal_status_partial_children(
         survivor = members[0]
         merged_ids: list[int] = []
         for merged in members[1:]:
-            for item in list(merged.items):
-                item.proposal = survivor
-                item.proposal_id = survivor.id
-                for load_item in item.galvanization_load_items:
-                    load_item.proposal = survivor
-                    load_item.proposal_id = survivor.id
-                if item.expedition_item is not None:
-                    item.expedition_item.proposal = survivor
-                    item.expedition_item.proposal_id = survivor.id
+            # Linhas do mesmo numero de item se juntam (remanejamento por linhas); se alguma nao puder se
+            # juntar, as duas partes continuam separadas.
+            if not await _absorb_rows(session, survivor, merged, actor, request_id=request_id):
+                continue
             merged.active = False
             merged_ids.append(int(merged.id))
             _touch(merged, actor)
@@ -3436,6 +3562,35 @@ async def _merge_equal_status_partial_children(
         )
 
 
+async def _absorb_rows(session: AsyncSession, survivor: Proposal, merged: Proposal, actor: User, *, request_id: str | None) -> bool:
+    """Passa as linhas de `merged` para `survivor`. Linha do mesmo numero de item que ja esta la se junta
+    (precisa ter o mesmo fluxo); se alguma nao puder se juntar nada e feito e devolve False."""
+    from api.app.modules.proposals.item_lots import rejoin_rows, rows_are_mergeable
+
+    resident = {row.item_number: row for row in survivor.items if row.active}
+    pairs = []
+    for item in merged.items:
+        if not item.active:
+            continue
+        match = resident.get(item.item_number)
+        if match is not None:
+            if not rows_are_mergeable(match, item):
+                return False
+            pairs.append((match, item))
+    for keep, other in pairs:
+        await rejoin_rows(session, keep, other, actor, request_id)
+    for item in list(merged.items):
+        item.proposal = survivor
+        item.proposal_id = survivor.id
+        for load_item in item.galvanization_load_items:
+            load_item.proposal = survivor
+            load_item.proposal_id = survivor.id
+        if item.expedition_item is not None:
+            item.expedition_item.proposal = survivor
+            item.expedition_item.proposal_id = survivor.id
+    return True
+
+
 async def _reborn_parent_when_children_converge(
     session: AsyncSession,
     child: Proposal,
@@ -3465,13 +3620,24 @@ async def _reborn_parent_when_children_converge(
     statuses = {row.current_status for row in active_children}
     if len(statuses) != 1:
         return None
+    # Mae que ainda tem linhas proprias (ex.: o resto do destino de um remanejamento, ainda na producao) esta
+    # operacional, nao "morta": nao renasce enquanto isso.
+    if any(item.active for item in parent.items):
+        return None
+    from api.app.modules.proposals.item_lots import rows_are_mergeable
+
+    seen: dict[str, ProposalItem] = {}
     for row in active_children:
-        for item in list(row.items):
-            item.proposal = parent
-            item.proposal_id = parent.id
-            if item.expedition_item is not None:
-                item.expedition_item.proposal = parent
-                item.expedition_item.proposal_id = parent.id
+        for item in row.items:
+            if not item.active:
+                continue
+            other = seen.get(item.item_number)
+            if other is not None and not rows_are_mergeable(other, item):
+                return None
+            seen.setdefault(item.item_number, item)
+    for row in active_children:
+        if not await _absorb_rows(session, parent, row, actor, request_id=request_id):
+            return None
         row.active = False
         _touch(row, actor)
         await _record_event(
@@ -3578,6 +3744,19 @@ async def _ensure_expedition_items_for_proposal(session: AsyncSession, proposal:
 
 
 async def _expedition_available_source(session: AsyncSession, item: ProposalItem) -> tuple[Decimal, str]:
+    available, origin = await _expedition_available_source_base(session, item)
+    if available > 0 and origin == "PRODUCAO":
+        # Linha que nasceu de um remanejamento por linhas (lote de pecas prontas recebido): a origem do
+        # material na Expedicao e o remanejamento, nao a producao.
+        is_lot = (await session.execute(
+            select(ProposalRemanagementItem.id).where(ProposalRemanagementItem.received_lot_item_id == item.id).limit(1)
+        )).first() is not None
+        if is_lot:
+            return available, "REMANEJAMENTO"
+    return available, origin
+
+
+async def _expedition_available_source_base(session: AsyncSession, item: ProposalItem) -> tuple[Decimal, str]:
     if not item.active or item.delivered:
         return Decimal("0"), "PRODUCAO"
     if not item.flow_defined:
@@ -3585,7 +3764,7 @@ async def _expedition_available_source(session: AsyncSession, item: ProposalItem
         # remanejamento (o destino continua com fluxo indefinido, so troca as pecas).
         received = Decimal(str((await session.execute(
             select(func.coalesce(func.sum(ProposalRemanagementItem.quantity), 0))
-            .where(ProposalRemanagementItem.destination_item_id == item.id)
+            .where(ProposalRemanagementItem.destination_item_id == item.id, ProposalRemanagementItem.mode == "TRANSFER")
         )).scalar_one() or "0")).quantize(Decimal("0.0001"))
         return received, ("REMANEJAMENTO" if received > 0 else "PRODUCAO")
     production_out = Decimal(str((await session.execute(
@@ -3598,7 +3777,7 @@ async def _expedition_available_source(session: AsyncSession, item: ProposalItem
     )).scalar_one() or "0"))
     ready_received_by_remanagement = Decimal(str((await session.execute(
         select(func.coalesce(func.sum(ProposalRemanagementItem.quantity), 0))
-        .where(ProposalRemanagementItem.destination_item_id == item.id)
+        .where(ProposalRemanagementItem.destination_item_id == item.id, ProposalRemanagementItem.mode == "TRANSFER")
     )).scalar_one() or "0"))
     if not item.produced and production_in_completed <= 0 and ready_received_by_remanagement <= 0:
         return Decimal("0"), "PRODUCAO"
@@ -5160,6 +5339,12 @@ async def complete_production_items(session: AsyncSession, proposal_id: int, pay
     )
     if partial_child is not None:
         await _merge_equal_status_partial_children(session, proposal.id, actor, request_id=request_id)
+    if proposal.parent_proposal_id is not None:
+        # Uma parte (filha) que acabou de fabricar e chegou na Expedicao pode ja se juntar as outras partes
+        # e fazer a mae renascer (parte de remanejamento que nao passa pela galvanizacao).
+        await session.flush()
+        await _merge_equal_status_partial_children(session, int(proposal.parent_proposal_id), actor, request_id=request_id)
+        await _reborn_parent_when_children_converge(session, proposal, actor, request_id=request_id)
     await session.commit()
     return _production_detail(await get_proposal(session, proposal.id))
 

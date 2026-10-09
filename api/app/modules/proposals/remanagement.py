@@ -12,6 +12,10 @@ ZERO = Decimal("0.0000")
 # existe so para os testes provarem o caminho bloqueado e para desligar de emergencia.
 GALVANIZED_REMANAGEMENT_ENABLED = True
 
+# Remanejamento por linhas (lotes fisicos) e parciais, plano em REMANEJAMENTO_PARCIAIS_PLANO.md. Desligado
+# por padrao ate a conferencia na dev; so entra quando todas as linhas envolvidas estao "limpas".
+REMANAGEMENT_BY_ROWS_ENABLED = False
+
 
 def galvanized_remanagement_blocked(requires_galvanization: str | None) -> bool:
     """True quando o item e galvanizado e o remanejamento de galvanizados ainda esta desligado."""

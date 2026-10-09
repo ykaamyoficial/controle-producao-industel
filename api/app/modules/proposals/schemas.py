@@ -1284,6 +1284,18 @@ class RemanagementReviewSummary(BaseModel):
     invalid_items: int
 
 
+class RemanagementReviewPart(BaseModel):
+    """Como uma proposta fica depois do remanejamento por linhas: a propria proposta, uma parte (filha) ou a
+    referencia (mae) no Controle Geral. `place`: PRODUCAO | GALVANIZACAO | EXPEDICAO | REFERENCIA."""
+
+    proposal_number: str
+    role: str  # ORIGEM | DESTINO
+    place: str
+    item_numbers: list[str] = Field(default_factory=list)
+    quantity: Decimal = Decimal("0")
+    is_part: bool = False
+
+
 class RemanagementReviewResult(BaseModel):
     destination_proposal_id: int
     valid: bool
@@ -1291,6 +1303,10 @@ class RemanagementReviewResult(BaseModel):
     errors: list[CompensationPlanError]
     summary: RemanagementReviewSummary
     items: list[RemanagementReviewItem]
+    # TRANSFER (motor de transferencias) ou ROWS (por linhas, com parciais) e, neste caso, o que vai acontecer
+    # com cada proposta envolvida.
+    engine: str = "TRANSFER"
+    parts: list[RemanagementReviewPart] = Field(default_factory=list)
 
 
 class RemanagementConfirmRequest(BaseModel):
