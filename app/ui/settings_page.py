@@ -186,6 +186,10 @@ class SettingsPage(QWidget):
             "Notificações",
             "Escolha por onde cada tipo de aviso chega (no app, bandeja, e-mail) e o horário de silêncio.",
         )
+        from app.ui.notifier_status_widget import NotifierStatusWidget
+
+        self.notifier_status_widget = NotifierStatusWidget(self)
+        notifications.addWidget(self.notifier_status_widget)
         self.notification_preferences_widget = None
         if hasattr(self.service, "notification_preferences"):
             from app.ui.notification_preferences_widget import NotificationPreferencesWidget

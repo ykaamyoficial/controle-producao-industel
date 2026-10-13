@@ -64,6 +64,9 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: de
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "Abrir {#MyAppName}"; Flags: nowait postinstall skipifsilent
+; O instalador encerra o agente de avisos (--notifier); religa-o ao terminar, com o
+; usuario original (nunca como administrador, senao os baloes iriam para a conta errada).
+Filename: "{app}\{#MyAppExeName}"; Parameters: "--notifier"; Flags: nowait runhidden runasoriginaluser
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}\versions"

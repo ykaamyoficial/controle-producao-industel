@@ -299,6 +299,15 @@ def main():
     if update_launched:
         return 0
 
+    # O Updater/instalador encerram o agente de avisos; religa-o assim que o
+    # programa abre (antes do login), sem esperar o usuario entrar.
+    try:
+        from app.services.notifier_agent import ensure_notifier_running
+
+        ensure_notifier_running()
+    except Exception:
+        log.exception("Falha ao religar o agente de avisos na abertura")
+
     from app.ui.main_window import MainWindow
 
     window = MainWindow(skip_auto_update_check=update_checked, update_available_notice=update_available_message)
