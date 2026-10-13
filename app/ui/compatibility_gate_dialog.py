@@ -8,7 +8,9 @@ from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QVBoxLayout
 from app.services.app_logging import get_logger
 from app.services.compatibility_check import CompatibilityCheckResult
 from app.ui.background_worker import start_worker
+from app.ui.components.dialog_shell import window_title_row
 from app.ui.components.modern_button import ModernButton
+from app.ui.dialog_utils import style_dialog_from_parent
 from app.versioning.models import CompatibilityStatus
 
 log = get_logger("compatibility_gate_dialog")
@@ -74,6 +76,7 @@ class CompatibilityGateDialog(QDialog):
         self.setModal(True)
         self.setMinimumWidth(420)
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
+        style_dialog_from_parent(self, parent, standalone=True)
         self._build()
         self._start_check()
 
@@ -87,6 +90,7 @@ class CompatibilityGateDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 24, 24, 20)
         layout.setSpacing(14)
+        layout.addWidget(window_title_row(self))
 
         self.message_label = QLabel(_CHECKING_MESSAGE)
         self.message_label.setWordWrap(True)

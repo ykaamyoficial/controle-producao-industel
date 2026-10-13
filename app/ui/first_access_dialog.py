@@ -16,6 +16,7 @@ from app.services.bootstrap_service import (
 )
 from app.ui.background_worker import start_worker
 from app.ui.components.modern_button import ModernButton
+from app.ui.components.dialog_shell import window_title_row
 from app.ui.dialog_utils import style_dialog_from_parent
 
 log = get_logger("first_access_dialog")
@@ -70,14 +71,15 @@ class FirstAccessDialog(QDialog):
         self.setModal(True)
         self.setMinimumWidth(460)
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
+        style_dialog_from_parent(self, parent, standalone=True)
         self._build()
-        style_dialog_from_parent(self, parent)
         self._start_bootstrap()
 
     def _build(self) -> None:
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 24, 24, 20)
         layout.setSpacing(14)
+        layout.addWidget(window_title_row(self))
 
         self.message_label = QLabel(_CHECKING_MESSAGE)
         self.message_label.setWordWrap(True)

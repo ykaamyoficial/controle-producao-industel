@@ -1151,6 +1151,8 @@ def _build_stylesheet(palette: dict) -> str:
     QLabel#PopoverName {{
         font-weight: 700;
     }}
+    QFrame#WindowTitleRow {{ background: transparent; border: 0; }}
+    QLabel#WindowTitleText {{ font-size: 13px; font-weight: 700; color: {muted}; }}
     /* Casca nova das janelas (window_shell.py): a moldura e pintada pela
        casca, entao o QDialog fica sem fundo; cantos internos acompanham o
        raio de 24 px da janela. */

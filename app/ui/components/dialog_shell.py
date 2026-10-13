@@ -126,6 +126,35 @@ def dialog_footer(*, left: tuple | list = (), right: tuple | list = ()) -> QFram
     return frame
 
 
+def window_title_row(dialog: QWidget, title: str | None = None) -> QFrame:
+    """Titulo e X de fechar das telas que abrem sem janela principal por tras:
+    o que a barra do Windows dava. O X faz o mesmo que o da barra (`close()`).
+
+    So aparece quando o dialogo esta sem a moldura do Windows; com ela a linha
+    fica escondida, para nao repetir titulo e X. Chamar depois de
+    `style_dialog_from_parent(..., standalone=True)`."""
+    from app.ui.components.app_icon_button import AppIconButton
+    from app.ui.icons import AppIcons, IconSize
+
+    frame = QFrame()
+    frame.setObjectName("WindowTitleRow")
+    row = QHBoxLayout(frame)
+    row.setContentsMargins(0, 0, 0, 0)
+    row.setSpacing(8)
+    label = QLabel(dialog.windowTitle() if title is None else title)
+    label.setObjectName("WindowTitleText")
+    close_button = AppIconButton(AppIcons.CLOSE, size=IconSize.MD, tooltip="Fechar")
+    close_button.setFixedSize(30, 30)
+    close_button.setAccessibleName("Fechar")
+    close_button.clicked.connect(dialog.close)
+    row.addWidget(label, 1)
+    row.addWidget(close_button, 0, Qt.AlignTop)
+    frame.title_label = label
+    frame.close_button = close_button
+    frame.setVisible(bool(dialog.windowFlags() & Qt.FramelessWindowHint))
+    return frame
+
+
 def info_notice(text: str) -> QFrame:
     """Aviso fixo da tela: caixa azul-clara com icone de informacao (nunca
     texto solto em cinza). O QLabel com o texto fica em `frame.text_label`."""

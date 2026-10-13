@@ -9,6 +9,7 @@ from app.services.app_logging import get_logger
 from app.services.compatibility_check import CompatibilityCheckResult
 from app.ui.background_worker import start_worker
 from app.ui.components.modern_button import ModernButton
+from app.ui.dialog_utils import style_dialog_from_parent
 from app.version import APP_VERSION
 from app.versioning.models import CompatibilityStatus
 
@@ -66,6 +67,7 @@ class MaintenanceModeDialog(QDialog):
         self._timer.setSingleShot(True)
         self._timer.timeout.connect(self._poll)
 
+        style_dialog_from_parent(self, parent, standalone=True)
         self._build()
         self._apply_result(initial_result)
         if auto_start_timer:

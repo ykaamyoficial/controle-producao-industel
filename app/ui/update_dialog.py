@@ -7,6 +7,7 @@ from PySide6.QtWidgets import QDialog, QFrame, QHBoxLayout, QLabel, QMessageBox,
 
 from app.services.update_coordinator import UpdateCoordinator
 from app.ui.components.modern_button import ModernButton
+from app.ui.dialog_utils import style_dialog_from_parent
 from app.ui.icons import AppIcons, icon_provider
 
 
@@ -39,6 +40,7 @@ class UpdateDialog(QDialog):
         self._progress_animation = None
         self.setWindowTitle("Nova versão disponível")
         self.setMinimumSize(640, 520)
+        style_dialog_from_parent(self, parent, standalone=True)
         self._build()
         self._apply_update_style()
 
