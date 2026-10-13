@@ -43,6 +43,10 @@ EXIT_SCALE = 0.94  # e encolhe ate este enquanto some
 APPEAR_MS = 160
 EXIT_MS = 180
 HEADER_DRAG_HEIGHT = 64
+# Dialogo cujo conteudo vai de ponta a ponta (margem zero, como a central de
+# chats) ganha esta folga: sem ela o canto reto do conteudo passaria da curva
+# de 24 px e cobriria o aro e o chanfro. 8 px e o minimo que cabe na curva.
+EDGE_PADDING = 8
 _GRIP_INSET = 9  # afasta a alca de redimensionar da curva do canto
 _QWIDGETSIZE_MAX = 16777215
 
@@ -220,20 +224,26 @@ class WindowShell(QObject):
         maximum = dialog.maximumSize()
         size = dialog.size()
         inner = dialog.contentsMargins()
-        dialog.setContentsMargins(inner.left() + margin, inner.top() + margin, inner.right() + margin, inner.bottom() + margin)
+        own = layout.contentsMargins() if layout is not None else inner
+        left = margin + max(0, EDGE_PADDING - inner.left() - own.left())
+        top = margin + max(0, EDGE_PADDING - inner.top() - own.top())
+        right = margin + max(0, EDGE_PADDING - inner.right() - own.right())
+        bottom = margin + max(0, EDGE_PADDING - inner.bottom() - own.bottom())
+        wider, taller = left + right, top + bottom
+        dialog.setContentsMargins(inner.left() + left, inner.top() + top, inner.right() + right, inner.bottom() + bottom)
         if maximum.width() < _QWIDGETSIZE_MAX:
-            dialog.setMaximumWidth(maximum.width() + 2 * margin)
+            dialog.setMaximumWidth(maximum.width() + wider)
         if maximum.height() < _QWIDGETSIZE_MAX:
-            dialog.setMaximumHeight(maximum.height() + 2 * margin)
+            dialog.setMaximumHeight(maximum.height() + taller)
         # Minimo que o proprio layout calcula cresce sozinho com a margem; so
         # o que foi fixado a mao (setMinimumWidth(720)) precisa ser somado.
         if minimum.width() > 0 and (implicit is None or minimum.width() != implicit.width()):
-            dialog.setMinimumWidth(minimum.width() + 2 * margin)
+            dialog.setMinimumWidth(minimum.width() + wider)
         if minimum.height() > 0 and (implicit is None or minimum.height() != implicit.height()):
-            dialog.setMinimumHeight(minimum.height() + 2 * margin)
-        dialog.resize(size.width() + 2 * margin, size.height() + 2 * margin)
+            dialog.setMinimumHeight(minimum.height() + taller)
+        dialog.resize(size.width() + wider, size.height() + taller)
         if dialog.testAttribute(Qt.WA_Moved):
-            dialog.move(dialog.x() - margin, dialog.y() - margin)
+            dialog.move(dialog.x() - left, dialog.y() - top)
 
     def _place_grip(self) -> None:
         """A alca de redimensionar do QDialog nasce no canto da janela, que

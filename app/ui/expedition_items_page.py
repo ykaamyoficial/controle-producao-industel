@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
 
 from app.models.item_table_model import ItemTableModel
 from app.ui.components.area_identity import style_area_title
+from app.ui.components.dialog_shell import dialog_footer, dialog_header, dialog_layout
 from app.ui.components.empty_state import EmptyState
 from app.ui.components.modern_button import ModernButton
 from app.ui.components.modern_table import ModernTable
@@ -36,6 +37,7 @@ from app.ui.components.operational_layout import (
 )
 from app.ui.components.toast_notification import ToastNotification
 from app.ui.components.top_tabs import configure_operational_tabs
+from app.ui.dialog_utils import style_dialog_from_parent
 from app.ui.process_detail_dialog import ProcessDetailDialog
 from app.ui.process_page import ProcessPage
 from app.ui.refresh_coordinator import RefreshCoordinator
@@ -330,10 +332,14 @@ class ExpeditionItemsPage(QWidget):
 
     def show_distribution(self, group_row: dict):
         """Em quais propostas o produto esta e quanto falta entregar em cada uma."""
+        product = str(group_row.get("codigo_produto") or group_row.get("descricao") or "")
         dialog = QDialog(self)
-        dialog.setWindowTitle(f"Distribuição por proposta — {group_row.get('codigo_produto') or group_row.get('descricao')}")
+        dialog.setWindowTitle(f"Distribuição por proposta — {product}")
         dialog.resize(760, 400)
-        layout = QVBoxLayout(dialog)
+        style_dialog_from_parent(dialog, self)
+        # Sem a barra de titulo do Windows o titulo passa a ficar no cabecalho.
+        layout = dialog_layout(dialog)
+        layout.addWidget(dialog_header("Distribuição por proposta", product))
         table = QTableWidget(0, 5)
         table.setHorizontalHeaderLabels(["Proposta", "Cliente", "Item", "Quantidade", "Situação"])
         table.verticalHeader().setVisible(False)
@@ -355,13 +361,10 @@ class ExpeditionItemsPage(QWidget):
         table.itemDoubleClicked.connect(
             lambda cell: self._open_details(items[cell.row()].get("api_proposal_id"), dialog)
         )
-        layout.addWidget(table)
-        footer = QHBoxLayout()
-        footer.addStretch()
+        layout.addWidget(table, 1)
         close_button = ModernButton("Fechar", "clear", variant="ghost")
         close_button.clicked.connect(dialog.accept)
-        footer.addWidget(close_button)
-        layout.addLayout(footer)
+        layout.addWidget(dialog_footer(right=[close_button]))
         dialog.exec()
 
     def open_context_menu(self, position):

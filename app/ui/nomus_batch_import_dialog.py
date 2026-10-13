@@ -366,7 +366,7 @@ class NomusBatchImportDialog(QDialog):
         self.cancel_button.clicked.connect(self.cancel_batch)
         self.retry_button.clicked.connect(self.retry_failed)
         self.conference_button.clicked.connect(self.accept_ready)
-        self._arrange_footer(self.width() < 1150)
+        self._arrange_footer(self.contentsRect().width() < 1150)
         root.addWidget(self.footer_frame)
         self._update_actions()
 
@@ -416,7 +416,8 @@ class NomusBatchImportDialog(QDialog):
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         if hasattr(self, "footer_layout"):
-            self._arrange_footer(event.size().width() < 1150)
+            # Largura do conteudo: com a casca nova a janela inclui a margem da sombra.
+            self._arrange_footer(self.contentsRect().width() < 1150)
 
     def _refresh_preview(self) -> None:
         if self._running:

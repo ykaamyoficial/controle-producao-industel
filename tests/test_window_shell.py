@@ -136,6 +136,22 @@ class WindowShellTests(unittest.TestCase):
         self.assertEqual((dialog.minimumWidth(), dialog.maximumWidth(), dialog.width()), (expected, expected, expected))
         dialog.reject()
 
+    def test_edge_to_edge_dialog_gets_a_minimum_padding_inside_the_curve(self):
+        dialog = QDialog(self.owner)
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(QLabel("De ponta a ponta"))
+        style_dialog_from_parent(dialog, self.owner)
+        dialog.resize(400, 300)
+        dialog.show()
+        self.app.processEvents()
+        padded = SHADOW_MARGIN + window_shell.EDGE_PADDING
+        margins = dialog.contentsMargins()
+        self.assertEqual((margins.left(), margins.top(), margins.right(), margins.bottom()), (padded,) * 4)
+        # O conteudo mantem o tamanho pedido; a janela cresce em volta dele.
+        self.assertEqual((dialog.contentsRect().width(), dialog.contentsRect().height()), (400, 300))
+        dialog.reject()
+
     def test_visible_area_and_outline_exclude_the_shadow_margin(self):
         dialog = self._dialog()
         dialog.resize(520, 360)

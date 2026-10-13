@@ -36,9 +36,11 @@ from app.ui.components.operational_layout import (
     OPERATIONAL_TABLE_STACK_MARGINS,
 )
 from app.ui.components.batch_selection import BatchSelectionController, BatchSelectionHeader
+from app.ui.components.dialog_shell import dialog_footer, dialog_header, dialog_layout
 from app.ui.components.operational_header import configure_operational_header
 from app.ui.components.top_tabs import configure_operational_tabs
 from app.ui.components.toast_notification import ToastNotification
+from app.ui.dialog_utils import style_dialog_from_parent
 from app.ui.resilience import show_operation_error
 from app.ui.flow_review_dialog import FlowReviewDialog
 from app.ui.galvanization_load_dialog import GalvanizationLoadDialog
@@ -277,10 +279,14 @@ class ProductionItemsPage(QWidget):
             self._show_group_distribution(row)
 
     def _show_group_distribution(self, group_row: dict):
+        product = str(group_row.get("codigo_produto") or group_row.get("descricao") or "")
         dialog = QDialog(self)
-        dialog.setWindowTitle(f"Distribuição por proposta — {group_row.get('codigo_produto') or group_row.get('descricao')}")
+        dialog.setWindowTitle(f"Distribuição por proposta — {product}")
         dialog.resize(680, 380)
-        layout = QVBoxLayout(dialog)
+        style_dialog_from_parent(dialog, self)
+        # Sem a barra de titulo do Windows o titulo passa a ficar no cabecalho.
+        layout = dialog_layout(dialog)
+        layout.addWidget(dialog_header("Distribuição por proposta", product))
         table = QTableWidget(0, 5)
         table.setHorizontalHeaderLabels(["Proposta", "Cliente", "Quantidade", "Peso", "Status"])
         table.verticalHeader().setVisible(False)
@@ -298,13 +304,10 @@ class ProductionItemsPage(QWidget):
                 cell = QTableWidgetItem(str(value if value not in (None, "") else "-"))
                 cell.setTextAlignment(Qt.AlignCenter)
                 table.setItem(row_index, col, cell)
-        layout.addWidget(table)
-        footer = QHBoxLayout()
-        footer.addStretch()
+        layout.addWidget(table, 1)
         close_btn = ModernButton("Fechar", "clear", variant="ghost")
         close_btn.clicked.connect(dialog.accept)
-        footer.addWidget(close_btn)
-        layout.addLayout(footer)
+        layout.addWidget(dialog_footer(right=[close_btn]))
         dialog.exec()
 
     def _set_loading(self, loading: bool):
