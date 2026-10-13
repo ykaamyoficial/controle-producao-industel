@@ -85,6 +85,11 @@ class MessageBoxShellTests(unittest.TestCase):
         # Margem da sombra + faixa onde o titulo e pintado.
         self.assertGreaterEqual(seen["top_margin"], SHADOW_MARGIN + TITLE_STRIP)
 
+    def test_standard_buttons_are_labelled_in_portuguese(self):
+        seen = self._when_box_opens(lambda box: (seen.update(labels=(box.button(QMessageBox.Yes).text(), box.button(QMessageBox.No).text())), box.button(QMessageBox.No).click()))
+        QMessageBox.question(self.owner, "T", "X")
+        self.assertEqual(seen["labels"], ("Sim", "Não"))
+
     def test_question_default_button_is_the_one_requested(self):
         seen = self._when_box_opens(lambda box: (seen.update(default=box.standardButton(box.defaultButton())), box.button(QMessageBox.Yes).click()))
         result = QMessageBox.question(self.owner, "T", "X", QMessageBox.Yes | QMessageBox.No, QMessageBox.No)

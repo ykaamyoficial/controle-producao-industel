@@ -349,7 +349,7 @@ Chave vira padrão e é removida; atualizar a skill `qt-industrial-ui` e `refere
 - **Nenhuma tela foi vista com dados reais, logado na API.** A conferência foi pela galeria, por montagens de teste na tela real e pelas fotos com os dados de exemplo dos testes.
 - 25 diálogos não foram fotografados, porque os testes não os constroem: `AboutDialog`, `FiscalActionCenter`, `_SelectGalvanizationLoadDialog`, `GalvanizationLoadActionCenter`, `ApiProposalsReadonlyDialog`, `DashboardDetailsDialog`, `FiscalEmissionDialog`, `FiscalProposalDetailDialog`, `GalvanizationLoadDialog`, `_ItemAllocationDialog`, `_GalvanizationLoadReviewDialog`, `_GalvanizationReturnReviewDialog`, `ItemFlowDialog`, `ItemSelectionDialog`, `ItemWeightDialog`, `OperationalRowsDialog`, `OperationalProcessReadOnlyDialog`, `OperationalLoadReadOnlyDialog`, `InternalNoteDialog`, `EventDetailDialog`, `UpdateAuditDialog`, `UserEditorDialog`, `UserProfileDialog`, `MediaViewerDialog` (visto na tela real, sem mídia) e `ProposalActionCenter` (coberto pela subclasse). Recebem a mesma casca pelo mesmo ponto único.
 - Dica (`QToolTip`) ficou como era.
-- Botões das caixas de mensagem continuam em inglês ("Yes", "No", "Cancel"), como já eram: o programa não instala a tradução do Qt.
+- Botões das caixas de mensagem: traduzidos depois, a pedido do usuário ("Sim", "Não", "Cancelar"...), em `message_boxes.py`. Com a chave de emergência desligada voltam a sair em inglês, porque aí a caixa é a original do Qt.
 - As duas classes sem uso (`ModernDialog`, `_LegacyGalvanizationLoadDetailsDialog`) não foram removidas.
 - O instalador não foi gerado.
 

@@ -22,6 +22,31 @@ from app.ui.components.window_shell import install_message_shell, window_shell_e
 
 _originals: dict[str, object] = {}
 
+# O programa nao instala a traducao do Qt, entao os botoes padrao saiam em
+# ingles. Como a caixa agora e montada aqui, o rotulo e dado em portugues.
+_BUTTON_LABELS = {
+    QMessageBox.Ok: "OK",
+    QMessageBox.Yes: "Sim",
+    QMessageBox.No: "Não",
+    QMessageBox.Cancel: "Cancelar",
+    QMessageBox.Close: "Fechar",
+    QMessageBox.Save: "Salvar",
+    QMessageBox.Discard: "Descartar",
+    QMessageBox.Apply: "Aplicar",
+    QMessageBox.Retry: "Tentar novamente",
+    QMessageBox.Ignore: "Ignorar",
+    QMessageBox.Abort: "Interromper",
+    QMessageBox.YesToAll: "Sim para todos",
+    QMessageBox.NoToAll: "Não para todos",
+}
+
+
+def _translate_buttons(box: QMessageBox) -> None:
+    for standard, label in _BUTTON_LABELS.items():
+        button = box.button(standard)
+        if button is not None:
+            button.setText(label)
+
 
 def _show_message(name: str, icon, parent, title, text, buttons, default_button):
     if not window_shell_enabled():
@@ -29,6 +54,7 @@ def _show_message(name: str, icon, parent, title, text, buttons, default_button)
     box = QMessageBox(icon, title, text, buttons, parent)
     if default_button != QMessageBox.NoButton:
         box.setDefaultButton(default_button)
+    _translate_buttons(box)
     install_message_shell(box)
     try:
         if box.exec() == -1:
@@ -65,6 +91,8 @@ def _input(parent, title, label, flags, input_method_hints) -> QInputDialog:
 
 
 def _finish_input(dialog: QInputDialog) -> tuple[str, bool]:
+    dialog.setOkButtonText("OK")
+    dialog.setCancelButtonText("Cancelar")
     install_message_shell(dialog)
     try:
         accepted = dialog.exec() == QDialog.Accepted
