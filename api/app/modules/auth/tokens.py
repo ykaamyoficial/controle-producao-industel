@@ -57,6 +57,44 @@ def decode_access_token(token: str) -> dict[str, Any]:
     return payload
 
 
+def create_notifier_token(user_id: int, device_id: int) -> tuple[str, datetime]:
+    """Token curto do agente de avisos. `type` proprio ("notifier"): nunca passa
+    em `decode_access_token`, entao nao abre nenhuma rota normal da API."""
+    settings = get_settings()
+    issued_at = utcnow()
+    expires_at = issued_at + timedelta(minutes=settings.access_token_expire_minutes)
+    payload: dict[str, Any] = {
+        "sub": str(user_id),
+        "did": str(device_id),
+        "jti": uuid.uuid4().hex,
+        "iat": int(issued_at.timestamp()),
+        "exp": int(expires_at.timestamp()),
+        "type": "notifier",
+        "iss": settings.jwt_issuer,
+        "aud": settings.jwt_audience,
+    }
+    return jwt.encode(payload, settings.secret_key, algorithm="HS256"), expires_at
+
+
+def decode_notifier_token(token: str) -> dict[str, Any]:
+    settings = get_settings()
+    try:
+        payload = jwt.decode(
+            token,
+            settings.secret_key,
+            algorithms=["HS256"],
+            issuer=settings.jwt_issuer,
+            audience=settings.jwt_audience,
+        )
+    except ExpiredSignatureError as exc:
+        raise AuthenticationError(error_codes.TOKEN_EXPIRED, "Token expirado.") from exc
+    except InvalidTokenError as exc:
+        raise AuthenticationError(error_codes.TOKEN_INVALID, "Token invalido.") from exc
+    if payload.get("type") != "notifier" or not payload.get("sub") or not payload.get("did"):
+        raise AuthenticationError(error_codes.TOKEN_INVALID, "Token invalido.")
+    return payload
+
+
 def generate_refresh_token() -> str:
     return secrets.token_urlsafe(48)
 

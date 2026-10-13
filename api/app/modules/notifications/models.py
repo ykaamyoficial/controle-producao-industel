@@ -108,3 +108,33 @@ class NotificationUserSettings(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+
+class NotificationDevice(Base):
+    """Computador autorizado a receber avisos do Windows em nome de um usuario.
+
+    Credencial propria do agente --notifier, separada da sessao (auth_sessions):
+    so le notificacoes, nao rotaciona a cada uso (o agente e o app principal
+    disputavam o mesmo refresh token e derrubavam a familia inteira por reuso)
+    e sobrevive ao "Sair" do app. O dono e sempre o ULTIMO login feito naquela
+    instalacao + usuario do Windows: registrar de novo revoga o anterior.
+    """
+
+    __tablename__ = "notification_devices"
+    __table_args__ = (
+        Index("ix_notification_devices_token_hash", "token_hash", unique=True),
+        Index("ix_notification_devices_installation", "installation_id", "os_user"),
+        Index("ix_notification_devices_user_id", "user_id"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    installation_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    os_user: Mapped[str] = mapped_column(String(120), nullable=False, server_default="")
+    device_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    token_hash: Mapped[str] = mapped_column(String(128), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoke_reason: Mapped[str | None] = mapped_column(String(80), nullable=True)

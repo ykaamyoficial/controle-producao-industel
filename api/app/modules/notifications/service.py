@@ -283,17 +283,29 @@ async def unread_summary(session: AsyncSession, actor: User) -> NotificationUnre
     )
 
 
-async def catch_up(session: AsyncSession, actor: User, *, since_id: int = 0, limit: int = 50) -> CatchUpResponse:
+_CHANNEL_NOT_DELIVERED = ("suprimido_preferencia", "agrupado_digest")
+
+
+async def catch_up(
+    session: AsyncSession, actor: User, *, since_id: int = 0, limit: int = 50, channel: str | None = None
+) -> CatchUpResponse:
     """O agente de bandeja chama isso ao (re)conectar: o que chegou desde a
-    ultima notificacao que ele ja mostrou."""
-    rows = (
-        await session.execute(
-            select(Notification)
-            .where(Notification.user_id == actor.id, Notification.id > since_id)
-            .order_by(Notification.id.asc())
-            .limit(limit)
+    ultima notificacao que ele ja mostrou. Com `channel`, deixa de fora o que
+    o plano de entrega suprimiu naquele canal (preferencia desligada ou
+    horario de silencio)."""
+    stmt = select(Notification).where(Notification.user_id == actor.id, Notification.id > since_id)
+    if channel:
+        suppressed = (
+            select(NotificationDelivery.id)
+            .where(
+                NotificationDelivery.notification_id == Notification.id,
+                NotificationDelivery.channel == channel,
+                NotificationDelivery.status.in_(_CHANNEL_NOT_DELIVERED),
+            )
+            .exists()
         )
-    ).scalars().all()
+        stmt = stmt.where(~suppressed)
+    rows = (await session.execute(stmt.order_by(Notification.id.asc()).limit(limit))).scalars().all()
     names = await _actor_names(session, list(rows))
     items = [_to_out(n, names.get(n.actor_user_id)) for n in rows]
     latest = rows[-1].id if rows else since_id

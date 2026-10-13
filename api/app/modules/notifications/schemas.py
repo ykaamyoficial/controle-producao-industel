@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class NotificationOut(BaseModel):
@@ -68,3 +68,32 @@ class NotificationSettingsPayload(BaseModel):
     quiet_start: str | None = None
     quiet_end: str | None = None
     quiet_channels: list[str] = []
+
+
+class NotifierDeviceRegisterPayload(BaseModel):
+    installation_id: str = Field(min_length=8, max_length=64)
+    os_user: str = Field(default="", max_length=120)
+    device_name: str | None = Field(default=None, max_length=160)
+
+
+class NotifierUserOut(BaseModel):
+    id: int
+    username: str
+    display_name: str
+
+
+class NotifierDeviceRegistered(BaseModel):
+    device_token: str
+    expires_at: datetime
+    user: NotifierUserOut
+
+
+class NotifierTokenPayload(BaseModel):
+    device_token: str = Field(min_length=16, max_length=200)
+
+
+class NotifierTokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    expires_in: int
+    user: NotifierUserOut

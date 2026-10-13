@@ -42,6 +42,7 @@ class Settings(BaseSettings):
     secret_key: str = Field(default="", alias="SECRET_KEY")
     access_token_expire_minutes: int = Field(default=15, ge=1, alias="ACCESS_TOKEN_EXPIRE_MINUTES")
     refresh_token_expire_days: int = Field(default=7, ge=1, alias="REFRESH_TOKEN_EXPIRE_DAYS")
+    notifier_device_expire_days: int = Field(default=90, ge=1, alias="NOTIFIER_DEVICE_EXPIRE_DAYS")
     login_max_failed_attempts: int = Field(default=5, ge=1, alias="LOGIN_MAX_FAILED_ATTEMPTS")
     login_lock_minutes: int = Field(default=15, ge=1, alias="LOGIN_LOCK_MINUTES")
     password_min_length: int = Field(default=4, ge=4, alias="PASSWORD_MIN_LENGTH")

@@ -183,5 +183,10 @@
     "classification": "TRANSITIONAL",
     "summary": "Adiciona proposal_remanagement_items.mode (TRANSFER = motor de transferencias ja existente, ROWS = remanejamento por linhas) e received_lot_item_id (linha que recebeu o lote pronto).",
     "justification": "Duas ADD COLUMN: mode com server_default 'TRANSFER' (todas as linhas ja gravadas continuam sendo do motor antigo, sem backfill) e received_lot_item_id nullable; mais um CHECK que so aceita os dois valores e uma FK com ON DELETE SET NULL para proposal_items. Classificada TRANSITIONAL (e nao ADDITIVE puro) apenas porque o scanner sinaliza a FK nova numa tabela existente. Nenhum dado, coluna ou constraint existente e alterado, e o codigo antigo ignora as colunas novas. As consultas que somam remanejamentos para a disponibilidade da Expedicao e para o controle de pecas passam a filtrar mode = 'TRANSFER', entao uma linha ROWS nunca e contada em dobro. O downgrade remove as duas colunas e volta a revisao registrada para 20261008_0035."
+  },
+  "20261013_0037": {
+    "classification": "ADDITIVE",
+    "summary": "Cria notification_devices (credencial propria do agente de avisos do Windows, uma por instalacao + usuario do Windows, sempre do ultimo login).",
+    "justification": "Apenas CREATE TABLE de uma tabela nova com tres indices e uma FK para users (ON DELETE CASCADE). Nenhuma tabela, coluna ou constraint existente e alterada e nenhum dado e migrado. O codigo antigo nao conhece a tabela; o agente antigo continua usando /notifications/catch-up com o refresh token da sessao, entao Desktop antigo + API nova continuam compativeis. O downgrade remove so a tabela nova (as credenciais de aviso se perdem e sao recriadas no proximo login)."
   }
 }
