@@ -920,6 +920,10 @@ def main() -> int:
 
         set_window_shell_enabled(True)
     app = QApplication(sys.argv[:1])
+    if args.casca:
+        from app.ui.components.floating_chrome import install_floating_chrome
+
+        install_floating_chrome(app)
     family = load_app_fonts()
     if args.remanejamento:
         window, wizard = remanagement_preview(args.tema, args.remanejamento)

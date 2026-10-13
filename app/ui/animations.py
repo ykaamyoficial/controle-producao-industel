@@ -162,3 +162,19 @@ def fade_in(widget: QWidget, duration: int = 180) -> QPropertyAnimation:
     animation.finished.connect(lambda: widget.setGraphicsEffect(None))
     animation.start()
     return animation
+
+
+def fade_out(widget: QWidget, duration: int = 160, on_finished=None) -> QPropertyAnimation:
+    """Some com um widget filho por opacidade e chama `on_finished` no fim (o
+    efeito grafico e temporario, como em `fade_in`)."""
+    effect = QGraphicsOpacityEffect(widget)
+    widget.setGraphicsEffect(effect)
+    animation = QPropertyAnimation(effect, b"opacity", widget)
+    animation.setDuration(motion_duration(duration))
+    animation.setStartValue(1.0)
+    animation.setEndValue(0.0)
+    animation.setEasingCurve(WINDOW_CURVE)
+    if on_finished is not None:
+        animation.finished.connect(on_finished)
+    animation.start()
+    return animation

@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from PySide6.QtCore import QEvent, Qt
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QScrollArea, QVBoxLayout, QWidget
 
+from app.ui.components.window_shell import install_popup_shell
 from app.ui.background_worker import start_worker
 from app.ui.components.modern_button import ModernButton
 from app.ui.icons import make_icon
@@ -107,6 +108,7 @@ class NotificationCenterPanel(QFrame):
         self._load_more_thread = None
         self._worker_threads = []
         self.setObjectName("NotificationCenterPanel")
+        install_popup_shell(self, anchor="top-right")
         self.setFixedWidth(PANEL_WIDTH)
         self.setMinimumHeight(PANEL_MIN_HEIGHT)
         self.setMaximumHeight(PANEL_MAX_HEIGHT)

@@ -3,7 +3,7 @@ from __future__ import annotations
 from PySide6.QtCore import QObject, Qt, QTimer, Signal
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
-from app.ui.animations import fade_in
+from app.ui.animations import fade_in, fade_out, window_motion_enabled
 from app.ui.components.app_icon_button import AppIconButton
 from app.ui.components.modern_button import ModernButton
 from app.ui.icons import IconColorRole
@@ -64,13 +64,24 @@ class InAppToast(QFrame):
         # fechar NUNCA marca a notificacao persistida como lida — so tira o
         # pop-up da tela (PDF: "Fechar o pop-up nao descarta a notificacao").
         self.closed.emit(self)
-        self.hide()
-        self.deleteLater()
+        self._leave()
 
     def _open(self):
         self._timer.stop()
         self.opened.emit(self)
         self.closed.emit(self)
+        self._leave()
+
+    def _leave(self) -> None:
+        """Quem ouve `closed` ja foi avisado; o aviso so termina de sumir."""
+        self._timer.stop()
+        if not window_motion_enabled() or not self.isVisible():
+            self._remove()
+            return
+        self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self._exit = fade_out(self, duration=160, on_finished=self._remove)
+
+    def _remove(self) -> None:
         self.hide()
         self.deleteLater()
 

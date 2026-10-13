@@ -275,12 +275,15 @@ def main():
     app.setApplicationName("Controle de Producao Industel")
     app.setWindowIcon(app_icon())
 
+    from app.ui.components.floating_chrome import install_floating_chrome
     from app.ui.fonts import load_app_fonts
     from app.ui.wheel_guard import install_combo_wheel_guard
 
     load_app_fonts()
     # A roda do mouse nao troca a opcao de um combo (rota, status...): rola a tela.
     install_combo_wheel_guard(app)
+    # Menus de contexto e listas de combo com canto liso e fade (casca nova das janelas).
+    install_floating_chrome(app)
 
     if not run_startup_bootstrap():
         return 0

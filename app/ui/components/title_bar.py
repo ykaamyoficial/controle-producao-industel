@@ -270,7 +270,8 @@ class TitleBar(QFrame):
         popup.move(point)
         popup.show()
         self._profile_popup = popup
-        fade_in(popup, duration=140)
+        if getattr(popup, "_window_shell", None) is None:  # com a casca, a entrada e dela
+            fade_in(popup, duration=140)
 
     def _on_logout_requested(self):
         if self.logout_callback is not None:

@@ -33,6 +33,12 @@ def contrast_ratio(color_a: str, color_b: str) -> float:
     return (lighter + 0.05) / (darker + 0.05)
 
 
+def contrast_text(color: str) -> str:
+    """Texto escuro ou branco, o que der mais contraste (WCAG) sobre `color`."""
+    dark, light = "#111827", "#ffffff"
+    return dark if contrast_ratio(dark, color) >= contrast_ratio(light, color) else light
+
+
 def ensure_contrast(color: str, background: str, minimum: float, toward: str) -> str:
     """Aproxima `color` de `toward` em passos ate atingir `minimum` contra
     `background`. Usado para derivar tokens que funcionem em qualquer paleta

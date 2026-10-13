@@ -912,11 +912,17 @@ def _build_stylesheet(palette: dict) -> str:
         selection-color: {accent_text};
         outline: 0;
     }}
+    /* Com a casca nova (floating_chrome.py) a lista do combo abre em janela
+       de fundo transparente: o raio abaixo sai liso. */
+    QComboBox QAbstractItemView[softFloatingList="true"] {{
+        {radius(12)}
+        padding: 4px;
+    }}
     QMenu {{
         background: {surface};
         color: {text};
         border: 1px solid {border};
-        border-radius: 9px;
+        border-radius: 12px;
         padding: 5px;
     }}
     QMenu::item {{
@@ -1157,6 +1163,10 @@ def _build_stylesheet(palette: dict) -> str:
        casca, entao o QDialog fica sem fundo; cantos internos acompanham o
        raio de 24 px da janela. */
     QDialog[windowShell="true"] {{
+        background: transparent;
+        border: 0;
+    }}
+    QFrame#NotificationCenterPanel[windowShell="true"], QFrame#Panel[windowShell="true"] {{
         background: transparent;
         border: 0;
     }}

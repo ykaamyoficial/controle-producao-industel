@@ -33,7 +33,7 @@ from PySide6.QtCore import QEvent, QObject, QPoint, QRectF, Qt, QTimer
 from PySide6.QtGui import QBrush, QColor, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import QSizeGrip, QWidget
 
-from app.ui.animations import SPRING_MS, spring, transition, window_motion_enabled
+from app.ui.animations import SPRING_MS, ease, spring, transition, window_motion_enabled
 from app.ui.theme_tokens import active_tokens, relative_luminance
 
 WINDOW_RADIUS = 24
@@ -48,6 +48,14 @@ HEADER_DRAG_HEIGHT = 64
 # de 24 px e cobriria o aro e o chanfro. 8 px e o minimo que cabe na curva.
 EDGE_PADDING = 8
 _GRIP_INSET = 9  # afasta a alca de redimensionar da curva do canto
+# Casca leve dos popups (central de notificacoes, menu do usuario, emojis):
+# canto e sombra menores, abre crescendo a partir do botao que o chamou e
+# some com um fade curto.
+POPUP_RADIUS = 16
+POPUP_MARGIN = 24
+POPUP_ENTER_SCALE = 0.94
+POPUP_ENTER_MS = 200
+POPUP_EXIT_MS = 120
 _QWIDGETSIZE_MAX = 16777215
 
 # Chave de ativacao. Enquanto as telas sao conferidas grupo a grupo a casca
@@ -89,14 +97,14 @@ def paint_shell_shadow(painter: QPainter, area: QRectF, radius: float, reach: fl
             painter.drawRoundedRect(area.adjusted(-spread, -spread + sink, spread, spread + sink), radius + spread, radius + spread)
 
 
-def paint_shell_body(painter: QPainter, area: QRectF, radius: float) -> None:
+def paint_shell_body(painter: QPainter, area: QRectF, radius: float, body: str = "bg") -> None:
     """Corpo da janela com um pouco de volume, como uma placa iluminada de
     cima: aro fino por fora, filete de luz logo por dentro (forte no alto) e
-    sombreado na borda de baixo. O miolo e a cor `bg` chapada, para qualquer
-    area de rolagem ou painel com esse mesmo fundo sumir nele."""
+    sombreado na borda de baixo. O miolo e a cor do token `body` chapada, para
+    qualquer area de rolagem ou painel com esse mesmo fundo sumir nele."""
     dark = is_dark_theme()
     painter.setPen(Qt.NoPen)
-    painter.setBrush(QColor(active_tokens()["bg"]))
+    painter.setBrush(QColor(active_tokens()[body]))
     painter.drawRoundedRect(area, radius, radius)
 
     # Chanfro: aneis concentricos cada vez mais fracos para dentro; a luz vem
@@ -130,11 +138,12 @@ class _Curtain(QWidget):
     nao redesenhar o conteudo a cada quadro.
     """
 
-    def __init__(self, window: QWidget, snapshot: QPixmap, scale: float, opacity: float, pass_mouse: bool):
+    def __init__(self, window: QWidget, snapshot: QPixmap, scale: float, opacity: float, pass_mouse: bool, origin=None):
         super().__init__(window)
         self._snapshot = snapshot
         self._scale = scale
         self._opacity = opacity
+        self._origin = origin  # ponto que fica parado enquanto a foto cresce; None = centro
         self.on_first_paint = None
         self.setAttribute(Qt.WA_OpaquePaintEvent)
         self.setAttribute(Qt.WA_TransparentForMouseEvents, pass_mouse)
@@ -157,11 +166,11 @@ class _Curtain(QWidget):
         painter.fillRect(self.rect(), Qt.transparent)
         painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
         painter.setRenderHint(QPainter.SmoothPixmapTransform)
-        center = QRectF(self.rect()).center()
+        origin = self._origin if self._origin is not None else QRectF(self.rect()).center()
         painter.setOpacity(max(0.0, min(1.0, self._opacity)))
-        painter.translate(center)
+        painter.translate(origin)
         painter.scale(self._scale, self._scale)
-        painter.translate(-center)
+        painter.translate(-origin)
         painter.drawPixmap(0, 0, self._snapshot)
         painter.end()
         if self.on_first_paint is not None:
@@ -169,15 +178,67 @@ class _Curtain(QWidget):
             QTimer.singleShot(0, self, callback)
 
 
+_GHOSTS: set = set()
+
+
+class _Ghost(QWidget):
+    """Foto de um popup que acabou de fechar, sumindo no mesmo lugar. O popup
+    fecha na hora, como sempre (clique fora, Esc): quem some devagar e so
+    esta janela, que nao recebe mouse nem foco."""
+
+    def __init__(self, snapshot: QPixmap, geometry):
+        super().__init__(
+            None,
+            Qt.ToolTip | Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint | Qt.WindowTransparentForInput | Qt.WindowDoesNotAcceptFocus,
+        )
+        self._snapshot = snapshot
+        self._opacity = 1.0
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setAttribute(Qt.WA_ShowWithoutActivating)
+        self.setAttribute(Qt.WA_DeleteOnClose)
+        self.setGeometry(geometry)
+        _GHOSTS.add(self)  # sem dono: e esta referencia que o mantem vivo ate sumir
+        self.show()
+        transition(self, "_opacity", 0.0, POPUP_EXIT_MS, on_finished=self._finish)
+
+    def _finish(self) -> None:
+        _GHOSTS.discard(self)
+        self.close()
+
+    def paintEvent(self, _event) -> None:  # noqa: N802 (Qt override)
+        painter = QPainter(self)
+        painter.setOpacity(max(0.0, min(1.0, self._opacity)))
+        painter.drawPixmap(0, 0, self._snapshot)
+        painter.end()
+
+
 class WindowShell(QObject):
     """Acompanha um dialogo: pinta a moldura, reserva a margem da sombra,
-    anima a entrada e a saida e arrasta a janela pelo topo."""
+    anima a entrada e a saida e arrasta a janela pelo topo.
 
-    def __init__(self, dialog: QWidget, *, radius: int = WINDOW_RADIUS, margin: int = SHADOW_MARGIN):
+    `popup=True` e a casca leve (ver `install_popup_shell`): sem gancho no
+    `done()` nem arrasto, entrada curta a partir de `anchor` e saida por
+    fantasma."""
+
+    def __init__(
+        self,
+        dialog: QWidget,
+        *,
+        radius: int = WINDOW_RADIUS,
+        margin: int = SHADOW_MARGIN,
+        body: str = "bg",
+        reach: float = 1.0,
+        popup: bool = False,
+        anchor: str = "center",
+    ):
         super().__init__(dialog)
         self._dialog = dialog
         self.radius = radius
         self.margin = margin
+        self._body = body
+        self._reach = reach
+        self._popup = popup
+        self._anchor = anchor
         self._frame: QPixmap | None = None
         self._frame_key = None
         self._curtain: _Curtain | None = None
@@ -187,13 +248,17 @@ class WindowShell(QObject):
         self._closing = False
         self._external_close = False
         self._drag_offset: QPoint | None = None
-        self._original_done = dialog.done
         dialog.setWindowFlag(Qt.FramelessWindowHint, True)
         dialog.setAttribute(Qt.WA_TranslucentBackground, True)
         dialog.setProperty("windowShell", True)
-        # Gancho por instancia: accept(), reject() e Esc chegam aqui antes do
-        # done() da classe, que e chamado quando a saida termina.
-        dialog.done = self._done
+        if popup:
+            # A sombra nativa do Windows e retangular e apareceria em volta.
+            dialog.setWindowFlag(Qt.NoDropShadowWindowHint, True)
+        else:
+            # Gancho por instancia: accept(), reject() e Esc chegam aqui antes
+            # do done() da classe, que e chamado quando a saida termina.
+            self._original_done = dialog.done
+            dialog.done = self._done
         dialog.installEventFilter(self)
 
     # -- geometria -------------------------------------------------------
@@ -207,6 +272,16 @@ class WindowShell(QObject):
         path = QPainterPath()
         path.addRoundedRect(self.area(), self.radius, self.radius)
         return path
+
+    def _origin(self):
+        """Ponto de onde o popup cresce: o canto encostado no botao que o chamou."""
+        area = self.area()
+        return {
+            "top-right": area.topRight(),
+            "top-left": area.topLeft(),
+            "bottom-left": area.bottomLeft(),
+            "bottom-right": area.bottomRight(),
+        }.get(self._anchor)
 
     def refresh(self) -> None:
         """Tema trocado com a janela aberta: repinta a moldura."""
@@ -265,15 +340,15 @@ class WindowShell(QObject):
     def _paint_frame(self) -> None:
         dialog = self._dialog
         ratio = dialog.devicePixelRatioF()
-        key = (dialog.width(), dialog.height(), ratio, active_tokens()["bg"])
+        key = (dialog.width(), dialog.height(), ratio, active_tokens()[self._body])
         if self._frame is None or self._frame_key != key:
             frame = QPixmap(dialog.size() * ratio)
             frame.setDevicePixelRatio(ratio)
             frame.fill(Qt.transparent)
             painter = QPainter(frame)
             painter.setRenderHint(QPainter.Antialiasing)
-            paint_shell_shadow(painter, self.area(), self.radius)
-            paint_shell_body(painter, self.area(), self.radius)
+            paint_shell_shadow(painter, self.area(), self.radius, self._reach)
+            paint_shell_body(painter, self.area(), self.radius, self._body)
             painter.end()
             self._frame, self._frame_key = frame, key
         painter = QPainter(dialog)
@@ -309,7 +384,8 @@ class WindowShell(QObject):
         # parte quando esse quadro e pintado; se partisse aqui, o tempo de o
         # Windows criar a janela comia o comeco do salto.
         self._entered = False
-        self._curtain = _Curtain(dialog, dialog.grab(), ENTER_SCALE, 0.0, pass_mouse=True)
+        scale = POPUP_ENTER_SCALE if self._popup else ENTER_SCALE
+        self._curtain = _Curtain(dialog, dialog.grab(), scale, 0.0, pass_mouse=True, origin=self._origin())
         self._curtain.on_first_paint = self._start_entrance
 
     def _start_entrance(self) -> None:
@@ -317,6 +393,10 @@ class WindowShell(QObject):
         if curtain is None or self._closing:
             return
         self._entered = True
+        if self._popup:
+            transition(curtain, "_opacity", 1.0, POPUP_EXIT_MS)
+            transition(curtain, "_scale", 1.0, POPUP_ENTER_MS, ease, self._drop_curtain)
+            return
         self._scrim("darken")
         transition(curtain, "_opacity", 1.0, APPEAR_MS)
         transition(curtain, "_scale", 1.0, SPRING_MS, spring, self._drop_curtain)
@@ -376,6 +456,10 @@ class WindowShell(QObject):
         elif kind == QEvent.Hide:
             self._drop_curtain()
             self._closing = False
+            if self._popup and self._prepared and window_motion_enabled():
+                _Ghost(dialog.grab(), dialog.geometry())
+        elif self._popup:
+            pass  # popup nao e arrastado
         elif kind == QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
             area = self.area()
             if QRectF(area.left(), area.top(), area.width(), HEADER_DRAG_HEIGHT).contains(event.position()):
@@ -385,6 +469,20 @@ class WindowShell(QObject):
         elif kind == QEvent.MouseButtonRelease:
             self._drag_offset = None
         return False
+
+
+def install_popup_shell(popup: QWidget, anchor: str = "top-right") -> WindowShell | None:
+    """Casca leve para popup (`Qt.Popup`): canto liso de 16 px, borda com volume
+    e sombra menores sobre o token `surface`, entrada crescendo a partir de
+    `anchor` e saida com fade. Devolve None com a chave desligada: o popup
+    fica como sempre foi."""
+    if not window_shell_enabled():
+        return None
+    shell = getattr(popup, "_window_shell", None)
+    if shell is None:
+        shell = WindowShell(popup, radius=POPUP_RADIUS, margin=POPUP_MARGIN, body="surface", reach=0.5, popup=True, anchor=anchor)
+        popup._window_shell = shell
+    return shell
 
 
 def install_window_shell(dialog: QWidget) -> WindowShell:

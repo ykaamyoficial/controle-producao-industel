@@ -4,6 +4,8 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 
+from app.ui.components.floating_chrome import soften_floating
+from app.ui.components.window_shell import install_popup_shell, window_shell_enabled
 from app.ui.components.avatar import make_avatar_label
 
 from PySide6.QtCore import QDateTime, QEasingCurve, QParallelAnimationGroup, QPropertyAnimation, QSize, Qt, Signal
@@ -127,6 +129,9 @@ class _MentionPopup(QFrame):
     def __init__(self, service, parent=None):
         super().__init__(parent, Qt.ToolTip | Qt.FramelessWindowHint)
         self.setAttribute(Qt.WA_ShowWithoutActivating)
+        if window_shell_enabled():
+            # Canto liso sem mexer na geometria: o popup e reposicionado a cada tecla.
+            soften_floating(self)
         self.service = service
         self.setObjectName("Panel")
         self.setFixedWidth(280)
@@ -214,6 +219,7 @@ class _EmojiPopup(QFrame):
     def __init__(self, parent=None):
         super().__init__(parent, Qt.Popup)
         self.setObjectName("Panel")
+        install_popup_shell(self, anchor="bottom-left")
         layout = QGridLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(2)

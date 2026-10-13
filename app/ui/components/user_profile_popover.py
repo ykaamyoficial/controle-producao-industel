@@ -3,6 +3,7 @@ from __future__ import annotations
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout
 
+from app.ui.components.window_shell import install_popup_shell
 from app.ui.components.modern_button import ModernButton
 from app.ui.components.avatar import make_avatar_label
 
@@ -25,6 +26,7 @@ class UserProfilePopover(QFrame):
         super().__init__(parent, Qt.Popup)
         self.service = service
         self.setObjectName("Panel")
+        install_popup_shell(self, anchor="top-right")
         self.setFixedWidth(240)
         self._build()
 
