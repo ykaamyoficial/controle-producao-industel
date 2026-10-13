@@ -418,9 +418,10 @@ class CabecalhoNovo(QHeaderView):
 class Tabela(QTableView):
     """Sombra fina sob o cabecalho quando a tabela foi rolada (da profundidade sem pesar)."""
 
-    def __init__(self, cabecalho: QHeaderView, modelo: Modelo, parent=None):
+    def __init__(self, cabecalho: QHeaderView, modelo: Modelo, parent=None, cantos: bool = False):
         super().__init__(parent)
         self.modelo = modelo
+        self.cantos = cantos
         self.setHorizontalHeader(cabecalho)
         self.proxy = Filtro(self)
         self.proxy.setSourceModel(modelo)
@@ -437,6 +438,26 @@ class Tabela(QTableView):
             if coluna[2]:
                 self.setColumnWidth(i, coluna[2])
         self.setWordWrap(True)
+        self.aplicar_tema()
+
+    def aplicar_tema(self) -> None:
+        """Canto superior direito: a barra de rolagem comeca ABAIXO do cabecalho e o espaco acima dela
+        fica na cor do cabecalho, entao a faixa azul vai de ponta a ponta (sem 'degrau')."""
+        if not self.cantos:  # "como e hoje": barra de rolagem padrao, com o degrau no canto
+            self.setStyleSheet(f"QTableView {{ background: {TEMAS[TEMA['nome']]['surface']}; border: 0; }}")
+            return
+        altura = self.horizontalHeader().height()
+        t = TEMAS[TEMA["nome"]]
+        paleta = self.palette()
+        paleta.setColor(paleta.ColorRole.Window, QColor(t["header"]))
+        self.setPalette(paleta)
+        self.setStyleSheet(f"""
+            QTableView {{ background: {t['surface']}; border: 0; border-bottom-left-radius: 14px; border-bottom-right-radius: 14px; }}
+            QScrollBar:vertical {{ background: {t['surface']}; width: 12px; margin: {altura}px 0 0 0; border: 0; }}
+            QScrollBar::handle:vertical {{ background: {t['border']}; border-radius: 4px; min-height: 32px; margin: 2px; }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: transparent; }}
+        """)
 
     def paintEvent(self, evento):  # noqa: N802
         super().paintEvent(evento)
@@ -480,7 +501,7 @@ class Janela(QWidget):
         self.atual = CabecalhoAtual()
         self.novo = CabecalhoNovo()
         self.tabela_atual = Tabela(self.atual, self.modelo)
-        self.tabela_nova = Tabela(self.novo, self.modelo)
+        self.tabela_nova = Tabela(self.novo, self.modelo, cantos=True)
         self.tabela_atual.sortByColumn(0, Qt.AscendingOrder)
         self.tabela_nova.sortByColumn(6, Qt.AscendingOrder)
 
@@ -501,8 +522,8 @@ class Janela(QWidget):
         dica = QLabel("Passe o mouse, clique nos títulos para ordenar e arraste a borda entre colunas. As duas tabelas usam os mesmos dados.")
         dica.setObjectName("Nota")
         raiz.addWidget(dica)
-        raiz.addWidget(Painel("Como é hoje", "Seta nativa minúscula em cima do primeiro título, sem resposta ao passar o mouse, colunas de ícone sem nome, caixa de seleção diferente da das linhas.", self.tabela_atual), 1)
-        raiz.addWidget(Painel("Proposto", "Seta própria só na coluna ordenada (fantasma no hover das outras), barra de destaque, separadores curtos, ícones nas colunas sem título, caixa igual à das linhas, sombra fina ao rolar.", self.tabela_nova), 1)
+        raiz.addWidget(Painel("Como é hoje", "Seta nativa minúscula em cima do primeiro título, sem resposta ao passar o mouse, colunas de ícone sem nome, caixa de seleção diferente da das linhas e a faixa azul que termina antes da barra de rolagem (degrau no canto direito).", self.tabela_atual), 1)
+        raiz.addWidget(Painel("Proposto", "Seta própria só na coluna ordenada (fantasma no hover das outras), barra de destaque, separadores curtos, ícones nas colunas sem título, caixa igual à das linhas, sombra fina ao rolar e a faixa azul indo até o canto direito (a barra de rolagem começa abaixo dela).", self.tabela_nova), 1)
         self._estilo()
 
     def _botao(self, texto, ao_clicar, marcavel=False):
@@ -528,6 +549,7 @@ class Janela(QWidget):
         self.b_tema.setText("Tema claro" if TEMA["nome"] == "escuro" else "Tema escuro")
         self._estilo()
         for t in (self.tabela_atual, self.tabela_nova):
+            t.aplicar_tema()
             t.viewport().update()
             t.horizontalHeader().viewport().update()
 
@@ -545,7 +567,6 @@ class Janela(QWidget):
             QLabel#Titulo {{ font-size: 15px; font-weight: 800; color: {t['accent']}; }}
             QLabel#TituloGrande {{ font-size: 18px; font-weight: 800; }}
             QLabel#Nota {{ color: {t['muted']}; font-size: 12px; }}
-            QTableView {{ background: {t['surface']}; border: 0; border-bottom-left-radius: 14px; border-bottom-right-radius: 14px; }}
             QHeaderView {{ background: transparent; border: 0; }}
             QPushButton {{ background: {t['accent_soft']}; color: {t['text']}; border: 0; border-radius: 10px; padding: 7px 14px; font-weight: 600; }}
             QPushButton:hover {{ background: {t['header_hover']}; }}
