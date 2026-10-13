@@ -48,6 +48,7 @@ class WindowShellTests(unittest.TestCase):
         cls.app = QApplication.instance() or QApplication([])
 
     def setUp(self):
+        self._shell_was_enabled = window_shell.window_shell_enabled()
         window_shell.set_window_shell_enabled(True)
         self.owner = QWidget()
         self.owner.resize(900, 600)
@@ -57,7 +58,7 @@ class WindowShellTests(unittest.TestCase):
     def tearDown(self):
         animations.force_window_motion(None)
         animations.set_reduced_motion(False)
-        window_shell.set_window_shell_enabled(False)
+        window_shell.set_window_shell_enabled(self._shell_was_enabled)
         self.owner.close()
         self.owner.deleteLater()
         self.app.processEvents()

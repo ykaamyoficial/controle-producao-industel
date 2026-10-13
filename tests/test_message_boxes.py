@@ -28,6 +28,7 @@ class MessageBoxShellTests(unittest.TestCase):
     def setUp(self):
         self.original_question = QMessageBox.question
         self.original_get_text = QInputDialog.getText
+        self._shell_was_enabled = window_shell.window_shell_enabled()
         window_shell.set_window_shell_enabled(True)
         message_boxes.install_message_boxes()
         self.owner = QWidget()
@@ -38,7 +39,7 @@ class MessageBoxShellTests(unittest.TestCase):
     def tearDown(self):
         message_boxes.uninstall_message_boxes()
         animations.force_window_motion(None)
-        window_shell.set_window_shell_enabled(False)
+        window_shell.set_window_shell_enabled(self._shell_was_enabled)
         self.owner.close()
         self.owner.deleteLater()
         self.app.processEvents()
@@ -128,6 +129,7 @@ class ScrimBackToBackTests(unittest.TestCase):
         cls.app = QApplication.instance() or QApplication([])
 
     def setUp(self):
+        self._shell_was_enabled = window_shell.window_shell_enabled()
         window_shell.set_window_shell_enabled(True)
         animations.force_window_motion(True)
         self.owner = QWidget()
@@ -138,7 +140,7 @@ class ScrimBackToBackTests(unittest.TestCase):
 
     def tearDown(self):
         animations.force_window_motion(None)
-        window_shell.set_window_shell_enabled(False)
+        window_shell.set_window_shell_enabled(self._shell_was_enabled)
         self.owner.close()
         self.owner.deleteLater()
         self.app.processEvents()

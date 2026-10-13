@@ -63,9 +63,9 @@ POPUP_EXIT_MS = 120
 TITLE_STRIP = 30
 _QWIDGETSIZE_MAX = 16777215
 
-# Chave de ativacao. Enquanto as telas sao conferidas grupo a grupo a casca
-# nova fica desligada por padrao; INDUSTEL_WINDOW_SHELL=1 liga e =0 desliga.
-_enabled = os.environ.get("INDUSTEL_WINDOW_SHELL", "0") == "1"
+# Chave de emergencia. A casca nova e o padrao; INDUSTEL_WINDOW_SHELL=0 volta ao
+# recorte antigo (frameless_dialog.py) sem precisar de outra versao do programa.
+_enabled = os.environ.get("INDUSTEL_WINDOW_SHELL", "1") != "0"
 
 
 def window_shell_enabled() -> bool:
