@@ -20,7 +20,7 @@ from app.ui.background_worker import start_worker
 from app.ui.dialog_utils import apply_large_dialog_geometry, style_dialog_from_parent
 from app.ui.icons import IconSize, status_icon
 from app.ui.item_selection_dialog import ItemSelectionDialog
-from app.ui.production_registration_dialog import ProductionRegistrationDialog
+from app.ui.production_wizard import ProductionWizardDialog
 
 
 class BatchStatusDialog(QDialog):
@@ -317,9 +317,15 @@ class BatchStatusDialog(QDialog):
         produced_weights = {}
         if status in ("__REGISTER_PRODUCTION__", "__REGISTER_DELIVERY__"):
             if status == "__REGISTER_PRODUCTION__":
-                dialog = ProductionRegistrationDialog(self.service, list(self.selected_ids), self, observation=self.observation.text().strip())
-                if dialog.exec():
+                parent = self.parentWidget() or self
+                observation = self.observation.text().strip()
+                self.hide()
+                wizard = ProductionWizardDialog(self.service, list(self.selected_ids), parent, observation=observation)
+                wizard.exec()
+                if wizard.registered:
                     self.accept()
+                else:
+                    self.reject()
                 return
             for process_id in self.selected_ids:
                 process = self.service.get_process_dict(process_id)

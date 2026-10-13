@@ -45,7 +45,7 @@ from app.ui.galvanization_load_dialog import GalvanizationLoadDialog
 from app.ui.action_center.batch_action_center import BatchProposalActionCenter
 from app.ui.process_page import ProcessPage
 from app.ui.production_actions import complete_production_items
-from app.ui.production_registration_dialog import ProductionRegistrationDialog
+from app.ui.production_wizard import ProductionWizardDialog
 
 
 def _to_float(value) -> float:
@@ -557,9 +557,6 @@ class ProductionItemsPage(QWidget):
         if not rows:
             ToastNotification(self.window(), "Selecione um ou mais itens.", "error")
             return
-        if any(not row.get("fluxo_definido") for row in rows):
-            QMessageBox.warning(self, "Registrar produção", "Defina primeiro o fluxo de todos os itens selecionados.")
-            return
         if any(str(row.get("status_producao") or "").strip().upper() == "PARADO" for row in rows):
             QMessageBox.warning(self, "Registrar produção", "A produção selecionada está pausada. Retome-a antes de registrar itens.")
             return
@@ -572,13 +569,15 @@ class ProductionItemsPage(QWidget):
             int(row.get("api_proposal_id") or row.get("processo_atual_id"))
             for row in rows if row.get("api_proposal_id") or row.get("processo_atual_id")
         ))
-        dialog = ProductionRegistrationDialog(
+        # Uma janela so: itens -> (fluxo, se faltar) -> revisao -> conclusao.
+        dialog = ProductionWizardDialog(
             self.service,
             proposal_ids,
             self,
             preselected_item_ids=item_ids,
         )
-        if dialog.exec():
+        dialog.exec()
+        if dialog.registered:
             self.refresh()
 
     def start_selected(self, rows: list[dict], observation: str = ""):

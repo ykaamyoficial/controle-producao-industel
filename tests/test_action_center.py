@@ -349,18 +349,30 @@ class ProductionHandlerRoutingTests(unittest.TestCase):
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
 
-    def test_register_production_opens_registration_dialog_when_flow_is_defined(self):
+    def test_register_production_opens_the_single_window_wizard_and_hides_the_center(self):
         service = FakeService("INICIADO")
-        service.item_flow_summary = lambda process_id: {"undefined_count": 0}
         dialog = StatusDialog(service, 1, "PRODUCAO")
         fake_dialog = MagicMock()
         fake_dialog.exec.return_value = 0
+        fake_dialog.registered = False
         action = next(a for a in dialog.context.available_actions if a.id == "REGISTER_PRODUCTION")
         with patch(
-            "app.ui.action_center.handlers.production.ProductionRegistrationDialog", return_value=fake_dialog
+            "app.ui.action_center.handlers.production.ProductionWizardDialog", return_value=fake_dialog
         ) as ctor:
             dialog.run_action(action)
         ctor.assert_called_once()
+        self.assertFalse(dialog.isVisible())
+        self.assertFalse(dialog.result())  # nada registrado: a central fecha sem mudanca
+
+    def test_register_production_that_registered_closes_the_center_as_changed(self):
+        service = FakeService("INICIADO")
+        dialog = StatusDialog(service, 1, "PRODUCAO")
+        fake_dialog = MagicMock()
+        fake_dialog.registered = True
+        action = next(a for a in dialog.context.available_actions if a.id == "REGISTER_PRODUCTION")
+        with patch("app.ui.action_center.handlers.production.ProductionWizardDialog", return_value=fake_dialog):
+            dialog.run_action(action)
+        self.assertTrue(dialog.result())
 
     def test_define_item_flow_opens_flow_review_dialog(self):
         service = FakeService("NAO_INICIADO")

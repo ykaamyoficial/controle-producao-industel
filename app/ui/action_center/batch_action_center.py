@@ -25,7 +25,7 @@ from app.ui.galvanization_load_dialog import GalvanizationLoadDialog, Galvanizat
 from app.ui.icons import AppIcons
 from app.ui.sidebar import NAV_LABELS
 from app.ui.item_selection_dialog import ItemSelectionDialog
-from app.ui.production_registration_dialog import ProductionRegistrationDialog
+from app.ui.production_wizard import ProductionWizardDialog
 
 log = get_logger("batch_action_center")
 
@@ -580,10 +580,16 @@ class BatchProposalActionCenter(QDialog):
         if self._validated_process_ids("STATUS") is None:
             return
         observation = self.observation.toPlainText().strip()
-        dialog = ProductionRegistrationDialog(self.service, self.process_ids, self, observation=observation)
-        if dialog.exec():
+        # A central some: so o assistente fica na tela (tamanho do remanejamento).
+        parent = self.parentWidget() or self
+        self.hide()
+        wizard = ProductionWizardDialog(self.service, self.process_ids, parent, observation=observation)
+        wizard.exec()
+        if wizard.registered:
             self.changed = True
             self.accept()
+        else:
+            self.reject()
 
     def _open_register_delivery(self):
         if self._validated_process_ids("STATUS") is None:

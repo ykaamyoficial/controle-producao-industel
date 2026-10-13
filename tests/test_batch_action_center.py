@@ -374,22 +374,22 @@ class SpecializedDialogRoutingTests(unittest.TestCase):
         dialog = BatchProposalActionCenter(service, [10, 20], "PRODUCAO")
         action = next(a for a in dialog.actions if a.id == "REGISTER_PRODUCTION")
         fake = MagicMock()
-        fake.exec.return_value = 1  # QDialog.Accepted
+        fake.registered = True
         with patch(
-            "app.ui.action_center.batch_action_center.ProductionRegistrationDialog", return_value=fake
+            "app.ui.action_center.batch_action_center.ProductionWizardDialog", return_value=fake
         ) as ctor:
             dialog.run_action(action)
         ctor.assert_called_once_with(service, [10, 20], dialog, observation="")
         self.assertTrue(dialog.changed)
         self.assertTrue(dialog.result())
 
-    def test_register_production_cancel_does_not_close_or_write(self):
+    def test_register_production_cancel_closes_the_center_without_changes(self):
         service = FakeBatchService("PRODUCAO", common_statuses=["FINALIZADO"])
         dialog = BatchProposalActionCenter(service, [10, 20], "PRODUCAO")
         action = next(a for a in dialog.actions if a.id == "REGISTER_PRODUCTION")
         fake = MagicMock()
-        fake.exec.return_value = 0  # usuario cancela a mesa de registro
-        with patch("app.ui.action_center.batch_action_center.ProductionRegistrationDialog", return_value=fake):
+        fake.registered = False  # usuario cancela o assistente
+        with patch("app.ui.action_center.batch_action_center.ProductionWizardDialog", return_value=fake):
             dialog.run_action(action)
         self.assertFalse(dialog.changed)
         self.assertFalse(dialog.result())
