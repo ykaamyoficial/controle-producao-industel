@@ -30,10 +30,11 @@ from __future__ import annotations
 import os
 
 from PySide6.QtCore import QEvent, QObject, QPoint, QRectF, Qt, QTimer
-from PySide6.QtGui import QBrush, QColor, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap
+from PySide6.QtGui import QBrush, QColor, QFont, QFontMetricsF, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import QSizeGrip, QWidget
 
 from app.ui.animations import SPRING_MS, ease, spring, transition, window_motion_enabled
+from app.ui.fonts import scaled_px
 from app.ui.theme_tokens import active_tokens, relative_luminance
 
 WINDOW_RADIUS = 24
@@ -56,6 +57,10 @@ POPUP_MARGIN = 24
 POPUP_ENTER_SCALE = 0.94
 POPUP_ENTER_MS = 200
 POPUP_EXIT_MS = 120
+# Caixa de mensagem e entrada de texto do Qt perdem a barra do Windows, que
+# levava o titulo ("Acao da proposta", "Producao"...): a casca reserva esta
+# faixa no alto e pinta o titulo nela.
+TITLE_STRIP = 30
 _QWIDGETSIZE_MAX = 16777215
 
 # Chave de ativacao. Enquanto as telas sao conferidas grupo a grupo a casca
@@ -230,6 +235,8 @@ class WindowShell(QObject):
         reach: float = 1.0,
         popup: bool = False,
         anchor: str = "center",
+        title_strip: bool = False,
+        ghost_exit: bool = False,
     ):
         super().__init__(dialog)
         self._dialog = dialog
@@ -239,6 +246,12 @@ class WindowShell(QObject):
         self._reach = reach
         self._popup = popup
         self._anchor = anchor
+        self._title_strip = title_strip
+        # Janela que o Qt cria e fecha por conta propria (popup, caixa de
+        # mensagem das funcoes estaticas) nao passa pelo gancho do done():
+        # quem some devagar e uma foto dela.
+        self._ghost_exit = ghost_exit or popup
+        self._exit_animated = False
         self._frame: QPixmap | None = None
         self._frame_key = None
         self._curtain: _Curtain | None = None
@@ -301,7 +314,7 @@ class WindowShell(QObject):
         inner = dialog.contentsMargins()
         own = layout.contentsMargins() if layout is not None else inner
         left = margin + max(0, EDGE_PADDING - inner.left() - own.left())
-        top = margin + max(0, EDGE_PADDING - inner.top() - own.top())
+        top = margin + max(0, EDGE_PADDING - inner.top() - own.top()) + (TITLE_STRIP if self._title_strip else 0)
         right = margin + max(0, EDGE_PADDING - inner.right() - own.right())
         bottom = margin + max(0, EDGE_PADDING - inner.bottom() - own.bottom())
         wider, taller = left + right, top + bottom
@@ -340,7 +353,7 @@ class WindowShell(QObject):
     def _paint_frame(self) -> None:
         dialog = self._dialog
         ratio = dialog.devicePixelRatioF()
-        key = (dialog.width(), dialog.height(), ratio, active_tokens()[self._body])
+        key = (dialog.width(), dialog.height(), ratio, active_tokens()[self._body], dialog.windowTitle() if self._title_strip else "")
         if self._frame is None or self._frame_key != key:
             frame = QPixmap(dialog.size() * ratio)
             frame.setDevicePixelRatio(ratio)
@@ -349,11 +362,24 @@ class WindowShell(QObject):
             painter.setRenderHint(QPainter.Antialiasing)
             paint_shell_shadow(painter, self.area(), self.radius, self._reach)
             paint_shell_body(painter, self.area(), self.radius, self._body)
+            if self._title_strip:
+                self._paint_title(painter)
             painter.end()
             self._frame, self._frame_key = frame, key
         painter = QPainter(dialog)
         painter.drawPixmap(0, 0, self._frame)
         painter.end()
+
+    def _paint_title(self, painter: QPainter) -> None:
+        area = self.area()
+        font = QFont(self._dialog.font())
+        font.setPixelSize(scaled_px(13))
+        font.setWeight(QFont.Weight.Bold)
+        strip = QRectF(area.left() + 22, area.top() + 14, area.width() - 44, TITLE_STRIP - 6)
+        painter.setFont(font)
+        painter.setPen(QColor(active_tokens()["muted"]))
+        title = QFontMetricsF(font).elidedText(self._dialog.windowTitle(), Qt.ElideRight, strip.width())
+        painter.drawText(strip, Qt.AlignLeft | Qt.AlignVCenter, title)
 
     # -- abrir e fechar --------------------------------------------------
 
@@ -371,6 +397,7 @@ class WindowShell(QObject):
     def _on_show(self) -> None:
         dialog = self._dialog
         self._closing = False
+        self._exit_animated = False
         if not self._prepared:
             self._prepared = True
             self._reserve_shadow_margin()
@@ -411,6 +438,7 @@ class WindowShell(QObject):
             self._original_done(result)
             return
         self._closing = True
+        self._exit_animated = True
         if self._curtain is None:
             self._curtain = _Curtain(dialog, dialog.grab(), 1.0, 1.0, pass_mouse=False)
         # Fechou no meio da entrada: a foto sai do tamanho em que estava.
@@ -456,7 +484,7 @@ class WindowShell(QObject):
         elif kind == QEvent.Hide:
             self._drop_curtain()
             self._closing = False
-            if self._popup and self._prepared and window_motion_enabled():
+            if self._ghost_exit and not self._exit_animated and self._prepared and window_motion_enabled():
                 _Ghost(dialog.grab(), dialog.geometry())
         elif self._popup:
             pass  # popup nao e arrastado
@@ -482,6 +510,24 @@ def install_popup_shell(popup: QWidget, anchor: str = "top-right") -> WindowShel
     if shell is None:
         shell = WindowShell(popup, radius=POPUP_RADIUS, margin=POPUP_MARGIN, body="surface", reach=0.5, popup=True, anchor=anchor)
         popup._window_shell = shell
+    return shell
+
+
+def install_message_shell(box: QWidget) -> WindowShell | None:
+    """Casca para caixa de mensagem (QMessageBox) e entrada de texto
+    (QInputDialog) montadas em Python (ver `message_boxes.py`). Precisa ser
+    chamada antes de a caixa aparecer. O titulo que ia na barra do Windows
+    passa a ser pintado no alto da propria caixa."""
+    if not window_shell_enabled() or getattr(box, "_window_shell", None) is not None:
+        return getattr(box, "_window_shell", None)
+    parent = box.parentWidget()
+    owner = parent.window() if parent is not None else None
+    if owner is not None and owner is not box:
+        from app.ui.components.dialog_scrim import attach_dialog_scrim
+
+        attach_dialog_scrim(box, owner)
+    shell = WindowShell(box, title_strip=True)
+    box._window_shell = shell
     return shell
 
 

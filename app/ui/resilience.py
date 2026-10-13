@@ -4,6 +4,7 @@ from PySide6.QtWidgets import QMessageBox
 
 from app.integrations.api.exceptions import ApiClientError, ApiConnectionError, ApiTimeoutError, ApiUnavailableError
 from app.services.app_logging import get_logger
+from app.ui.components.window_shell import install_message_shell
 
 
 log = get_logger("ui_resilience")
@@ -26,6 +27,7 @@ def show_operation_error(parent, exc: Exception, retry=None, *, title: str = "Op
     if retry is not None and isinstance(exc, RETRYABLE_ERRORS):
         retry_button = box.addButton("Tentar novamente", QMessageBox.AcceptRole)
     box.addButton("Fechar", QMessageBox.RejectRole)
+    install_message_shell(box)
     box.exec()
     if retry_button is not None and box.clickedButton() is retry_button:
         retry()

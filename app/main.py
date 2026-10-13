@@ -276,6 +276,7 @@ def main():
     app.setWindowIcon(app_icon())
 
     from app.ui.components.floating_chrome import install_floating_chrome
+    from app.ui.components.message_boxes import install_message_boxes
     from app.ui.fonts import load_app_fonts
     from app.ui.wheel_guard import install_combo_wheel_guard
 
@@ -284,6 +285,8 @@ def main():
     install_combo_wheel_guard(app)
     # Menus de contexto e listas de combo com canto liso e fade (casca nova das janelas).
     install_floating_chrome(app)
+    # Caixas de mensagem e de entrada de texto do Qt com a mesma casca.
+    install_message_boxes()
 
     if not run_startup_bootstrap():
         return 0

@@ -16,7 +16,7 @@ volta a ser transparente.
 
 from __future__ import annotations
 
-from PySide6.QtCore import QEvent, QObject, Qt
+from PySide6.QtCore import QEvent, QObject, Qt, QTimer
 from PySide6.QtGui import QColor, QPainter, QPixmap
 from PySide6.QtWidgets import QDialog, QWidget
 
@@ -38,6 +38,11 @@ class DialogScrim(QWidget):
         self._holders = 0
         self._backdrop: QPixmap | None = None
         self._capturing = False
+        # Verdadeiro entre o veu sair de cena e a janela de tras repintar sem
+        # ele: ate la o que ela "ja pintou" ainda traz o veu, e uma foto
+        # tirada dali escureceria duas vezes (dialogo que abre logo depois
+        # de outro fechar).
+        self._painted_with_veil = False
         self.hide()
         owner.installEventFilter(self)
 
@@ -49,7 +54,14 @@ class DialogScrim(QWidget):
                 self.setGeometry(watched.rect())
             elif kind == QEvent.StyleChange:
                 self._thaw()  # tema trocado com o dialogo aberto: a foto ficou velha
+        if watched is self.parent() and self._painted_with_veil and event.type() == QEvent.UpdateRequest:
+            # A janela vai repintar agora; no proximo giro ja esta sem o veu.
+            QTimer.singleShot(0, self, self._veil_repainted)
         return False
+
+    def _veil_repainted(self) -> None:
+        if not self.isVisible():
+            self._painted_with_veil = False
 
     def acquire(self, deferred: bool = False) -> None:
         """`deferred`: entra em cena ainda transparente e com a janela de tras
@@ -81,6 +93,7 @@ class DialogScrim(QWidget):
         self._holders = max(0, self._holders - 1)
         if self._holders == 0:
             self._thaw()
+            self._painted_with_veil = self._painted_with_veil or (self.isVisible() and self._alpha > 0.01)
             self.hide()
 
     def _freeze(self, repaint: bool = False) -> None:
@@ -91,7 +104,7 @@ class DialogScrim(QWidget):
         # sai barato e a foto perderia o canto.
         if getattr(owner, "_window_shell", None) is not None:
             return
-        backdrop = None if repaint else painted_pixmap(owner)
+        backdrop = None if repaint or self._painted_with_veil else painted_pixmap(owner)
         if backdrop is None:
             self._capturing = True
             try:

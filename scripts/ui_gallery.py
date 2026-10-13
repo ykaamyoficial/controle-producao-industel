@@ -922,8 +922,10 @@ def main() -> int:
     app = QApplication(sys.argv[:1])
     if args.casca:
         from app.ui.components.floating_chrome import install_floating_chrome
+        from app.ui.components.message_boxes import install_message_boxes
 
         install_floating_chrome(app)
+        install_message_boxes()
     family = load_app_fonts()
     if args.remanejamento:
         window, wizard = remanagement_preview(args.tema, args.remanejamento)

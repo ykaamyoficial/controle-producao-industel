@@ -10,6 +10,9 @@ tocar em cada um o filtro abaixo, ligado uma vez na aplicacao como o
 - fade curto ao abrir. Fechar continua na hora: menu que demora a sumir
   atrapalha.
 
+As caixas de mensagem e de entrada de texto do Qt nao passam por aqui: ver
+`message_boxes.py`.
+
 So age com a casca nova ligada (`window_shell_enabled()`); sem ela nada muda.
 """
 
