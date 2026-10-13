@@ -19,7 +19,14 @@ class InstallerLayoutTests(unittest.TestCase):
 
     def test_shortcuts_and_run_point_to_the_launcher(self):
         self.assertIn('#define MyAppExeName "ControleProducao.exe"', _ISS)
-        self.assertEqual(len(re.findall(r'Filename: "\{app\}\\{#MyAppExeName\}"', _ISS)), 3)
+        self.assertEqual(len(re.findall(r'Filename: "\{app\}\\{#MyAppExeName\}"', _ISS)), 4)
+
+    def test_installer_relaunches_the_tray_agent_as_the_original_user(self):
+        """Depois de encerrar o --notifier, o instalador o liga de novo, mas
+        nunca como administrador (os baloes iriam para a conta errada)."""
+        line = next((entry for entry in _ISS.splitlines() if 'Parameters: "--notifier"' in entry), "")
+        self.assertIn("runasoriginaluser", line)
+        self.assertIn("runhidden", line)
 
     def test_installer_stops_every_product_process_including_the_tray_agent(self):
         for image in ("ControleProducao.exe", "ControleProducaoApp.exe", "Updater.exe"):
