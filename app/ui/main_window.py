@@ -191,11 +191,15 @@ class MainWindow(FramelessHitTestMixin, QMainWindow):
 
     def _ensure_notifier_startup_registration(self) -> None:
         try:
-            from app.services.notifier_agent import ensure_startup_registration
+            from app.services.notifier_agent import ensure_notifier_running, ensure_startup_registration
 
             ensure_startup_registration()
+            ensure_notifier_running()
+            ensure = getattr(self.service, "ensure_notifier_registration", None)
+            if callable(ensure):
+                ensure()
         except Exception:
-            log.exception("Falha inesperada ao registrar notificador na pasta Startup")
+            log.exception("Falha inesperada ao registrar notificador na inicializacao do Windows")
 
     def _build(self):
         root = QWidget()

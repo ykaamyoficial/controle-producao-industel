@@ -14,11 +14,29 @@ hiddenimports += collect_submodules('PIL')
 hiddenimports += collect_submodules('certifi')
 certifi_datas = collect_data_files('certifi')
 
+# Baloes do Windows (windows-toasts -> winrt-*, extensoes nativas). Se algum
+# pacote nao estiver instalado no ambiente de build, o app cai no winotify.
+from PyInstaller.utils.hooks import collect_all
+winrt_binaries = []
+for _pkg in ('windows_toasts', 'winrt'):
+    try:
+        _datas, _bins, _hidden = collect_all(_pkg)
+        certifi_datas += _datas
+        winrt_binaries += _bins
+        hiddenimports += _hidden
+    except Exception:
+        pass
+for _mod in (
+    'winrt.runtime', 'winrt.system', 'winrt.windows.foundation', 'winrt.windows.foundation.collections',
+    'winrt.windows.ui.notifications', 'winrt.windows.data.xml.dom', 'winotify',
+):
+    hiddenimports.append(_mod)
+
 
 a = Analysis(
     ['app\\main.py'],
     pathex=[],
-    binaries=[],
+    binaries=winrt_binaries,
     datas=[
         ('app\\assets', 'app\\assets'),
         ('app\\migrations', 'app\\migrations'),

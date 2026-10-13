@@ -286,6 +286,7 @@ class BackendService:
                 self._api_refresh_token = self.official_proposal_storage.token_store.get_refresh_token()
             except Exception:
                 self._api_refresh_token = None
+            self._register_notifier_device(state.access_token, api_user.id, force=True)
             return True
         except Exception as exc:
             log.warning('Falha no login via API | detalhe=%s', user_message_for_api_error(exc))
@@ -293,6 +294,37 @@ class BackendService:
             self._api_access_token = None
             self._api_refresh_token = None
             return False
+
+    def _register_notifier_device(self, access_token: str | None, user_id: int | None, *, force: bool) -> None:
+        """Torna este computador destino dos avisos do Windows em nome do usuario
+        logado (o ultimo login vence). Em segundo plano e sem nunca falhar o login."""
+        try:
+            from app.services.notifier_registration import register_in_background
+
+            register_in_background(access_token or '', int(user_id or 0), force=force)
+        except Exception:
+            log.warning('Nao foi possivel registrar o computador para avisos do Windows', exc_info=True)
+
+    def ensure_notifier_registration(self) -> None:
+        """Sessao restaurada sem senha: garante a credencial local do avisador
+        (sem forcar: so registra se faltar ou for de outro usuario). O token de
+        acesso pode exigir renovacao de rede, entao tudo roda em segundo plano."""
+        user_id = int((self.user or {}).get('id') or 0)
+        if not user_id:
+            return
+        storage = self.official_proposal_storage
+
+        def _run() -> None:
+            try:
+                from app.services.notifier_registration import register_current_login
+
+                register_current_login(storage.current_access_token(), user_id, force=False)
+            except Exception:
+                log.debug('ensure_notifier_registration ignorado', exc_info=True)
+
+        import threading
+
+        threading.Thread(target=_run, name='notifier-ensure-registration', daemon=True).start()
 
     def user_name(self) -> str:
         if not self.user:

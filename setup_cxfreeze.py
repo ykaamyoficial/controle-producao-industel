@@ -22,6 +22,8 @@ build_exe_options = {
         "PySide6.QtWidgets",
         "PySide6.QtPrintSupport",
         "winotify",
+        "windows_toasts",
+        "winrt",
     ],
     "includes": [
         "hmac",

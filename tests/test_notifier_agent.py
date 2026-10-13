@@ -4,8 +4,12 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from app.services import notifier_agent
-from app.services.notifier_agent import NotifierState, plan_toasts, run_cycle
+from app.services import notifier_agent, notifier_credentials
+from app.services.notifier_agent import FetchResult, NotifierState, plan_toasts, run_cycle
+
+
+def _notifier_dir(temp_dir):
+    return patch.dict(os.environ, {notifier_credentials.NOTIFIER_DIR_ENV: str(temp_dir)})
 
 
 def _item(nid, severity="normal", title="t", body="b", deep_link="proposal/1"):
@@ -36,6 +40,10 @@ class PlanToastsTest(unittest.TestCase):
         self.assertEqual(toasts[0]["title"], "Uma so")
         self.assertEqual(toasts[0]["deep_link"], "proposal/7")
 
+    def test_owner_is_carried_to_every_toast(self):
+        toasts = plan_toasts([_item(1, "critica"), _item(2), _item(3)], suppress_individual=False, owner="Joao")
+        self.assertEqual({t["owner"] for t in toasts}, {"Joao"})
+
     def test_mix_yields_individual_plus_group(self):
         toasts = plan_toasts([_item(1, "critica"), _item(2), _item(3)], suppress_individual=False)
         self.assertEqual(len(toasts), 2)
@@ -43,19 +51,17 @@ class PlanToastsTest(unittest.TestCase):
 
 class NotifierStateTest(unittest.TestCase):
     def test_from_dict_defaults_to_zero(self):
-        self.assertEqual(NotifierState.from_dict({}).last_seen_notification_id, 0)
+        self.assertEqual(NotifierState.from_dict({}), NotifierState(last_seen_notification_id=0, user_id=0))
 
-    def test_round_trips_through_disk(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            with patch.object(notifier_agent, "get_app_data_dir", return_value=Path(temp_dir)):
-                notifier_agent.save_state(NotifierState(last_seen_notification_id=42))
-                self.assertEqual(notifier_agent.load_state(), NotifierState(last_seen_notification_id=42))
+    def test_round_trips_through_disk_with_owner(self):
+        with tempfile.TemporaryDirectory() as temp_dir, _notifier_dir(temp_dir):
+            notifier_agent.save_state(NotifierState(last_seen_notification_id=42, user_id=7))
+            self.assertEqual(notifier_agent.load_state(), NotifierState(last_seen_notification_id=42, user_id=7))
 
     def test_corrupted_file_returns_defaults(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
+        with tempfile.TemporaryDirectory() as temp_dir, _notifier_dir(temp_dir):
             (Path(temp_dir) / notifier_agent.STATE_FILE_NAME).write_text("nope", encoding="utf-8")
-            with patch.object(notifier_agent, "get_app_data_dir", return_value=Path(temp_dir)):
-                self.assertEqual(notifier_agent.load_state(), NotifierState())
+            self.assertEqual(notifier_agent.load_state(), NotifierState())
 
 
 class PendingDeepLinkTest(unittest.TestCase):
@@ -74,29 +80,38 @@ class PendingDeepLinkTest(unittest.TestCase):
 
 
 class RunCycleTest(unittest.TestCase):
-    def _run(self, *, temp_dir, items, summary=None, main_app_running=False, toast_ok=True):
+    def _run(self, *, temp_dir, items, summary=None, main_app_running=False, toast_ok=True, user_id=5, owner="Joao"):
         summary = summary or {"total_unread": len(items)}
-        with patch.object(notifier_agent, "get_app_data_dir", return_value=Path(temp_dir)), patch.object(
+        result = FetchResult(items, summary, user_id, owner, NotifierState(user_id=user_id))
+        with _notifier_dir(temp_dir), patch.object(
             notifier_agent, "is_main_app_running", return_value=main_app_running
-        ), patch.object(
-            notifier_agent, "_fetch_notifications", return_value=(items, summary)
-        ), patch.object(notifier_agent, "_send_toast", return_value=toast_ok) as toast_mock:
+        ), patch.object(notifier_agent, "_fetch_notifications", return_value=result), patch.object(
+            notifier_agent, "_send_toast", return_value=toast_ok
+        ) as toast_mock:
             shown = run_cycle()
             state = notifier_agent.load_state()
         return shown, toast_mock, state
 
-    def test_no_session_keeps_state(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            with patch.object(notifier_agent, "get_app_data_dir", return_value=Path(temp_dir)), patch.object(
-                notifier_agent, "_fetch_notifications", return_value=None
-            ):
+    def test_no_session_keeps_state_and_tells_the_tray(self):
+        received = {}
+        with tempfile.TemporaryDirectory() as temp_dir, _notifier_dir(temp_dir), patch.object(
+            notifier_agent, "_fetch_notifications", return_value=None
+        ):
+            notifier_agent.set_tray_updater(lambda s: received.update(s))
+            try:
                 self.assertEqual(run_cycle(), 0)
+            finally:
+                notifier_agent.set_tray_updater(None)
+            self.assertEqual(notifier_agent.load_state(), NotifierState())
+        self.assertTrue(received.get("no_session"))
 
-    def test_successful_toast_advances_pointer_to_highest_id(self):
+    def test_successful_toast_advances_pointer_and_keeps_owner(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             shown, toast_mock, state = self._run(temp_dir=temp_dir, items=[_item(10, "critica"), _item(12)])
             self.assertEqual(shown, 2)
-            self.assertEqual(state.last_seen_notification_id, 12)
+            self.assertEqual(state, NotifierState(last_seen_notification_id=12, user_id=5))
+            # o balao diz para quem e o aviso
+            self.assertEqual(toast_mock.call_args_list[0].args[3], "Joao")
 
     def test_failed_toast_does_not_advance_pointer(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -111,7 +126,7 @@ class RunCycleTest(unittest.TestCase):
             self.assertEqual(shown, 0)
             self.assertEqual(state.last_seen_notification_id, 8)
 
-    def test_tray_updater_receives_summary(self):
+    def test_tray_updater_receives_summary_and_owner(self):
         received = {}
         with tempfile.TemporaryDirectory() as temp_dir:
             notifier_agent.set_tray_updater(lambda s: received.update(s))
@@ -120,6 +135,7 @@ class RunCycleTest(unittest.TestCase):
             finally:
                 notifier_agent.set_tray_updater(None)
         self.assertEqual(received.get("total_unread"), 4)
+        self.assertEqual(received.get("owner_name"), "Joao")
 
 
 @unittest.skipUnless(os.name == "nt", "mutex do Windows so existe no Windows")

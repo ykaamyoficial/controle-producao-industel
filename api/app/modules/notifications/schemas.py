@@ -27,6 +27,9 @@ class NotificationUnreadSummary(BaseModel):
     total_unread: int = 0
     by_severity: dict[str, int] = {}
     by_category: dict[str, int] = {}
+    # maior id de notificacao do usuario: o agente de avisos usa como ponto de
+    # partida ao trocar de usuario, sem despejar o historico em toasts.
+    latest_id: int = 0
     server_time: str | None = None
 
 

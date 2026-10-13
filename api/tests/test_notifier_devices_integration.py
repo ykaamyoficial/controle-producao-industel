@@ -247,6 +247,8 @@ class NotifierDeviceTests(unittest.TestCase):
                 self.assertEqual([item.title for item in tray.items], ["visivel"])
                 everything = await notifications_service.catch_up(session, user, since_id=0)
                 self.assertEqual(len(everything.items), 2)
+                summary = await notifications_service.unread_summary(session, user)
+                self.assertEqual(summary.latest_id, everything.items[-1].id)
 
         asyncio.run(_run())
 

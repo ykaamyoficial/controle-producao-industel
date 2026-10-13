@@ -275,10 +275,14 @@ async def unread_summary(session: AsyncSession, actor: User) -> NotificationUnre
         total += int(count)
         by_severity[severity] = by_severity.get(severity, 0) + int(count)
         by_category[category] = by_category.get(category, 0) + int(count)
+    latest_id = (
+        await session.execute(select(func.max(Notification.id)).where(Notification.user_id == actor.id))
+    ).scalar_one_or_none()
     return NotificationUnreadSummary(
         total_unread=total,
         by_severity=by_severity,
         by_category=by_category,
+        latest_id=int(latest_id or 0),
         server_time=_utcnow().isoformat(),
     )
 
