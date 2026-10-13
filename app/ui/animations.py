@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import math
+
 from PySide6.QtCore import QEasingCurve, QPointF, QPropertyAnimation, QVariantAnimation
+from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import QGraphicsOpacityEffect, QWidget
 
 # Curva unica do padrao visual: cubic-bezier(.23, 1, .32, 1) - sai rapido e
@@ -9,7 +12,17 @@ from PySide6.QtWidgets import QGraphicsOpacityEffect, QWidget
 STANDARD_CURVE = QEasingCurve(QEasingCurve.BezierSpline)
 STANDARD_CURVE.addCubicBezierSegment(QPointF(0.23, 1.0), QPointF(0.32, 1.0), QPointF(1.0, 1.0))
 
+# Janelas (abrir, fechar, veu): curva padrao do Core Animation,
+# cubic-bezier(.25, .1, .25, 1), e uma mola pouco amortecida para o salto de
+# entrada - ver docs/architecture/PADRAO_JANELAS_PLANO_MIGRACAO.md.
+WINDOW_CURVE = QEasingCurve(QEasingCurve.BezierSpline)
+WINDOW_CURVE.addCubicBezierSegment(QPointF(0.25, 0.1), QPointF(0.25, 1.0), QPointF(1.0, 1.0))
+SPRING_MS = 550  # ate a mola assentar; a janela ja parece no lugar em ~200 ms
+SPRING_RESPONSE = 0.40  # segundos de um ciclo: menor = mais rapida
+SPRING_DAMPING = 0.68  # 1 = sem quique; 0.68 passa ~5% do ponto
+
 _reduced_motion = False
+_window_motion_forced: bool | None = None
 
 
 def set_reduced_motion(enabled: bool) -> None:
@@ -25,6 +38,79 @@ def reduced_motion() -> bool:
 
 def motion_duration(milliseconds: int) -> int:
     return 0 if _reduced_motion else max(0, int(milliseconds))
+
+
+def window_motion_enabled() -> bool:
+    """Abrir/fechar animado de janela. Fica desligado com "reduzir animacoes" e
+    nas plataformas sem tela (`offscreen`/`minimal`: a suite e o CI), onde
+    ninguem ve a animacao e os testes esperam que accept()/reject() fechem o
+    dialogo na hora."""
+    if _window_motion_forced is not None:
+        return _window_motion_forced
+    if _reduced_motion:
+        return False
+    app = QGuiApplication.instance()
+    return isinstance(app, QGuiApplication) and app.platformName() not in ("offscreen", "minimal")
+
+
+def force_window_motion(enabled: bool | None) -> None:
+    """So para teste: liga (True) ou desliga (False) a animacao de janela em
+    qualquer plataforma; None volta a regra normal."""
+    global _window_motion_forced
+    _window_motion_forced = enabled
+
+
+def ease(progress: float) -> float:
+    return WINDOW_CURVE.valueForProgress(progress)
+
+
+def spring(progress: float) -> float:
+    """Mola das janelas: devolve quanto do caminho ja foi andado e passa de 1
+    no quique antes de assentar. `progress` vai de 0 a 1 ao longo de SPRING_MS."""
+    elapsed = progress * SPRING_MS / 1000
+    natural = 2 * math.pi / SPRING_RESPONSE
+    decay = SPRING_DAMPING * natural
+    swing = natural * math.sqrt(1 - SPRING_DAMPING**2)
+    return 1 - math.exp(-decay * elapsed) * (math.cos(swing * elapsed) + decay / swing * math.sin(swing * elapsed))
+
+
+def transition(widget: QWidget, attribute: str, end: float, duration: int, curve=ease, on_finished=None) -> None:
+    """Anima um atributo pintado de `widget` ate `end` e chama `on_finished` na
+    chegada. Uma animacao por atributo; `curve` recebe o progresso (0 a 1) e
+    devolve quanto do caminho ja andou. Duracao zero (ou "reduzir animacoes")
+    aplica o valor final e chama `on_finished` na hora."""
+    animations = widget.__dict__.setdefault("_transitions", {})
+    previous = animations.pop(attribute, None)
+    if previous is not None:
+        previous.stop()
+        previous.deleteLater()
+    start = float(getattr(widget, attribute))
+    end = float(end)
+
+    def arrived():
+        animations.pop(attribute, None)
+        setattr(widget, attribute, end)
+        widget.update()
+        if on_finished is not None:
+            on_finished()
+
+    duration = motion_duration(duration)
+    if duration <= 0:
+        arrived()
+        return
+    animation = QVariantAnimation(widget)
+    animation.setDuration(duration)
+    animation.setStartValue(0.0)
+    animation.setEndValue(1.0)
+
+    def apply(progress):
+        setattr(widget, attribute, start + (end - start) * curve(progress))
+        widget.update()
+
+    animation.valueChanged.connect(apply)
+    animation.finished.connect(arrived)
+    animations[attribute] = animation
+    animation.start()
 
 
 def animate_value(widget: QWidget, attribute: str, end: float, duration: int) -> None:

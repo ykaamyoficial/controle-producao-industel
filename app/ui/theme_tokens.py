@@ -55,7 +55,9 @@ def ui_tokens(palette: dict) -> dict[str, str]:
     - input_border: borda de campo e de caixa de marcacao (>= 3:1)
     - ring: anel de foco (>= 3:1)
     - accent_soft: fundo suave na cor de destaque (pilulas de contagem)
-    - media_*, overlay*, on_overlay: visualizador de midia (unica excecao fixa)
+    - media_*, overlay*, on_overlay: visualizador de midia (excecao fixa)
+    - shell_ink, shell_light: sombra e filete de luz da casca das janelas
+      (excecao fixa: luz e sombra sao as mesmas nos dois temas, so a forca muda)
     """
     surface = palette["surface"]
     surface_alt = palette["surface_alt"]
@@ -79,6 +81,10 @@ def ui_tokens(palette: dict) -> dict[str, str]:
         "overlay": "rgba(15, 23, 42, 160)",
         "overlay_strong": "rgba(15, 23, 42, 200)",
         "on_overlay": "#ffffff",
+        # Casca das janelas (window_shell.py) e veu: mesmo azul quase preto do
+        # veu para aro e sombras, branco para o filete de luz.
+        "shell_ink": "#080f1e",
+        "shell_light": "#ffffff",
     }
 
 

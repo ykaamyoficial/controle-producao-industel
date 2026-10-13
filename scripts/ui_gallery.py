@@ -7,6 +7,8 @@ Uso:
     python scripts/ui_gallery.py
     python scripts/ui_gallery.py --tema escuro
     python scripts/ui_gallery.py --shot saida.png     # salva saida.png e saida_dialogo.png
+    python scripts/ui_gallery.py --casca              # liga a casca nova das janelas (canto de 24 px,
+                                                      # borda com volume, mola); vale com qualquer outra opcao
 """
 
 from __future__ import annotations
@@ -35,7 +37,6 @@ from PySide6.QtWidgets import (  # noqa: E402
 
 from app.services.backend_adapter import OFFICIAL_COLOR_PALETTES  # noqa: E402
 from app.ui.components.empty_state import EmptyState  # noqa: E402
-from app.ui.components.frameless_dialog import apply_frameless_rounded_dialog  # noqa: E402
 from app.ui.components.count_tabs import CountTabs  # noqa: E402
 from app.ui.components.modern_button import ModernButton  # noqa: E402
 from app.ui.components.segmented_control import SegmentedControl  # noqa: E402
@@ -179,7 +180,6 @@ class Gallery(QWidget):
         dialog.setModal(True)
         dialog.setWindowTitle("Diálogo de exemplo")
         style_dialog_from_parent(dialog, self)
-        apply_frameless_rounded_dialog(dialog)
         layout = QVBoxLayout(dialog)
         layout.setContentsMargins(16, 14, 16, 14)
         layout.setSpacing(10)
@@ -910,10 +910,15 @@ def main() -> int:
         metavar="ABA",
         help="com --moldura: abre Detalhes da proposta por cima, na aba 0..5",
     )
+    parser.add_argument("--casca", action="store_true", help="liga a casca nova das janelas sobrepostas (window_shell.py)")
     parser.add_argument("--altura", type=int, default=740, help="com --moldura/--painel: altura da janela (para ver a pagina inteira)")
     parser.add_argument("--shot", metavar="ARQUIVO.png")
     args = parser.parse_args()
 
+    if args.casca:
+        from app.ui.components.window_shell import set_window_shell_enabled
+
+        set_window_shell_enabled(True)
     app = QApplication(sys.argv[:1])
     family = load_app_fonts()
     if args.remanejamento:

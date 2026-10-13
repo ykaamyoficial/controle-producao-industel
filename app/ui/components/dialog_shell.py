@@ -259,11 +259,20 @@ def install_dialog_shell(dialog: QWidget, *, frameless: bool = True) -> None:
     """Casca padrao de tela sobreposta. Chamado por
     `style_dialog_from_parent()`; idempotente."""
     if getattr(dialog, "_dialog_shell_controller", None) is not None:
+        # Chamado de novo quando o tema muda com a janela aberta.
+        shell = getattr(dialog, "_window_shell", None)
+        if shell is not None:
+            shell.refresh()
         return
     controller = _DialogShellController(dialog)
     dialog.installEventFilter(controller)
     dialog._dialog_shell_controller = controller
     if frameless:
+        from app.ui.components.window_shell import install_window_shell, window_shell_enabled
+
+        if window_shell_enabled():
+            install_window_shell(dialog)
+            return
         from app.ui.components.frameless_dialog import apply_frameless_rounded_dialog
 
         apply_frameless_rounded_dialog(dialog)

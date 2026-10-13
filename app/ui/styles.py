@@ -1151,6 +1151,21 @@ def _build_stylesheet(palette: dict) -> str:
     QLabel#PopoverName {{
         font-weight: 700;
     }}
+    /* Casca nova das janelas (window_shell.py): a moldura e pintada pela
+       casca, entao o QDialog fica sem fundo; cantos internos acompanham o
+       raio de 24 px da janela. */
+    QDialog[windowShell="true"] {{
+        background: transparent;
+        border: 0;
+    }}
+    QDialog[windowShell="true"] QFrame#DetailPanel, QDialog[windowShell="true"] QFrame#DetailPanelHighlight,
+    QDialog[windowShell="true"] QFrame#Panel {{
+        {radius(18)}
+    }}
+    QDialog[windowShell="true"] QLineEdit, QDialog[windowShell="true"] QComboBox, QDialog[windowShell="true"] QTextEdit,
+    QDialog[windowShell="true"] QSpinBox, QDialog[windowShell="true"] QDoubleSpinBox {{
+        {radius(12)}
+    }}
     QFrame#NotificationCenterPanel {{
         background: {surface};
         border: 1px solid {border};
