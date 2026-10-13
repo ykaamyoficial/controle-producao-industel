@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import math
 
-from PySide6.QtCore import QEasingCurve, QPointF, QPropertyAnimation, QVariantAnimation
-from PySide6.QtGui import QGuiApplication
+from PySide6.QtCore import QEasingCurve, QPoint, QPointF, QPropertyAnimation, QRect, QVariantAnimation
+from PySide6.QtGui import QGuiApplication, QImage, QPainter, QPixmap
 from PySide6.QtWidgets import QGraphicsOpacityEffect, QWidget
 
 # Curva unica do padrao visual: cubic-bezier(.23, 1, .32, 1) - sai rapido e
@@ -177,4 +177,62 @@ def fade_out(widget: QWidget, duration: int = 160, on_finished=None) -> QPropert
     if on_finished is not None:
         animation.finished.connect(on_finished)
     animation.start()
+    return animation
+
+
+def painted_pixmap(widget: QWidget) -> QPixmap | None:
+    """Foto do que `widget` ja pintou, copiada do backing store da janela dele
+    (~3 ms). Repintar com `grab()` passa de 70 ms numa pagina inteira. Devolve
+    None quando a janela ainda nao pintou nada (ou nao e de pixels comuns)."""
+    window = widget.window()
+    store = window.backingStore()
+    image = store.paintDevice() if store is not None else None
+    if not isinstance(image, QImage) or image.isNull():
+        return None
+    ratio = window.devicePixelRatioF()
+    origin = widget.mapTo(window, QPoint(0, 0))
+    area = QRect(round(origin.x() * ratio), round(origin.y() * ratio), round(widget.width() * ratio), round(widget.height() * ratio))
+    if area.isEmpty() or not image.rect().contains(area):
+        return None
+    pixmap = QPixmap.fromImage(image.copy(area))
+    pixmap.setDevicePixelRatio(ratio)
+    return pixmap
+
+
+class _Backdrop(QWidget):
+    """Foto da pagina que saiu, pintada ATRAS da pagina que entra."""
+
+    def __init__(self, parent: QWidget):
+        super().__init__(parent)
+        self._snapshot: QPixmap | None = None
+        self.hide()
+
+    def paintEvent(self, _event) -> None:  # noqa: N802 (Qt override)
+        if self._snapshot is not None:
+            painter = QPainter(self)
+            painter.drawPixmap(0, 0, self._snapshot)
+            painter.end()
+
+
+def crossfade(container: QWidget, incoming: QWidget, snapshot: QPixmap | None, duration: int = 200) -> QPropertyAnimation:
+    """Troca de pagina sem piscar o fundo: `incoming` (a pagina nova, dentro
+    de `container`) aparece por cima da foto da pagina antiga. `snapshot` vem
+    de `painted_pixmap(container)` tirada ANTES da troca; sem ela vira o
+    `fade_in` de sempre."""
+    backdrop = None
+    if snapshot is not None and motion_duration(duration) > 0:
+        # Filho do proprio container, por baixo das paginas: fica acima do
+        # fundo do container (que pode ser opaco) e abaixo de quem entra.
+        backdrop = getattr(container, "_crossfade_backdrop", None)
+        if backdrop is None:
+            backdrop = _Backdrop(container)
+            container._crossfade_backdrop = backdrop
+        backdrop._snapshot = snapshot
+        backdrop.setGeometry(container.rect())
+        backdrop.lower()
+        backdrop.show()
+    animation = fade_in(incoming, duration=duration)
+    animation.setEasingCurve(WINDOW_CURVE)
+    if backdrop is not None:
+        animation.finished.connect(backdrop.hide)
     return animation

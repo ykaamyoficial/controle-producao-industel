@@ -6,7 +6,7 @@ from PySide6.QtWidgets import QApplication, QFrame, QHBoxLayout, QLabel, QMainWi
 
 from app.services.backend_adapter import BackendService
 from app.services.session_sync_service import SessionSyncService
-from app.ui.animations import animate_width, fade_in, set_reduced_motion
+from app.ui.animations import animate_width, crossfade, fade_in, painted_pixmap, set_reduced_motion
 from app.ui.app_icon import app_icon
 from app.ui.background_worker import start_worker
 from app.ui.chat_center_page import ChatCenterDialog
@@ -496,11 +496,14 @@ class MainWindow(FramelessHitTestMixin, QMainWindow):
         previous = self.stack.currentWidget()
         if previous is not page and hasattr(previous, "deactivate_transient_modes"):
             previous.deactivate_transient_modes()
+        # Foto da pagina que sai, tirada antes da troca: a nova aparece por cima
+        # dela (transicao cruzada) em vez de piscar o fundo.
+        leaving = painted_pixmap(self.stack) if previous is not None and previous is not page and self.isVisible() else None
         self.stack.setCurrentWidget(page)
         self.sidebar.set_active(key)
         if hasattr(page, "refresh"):
             page.refresh()
-        self._page_animation = fade_in(page)
+        self._page_animation = crossfade(self.stack, page, leaving)
 
     def open_chat_center(self, *, proposal_id=None, conversation_id=None, message_id=None):
         if not self._can_view("chats", "CHATS"):

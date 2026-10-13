@@ -3,6 +3,7 @@ from __future__ import annotations
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QDialog, QFrame, QHBoxLayout, QLabel, QMessageBox, QStackedWidget, QVBoxLayout
 
+from app.ui.animations import fade_in
 from app.ui.components.app_icon_button import AppIconButton
 from app.ui.components.dialog_shell import dialog_footer, dialog_header
 from app.ui.components.modern_button import ModernButton
@@ -127,7 +128,10 @@ class ProductionWizardDialog(QDialog):
         index = sequence.index(page)
         self.stepper.set_steps([p.step_name for p in sequence])
         self.stepper.set_current(index)
+        changed = self.stack.currentWidget() is not page
         self.stack.setCurrentWidget(page)
+        if changed and self.isVisible():
+            self._page_fade = fade_in(page, duration=160)
         self.header.title_label.setText(TITLE)
         if self.header.subtitle_label is not None:
             self.header.subtitle_label.setText(f"Passo {index + 1} de {len(sequence)} — {page.instruction}")

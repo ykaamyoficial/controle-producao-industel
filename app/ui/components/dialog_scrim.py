@@ -16,11 +16,11 @@ volta a ser transparente.
 
 from __future__ import annotations
 
-from PySide6.QtCore import QEvent, QObject, QPoint, QRect, Qt
-from PySide6.QtGui import QColor, QImage, QPainter, QPixmap
+from PySide6.QtCore import QEvent, QObject, Qt
+from PySide6.QtGui import QColor, QPainter, QPixmap
 from PySide6.QtWidgets import QDialog, QWidget
 
-from app.ui.animations import animate_value, transition, window_motion_enabled
+from app.ui.animations import animate_value, painted_pixmap, transition, window_motion_enabled
 from app.ui.theme_tokens import active_tokens, relative_luminance
 
 _SCRIM_COLOR = (8, 15, 30)
@@ -83,23 +83,6 @@ class DialogScrim(QWidget):
             self._thaw()
             self.hide()
 
-    def _painted_owner(self) -> QPixmap | None:
-        """O que a janela de tras ja pintou, copiado do backing store dela."""
-        owner = self.parent()
-        window = owner.window()
-        store = window.backingStore()
-        image = store.paintDevice() if store is not None else None
-        if not isinstance(image, QImage) or image.isNull():
-            return None
-        ratio = window.devicePixelRatioF()
-        origin = owner.mapTo(window, QPoint(0, 0))
-        area = QRect(round(origin.x() * ratio), round(origin.y() * ratio), round(owner.width() * ratio), round(owner.height() * ratio))
-        if area.isEmpty() or not image.rect().contains(area):
-            return None
-        pixmap = QPixmap.fromImage(image.copy(area))
-        pixmap.setDevicePixelRatio(ratio)
-        return pixmap
-
     def _freeze(self, repaint: bool = False) -> None:
         """`repaint`: o veu ja esta na tela (e portanto no que a janela pintou),
         entao a foto limpa so sai repintando a janela sem ele."""
@@ -108,7 +91,7 @@ class DialogScrim(QWidget):
         # sai barato e a foto perderia o canto.
         if getattr(owner, "_window_shell", None) is not None:
             return
-        backdrop = None if repaint else self._painted_owner()
+        backdrop = None if repaint else painted_pixmap(owner)
         if backdrop is None:
             self._capturing = True
             try:

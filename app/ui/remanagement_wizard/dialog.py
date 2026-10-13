@@ -4,6 +4,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QDialog, QFrame, QHBoxLayout, QLabel, QMessageBox, QStackedWidget, QVBoxLayout
 
 from app.services.remanagement_flow_state import RemanagementFlowState
+from app.ui.animations import fade_in
 from app.ui.components.app_icon_button import AppIconButton
 from app.ui.components.dialog_shell import dialog_footer, dialog_header
 from app.ui.components.modern_button import ModernButton
@@ -105,7 +106,10 @@ class RemanagementWizardDialog(QDialog):
     def _show_page(self, index: int) -> None:
         self._index = index
         page = self.pages[index]
+        changed = self.stack.currentIndex() != index
         self.stack.setCurrentIndex(index)
+        if changed and self.isVisible():
+            self._page_fade = fade_in(page, duration=160)
         self.stepper.set_current(index)
         self.header.title_label.setText(TITLE)
         if self.header.subtitle_label is not None:
