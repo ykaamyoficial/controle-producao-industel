@@ -31,6 +31,7 @@ from app.ui.animations import fade_in
 from app.ui.background_worker import start_worker
 from app.ui.components.app_icon_button import AppIconButton
 from app.ui.components.chat_pending_attachments import AttachmentState
+from app.ui.components.dialog_shell import dialog_header
 from app.ui.chat_attachment_download_worker import AttachmentCacheManager, ChatAttachmentDownloadWorker, cached_attachment_path, safe_attachment_filename
 from app.ui.components.chat_message_attachments import MediaViewerDialog, attachment_display_category, attachment_filename, build_media_sequence, resolve_media_kind
 from app.ui.components.chat_shared_content import SharedContentPanel
@@ -39,6 +40,7 @@ from app.ui.components.modern_button import ModernButton
 from app.ui.components.proposal_activity_panel import ProposalActivityPanel
 from app.ui.components.status_badge import StatusBadge
 from app.ui.components.style_state import set_style_state
+from app.ui.dialog_utils import style_dialog_from_parent
 from app.ui.components.timeline_entries import (
     GROUP_WINDOW_SECONDS,
     CurrentUserMessageWidget,
@@ -100,8 +102,11 @@ class InternalNoteDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Registrar nota interna")
         self.setMinimumWidth(380)
+        style_dialog_from_parent(self, parent)
         layout = QVBoxLayout(self)
         layout.setSpacing(8)
+        # Sem a barra de titulo do Windows o titulo passa a ficar no cabecalho.
+        layout.addWidget(dialog_header("Registrar nota interna"))
 
         area_label = QLabel("Área de origem")
         layout.addWidget(area_label)

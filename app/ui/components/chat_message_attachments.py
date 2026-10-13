@@ -43,6 +43,7 @@ except ImportError:  # pragma: no cover - ambiente sem QtMultimediaWidgets
 
 from app.ui.chat_attachment_download_worker import AttachmentCacheManager, ChatAttachmentDownloadWorker, cached_attachment_path
 from app.ui.components.chat_pending_attachments import attachment_category, format_file_size, icon_for_category
+from app.ui.dialog_utils import style_dialog_from_parent
 from app.ui.icons import AppIcons, icon_provider, make_icon
 from app.ui.theme_tokens import active_tokens
 
@@ -397,6 +398,7 @@ class MediaViewerDialog(QDialog):
         self._closed = False
         self.setWindowTitle("Midia")
         self.resize(980, 700)
+        style_dialog_from_parent(self, parent)
         self._build()
         self._install_shortcuts()
         self.finished.connect(self._cleanup_resources)
