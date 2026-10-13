@@ -16,7 +16,7 @@ from app.services import notifier_credentials as creds
 from app.services.app_logging import get_logger
 from app.services.app_paths import get_app_data_dir, get_launcher_path, is_packaged
 from app.services.notifier_credentials import NotifierState, load_state, save_state  # noqa: F401  (reexport)
-from app.ui.app_icon import app_icon_path
+from app.ui.app_icon import app_icon_path, toast_icon_path
 
 
 log = get_logger("notifier_agent")
@@ -306,7 +306,7 @@ def _send_toast(title: str, message: str, deep_link: str = "", owner: str = "") 
     """Tenta exibir o toast. Retorna False se nao foi possivel disparar."""
     from app.services import windows_toast
 
-    icon_path = app_icon_path()
+    icon_path = toast_icon_path()
     return windows_toast.show_toast(
         title or TOAST_APP_ID,
         message or "",
