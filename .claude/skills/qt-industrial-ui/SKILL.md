@@ -52,7 +52,7 @@ Já existem em `app/ui/components/` (confira com `python scripts/ui_gallery.py`,
 - `page_header.py`: `page_header(titulo, subtitulo, side=[...], actions=[...])` / `setup_page_header(frame, ...)` - faixa de topo das páginas de painel e relatório (título na cor de destaque, ações à direita, `frame.body_layout` para os filtros). Painel de conteúdo: `make_panel()`; painel interno suave: objectName `SoftPanel`.
 - `style_state.py`: `set_style_state(widget, active=True, ...)` troca estado por propriedade e reaplica o estilo (nunca reescreva stylesheet em tempo de execução); `StatusDot(cor)` é o ponto de cor pintado. `status_badge.py` tem também `StageChip` (etapa de linha do tempo) e `StatusBadge.colors()`; `avatar.py` tem `AvatarLabel`.
 - Chat: balões, cartões, anexos e composição são estilizados em `styles.py` por nome de objeto e propriedade (`tone`, `mentionsMe`, `dropActive`, `active`, `card`); o visualizador de mídia usa os tokens fixos `media_*`/`overlay*`. Galeria: `python scripts/ui_gallery.py --chat`.
-- Casca e véu de diálogo (`dialog_scrim.py`, `install_dialog_shell`), ligados sozinhos por `style_dialog_from_parent()`: sem moldura nativa (só com janela principal por trás), cantos de 16 px e tabelas padronizadas. Não chame `apply_frameless_rounded_dialog` à mão.
+- Casca e véu de diálogo (`window_shell.py`, `dialog_scrim.py`, `install_dialog_shell`), ligados sozinhos por `style_dialog_from_parent()`: sem moldura nativa, fundo transparente com a moldura pintada (canto liso de 24 px, borda com volume, duas sombras), mola ao abrir e encolher ao fechar, tabelas padronizadas. Tela de inicialização (sem janela principal por trás) usa `standalone=True` e precisa de fechamento próprio (`window_title_row()` ou botão Fechar). Popup usa `install_popup_shell()`; menu e lista de combo são tratados por `floating_chrome.py`; `QMessageBox`/`QInputDialog` por `message_boxes.py`. Não chame `apply_frameless_rounded_dialog` à mão. Padrão aprovado em 13/10/2026 (`prototipos/acoes_proposta/acoes.py`); plano e andamento em `docs/architecture/PADRAO_JANELAS_PLANO_MIGRACAO.md`.
 - Animação de atributo pintado: `animate_value()` em `app/ui/animations.py`.
 
 Tela de referência no código real: `app/ui/process_detail_dialog.py` e `app/ui/process_detail/`.
@@ -75,11 +75,12 @@ Painel de conteúdo usa `objectName` `DetailPanel` (ou `make_panel()`), não `Pa
 | Estado vazio | Ícone em círculo, título, texto e botão "Limpar filtros". |
 | Carregando | Esqueleto com brilho no lugar do conteúdo. |
 
-Altura de controle 34, raios 10 (campo/botão), 14 (painel), 16 (janela sobreposta). Espaçamento em múltiplos de 4. Alvo de clique >= 32 px.
+Altura de controle 34, raios 10 (campo/botão), 14 (painel) nas páginas. Janela sobreposta: 24, com painel 18, cartão 16 e campo 12 dentro dela; popup 16; menu 12. Espaçamento em múltiplos de 4. Alvo de clique >= 32 px.
 
 ## Movimento
 
 - Só opacidade, cor e escala pintada. Entrada 180-240 ms, saída 120-180 ms, curva `cubic-bezier(.23, 1, .32, 1)`.
+- Janelas são a exceção, no estilo macOS/iOS: nascem em 88% e saltam para o lugar com mola (`spring`, ~550 ms até assentar, parece no lugar em ~200 ms); saem encolhendo até 94% em 180 ms; curva fora da mola `cubic-bezier(.25, .1, .25, 1)` (`animations.ease`). Use `transition()` de `app/ui/animations.py`; animação de janela fica desligada na plataforma `offscreen` e com Reduzir animações (`window_motion_enabled()`).
 - Botão: hover 140 ms, clique encolhe 3% em 80 ms. Marcadores (segmentado, abas) deslizam em 240 ms.
 - A ação dispara **antes** da animação; nada espera animação terminar.
 - Uma única animação contínua por tela, no máximo (o pulso da etapa atual).
@@ -90,7 +91,7 @@ Altura de controle 34, raios 10 (campo/botão), 14 (painel), 16 (janela sobrepos
 Toda janela sobreposta (detalhes, formulário, assistente, confirmação) segue **um** padrão. Especificação completa, tamanhos e regras de fechamento em [references/janelas-sobrepostas.md](references/janelas-sobrepostas.md). Resumo:
 
 1. **Véu** escurece a tela de trás; a janela aparece com fade.
-2. **Janela** com fundo `bg`, borda de 1 px, raio 16, sem barra de título do Windows.
+2. **Janela** com fundo `bg`, canto liso de 24 px, borda com volume (aro, filete de luz, sombreado) e sombra própria, sem barra de título do Windows.
 3. **Cabeçalho-cartão**: título 18 px em negrito, subtítulo, linha de situação (selo + prazo) e, à direita, as ações - secundárias, **uma** primária e "Fechar" sempre por último.
 4. **Abas** (quando houver) com contagem e traço que desliza.
 5. **Corpo** em painéis brancos de raio 14; tabelas em moldura arredondada.

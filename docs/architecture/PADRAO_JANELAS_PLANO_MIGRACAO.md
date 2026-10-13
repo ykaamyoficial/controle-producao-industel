@@ -290,7 +290,7 @@ Aceite: os dois pilotos iguais ao protótipo nos dois temas; suíte verde; entra
 | Miolo da janela | **Mudou em relação ao protótipo:** o degradê do corpo virou cor chapada, porque área de rolagem e painel com o mesmo fundo apareceriam como retângulos. O volume ficou só na borda; o protótipo foi ajustado para ficar igual |
 | Vídeo dentro de janela transparente | Testado antes da onda F: `QVideoWidget` tocando um vídeo de teste aparece normalmente dentro de diálogo com a casca nova (Windows 10, PySide6 6.11) |
 
-Suíte ao fim da onda: 2754 passaram e 382 pulados com a casca desligada (Desktop + API); 1949 passaram e 21 pulados nos testes do Desktop com a casca ligada em todos os diálogos.
+Suíte ao fim da onda: 2754 passaram e 382 pulados com a casca desligada (Desktop + API). Com a chave ligada os 1949 testes do Desktop também passaram, mas essa rodada prova pouco: nos testes a maioria dos diálogos nasce sem janela dona e, sem dona, não recebe a casca. A rodada com a casca forçada em todos está no andamento das ondas B a E.
 
 ### Onda B — Centrais de ação e detalhes (M)
 
@@ -331,6 +331,27 @@ Casca aplicada às 200 `QMessageBox` e às 7 `QInputDialog` por gancho global, s
 ### Onda K — Fechamento (P)
 
 Chave vira padrão e é removida; atualizar a skill `qt-industrial-ui` e `references/janelas-sobrepostas.md`; remover as duas classes sem uso; gerar o instalador e conferir numa máquina limpa; documento de fechamento pela skill `fase-report`.
+
+## Andamento das ondas B a K (13/10/2026)
+
+| Onda | O que foi feito | Como foi conferido |
+|---|---|---|
+| B a E — diálogos | Folga mínima de 8 px para conteúdo de ponta a ponta (central de chats); importação em lote do Nomus decide o rodapé pela largura do conteúdo; os dois "Distribuição por proposta" passam pelo ponto único com cabeçalho e rodapé; cartão de ação com canto de 16 px | Ferramenta de conferência (plugin de pytest, fora do repositório) que força a casca em todo diálogo e fotografa cada um com os dados de exemplo dos testes: 93 fotos de 35 classes. Suíte com a casca forçada: 1942 passaram, 8 falhas esperadas (3 testes que afirmam o comportamento sem a casca, 1 que mede a janela com a margem, 4 do Nomus por configuração local ausente no diretório de conferência) |
+| F — chat e mídia | Nota interna e visualizador de mídia passam pelo ponto único | **O risco do vídeo não se confirmou:** vídeo tocando aparece dentro de janela transparente. Conferido na tela real com `QVideoWidget`, com o cartão de vídeo do chat e com o visualizador aberto. O chat ficou com a casca completa |
+| G — inicialização | `style_dialog_from_parent(..., standalone=True)`: as cinco telas perdem a barra do Windows, recebem o tema da configuração e, onde não havia botão de fechar (login, primeiro acesso, compatibilidade), uma linha de título com X (`window_title_row`) | Fotos das cinco telas; testes de inicialização |
+| H — popups, menus, avisos | Casca leve (16 px, sombra menor, entrada a partir do botão, saída por fantasma) na central de notificações, menu do usuário e emojis; menus de contexto e listas de combo com canto liso e fade por um filtro ligado uma vez na aplicação (`floating_chrome.py`); popup de menção com canto liso; aviso rápido pintado, com mola; aviso de notificação some com fade | Tela real: popups, menu, combo e avisos com canto liso. A animação dos popups não pôde ser medida direito na galeria, porque o serviço de exemplo trava a tela ao buscar notificações |
+| I — páginas | Transição cruzada na troca de página (foto da página antiga por baixo da nova); passos dos assistentes com fade | Tela real: no meio da troca a página antiga aparece por baixo. O efeito gráfico da página que entra foi mantido (trocá-lo custaria o mesmo) |
+| J — caixas de mensagem | Funções estáticas de `QMessageBox` e `QInputDialog` trocadas no início do programa por versões que montam a mesma caixa com a casca (`message_boxes.py`); título pintado no alto da caixa. Corrigido o véu que escurecia duas vezes quando um diálogo abria logo depois de outro fechar | Tela real: aviso, pergunta e entrada de texto; `tests/test_message_boxes.py`. A abordagem por filtro de eventos, prevista no plano, deixava a caixa invisível e foi descartada |
+| K — fechamento | A casca nova virou o padrão. A chave não foi removida: `INDUSTEL_WINDOW_SHELL=0` volta ao recorte antigo, como saída de emergência. Skill `qt-industrial-ui` atualizada | Suíte oficial completa |
+
+### O que não foi conferido
+
+- **Nenhuma tela foi vista com dados reais, logado na API.** A conferência foi pela galeria, por montagens de teste na tela real e pelas fotos com os dados de exemplo dos testes.
+- 25 diálogos não foram fotografados, porque os testes não os constroem: `AboutDialog`, `FiscalActionCenter`, `_SelectGalvanizationLoadDialog`, `GalvanizationLoadActionCenter`, `ApiProposalsReadonlyDialog`, `DashboardDetailsDialog`, `FiscalEmissionDialog`, `FiscalProposalDetailDialog`, `GalvanizationLoadDialog`, `_ItemAllocationDialog`, `_GalvanizationLoadReviewDialog`, `_GalvanizationReturnReviewDialog`, `ItemFlowDialog`, `ItemSelectionDialog`, `ItemWeightDialog`, `OperationalRowsDialog`, `OperationalProcessReadOnlyDialog`, `OperationalLoadReadOnlyDialog`, `InternalNoteDialog`, `EventDetailDialog`, `UpdateAuditDialog`, `UserEditorDialog`, `UserProfileDialog`, `MediaViewerDialog` (visto na tela real, sem mídia) e `ProposalActionCenter` (coberto pela subclasse). Recebem a mesma casca pelo mesmo ponto único.
+- Dica (`QToolTip`) ficou como era.
+- Botões das caixas de mensagem continuam em inglês ("Yes", "No", "Cancel"), como já eram: o programa não instala a tradução do Qt.
+- As duas classes sem uso (`ModernDialog`, `_LegacyGalvanizationLoadDetailsDialog`) não foram removidas.
+- O instalador não foi gerado.
 
 ## Ordem e dependências
 

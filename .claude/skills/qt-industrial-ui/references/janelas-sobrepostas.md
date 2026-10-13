@@ -27,7 +27,7 @@ Margem interna da janela: 16 nas laterais, 14 em cima e embaixo; espaçamento en
 
 **Véu.** Cobre a janela principal inteira. Cor `rgb(8, 15, 30)` com 41% de opacidade no tema claro e 59% no escuro. Aparece em 200 ms. É ele que separa a janela do fundo (o recorte arredondado atual não permite sombra nativa); uma sombra suave pode ser pintada pelo próprio véu em volta do retângulo da janela.
 
-**Janela.** Fundo `bg`, borda de 1 px `border`, raio 16, sem barra de título do Windows. Entra com fade de 220 ms.
+**Janela.** Fundo `bg`, canto liso de 24 px, borda com volume e duas sombras, sem barra de título do Windows. Salta para o lugar com mola ao abrir e encolhe enquanto some ao fechar.
 
 **Cabeçalho-cartão.** Painel branco com:
 
@@ -75,7 +75,8 @@ O protótipo desenha a janela como um widget filho. **No sistema continua sendo 
 
 - `style_dialog_from_parent()` (`app/ui/dialog_utils.py`) já é o ponto único por onde passam os diálogos, e `apply_frameless_rounded_dialog()` (`app/ui/components/frameless_dialog.py`) já tira a moldura e arredonda os cantos. O padrão novo entra **nesses dois pontos**, para valer em todos os diálogos de uma vez.
 - O véu é um widget filho da janela principal, mostrado quando o diálogo aparece e escondido quando ele fecha (`showEvent`/`finished`), ligado no mesmo ponto central.
-- Não use `WA_TranslucentBackground` no diálogo: o comentário em `frameless_dialog.py` registra que isso quebra o repaint de tabelas e áreas de rolagem.
+- Desde 13/10/2026 a casca (`window_shell.py`) usa fundo transparente com a moldura pintada, que é o que dá o canto liso; tabela, área de rolagem e vídeo foram conferidos dentro dela. O recorte por máscara (`frameless_dialog.py`) ficou só como saída de emergência (`INDUSTEL_WINDOW_SHELL=0`). Não instale a casca à mão: passe pelo ponto único.
+- A casca soma 48 px de margem de sombra em volta da janela. Código de diálogo que precisa da própria largura usa `contentsRect()`, não `width()`.
 - O cabeçalho-cartão, as abas com contagem e o rodapé de ações viram componentes reutilizáveis em `app/ui/components/`, para nenhum diálogo montá-los à mão.
 - `QMessageBox` continua sendo `QMessageBox` (os testes fazem patch nele); só recebe estilo.
 
