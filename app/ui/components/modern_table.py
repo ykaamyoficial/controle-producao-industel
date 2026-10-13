@@ -3,19 +3,20 @@ from __future__ import annotations
 from datetime import date
 
 from PySide6.QtCore import QPointF, QRectF, QSortFilterProxyModel, Qt, Signal
-from PySide6.QtGui import QBrush, QColor, QFont, QFontMetricsF, QPainter, QPen
+from PySide6.QtGui import QBrush, QColor, QFont, QFontMetricsF, QLinearGradient, QPainter, QPalette, QPen
 from PySide6.QtWidgets import QAbstractItemView, QHeaderView, QStyledItemDelegate, QStyle, QStyleOptionViewItem, QTableView
 
 from app.services.status_sorting import _parse_date
+from app.ui.components.modern_header import ModernHeaderView
 from app.ui.components.operational_table import configure_operational_table
 from app.ui.styles import _contrast_text, area_color, status_color
-from app.ui.theme_tokens import ui_tokens
+from app.ui.theme_tokens import active_tokens, ui_tokens
 from app.ui.icons import IconSize, make_icon, status_icon
 from app.ui.fonts import scaled_px
 
 # Medidas do padrao visual (skill qt-industrial-ui).
 TABLE_ROW_HEIGHT = 40
-TABLE_HEADER_HEIGHT = 34
+TABLE_HEADER_HEIGHT = 38
 _BADGE_HEIGHT = 22
 _DEADLINE_KEYS = {"prazo_entrega"}
 _DEADLINE_WARNING_DAYS = 7
@@ -286,6 +287,7 @@ class ModernTable(QTableView):
         # Linha (do modelo exibido) sob o mouse; o delegate usa para pintar o
         # hover na linha inteira, e nao so na celula.
         self.hovered_row = -1
+        self.setHorizontalHeader(ModernHeaderView(Qt.Horizontal, self))
         configure_operational_table(self)
         self.setAlternatingRowColors(True)
         self.setSortingEnabled(True)
@@ -314,6 +316,31 @@ class ModernTable(QTableView):
     def leaveEvent(self, event):  # noqa: N802 (Qt override)
         self._set_hovered_row(-1)
         super().leaveEvent(event)
+
+    def _sync_header_corner(self) -> None:
+        """Canto superior direito: a barra de rolagem comeca ABAIXO do cabecalho e o espaco acima dela
+        fica na cor do cabecalho, entao a faixa azul vai de ponta a ponta (sem degrau)."""
+        header_color = QColor(active_tokens()["table_header"])
+        if getattr(self, "_corner_color", None) == header_color.name():
+            return
+        self._corner_color = header_color.name()
+        palette = self.palette()
+        palette.setColor(QPalette.ColorRole.Window, header_color)
+        self.setPalette(palette)
+        self.setStyleSheet(f"QScrollBar:vertical {{ margin: {self.horizontalHeader().height()}px 0 0 0; }}")
+
+    def paintEvent(self, event):  # noqa: N802 (Qt override)
+        self._sync_header_corner()
+        super().paintEvent(event)
+        # Sombra fina sob o cabecalho quando a tabela foi rolada: da profundidade sem pesar.
+        if self.verticalScrollBar().isVisible() and self.verticalScrollBar().value() > 0:
+            painter = QPainter(self.viewport())
+            gradient = QLinearGradient(0, 0, 0, 7)
+            dark = QColor(0, 0, 0, 38 if QColor(active_tokens()["surface"]).lightness() > 128 else 90)
+            gradient.setColorAt(0, dark)
+            gradient.setColorAt(1, QColor(0, 0, 0, 0))
+            painter.fillRect(0, 0, self.viewport().width(), 7, gradient)
+            painter.end()
 
     def setModel(self, model):
         super().setModel(model)

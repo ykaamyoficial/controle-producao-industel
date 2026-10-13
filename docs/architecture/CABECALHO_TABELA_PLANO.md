@@ -1,6 +1,8 @@
 # Cabeçalho da tabela padrão — análise e plano (13/10/2026)
 
-Escopo: **somente o cabeçalho** da tabela operacional (`ModernTable` + `BatchSelectionHeader`, usada em Controle Geral, Produção, Galvanização, Expedição, Parciais etc.). **Nada foi alterado no sistema**: existe só o modelo isolado `prototipos/cabecalho_tabela/preview.py`, que mostra "como é hoje" e "proposto" lado a lado com os mesmos dados.
+Escopo: **somente o cabeçalho** da tabela operacional (`ModernTable` + `BatchSelectionHeader`, usada em Controle Geral, Produção, Galvanização, Expedição, Parciais etc.). O modelo isolado `prototipos/cabecalho_tabela/preview.py` mostra "como é hoje" e "proposto" lado a lado com os mesmos dados.
+
+> **Status (13/10/2026): implementado** em `app/ui/components/modern_header.py` (`ModernHeaderView`). `BatchSelectionHeader` agora é um alias dele (mesmo contrato do modo lote); `ModernTable` já nasce com o cabeçalho novo (altura 34 → 38, sombra ao rolar e canto direito sem degrau). Testes em `tests/test_modern_header.py`. Diferenças em relação ao modelo: a coluna 0 (ícone) nunca ordena e por isso não mostra barra de destaque; tabelas de diálogo (`QTableWidget`) seguem com o cabeçalho antigo.
 
 ```text
 python prototipos/cabecalho_tabela/preview.py
