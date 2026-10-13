@@ -36,7 +36,7 @@ from app.services.diagnostic_service import (
 )
 from app.ui.background_worker import start_worker
 from app.ui.components.modern_button import ModernButton
-from app.ui.dialog_utils import style_dialog_from_parent
+from app.ui.dialog_utils import apply_large_dialog_geometry, style_dialog_from_parent
 
 log = get_logger("api_diagnostic_dialog")
 
@@ -69,9 +69,9 @@ class ApiDiagnosticDialog(QDialog):
         self._closing = False
         self._build()
         self._load()
+        # Abre no tamanho da central de chats (94% x 94% da janela principal) e pode ser redimensionada.
+        apply_large_dialog_geometry(self, parent, width_ratio=0.94, height_ratio=0.94, minimum_width=780, minimum_height=560)
         style_dialog_from_parent(self, parent)
-        self.setMinimumSize(760, 620)
-        self.resize(860, 700)
 
     def _build(self):
         root = QVBoxLayout(self)
@@ -118,11 +118,10 @@ class ApiDiagnosticDialog(QDialog):
         diag_layout.addLayout(diag_actions)
 
         self.diag_checks_list = QListWidget()
-        self.diag_checks_list.setMinimumHeight(150)
-        self.diag_checks_list.setMaximumHeight(210)
-        diag_layout.addWidget(self.diag_checks_list)
+        self.diag_checks_list.setMinimumHeight(120)
+        diag_layout.addWidget(self.diag_checks_list, 1)
 
-        root.addWidget(diag_panel)
+        root.addWidget(diag_panel, 1)
 
         form = QFrame()
         form.setObjectName("Panel")
