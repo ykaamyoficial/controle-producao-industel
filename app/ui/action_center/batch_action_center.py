@@ -24,7 +24,7 @@ from app.ui.flow_review_dialog import FlowReviewDialog
 from app.ui.galvanization_load_dialog import GalvanizationLoadDialog, GalvanizationReturnDialog
 from app.ui.icons import AppIcons
 from app.ui.sidebar import NAV_LABELS
-from app.ui.item_selection_dialog import ItemSelectionDialog
+from app.ui.delivery_wizard import DeliveryWizardDialog
 from app.ui.production_wizard import ProductionWizardDialog
 
 log = get_logger("batch_action_center")
@@ -595,42 +595,16 @@ class BatchProposalActionCenter(QDialog):
         if self._validated_process_ids("STATUS") is None:
             return
         observation = self.observation.toPlainText().strip()
-        item_selections: dict[int, list[int]] = {}
-        target_statuses: dict[int, str] = {}
-        for process_id in self.process_ids:
-            available = self.service.proposal_items(process_id, pending_delivery=True)
-            if not available:
-                target_statuses[process_id] = "ENTREGUE"
-                continue
-            selector = ItemSelectionDialog(self.service, process_id, "delivery", self, allow_full_selection=True)
-            selector.setWindowTitle(f"Retirada | {self._proposal_label(process_id)}")
-            if not selector.exec():
-                return
-            item_selections[process_id] = selector.selected_ids
-            target_statuses[process_id] = "ENTREGUE" if len(selector.selected_ids) == len(available) else "ENTREGUE_PARCIAL"
-        if QMessageBox.question(
-            self, "Acoes em lote", self._confirmation_text("Registrar retirada do cliente")
-        ) != QMessageBox.Yes:
-            return
-        self._run_background_action(
-            lambda: self._apply_delivery_to_all(target_statuses, item_selections, observation)
-        )
-
-    def _apply_delivery_to_all(
-        self, target_statuses: dict[int, str], item_selections: dict[int, list[int]], observation: str
-    ) -> tuple[int, list[str]]:
-        changed = 0
-        failures: list[str] = []
-        for process_id in self.process_ids:
-            try:
-                self.service.update_status(
-                    process_id, self.area, target_statuses.get(process_id, "ENTREGUE"), observation,
-                    item_selections.get(process_id),
-                )
-                changed += 1
-            except Exception as exc:
-                failures.append(f"{self._proposal_label(process_id)}: {exc}")
-        return changed, failures
+        # A central some: so o assistente de retirada (itens, revisao, conclusao) fica na tela.
+        parent = self.parentWidget() or self
+        self.hide()
+        wizard = DeliveryWizardDialog(self.service, self.process_ids, parent, observation=observation)
+        wizard.exec()
+        if wizard.registered:
+            self.changed = True
+            self.accept()
+        else:
+            self.reject()
 
     def _open_define_flow(self):
         if self._validated_process_ids("DEFINE_ITEM_FLOW") is None:

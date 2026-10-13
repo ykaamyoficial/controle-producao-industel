@@ -19,7 +19,7 @@ from app.ui.components.modern_button import ModernButton
 from app.ui.background_worker import start_worker
 from app.ui.dialog_utils import apply_large_dialog_geometry, style_dialog_from_parent
 from app.ui.icons import IconSize, status_icon
-from app.ui.item_selection_dialog import ItemSelectionDialog
+from app.ui.delivery_wizard import DeliveryWizardDialog
 from app.ui.production_wizard import ProductionWizardDialog
 
 
@@ -327,24 +327,17 @@ class BatchStatusDialog(QDialog):
                 else:
                     self.reject()
                 return
-            for process_id in self.selected_ids:
-                process = self.service.get_process_dict(process_id)
-                available = self.service.proposal_items(process_id, pending_delivery=True)
-                if not available:
-                    target_statuses[process_id] = "ENTREGUE"
-                    continue
-                selector = ItemSelectionDialog(
-                    self.service,
-                    process_id,
-                    "delivery",
-                    self,
-                    allow_full_selection=True,
-                )
-                selector.setWindowTitle(f"Retirada | {process.get('proposta') or process_id}")
-                if not selector.exec():
-                    return
-                item_selections[process_id] = selector.selected_ids
-                target_statuses[process_id] = "ENTREGUE" if len(selector.selected_ids) == len(available) else "ENTREGUE_PARCIAL"
+            # Retirada: assistente em uma janela so (itens, revisao e conclusao); este dialogo sai da tela.
+            parent = self.parentWidget() or self
+            observation = self.observation.text().strip()
+            self.hide()
+            wizard = DeliveryWizardDialog(self.service, list(self.selected_ids), parent, observation=observation)
+            wizard.exec()
+            if wizard.registered:
+                self.accept()
+            else:
+                self.reject()
+            return
         if QMessageBox.question(
             self,
             "Acoes em lote",

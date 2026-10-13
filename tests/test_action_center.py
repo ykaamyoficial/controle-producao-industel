@@ -843,67 +843,30 @@ class ExpeditionActionCenterTests(unittest.TestCase):
         self.assertEqual(call[:4], ("update_status", 1, "EXPEDICAO", "SEPARADO"))
         self.assertIsNone(call[5])  # item_ids: preserva o comportamento atual (nunca inventa selecao de itens)
 
-    # 10: registrar retirada abre o dialogo especializado correto
-    def test_register_delivery_opens_the_item_selection_dialog(self):
+    # 10: registrar retirada abre o assistente de retirada (uma janela so) e a central some
+    def test_register_delivery_opens_the_single_window_wizard(self):
         service = FakeExpeditionService("SEPARADO")
         dialog = StatusDialog(service, 1, "EXPEDICAO")
-        fake_selector = MagicMock()
-        fake_selector.exec.return_value = 0  # usuario cancela
+        fake_wizard = MagicMock()
+        fake_wizard.registered = False  # usuario cancela
         action = next(a for a in dialog.context.available_actions if a.id == "REGISTER_DELIVERY")
-        with patch(
-            "app.ui.action_center.handlers.expedition.ItemSelectionDialog", return_value=fake_selector
-        ) as ctor:
+        with patch("app.ui.action_center.handlers.expedition.DeliveryWizardDialog", return_value=fake_wizard) as ctor:
             dialog.run_action(action)
         ctor.assert_called_once()
+        self.assertEqual(ctor.call_args.args[1], [1])
         self.assertEqual(service.calls, [])
+        self.assertFalse(dialog.isVisible())
+        self.assertFalse(dialog.result())
 
-    # 11-13: retirada trabalha apenas com os itens elegiveis retornados pelo dominio; parcial/total conforme selecao real
-    def test_partial_delivery_selection_results_in_partial_status(self):
-        service = FakeExpeditionService("SEPARADO", pending_delivery_items=[{"id": 101}, {"id": 102}])
-        dialog = StatusDialog(service, 1, "EXPEDICAO")
-        fake_selector = MagicMock()
-        fake_selector.exec.return_value = 1
-        fake_selector.selected_ids = [101]  # so um dos dois itens elegiveis
-        action = next(a for a in dialog.context.available_actions if a.id == "REGISTER_DELIVERY")
-        with patch("app.ui.action_center.handlers.expedition.ItemSelectionDialog", return_value=fake_selector):
-            with patch("app.ui.action_center.proposal_action_center.start_worker", side_effect=_synchronous_start_worker):
-                dialog.run_action(action)
-        self.assertEqual(service.calls, [("update_status", 1, "EXPEDICAO", "ENTREGUE_PARCIAL", "", [101])])
-
-    def test_full_delivery_selection_results_in_total_status(self):
-        service = FakeExpeditionService("SEPARADO", pending_delivery_items=[{"id": 101}, {"id": 102}])
-        dialog = StatusDialog(service, 1, "EXPEDICAO")
-        fake_selector = MagicMock()
-        fake_selector.exec.return_value = 1
-        fake_selector.selected_ids = [101, 102]  # todos os itens elegiveis
-        action = next(a for a in dialog.context.available_actions if a.id == "REGISTER_DELIVERY")
-        with patch("app.ui.action_center.handlers.expedition.ItemSelectionDialog", return_value=fake_selector):
-            with patch("app.ui.action_center.proposal_action_center.start_worker", side_effect=_synchronous_start_worker):
-                dialog.run_action(action)
-        self.assertEqual(service.calls, [("update_status", 1, "EXPEDICAO", "ENTREGUE", "", [101, 102])])
-
-    def test_no_pending_items_delivers_directly_without_opening_the_dialog(self):
-        # itens ja entregues nao aparecem mais como pendentes - dominio decide, nao a UI
-        service = FakeExpeditionService("SEPARADO", pending_delivery_items=[])
-        dialog = StatusDialog(service, 1, "EXPEDICAO")
-        action = next(a for a in dialog.context.available_actions if a.id == "REGISTER_DELIVERY")
-        with patch("app.ui.action_center.handlers.expedition.ItemSelectionDialog") as ctor:
-            with patch("app.ui.action_center.proposal_action_center.start_worker", side_effect=_synchronous_start_worker):
-                dialog.run_action(action)
-        ctor.assert_not_called()
-        self.assertEqual(service.calls, [("update_status", 1, "EXPEDICAO", "ENTREGUE", "", None)])
-
-    # registrar retirada continua fechando a Central em sucesso (mesmo comportamento do RegisterProductionHandler)
+    # registrar retirada que gravou fecha a Central como "mudou" (o assistente e quem grava)
     def test_register_delivery_success_closes_the_action_center(self):
         service = FakeExpeditionService("SEPARADO", pending_delivery_items=[{"id": 101}])
         dialog = StatusDialog(service, 1, "EXPEDICAO")
-        fake_selector = MagicMock()
-        fake_selector.exec.return_value = 1
-        fake_selector.selected_ids = [101]
+        fake_wizard = MagicMock()
+        fake_wizard.registered = True
         action = next(a for a in dialog.context.available_actions if a.id == "REGISTER_DELIVERY")
-        with patch("app.ui.action_center.handlers.expedition.ItemSelectionDialog", return_value=fake_selector):
-            with patch("app.ui.action_center.proposal_action_center.start_worker", side_effect=_synchronous_start_worker):
-                dialog.run_action(action)
+        with patch("app.ui.action_center.handlers.expedition.DeliveryWizardDialog", return_value=fake_wizard):
+            dialog.run_action(action)
         self.assertEqual(dialog.result(), 1)  # QDialog.Accepted
 
     # 18-19: sucesso em iniciar/registrar separacao chama reload_context() e nao duplica widgets
