@@ -40,7 +40,13 @@ class FakeService:
         return self._prefs
 
     def notification_settings(self):
-        return {"quiet_start": "22:00", "quiet_end": "07:00", "quiet_channels": ["email"]}
+        return {
+            "quiet_start": "22:00",
+            "quiet_end": "07:00",
+            "quiet_channels": ["email"],
+            "daily_report_enabled": False,
+            "daily_report_hour": 9,
+        }
 
     def notification_preferences_update(self, items):
         self.saved_items = items
@@ -102,6 +108,25 @@ class NotificationPreferencesWidgetTests(unittest.TestCase):
             self.assertTrue(by_cat["PROPOSTA_STATUS"]["channel_email"])
             self.assertEqual(by_cat["PROPOSTA_STATUS"]["min_severity_email"], "normal")
             self.assertEqual(sorted(service.saved_settings["quiet_channels"]), ["email", "tray"])
+        finally:
+            self._drain(widget)
+
+    def test_daily_report_preferences_load_and_save(self):
+        service = FakeService()
+        widget = NotificationPreferencesWidget(service, auto_load=False)
+        try:
+            widget.load()
+            self._pump(widget, lambda: widget._loaded)
+            self.assertFalse(widget.report_enabled.isChecked())
+            self.assertEqual(widget.report_hour.value(), 9)
+            self.assertFalse(widget.report_hour.isEnabled())
+
+            widget.report_enabled.setChecked(True)
+            widget.report_hour.setValue(8)
+            widget.save()
+            self._pump(widget, lambda: service.saved_settings is not None)
+            self.assertTrue(service.saved_settings["daily_report_enabled"])
+            self.assertEqual(service.saved_settings["daily_report_hour"], 8)
         finally:
             self._drain(widget)
 

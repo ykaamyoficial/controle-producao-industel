@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
@@ -56,6 +57,29 @@ class NotificationPreferencesWidget(QWidget):
             header.setObjectName("ColumnHeader")
             self.grid.addWidget(header, 0, col)
         layout.addLayout(self.grid)
+
+        layout.addSpacing(8)
+        report_title = QLabel("Relatório diário por e-mail")
+        report_title.setObjectName("PanelTitle")
+        layout.addWidget(report_title)
+        report_row = QHBoxLayout()
+        report_row.setSpacing(8)
+        self.report_enabled = QCheckBox("Receber o resumo do dia nos dias úteis")
+        self.report_enabled.setChecked(True)
+        self.report_hour = QSpinBox()
+        self.report_hour.setRange(0, 23)
+        self.report_hour.setValue(7)
+        self.report_hour.setSuffix(" h")
+        self.report_hour.setMaximumWidth(80)
+        self.report_enabled.toggled.connect(self.report_hour.setEnabled)
+        report_row.addWidget(self.report_enabled)
+        report_row.addWidget(QLabel("a partir das"))
+        report_row.addWidget(self.report_hour)
+        report_row.addStretch()
+        layout.addLayout(report_row)
+        report_hint = QLabel("Resume produção, galvanização, expedição e pendências. Dias sem movimento não geram e-mail.")
+        report_hint.setObjectName("Caption")
+        layout.addWidget(report_hint)
 
         layout.addSpacing(8)
         quiet_title = QLabel("Horário de silêncio")
@@ -158,6 +182,11 @@ class NotificationPreferencesWidget(QWidget):
         channels = set((settings or {}).get("quiet_channels") or [])
         self.quiet_tray.setChecked("tray" in channels)
         self.quiet_email.setChecked("email" in channels)
+        enabled = (settings or {}).get("daily_report_enabled")
+        self.report_enabled.setChecked(True if enabled is None else bool(enabled))
+        hour = (settings or {}).get("daily_report_hour")
+        if hour is not None:
+            self.report_hour.setValue(int(hour))
         self._loaded = True
         self.status_label.setText("")
         self.save_btn.setEnabled(True)
@@ -189,6 +218,8 @@ class NotificationPreferencesWidget(QWidget):
             "quiet_start": self.quiet_start.text().strip() or None,
             "quiet_end": self.quiet_end.text().strip() or None,
             "quiet_channels": quiet_channels,
+            "daily_report_enabled": self.report_enabled.isChecked(),
+            "daily_report_hour": self.report_hour.value(),
         }
         self.status_label.setText("Salvando...")
         self.save_btn.setEnabled(False)
