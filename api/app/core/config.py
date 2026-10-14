@@ -11,7 +11,7 @@ API_VERSION = "0.10.0"
 API_STAGE = "official-fiscal"
 API_CONTRACT_VERSION = "v1"
 SERVICE_NAME = "controle-producao-api"
-EXPECTED_DATABASE_REVISION = "20261013_0037"
+EXPECTED_DATABASE_REVISION = "20261014_0038"
 # Revisao mais antiga que este server_version ainda consegue operar (Fase 04, Secao 19).
 # Hoje e igual a EXPECTED_DATABASE_REVISION porque esta release depende da
 # hierarquia mae/filhas e nao possui tolerancia retroativa deliberada -- sera
@@ -151,6 +151,11 @@ class Settings(BaseSettings):
     notifications_delivery_interval_seconds: float = Field(default=45.0, ge=5, alias="NOTIFICATIONS_DELIVERY_INTERVAL_SECONDS")
     notifications_digest_hour: int = Field(default=7, ge=0, le=23, alias="NOTIFICATIONS_DIGEST_HOUR")
     notifications_email_max_attempts: int = Field(default=5, ge=1, alias="NOTIFICATIONS_EMAIL_MAX_ATTEMPTS")
+    # Relatorio diario em HTML (substitui o digest em texto quando ligado).
+    # REDIRECT_TO: enquanto preenchido, so o relatorio global (superusuario) e
+    # gerado e vai inteiro para este endereco -- ninguem mais recebe nada.
+    notifications_daily_report_enabled: bool = Field(default=False, alias="NOTIFICATIONS_DAILY_REPORT_ENABLED")
+    notifications_daily_report_redirect_to: str = Field(default="", alias="NOTIFICATIONS_DAILY_REPORT_REDIRECT_TO")
     # Retencao de dados de autenticacao (api/app/modules/auth/retention.py).
     # Sessoes ja EXPIRADAS e eventos de token (renovacao/reuso) sao apagados apos
     # estes prazos; logins, trocas de senha e acoes de negocio nunca sao apagados.

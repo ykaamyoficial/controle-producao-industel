@@ -11,6 +11,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.app.core.config import get_settings
 from api.app.database.session import get_sessionmaker
 from api.app.modules.auth.models import User
+from api.app.modules.notifications.daily_report.collector import collect_daily_report
+from api.app.modules.notifications.daily_report.renderer import render_daily_report
+from api.app.modules.notifications.daily_report.schemas import report_window_for
 from api.app.modules.notifications.email_sender import EmailSendError, send_email
 from api.app.modules.notifications.models import (
     Notification,
@@ -156,6 +159,81 @@ async def _process_digest(session: AsyncSession, *, digest_hour: int) -> int:
     return digests_sent
 
 
+def daily_report_due(now: datetime, *, digest_hour: int) -> bool:
+    """Relatorio so em dia util, depois da hora configurada."""
+    return now.weekday() < 5 and now.hour >= digest_hour
+
+
+async def _process_daily_report(session: AsyncSession, *, digest_hour: int, redirect_to: str) -> int:
+    """Relatorio diario HTML. Idempotente por NotificationUserSettings.
+    last_digest_date; a janela cobre desde o ultimo dia processado (segunda
+    cobre sexta a domingo). Dia sem movimento nao envia. Superusuario recebe a
+    visao da fabrica; os demais, so as propostas que criaram."""
+    now = datetime.now().astimezone()
+    if not daily_report_due(now, digest_hour=digest_hour):
+        return 0
+    today = now.date()
+    query = select(User).where(User.active.is_(True))
+    if redirect_to:
+        query = query.where(User.is_superuser.is_(True)).order_by(User.id).limit(1)
+    else:
+        query = query.where(User.email.is_not(None), User.email != "")
+    users = (await session.execute(query)).scalars().all()
+
+    sent = 0
+    for user in users:
+        user_settings = (
+            await session.execute(select(NotificationUserSettings).where(NotificationUserSettings.user_id == user.id))
+        ).scalar_one_or_none()
+        if user_settings is not None and not user_settings.daily_report_enabled:
+            continue
+        user_hour = user_settings.daily_report_hour if user_settings and user_settings.daily_report_hour is not None else digest_hour
+        if not daily_report_due(now, digest_hour=user_hour):
+            continue
+        last = user_settings.last_digest_date if user_settings else None
+        if last == today:
+            continue
+        window = report_window_for(today, last_sent=last, tzinfo=now.tzinfo)
+        report = await collect_daily_report(
+            session, window=window, recipient=user, scope_user_id=None if user.is_superuser else user.id, today=today
+        )
+        if report.has_activity:
+            rendered = render_daily_report(report)
+            try:
+                await send_email(
+                    to_address=redirect_to or user.email,
+                    subject=rendered.subject,
+                    body_text=rendered.text,
+                    body_html=rendered.html,
+                )
+            except EmailSendError as exc:
+                log.warning("relatorio_diario_falhou | user=%s erro=%s", user.id, exc)
+                continue
+            sent += 1
+            # o relatorio ja cobriu o que estava agrupado para o digest antigo
+            pending = (
+                await session.execute(
+                    select(NotificationDelivery)
+                    .join(Notification, Notification.id == NotificationDelivery.notification_id)
+                    .where(
+                        Notification.user_id == user.id,
+                        NotificationDelivery.channel == "email",
+                        NotificationDelivery.status == "agrupado_digest",
+                    )
+                )
+            ).scalars().all()
+            for delivery in pending:
+                delivery.status = "enviado"
+                delivery.sent_at = func.now()
+        await session.execute(
+            pg_insert(NotificationUserSettings)
+            .values(user_id=user.id, last_digest_date=today, updated_at=func.now())
+            .on_conflict_do_update(index_elements=["user_id"], set_={"last_digest_date": today, "updated_at": func.now()})
+        )
+        await session.commit()
+    return sent
+
+
 async def process_once() -> tuple[int, int]:
     settings = get_settings()
     factory = get_sessionmaker()
@@ -164,7 +242,14 @@ async def process_once() -> tuple[int, int]:
     async with factory() as session:
         immediate = await _process_immediate(session, max_attempts=settings.notifications_email_max_attempts)
     async with factory() as session:
-        digest = await _process_digest(session, digest_hour=settings.notifications_digest_hour)
+        if settings.notifications_daily_report_enabled:
+            digest = await _process_daily_report(
+                session,
+                digest_hour=settings.notifications_digest_hour,
+                redirect_to=settings.notifications_daily_report_redirect_to.strip(),
+            )
+        else:
+            digest = await _process_digest(session, digest_hour=settings.notifications_digest_hour)
     return (immediate, digest)
 
 

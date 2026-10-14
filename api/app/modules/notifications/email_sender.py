@@ -11,13 +11,15 @@ class EmailSendError(RuntimeError):
     pass
 
 
-def _send_blocking(*, to_address: str, subject: str, body_text: str) -> None:
+def _send_blocking(*, to_address: str, subject: str, body_text: str, body_html: str | None = None) -> None:
     settings = get_settings()
     message = EmailMessage()
     message["From"] = settings.smtp_from
     message["To"] = to_address
     message["Subject"] = subject
     message.set_content(body_text)
+    if body_html:
+        message.add_alternative(body_html, subtype="html")
     try:
         with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=settings.smtp_timeout_seconds) as client:
             client.ehlo()
@@ -31,8 +33,11 @@ def _send_blocking(*, to_address: str, subject: str, body_text: str) -> None:
         raise EmailSendError(str(exc)) from exc
 
 
-async def send_email(*, to_address: str, subject: str, body_text: str) -> None:
-    """Envia um e-mail simples (texto puro) via SMTP da stdlib, fora do event
-    loop (`asyncio.to_thread`). Levanta `EmailSendError` em qualquer falha —
-    quem chama decide o retry/backoff (ver delivery_worker)."""
-    await asyncio.to_thread(_send_blocking, to_address=to_address, subject=subject, body_text=body_text)
+async def send_email(*, to_address: str, subject: str, body_text: str, body_html: str | None = None) -> None:
+    """Envia um e-mail via SMTP da stdlib, fora do event loop
+    (`asyncio.to_thread`). Texto puro por padrao; com `body_html` vai como
+    multipart/alternative (texto + HTML). Levanta `EmailSendError` em
+    qualquer falha — quem chama decide o retry/backoff (ver delivery_worker)."""
+    await asyncio.to_thread(
+        _send_blocking, to_address=to_address, subject=subject, body_text=body_text, body_html=body_html
+    )
