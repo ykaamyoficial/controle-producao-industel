@@ -6,6 +6,21 @@ from decimal import Decimal
 
 ZERO = Decimal("0.0000")
 
+# Plano de logistica do remanejamento: itens galvanizados podem ser origem e destino do
+# remanejamento (liberado na Fase E). A troca de dono das pecas por estagio, a reposicao que
+# passa pela galvanizacao e a conferencia de conservacao (Fases B e C) valem para eles. A chave
+# existe so para os testes provarem o caminho bloqueado e para desligar de emergencia.
+GALVANIZED_REMANAGEMENT_ENABLED = True
+
+# Remanejamento por linhas (lotes fisicos) e parciais, plano em REMANEJAMENTO_PARCIAIS_PLANO.md. Desligado
+# por padrao ate a conferencia na dev; so entra quando todas as linhas envolvidas estao "limpas".
+REMANAGEMENT_BY_ROWS_ENABLED = False
+
+
+def galvanized_remanagement_blocked(requires_galvanization: str | None) -> bool:
+    """True quando o item e galvanizado e o remanejamento de galvanizados ainda esta desligado."""
+    return requires_galvanization == "SIM" and not GALVANIZED_REMANAGEMENT_ENABLED
+
 
 def quantity(value) -> Decimal:
     return Decimal(str(value or "0")).quantize(Decimal("0.0001"))
@@ -80,7 +95,37 @@ def calculate_item_balance(
     )
 
 
-def items_are_compatible(source_item, destination_item) -> tuple[bool, str | None]:
+def galvanization_pipeline_quantity(
+    *,
+    requested,
+    production_out=ZERO,
+    production_in_completed=ZERO,
+    fabricated_in=ZERO,
+    fabricated_out=ZERO,
+) -> Decimal:
+    """Quantas pecas de um item GALVANIZADO passam pela galvanizacao ("esteira").
+
+    esteira = pedido - obrigacao de fabricar cedida + reposicao concluida recebida
+              + pecas ja fabricadas recebidas - pecas ja fabricadas cedidas
+
+    Sem nenhuma troca por remanejamento a esteira e igual ao pedido. E esta quantidade (e nao
+    mais `item.quantity`) que diz quanto o item ainda pode mandar em carga e quando ele
+    voltou inteiro da galvanizacao (plano de logistica do remanejamento, Fase C)."""
+    return (
+        quantity(requested) - quantity(production_out) + quantity(production_in_completed)
+        + quantity(fabricated_in) - quantity(fabricated_out)
+    ).quantize(Decimal("0.0001"))
+
+
+def items_are_compatible(source_item, destination_item, *, strict_flow: bool = True) -> tuple[bool, str | None]:
+    """Dois itens podem trocar pecas quando sao a MESMA peca (mesmo codigo e mesma unidade).
+
+    `strict_flow=True` (caminho antigo `apply_remanagement`) exige tambem o mesmo fluxo
+    (galvanizacao, producao interna, fluxo definido nos dois). O motor novo (compensacao por
+    estagio) usa `strict_flow=False`: o fluxo de cada proposta pode ser diferente, porque as pecas
+    em andamento que trocam de dono continuam o caminho que ja seguiam. A unica exigencia de fluxo e
+    que a ORIGEM tenha fluxo definido (a reposicao dela segue o fluxo da propria origem); o destino
+    pode ainda estar sem fluxo definido."""
     source_code = str(source_item.product_code or "").strip().upper()
     destination_code = str(destination_item.product_code or "").strip().upper()
     if not source_code or not destination_code or source_code != destination_code:
@@ -89,6 +134,10 @@ def items_are_compatible(source_item, destination_item) -> tuple[bool, str | Non
     destination_unit = str(destination_item.unit or "").strip().upper()
     if source_unit != destination_unit:
         return False, "Os itens precisam possuir a mesma unidade."
+    if not strict_flow:
+        if not source_item.flow_defined:
+            return False, "A origem precisa possuir fluxo operacional definido."
+        return True, None
     if source_item.requires_galvanization != destination_item.requires_galvanization:
         return False, "Os itens possuem fluxos de galvanizacao diferentes."
     if source_item.produce_internally != destination_item.produce_internally:

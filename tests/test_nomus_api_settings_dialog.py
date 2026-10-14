@@ -142,12 +142,12 @@ class NomusApiSettingsDialogTests(unittest.TestCase):
 
         self.assertIsNotNone(admin_page.nomus_settings)
         self.assertIsNone(user_page.nomus_settings)
-        self.assertIn("Testar conexao", admin_buttons)
+        self.assertIn("Testar conexão", admin_buttons)
         self.assertIn("Salvar", admin_buttons)
-        self.assertIn("Diagnostico da API", admin_buttons)
+        self.assertIn("Diagnóstico da API", admin_buttons)
         self.assertIn("Consultar propostas na API", admin_buttons)
-        self.assertNotIn("Testar conexao", user_buttons)
-        self.assertNotIn("Diagnostico da API", user_buttons)
+        self.assertNotIn("Testar conexão", user_buttons)
+        self.assertNotIn("Diagnóstico da API", user_buttons)
         self.assertNotIn("Consultar propostas na API", user_buttons)
 
     def test_embedded_widget_loads_only_when_nomus_category_is_first_selected(self):
@@ -197,7 +197,7 @@ class NomusApiSettingsDialogTests(unittest.TestCase):
         with patch("app.ui.nomus_api_settings_dialog.QMessageBox.question", return_value=QMessageBox.Yes):
             widget.remove_key()
         self.assertEqual(store.delete_calls, 0)
-        self.assertIn("marcada para remocao", widget.key_status.text())
+        self.assertIn("marcada para remoção", widget.key_status.text())
 
         with patch("app.ui.nomus_api_settings_dialog.QMessageBox.information"):
             widget.save()
@@ -212,7 +212,7 @@ class NomusApiSettingsDialogTests(unittest.TestCase):
 
         self.assertNotIn("SQLite", combined)
         self.assertNotIn(".db", combined)
-        self.assertIn("Diagnostico API/PostgreSQL", combined)
+        self.assertIn("Diagnóstico API/PostgreSQL", combined)
 
     def test_settings_page_enables_user_management_in_official_postgresql_mode(self):
         page = SettingsPage(FakeSettingsService(admin=True))

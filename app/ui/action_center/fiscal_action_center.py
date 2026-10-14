@@ -7,11 +7,11 @@ from PySide6.QtWidgets import QDialog, QFrame, QGridLayout, QHBoxLayout, QLabel,
 from app.ui.action_center.descriptor import ActionCategory, ActionDescriptor
 from app.ui.action_center.provider import CATEGORY_TO_CARD_TYPE
 from app.ui.components.action_card_button import ActionCardButton
+from app.ui.components.dialog_shell import dialog_header
 from app.ui.components.modern_button import ModernButton
-from app.ui.components.status_badge import StatusBadge
+from app.ui.components.status_badge import area_badge, neutral_badge
 from app.ui.dialog_utils import style_dialog_from_parent
 from app.ui.icons import AppIcons
-from app.ui.theme_tokens import with_alpha
 
 
 class FiscalActionCenter(QDialog):
@@ -22,7 +22,7 @@ class FiscalActionCenter(QDialog):
         self.service = service
         self.fiscal_row = dict(fiscal_row)
         self.handlers = handlers
-        self.setWindowTitle("Acoes fiscais")
+        self.setWindowTitle("Ações fiscais")
         style_dialog_from_parent(self, parent)
         self.setMinimumWidth(720)
         self.resize(760, 550)
@@ -39,11 +39,11 @@ class FiscalActionCenter(QDialog):
     def _build(self):
         palette = self.service.palette
         root = QVBoxLayout(self)
-        root.setContentsMargins(20, 16, 20, 14)
-        root.setSpacing(12)
-        root.addLayout(self._header(palette))
-        label = QLabel("Acoes disponiveis")
-        label.setStyleSheet("font-weight: 700; font-size: 13px;")
+        root.setContentsMargins(16, 14, 16, 14)
+        root.setSpacing(10)
+        root.addWidget(self._header(palette))
+        label = QLabel("Ações disponíveis")
+        label.setObjectName("PanelTitle")
         root.addWidget(label)
 
         content = QWidget()
@@ -69,42 +69,35 @@ class FiscalActionCenter(QDialog):
         scroll.setWidget(content)
         root.addWidget(scroll, 1)
 
-        root.addWidget(QLabel("Observacao (opcional)"))
+        root.addWidget(QLabel("Observação (opcional)"))
         observation = QTextEdit()
-        observation.setPlaceholderText("Acrescente uma informacao importante sobre esta operacao")
+        observation.setPlaceholderText("Acrescente uma informação importante sobre esta operação")
         observation.setFixedHeight(68)
         root.addWidget(observation)
         divider = QFrame()
         divider.setFixedHeight(1)
-        divider.setStyleSheet(f"background: {palette['border']}; border: 0;")
+        divider.setObjectName("Divider")
         root.addWidget(divider)
         footer = QHBoxLayout()
         footer.addStretch()
-        close = ModernButton("Fechar", AppIcons.CLOSE)
+        close = ModernButton("Fechar", AppIcons.CLOSE, variant="ghost")
         close.clicked.connect(self.reject)
         footer.addWidget(close)
         root.addLayout(footer)
 
-    def _header(self, palette) -> QVBoxLayout:
-        root = QVBoxLayout()
-        root.setSpacing(4)
+    def _header(self, palette) -> QFrame:
         proposal = self.fiscal_row.get("proposta") or "Proposta fiscal"
         client = self.fiscal_row.get("cliente") or ""
         title = QLabel(f"{proposal}" + (f" — {client}" if client else ""))
-        title.setStyleSheet("font-size: 16px; font-weight: 800;")
-        title.setWordWrap(True)
-        root.addWidget(title)
         badges = QHBoxLayout()
         badges.setContentsMargins(0, 0, 0, 0)
         area_color = palette.get("area_fiscal", palette["danger"])
-        badges.addWidget(StatusBadge("Fiscal", with_alpha(area_color, 34), area_color))
+        badges.addWidget(area_badge("Fiscal", area_color))
         status = self.fiscal_row.get("status_fiscal") or self.fiscal_row.get("situacao_fiscal") or ""
         status_label = self.service.fiscal_status_label(status) if hasattr(self.service, "fiscal_status_label") else status
         if status_label:
-            badges.addWidget(StatusBadge(status_label, with_alpha(palette["muted"], 30), palette["text"]))
-        badges.addStretch()
-        root.addLayout(badges)
-        return root
+            badges.addWidget(neutral_badge(status_label, palette))
+        return dialog_header(title, status=[badges])
 
     def _descriptors(self) -> list[ActionDescriptor]:
         row = self.fiscal_row

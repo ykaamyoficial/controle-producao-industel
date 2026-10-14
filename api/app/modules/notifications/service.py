@@ -275,25 +275,41 @@ async def unread_summary(session: AsyncSession, actor: User) -> NotificationUnre
         total += int(count)
         by_severity[severity] = by_severity.get(severity, 0) + int(count)
         by_category[category] = by_category.get(category, 0) + int(count)
+    latest_id = (
+        await session.execute(select(func.max(Notification.id)).where(Notification.user_id == actor.id))
+    ).scalar_one_or_none()
     return NotificationUnreadSummary(
         total_unread=total,
         by_severity=by_severity,
         by_category=by_category,
+        latest_id=int(latest_id or 0),
         server_time=_utcnow().isoformat(),
     )
 
 
-async def catch_up(session: AsyncSession, actor: User, *, since_id: int = 0, limit: int = 50) -> CatchUpResponse:
+_CHANNEL_NOT_DELIVERED = ("suprimido_preferencia", "agrupado_digest")
+
+
+async def catch_up(
+    session: AsyncSession, actor: User, *, since_id: int = 0, limit: int = 50, channel: str | None = None
+) -> CatchUpResponse:
     """O agente de bandeja chama isso ao (re)conectar: o que chegou desde a
-    ultima notificacao que ele ja mostrou."""
-    rows = (
-        await session.execute(
-            select(Notification)
-            .where(Notification.user_id == actor.id, Notification.id > since_id)
-            .order_by(Notification.id.asc())
-            .limit(limit)
+    ultima notificacao que ele ja mostrou. Com `channel`, deixa de fora o que
+    o plano de entrega suprimiu naquele canal (preferencia desligada ou
+    horario de silencio)."""
+    stmt = select(Notification).where(Notification.user_id == actor.id, Notification.id > since_id)
+    if channel:
+        suppressed = (
+            select(NotificationDelivery.id)
+            .where(
+                NotificationDelivery.notification_id == Notification.id,
+                NotificationDelivery.channel == channel,
+                NotificationDelivery.status.in_(_CHANNEL_NOT_DELIVERED),
+            )
+            .exists()
         )
-    ).scalars().all()
+        stmt = stmt.where(~suppressed)
+    rows = (await session.execute(stmt.order_by(Notification.id.asc()).limit(limit))).scalars().all()
     names = await _actor_names(session, list(rows))
     items = [_to_out(n, names.get(n.actor_user_id)) for n in rows]
     latest = rows[-1].id if rows else since_id
@@ -396,6 +412,8 @@ def _settings_out(row: NotificationUserSettings | None) -> NotificationUserSetti
     if row is None:
         return NotificationUserSettingsOut(quiet_start=None, quiet_end=None, quiet_channels=["tray", "email"])
     return NotificationUserSettingsOut(
+        daily_report_enabled=row.daily_report_enabled,
+        daily_report_hour=row.daily_report_hour,
         quiet_start=row.quiet_start.strftime("%H:%M") if row.quiet_start else None,
         quiet_end=row.quiet_end.strftime("%H:%M") if row.quiet_end else None,
         quiet_channels=list(row.quiet_channels or []),
@@ -418,24 +436,20 @@ async def put_settings(session: AsyncSession, actor: User, payload: Notification
     quiet_start = _parse(payload.quiet_start)
     quiet_end = _parse(payload.quiet_end)
     channels = [c for c in dict.fromkeys(payload.quiet_channels) if c in _QUIET_CHANNELS]
+    values = {
+        "quiet_start": quiet_start,
+        "quiet_end": quiet_end,
+        "quiet_channels": channels,
+    }
+    provided = payload.model_fields_set
+    if "daily_report_enabled" in provided and payload.daily_report_enabled is not None:
+        values["daily_report_enabled"] = payload.daily_report_enabled
+    if "daily_report_hour" in provided:  # None = voltar ao horario padrao
+        values["daily_report_hour"] = payload.daily_report_hour
     await session.execute(
         pg_insert(NotificationUserSettings)
-        .values(
-            user_id=actor.id,
-            quiet_start=quiet_start,
-            quiet_end=quiet_end,
-            quiet_channels=channels,
-            updated_at=func.now(),
-        )
-        .on_conflict_do_update(
-            index_elements=["user_id"],
-            set_={
-                "quiet_start": quiet_start,
-                "quiet_end": quiet_end,
-                "quiet_channels": channels,
-                "updated_at": func.now(),
-            },
-        )
+        .values(user_id=actor.id, updated_at=func.now(), **values)
+        .on_conflict_do_update(index_elements=["user_id"], set_={**values, "updated_at": func.now()})
     )
     await session.commit()
     return await get_settings(session, actor)

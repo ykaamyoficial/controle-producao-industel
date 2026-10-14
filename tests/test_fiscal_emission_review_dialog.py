@@ -37,7 +37,7 @@ class FiscalEmissionReviewDialogTests(unittest.TestCase):
                 self.error_code = error_code
 
         self.assertIn("saldo fiscal", FiscalEmissionReviewDialog._error_message(FakeError("FISCAL_QUANTITY_EXCEEDED")))
-        self.assertIn("concluida", FiscalEmissionReviewDialog._error_message(FakeError("FISCAL_INVALID_STATE")))
+        self.assertIn("concluída", FiscalEmissionReviewDialog._error_message(FakeError("FISCAL_INVALID_STATE")))
 
     def test_error_message_falls_back_to_exception_text_for_unmapped_codes(self):
         """Regression: an exception without a recognized error_code must still
@@ -55,7 +55,7 @@ class FiscalEmissionReviewDialogTests(unittest.TestCase):
             def __str__(self):
                 return ""
 
-        self.assertEqual(FiscalEmissionReviewDialog._error_message(BlankError()), "Nao foi possivel concluir a emissao fiscal.")
+        self.assertEqual(FiscalEmissionReviewDialog._error_message(BlankError()), "Não foi possível concluir a emissão fiscal.")
 
 
 if __name__ == "__main__":

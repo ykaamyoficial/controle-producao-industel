@@ -3,6 +3,8 @@ from __future__ import annotations
 import colorsys
 
 from app.services.backend_adapter import legacy
+from app.ui.fonts import scale_qss_fonts
+from app.ui.theme_tokens import contrast_ratio, mix, set_active_palette, ui_tokens, with_alpha
 
 
 def radius(value: int = 10) -> str:
@@ -28,6 +30,10 @@ def chrome_bg_color(palette: dict) -> str:
 
 
 def app_stylesheet(palette: dict) -> str:
+    return scale_qss_fonts(_build_stylesheet(palette))
+
+
+def _build_stylesheet(palette: dict) -> str:
     bg = palette["bg"]
     surface = palette["surface"]
     surface_alt = palette["surface_alt"]
@@ -39,17 +45,37 @@ def app_stylesheet(palette: dict) -> str:
     accent_text = palette["accent_text"]
     danger = palette["danger"]
     chrome_bg = chrome_bg_color(palette)
+    # Ponto unico por onde um tema e aplicado: registra a paleta ativa para os
+    # componentes pintados a mao (ver theme_tokens.active_tokens()).
+    set_active_palette(palette)
+    tokens = ui_tokens(palette)
+    zebra = tokens["zebra"]
+    table_header = tokens["table_header"]
+    selected = tokens["selected"]
+    subtle = tokens["subtle"]
+    input_border = tokens["input_border"]
+    ring = tokens["ring"]
+    # Hover da barra lateral: a superficie clareando a moldura, sem borda.
+    nav_hover = with_alpha(surface, 150)
+    highlight_border = mix(border, accent, 0.5)
+    danger_text = _contrast_text(danger)
+    success_text = _contrast_text(palette["success"])
+    warning = palette["warning"]
+    secondary = palette["secondary"]
+    success = palette["success"]
+    media_bg = tokens["media_bg"]
+    media_text = tokens["media_text"]
+    overlay = tokens["overlay"]
+    overlay_strong = tokens["overlay_strong"]
+    on_overlay = tokens["on_overlay"]
 
     return f"""
     * {{
-        font-family: "Segoe UI", "Arial";
+        font-family: "Inter", "Segoe UI", "Arial";
         font-size: 12px;
         color: {text};
     }}
     QMainWindow, QWidget#AppRoot, QDialog {{
-        background: {bg};
-    }}
-    QDialog QWidget {{
         background: {bg};
     }}
     QScrollArea, QScrollArea > QWidget, QScrollArea > QWidget > QWidget {{
@@ -189,8 +215,8 @@ def app_stylesheet(palette: dict) -> str:
     }}
     QLabel#SidebarGroupLabel {{
         color: {muted};
-        font-size: 10px;
-        font-weight: 800;
+        font-size: 11px;
+        font-weight: 700;
         letter-spacing: 0px;
         padding: 10px 4px 2px 4px;
     }}
@@ -233,20 +259,38 @@ def app_stylesheet(palette: dict) -> str:
     QPushButton#GhostButton:hover {{
         background: {surface_alt};
     }}
+    QToolButton#GhostButton {{
+        background: transparent;
+        border: 0;
+        border-radius: 6px;
+        padding: 0;
+        font-size: 14px;
+        font-weight: 700;
+    }}
+    QToolButton#GhostButton:hover {{
+        background: {surface_alt};
+    }}
+    QToolButton#GhostButton::menu-indicator {{
+        image: none;
+        width: 0;
+    }}
     QPushButton#NavButton {{
         background: transparent;
         border: 1px solid transparent;
         text-align: left;
-        padding: 2px 8px;
-        {radius(12)}
+        padding: 2px 10px;
+        font-weight: 600;
+        {radius(10)}
     }}
     QPushButton#NavButton[collapsed="true"] {{
         text-align: center;
         padding: 1px 0px;
     }}
     QPushButton#NavButton:hover {{
-        background: {surface_alt};
-        border-color: {border};
+        background: {nav_hover};
+    }}
+    QPushButton#NavButton:focus {{
+        border-color: {ring};
     }}
     QPushButton#NavButton[active="true"] {{
         background: {accent};
@@ -283,7 +327,7 @@ def app_stylesheet(palette: dict) -> str:
     QFrame#TopBar, QFrame#FilterBar, QFrame#Card, QFrame#KpiCard, QFrame#Panel {{
         background: {surface};
         border: 1px solid {border};
-        {radius(16)}
+        {radius(14)}
     }}
     QScrollArea#FlowSetupScroll,
     QScrollArea#FlowSetupScroll > QWidget,
@@ -363,7 +407,7 @@ def app_stylesheet(palette: dict) -> str:
         border: 1px solid {accent};
     }}
     QFrame#OperationalHeader {{
-        background: {bg};
+        background: {surface};
         border: 0;
         border-bottom: 1px solid {border};
         border-radius: 0;
@@ -379,7 +423,7 @@ def app_stylesheet(palette: dict) -> str:
     QFrame#TopBar {{
         {radius(12)}
     }}
-    QFrame#KpiCard:hover, QFrame#Panel:hover {{
+    QFrame#KpiCard:hover, QFrame#Panel[clickable="true"]:hover {{
         background: {surface_alt};
         border: 1px solid {accent};
     }}
@@ -423,12 +467,422 @@ def app_stylesheet(palette: dict) -> str:
         background: {accent_hover};
     }}
     QLabel#FilterTitle {{
-        font-size: 14px;
+        font-size: 18px;
+        font-weight: 700;
+        color: {text};
+    }}
+    QFrame#DetailPanel {{
+        background: {surface};
+        border: 1px solid {border};
+        {radius(14)}
+    }}
+    QFrame#DetailPanelHighlight {{
+        background: {surface_alt};
+        border: 1px solid {highlight_border};
+        {radius(14)}
+    }}
+    QFrame#PartialCard {{
+        background: {surface};
+        border: 1px solid {border};
+        {radius(12)}
+    }}
+    QFrame#PartialCard:hover {{
+        border-color: {highlight_border};
+    }}
+    QFrame#PartialCard[selected="true"] {{
+        background: {surface_alt};
+        border: 2px solid {accent};
+    }}
+    QFrame#PartialCard QLabel {{
+        background: transparent;
+    }}
+    QLabel#PartialCardTitle {{
+        font-size: 13px;
         font-weight: 800;
+    }}
+    QFrame#NoteBox {{
+        background: {surface_alt};
+        border: 0;
+        {radius(10)}
+    }}
+    QFrame#InfoNotice {{
+        background: {surface_alt};
+        border: 1px solid {highlight_border};
+        {radius(10)}
+    }}
+    QFrame#DetailPanel QLabel, QFrame#DetailPanelHighlight QLabel, QFrame#NoteBox QLabel, QFrame#InfoNotice QLabel {{
+        background: transparent;
+    }}
+    QLabel#DetailTitle {{
+        font-size: 18px;
+        font-weight: 800;
+    }}
+    QLabel#PanelTitle {{
+        font-size: 14px;
+        font-weight: 700;
+    }}
+    QLabel#KeyLabel {{
+        color: {muted};
+        font-size: 12px;
+    }}
+    QLabel#ValueLabel {{
+        font-size: 13px;
+        font-weight: 600;
+    }}
+    QLabel#ValueEmpty {{
+        color: {subtle};
+        font-size: 13px;
+    }}
+    QLabel#StatNumber {{
+        font-size: 20px;
+        font-weight: 700;
+    }}
+    QLabel#FilterTitle[tone="accent"] {{
+        color: {accent};
+    }}
+    QFrame#IndicatorCard {{
+        background: {surface};
+        border: 1px solid {border};
+        {radius(14)}
+    }}
+    QFrame#IndicatorCard:hover {{
+        background: {surface_alt};
+        border: 1px solid {accent};
+    }}
+    QFrame#IndicatorCard:focus {{
+        border: 2px solid {ring};
+    }}
+    QFrame#IndicatorCard QLabel {{
+        background: transparent;
+    }}
+    QLabel#IndicatorLabel {{
+        color: {muted};
+        font-size: 12px;
+        font-weight: 600;
+    }}
+    QLabel#IndicatorValue {{
+        font-size: 28px;
+        font-weight: 700;
+    }}
+    QLabel#MetricCaption {{
+        color: {muted};
+        font-size: 11px;
+    }}
+    QLabel#MetricValue {{
+        font-size: 16px;
+        font-weight: 700;
+    }}
+    QWidget#AreaBarRow:hover, QWidget#LegendRow:hover {{
+        background: {surface_alt};
+        border-radius: 8px;
+    }}
+    QFrame#SoftPanel {{
+        background: {surface_alt};
+        border: 0;
+        {radius(12)}
+    }}
+    QFrame#SoftPanel QLabel {{
+        background: transparent;
+    }}
+    QFrame#AlertRow {{
+        background: {surface};
+        border: 1px solid {border};
+        border-left: 4px solid {accent};
+        {radius(10)}
+    }}
+    QFrame#AlertRow[kind="danger"] {{ border-left-color: {danger}; }}
+    QFrame#AlertRow[kind="warning"] {{ border-left-color: {palette["warning"]}; }}
+    QFrame#AlertRow QLabel {{
+        background: transparent;
+    }}
+    /* ---- chat: baloes, cartoes, anexos ---- */
+    QFrame#BubbleRow {{ background: transparent; border: 0; }}
+    QFrame#BubbleOwn {{ background: {accent}; border: 0; border-radius: 14px; }}
+    QFrame#BubbleOther {{ background: {surface_alt}; border: 1px solid {border}; border-radius: 14px; }}
+    QFrame#BubbleOther[mentionsMe="true"] {{ border-left: 3px solid {accent}; }}
+    QLabel#BubbleBody {{ font-size: 13px; background: transparent; }}
+    QLabel#BubbleBody[tone="own"] {{ color: {accent_text}; }}
+    QLabel#BubbleBody[tone="other"] {{ color: {text}; }}
+    QLabel#BubbleTime {{ font-size: 11px; background: transparent; }}
+    QLabel#BubbleTime[tone="own"] {{ color: {accent_text}; }}
+    QLabel#BubbleTime[tone="other"] {{ color: {muted}; }}
+    QLabel#BubbleAuthor {{ font-size: 12px; font-weight: 700; background: transparent; }}
+    QLabel#BubbleMeta {{ font-size: 11px; color: {muted}; background: transparent; }}
+    QLabel#ChatDayChip {{
+        background: {surface_alt};
+        color: {muted};
+        border-radius: 11px;
+        padding: 2px 14px;
+        font-size: 11px;
+        font-weight: 700;
+    }}
+    QFrame#InternalNoteCard {{
+        background: {surface};
+        border: 1px dashed {warning};
+        border-left: 4px solid {warning};
+        border-radius: 10px;
+    }}
+    QFrame#QuestionCard {{
+        background: {surface};
+        border: 1px solid {secondary};
+        border-left: 4px solid {secondary};
+        border-radius: 10px;
+    }}
+    QFrame#AnswerCard, QFrame#FileCard, QFrame#AudioAttachment, QFrame#SharedDocumentRow,
+    QFrame#SharedLinkRow, QFrame#ActivityRow, QFrame#ChatAttachment[card="true"] {{
+        background: {surface};
+        border: 1px solid {border};
+        border-radius: 10px;
+    }}
+    QFrame#QuotePreview {{
+        background: {surface_alt};
+        border: 0;
+        border-left: 3px solid {accent};
+        border-radius: 6px;
+    }}
+    QFrame#ReplyConnector {{ background: {accent}; border: 0; }}
+    /* Bolhas e cartoes em relevo: o fundo e a borda sao pintados a mao
+       (app/ui/components/raised_paint.py), entao o QSS so os deixa lisos. */
+    QFrame#BubbleOwn[raised="true"], QFrame#BubbleOther[raised="true"],
+    QFrame#InternalNoteCard[raised="true"], QFrame#QuestionCard[raised="true"] {{
+        background: transparent;
+        border: 0;
+        border-radius: 0;
+    }}
+    QFrame#ChatCenterColumn[framed="true"] {{
+        background: {surface};
+        border: 1px solid {border};
+        {radius(14)}
+    }}
+    QFrame#ChatCenterColumn[framed="true"] QFrame#ChatHeaderCard {{
+        border-top-left-radius: 13px;
+        border-top-right-radius: 13px;
+    }}
+    QFrame#InternalNoteCard QLabel, QFrame#QuestionCard QLabel, QFrame#AnswerCard QLabel,
+    QFrame#QuotePreview QLabel, QFrame#FileCard QLabel, QFrame#AudioAttachment QLabel,
+    QFrame#SharedDocumentRow QLabel, QFrame#SharedLinkRow QLabel, QFrame#ActivityRow QLabel {{
+        background: transparent;
+    }}
+    QLabel#ChatText {{ font-size: 13px; background: transparent; }}
+    QLabel#ChatName {{ font-size: 12px; font-weight: 700; background: transparent; }}
+    QLabel#ChatCaption {{ font-size: 11px; color: {muted}; background: transparent; }}
+    QLabel#ChatCaption[italic="true"] {{ font-style: italic; }}
+    QLabel#ChatCaption[strong="true"] {{ font-weight: 700; }}
+    QLabel#ChatHeading {{ font-size: 13px; font-weight: 800; }}
+    QLabel#ChatLink {{ font-size: 12px; font-weight: 700; color: {accent}; background: transparent; }}
+    QLabel#CardTitle {{ font-size: 11px; font-weight: 800; background: transparent; }}
+    QLabel#CardTitle[tone="warning"] {{ color: {warning}; }}
+    QLabel#CardTitle[tone="secondary"] {{ color: {secondary}; }}
+    QLabel#QuoteAuthor {{ font-size: 11px; font-weight: 700; color: {accent}; background: transparent; }}
+    QLabel#QuoteText {{ font-size: 12px; background: transparent; }}
+    QFrame#ChatAttachment {{ background: transparent; border: 0; }}
+    QLabel#FileCardName {{ font-size: 12px; font-weight: 700; background: transparent; }}
+    QLabel#FileCardMeta {{ font-size: 11px; color: {muted}; background: transparent; }}
+    QLabel#TransferLabel {{ font-size: 11px; background: transparent; }}
+    QPushButton#ChatSmallButton {{ font-size: 11px; padding: 2px 10px; }}
+    QLabel#AttachmentPreview {{
+        background: {surface_alt};
+        border: 0;
+        border-radius: 10px;
+        color: {muted};
+    }}
+    QLabel#AttachmentPreview[card="true"] {{ border: 1px solid {border}; }}
+    QFrame#AttachmentImageTile {{ background: {surface_alt}; border: 0; border-radius: 10px; }}
+    QLabel#AttachmentImageLabel {{ background: transparent; color: {muted}; font-size: 11px; }}
+    QWidget#ImageGallery {{ background: transparent; border: 0; }}
+    QFrame#VideoAttachment {{ background: transparent; border: 0; }}
+    QFrame#VideoMediaBox {{ background: {surface_alt}; border: 0; border-radius: 10px; }}
+    QLabel#VideoPoster {{ background: transparent; }}
+    QToolButton#VideoPlayButton {{ background: {overlay}; border: 0; border-radius: 24px; }}
+    QToolButton#VideoPlayButton:hover {{ background: {overlay_strong}; }}
+    QToolButton#VideoExpandButton {{ background: {overlay}; border: 0; border-radius: 4px; color: {on_overlay}; }}
+    QToolButton#VideoExpandButton:hover {{ background: {overlay_strong}; }}
+    QLabel#VideoDurationBadge {{
+        background: {overlay};
+        color: {on_overlay};
+        font-size: 11px;
+        padding: 2px 6px;
+        border-radius: 4px;
+        margin: 6px;
+    }}
+    QLabel#VideoOverlayMessage {{
+        background: {overlay_strong};
+        color: {on_overlay};
+        font-size: 12px;
+        padding: 8px 12px;
+        border-radius: 8px;
+    }}
+    QToolButton#AudioPlayButton {{ background: {surface_alt}; border: 0; border-radius: 13px; }}
+    QWidget#MediaCanvas, QScrollArea#MediaCanvas, QStackedWidget#MediaCanvas,
+    QScrollArea#MediaCanvas > QWidget, QScrollArea#MediaCanvas > QWidget > QWidget {{
+        background: {media_bg};
+        border: 0;
+    }}
+    QLabel#MediaCanvasText {{ background: {media_bg}; color: {media_text}; font-size: 13px; }}
+    QLabel#MediaInfoKey {{ font-size: 11px; font-weight: 700; color: {muted}; margin-top: 6px; }}
+    QLabel#MediaInfoValue {{ font-size: 12px; }}
+    QFrame#ComposeBar {{ background: {surface}; border: 1px solid {border}; border-radius: 12px; }}
+    QFrame#ComposeBar[dropActive="true"] {{ border: 2px dashed {accent}; }}
+    QFrame#ReplyPreviewBar {{
+        background: {surface_alt};
+        border: 0;
+        border-left: 3px solid {accent};
+        border-radius: 6px;
+    }}
+    QTextEdit#ComposeTextEdit {{ border: 0; background: transparent; }}
+    QPushButton#ChatSendButton {{ background: {accent}; border: 0; border-radius: 18px; }}
+    QPushButton#ChatSendButton:hover:enabled {{ background: {accent_hover}; }}
+    QPushButton#ChatSendButton:disabled {{ background: {surface_alt}; }}
+    QLabel#PresenceDot {{ background: {muted}; border-radius: 4px; }}
+    QLabel#PresenceDot[online="true"] {{ background: {success}; }}
+    QWidget#MentionRow[selected="true"] {{ background: {surface_alt}; border-radius: 8px; }}
+    QPushButton#SharedContentFilterButton {{
+        background: {surface_alt};
+        color: {muted};
+        border: 0;
+        border-radius: 14px;
+        padding: 4px 14px;
+        font-size: 11px;
+        font-weight: 600;
+    }}
+    QPushButton#SharedContentFilterButton:checked {{
+        background: {accent};
+        color: {accent_text};
+        font-weight: 700;
+    }}
+    QFrame#SharedMediaTile {{ background: {surface_alt}; border: 1px solid {border}; border-radius: 10px; }}
+    QLabel#MediaPlayBadge {{ background: {overlay}; border-radius: 10px; padding: 2px; }}
+    QListWidget#ConversationList {{ border: 0; background: transparent; }}
+    QListWidget#ConversationList QScrollBar:vertical {{ width: 5px; margin: 0px; }}
+    QListWidget#ConversationList QScrollBar::handle:vertical {{ min-height: 24px; }}
+    QLabel#ConversationProposal {{ font-size: 12px; font-weight: 700; background: transparent; }}
+    QLabel#ColumnHeader {{ font-size: 11px; font-weight: 700; }}
+    QFrame#NomusProgressChip, QFrame#NomusProgressChipAccent {{
+        background: {surface};
+        border: 1px solid {border};
+        border-radius: 12px;
+    }}
+    QFrame#NomusProgressChipAccent {{ background: {surface_alt}; border: 1px solid {accent}; }}
+    QFrame#NomusProgressChip QLabel, QFrame#NomusProgressChipAccent QLabel {{ background: transparent; }}
+    QLabel#NomusChipValue {{ font-size: 13px; font-weight: 700; }}
+    QFrame#DetailPanel QLabel#NomusProgressDetail {{
+        color: {muted};
+        font-size: 12px;
+        background: {surface_alt};
+        border-radius: 8px;
+        padding: 7px 9px;
+    }}
+    QProgressBar#NomusProgressBar {{
+        background: {surface_alt};
+        border: 1px solid {border};
+        border-radius: 11px;
+        min-height: 22px;
+        max-height: 22px;
+        padding: 1px;
+    }}
+    QProgressBar#NomusProgressBar::chunk {{ background: {accent}; border-radius: 10px; }}
+    QFrame#DetailPanel QLabel#NomusProgressPercent {{
+        background: {surface_alt};
+        border: 1px solid {border};
+        border-radius: 10px;
+        padding: 6px 10px;
+        font-weight: 700;
+    }}
+    QAbstractItemView QLineEdit {{ padding: 2px 8px; border-radius: 6px; }}
+    QLabel#ToastNotification {{
+        background: {success};
+        color: {success_text};
+        border-radius: 12px;
+        padding: 12px 18px;
+        font-weight: 700;
+    }}
+    QLabel#ToastNotification[kind="error"] {{ background: {danger}; color: {danger_text}; }}
+    QLabel#StageChip {{ font-size: 12px; }}
+    QLabel#StageArrow {{ color: {muted}; font-size: 18px; }}
+    QLabel#UnreadBadge {{
+        background: {danger};
+        color: {danger_text};
+        border-radius: 9px;
+        font-size: 11px;
+        font-weight: 800;
+    }}
+    QLabel#StatusDot {{ background: {muted}; border-radius: 4px; }}
+    QLabel#StatusDot[tone="success"] {{ background: {success}; }}
+    QLabel#StatusDot[tone="warning"] {{ background: {warning}; }}
+    QLabel#StatusDot[tone="danger"] {{ background: {danger}; }}
+    QWidget#ChatFeedStack {{ border: 0; }}
+    QWidget#ChatFeedStack[dropActive="true"] {{ border: 2px dashed {accent}; background: {surface_alt}; }}
+    QWidget#ChatFlashRow[flash="true"] {{ background: {highlight_border}; }}
+    QPushButton#ChatTabButton {{
+        background: transparent;
+        border: 0;
+        border-bottom: 2px solid transparent;
+        border-radius: 0;
+        padding: 6px 2px 7px 2px;
+        color: {muted};
+        font-weight: 600;
+        font-size: 12px;
+        text-align: left;
+    }}
+    QPushButton#ChatTabButton:hover {{ color: {text}; }}
+    QPushButton#ChatTabButton[active="true"] {{
+        color: {accent};
+        border-bottom: 2px solid {accent};
+        font-weight: 700;
+    }}
+    QPushButton#ChatTabButton[active="true"]:hover {{ color: {accent}; }}
+    QLabel#DeadlineText {{
+        font-size: 13px;
+        font-weight: 500;
+    }}
+    QLabel#DeadlineAlert {{
+        font-size: 12px;
+        font-weight: 700;
+    }}
+    QLabel#DeadlineAlert[kind="danger"] {{ color: {danger}; }}
+    QLabel#DeadlineAlert[kind="warning"] {{ color: {palette["warning"]}; }}
+    QFrame#DialogFooter {{
+        background: transparent;
+        border: 0;
+        border-top: 1px solid {border};
+        border-radius: 0;
+    }}
+    QFrame#DialogFooter QLabel {{
+        background: transparent;
+    }}
+    QLabel#InlineNotice {{
+        color: {muted};
+        font-size: 12px;
+    }}
+    QLabel#InlineNotice[kind="danger"] {{ color: {danger}; font-weight: 600; }}
+    QLabel#InlineNotice[kind="warning"] {{ color: {palette["warning"]}; font-weight: 600; }}
+    QLabel#InlineNotice[kind="success"] {{ color: {palette["success"]}; font-weight: 600; }}
+    QGroupBox {{
+        background: {surface};
+        border: 1px solid {border};
+        {radius(14)}
+        margin-top: 14px;
+        padding: 16px 14px 12px 14px;
+        font-weight: 700;
+    }}
+    QGroupBox::title {{
+        subcontrol-origin: margin;
+        subcontrol-position: top left;
+        left: 14px;
+        padding: 0 6px;
+        color: {text};
+    }}
+    QFrame#Divider {{
+        background: {border};
+        border: 0;
+    }}
+    QLabel#BatchModeLabel {{
+        font-size: 14px;
+        font-weight: 700;
         color: {text};
     }}
     QLabel#FilterSubtitle {{
-        font-size: 10px;
+        font-size: 12px;
         color: {muted};
     }}
     QLabel#FieldLabel {{
@@ -438,14 +892,16 @@ def app_stylesheet(palette: dict) -> str:
     }}
     QLineEdit, QComboBox, QTextEdit, QSpinBox, QDoubleSpinBox {{
         background: {surface};
-        border: 1px solid {border};
+        border: 1px solid {input_border};
         {radius(10)}
         padding: 6px 10px;
         selection-background-color: {accent};
         selection-color: {accent_text};
+        placeholder-text-color: {subtle};
     }}
     QLineEdit:focus, QComboBox:focus, QTextEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus {{
-        border: 1px solid {accent};
+        border: 2px solid {ring};
+        padding: 5px 9px;
     }}
     QLineEdit[validationState="error"], QTextEdit[validationState="error"], QTableWidget[validationState="error"] {{
         border: 2px solid {danger};
@@ -492,11 +948,17 @@ def app_stylesheet(palette: dict) -> str:
         selection-color: {accent_text};
         outline: 0;
     }}
+    /* Com a casca nova (floating_chrome.py) a lista do combo abre em janela
+       de fundo transparente: o raio abaixo sai liso. */
+    QComboBox QAbstractItemView[softFloatingList="true"] {{
+        {radius(12)}
+        padding: 4px;
+    }}
     QMenu {{
         background: {surface};
         color: {text};
         border: 1px solid {border};
-        border-radius: 9px;
+        border-radius: 12px;
         padding: 5px;
     }}
     QMenu::item {{
@@ -514,7 +976,7 @@ def app_stylesheet(palette: dict) -> str:
     QCheckBox::indicator {{
         width: 15px;
         height: 15px;
-        border: 1px solid {border};
+        border: 1px solid {input_border};
         border-radius: 4px;
         background: {surface};
     }}
@@ -525,35 +987,58 @@ def app_stylesheet(palette: dict) -> str:
     QTableView, QTableWidget {{
         background: {surface};
         color: {text};
-        alternate-background-color: {surface_alt};
+        alternate-background-color: {zebra};
         gridline-color: transparent;
         border: 1px solid {border};
         {radius(14)}
-        selection-background-color: {accent};
-        selection-color: {accent_text};
+        selection-background-color: {selected};
+        selection-color: {text};
         outline: 0;
     }}
     QTableView::viewport, QTableWidget::viewport {{
         background: {surface};
         {radius(12)}
     }}
-    QTreeWidget#FlowReviewTree {{
+    QTreeView, QTreeWidget {{
         background: {surface};
         color: {text};
-        alternate-background-color: {surface_alt};
+        alternate-background-color: {zebra};
         border: 1px solid {border};
-        {radius(8)}
-        selection-background-color: {accent};
-        selection-color: {accent_text};
+        {radius(12)}
+        selection-background-color: {selected};
+        selection-color: {text};
         outline: 0;
     }}
-    QTreeWidget#FlowReviewTree::viewport {{
+    QTreeView::viewport, QTreeWidget::viewport {{
         background: {surface};
-        {radius(8)}
+        {radius(10)}
     }}
-    QTreeWidget#FlowReviewTree::item:selected {{
+    QTreeView::item, QTreeWidget::item {{
+        min-height: 34px;
+        padding: 0 6px;
+        border: 0;
+    }}
+    QTreeView::item:hover, QTreeWidget::item:hover {{
+        background: {surface_alt};
+    }}
+    QTreeView::item:selected, QTreeWidget::item:selected {{
+        background: {selected};
+        color: {text};
+    }}
+    QTreeView::indicator, QTreeWidget::indicator {{
+        width: 15px;
+        height: 15px;
+        border: 1px solid {input_border};
+        border-radius: 4px;
+        background: {surface};
+    }}
+    QTreeView::indicator:checked, QTreeWidget::indicator:checked {{
         background: {accent};
-        color: {accent_text};
+        border-color: {accent};
+    }}
+    QTreeView::indicator:indeterminate, QTreeWidget::indicator:indeterminate {{
+        background: {selected};
+        border-color: {accent};
     }}
     QTableView#OperationalTable {{
         background: {surface};
@@ -564,6 +1049,17 @@ def app_stylesheet(palette: dict) -> str:
         background: {surface};
         border-radius: 0;
     }}
+    QTableView::indicator, QTableWidget::indicator {{
+        width: 15px;
+        height: 15px;
+        border: 1px solid {input_border};
+        border-radius: 4px;
+        background: {surface};
+    }}
+    QTableView::indicator:checked, QTableWidget::indicator:checked {{
+        background: {accent};
+        border-color: {accent};
+    }}
     QTableView::item, QTableWidget::item {{
         padding: 3px 8px;
         border: 0;
@@ -571,8 +1067,12 @@ def app_stylesheet(palette: dict) -> str:
     QTableView::item:hover, QTableWidget::item:hover {{
         background: {surface_alt};
     }}
+    QTableView::item:selected, QTableWidget::item:selected {{
+        background: {selected};
+        color: {text};
+    }}
     QHeaderView::section {{
-        background: {surface_alt};
+        background: {table_header};
         color: {text};
         padding: 3px 8px;
         border: 0;
@@ -593,7 +1093,8 @@ def app_stylesheet(palette: dict) -> str:
         border: 0;
     }}
     QLabel#EmptyStateIcon {{
-        background: transparent;
+        background: {surface_alt};
+        border-radius: 28px;
     }}
     QLabel#EmptyStateTitle {{
         background: transparent;
@@ -631,7 +1132,7 @@ def app_stylesheet(palette: dict) -> str:
         min-width: 24px;
     }}
     QScrollBar::handle:hover {{
-        background: {muted};
+        background: {input_border};
     }}
     QScrollBar::add-line, QScrollBar::sub-line {{
         background: transparent;
@@ -656,6 +1157,102 @@ def app_stylesheet(palette: dict) -> str:
     QLabel#ErrorText {{
         color: {danger};
         font-weight: 600;
+    }}
+    QPushButton#CloseIconButton {{
+        background: transparent;
+        border: 0;
+        padding: 0;
+        {radius(6)}
+    }}
+    QPushButton#CloseIconButton:hover {{
+        background: {surface_alt};
+    }}
+    QFrame#Toast, QFrame#LoginSummaryBanner {{
+        background: {surface};
+        border: 1px solid {border};
+        {radius(12)}
+    }}
+    QFrame#Toast QLabel, QFrame#LoginSummaryBanner QLabel {{
+        background: transparent;
+    }}
+    QLabel#ToastTitle {{
+        font-size: 12px;
+        font-weight: 700;
+    }}
+    QLabel#ToastBody {{
+        font-size: 11px;
+    }}
+    QLabel#BannerTitle {{
+        font-size: 14px;
+        font-weight: 800;
+    }}
+    QLabel#IndicatorText {{
+        font-size: 12px;
+        font-weight: 600;
+    }}
+    QLabel#PopoverName {{
+        font-weight: 700;
+    }}
+    QFrame#WindowTitleRow {{ background: transparent; border: 0; }}
+    QLabel#WindowTitleText {{ font-size: 13px; font-weight: 700; color: {muted}; }}
+    /* Casca nova das janelas (window_shell.py): a moldura e pintada pela
+       casca, entao o QDialog fica sem fundo; cantos internos acompanham o
+       raio de 24 px da janela. */
+    QDialog[windowShell="true"] {{
+        background: transparent;
+        border: 0;
+    }}
+    QFrame#NotificationCenterPanel[windowShell="true"], QFrame#Panel[windowShell="true"] {{
+        background: transparent;
+        border: 0;
+    }}
+    QDialog[windowShell="true"] QFrame#DetailPanel, QDialog[windowShell="true"] QFrame#DetailPanelHighlight,
+    QDialog[windowShell="true"] QFrame#Panel {{
+        {radius(18)}
+    }}
+    QDialog[windowShell="true"] QLineEdit, QDialog[windowShell="true"] QComboBox, QDialog[windowShell="true"] QTextEdit,
+    QDialog[windowShell="true"] QSpinBox, QDialog[windowShell="true"] QDoubleSpinBox {{
+        {radius(12)}
+    }}
+    QFrame#NotificationCenterPanel {{
+        background: {surface};
+        border: 1px solid {border};
+        {radius(16)}
+    }}
+    QScrollArea#NotificationScrollArea, QScrollArea#NotificationScrollArea > QWidget,
+    QScrollArea#NotificationScrollArea > QWidget > QWidget {{
+        background: transparent;
+        border: 0;
+        border-radius: 0;
+    }}
+    QLabel#NotificationPanelTitle {{
+        font-size: 15px;
+        font-weight: 800;
+    }}
+    QLabel#NotificationDayLabel {{
+        color: {muted};
+        font-size: 11px;
+        font-weight: 700;
+        margin-top: 4px;
+    }}
+    QLabel#NotificationTitle {{
+        font-size: 12px;
+        font-weight: 600;
+    }}
+    QLabel#NotificationTitle[severity="accent"] {{ color: {accent}; font-weight: 700; }}
+    QLabel#NotificationTitle[severity="danger"] {{ color: {danger}; font-weight: 700; }}
+    QLabel#NotificationTitle[severity="warning"] {{ color: {palette["warning"]}; font-weight: 700; }}
+    QLabel#NotificationTitle[severity="muted"] {{ color: {muted}; font-weight: 700; }}
+    QLabel#NotificationTime {{
+        color: {muted};
+        font-size: 10px;
+    }}
+    QLabel#NotificationBody {{
+        font-size: 11px;
+    }}
+    QFrame#TitleBarSeparator {{
+        background: {input_border};
+        border: 0;
     }}
     QFrame#TitleBar {{
         background: {chrome_bg};
@@ -706,10 +1303,13 @@ STATUS_BADGE_COLORS = {
     "claro": {
         "neutral": "#64748B",
         "waiting": "#2563EB",
-        "progress": "#EA580C",
-        "attention": "#CA8A04",
-        "warning": "#CA8A04",
-        "done": "#16A34A",
+        # progress/attention/warning/done ficaram mais escuros que os
+        # originais (#EA580C, #CA8A04, #16A34A) para o texto branco do selo
+        # solido passar de 4.5:1 - conferido por scripts/check_contrast.py.
+        "progress": "#C2410C",
+        "attention": "#A16207",
+        "warning": "#A16207",
+        "done": "#15803D",
         "final_done": "#0F766E",
         "danger": "#DC2626",
         "blocked": "#DC2626",
@@ -806,14 +1406,14 @@ def status_color(status: str, palette: dict, area: str = "") -> tuple[str, str]:
 
 
 def _contrast_text(hex_color: str) -> str:
-    color = hex_color.strip().lstrip("#")
-    if len(color) < 6:
+    """Texto escuro ou branco, o que der mais contraste (WCAG) sobre a cor.
+    O corte antigo por luminancia fixa escolhia branco sobre o vermelho do
+    tema escuro (#FB7185), que ficava em 2.7:1."""
+    color = hex_color.strip()
+    if len(color.lstrip("#")) < 6:
         return "#ffffff"
-    r = int(color[0:2], 16)
-    g = int(color[2:4], 16)
-    b = int(color[4:6], 16)
-    luminance = (0.2126 * r + 0.7152 * g + 0.0722 * b)
-    return "#111827" if luminance >= 150 else "#ffffff"
+    dark, light = "#111827", "#ffffff"
+    return dark if contrast_ratio(dark, color) >= contrast_ratio(light, color) else light
 
 
 def chart_colors(palette: dict) -> list[str]:

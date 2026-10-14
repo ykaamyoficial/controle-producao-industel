@@ -3,12 +3,11 @@ from __future__ import annotations
 import re
 from typing import Any, Callable
 
-from PySide6.QtCore import QThread, QTimer, Qt
+from PySide6.QtCore import QThread, QTimer
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
     QFrame,
-    QHBoxLayout,
     QLabel,
     QLineEdit,
     QMessageBox,
@@ -26,6 +25,7 @@ from app.services.nomus_api_importer import (
 )
 from app.services.proposal_import.compatibility import to_current_payload
 from app.services.proposal_import.schemas import StandardProposalImportResult
+from app.ui.components.dialog_shell import dialog_footer, dialog_header
 from app.ui.components.modern_button import ModernButton
 from app.ui.dialog_utils import style_dialog_from_parent
 from app.ui.nomus_import_progress_dialog import NomusImportProgressDialog
@@ -69,21 +69,17 @@ class NomusApiImportDialog(QDialog):
 
     def _build(self):
         root = QVBoxLayout(self)
-        root.setContentsMargins(18, 16, 18, 16)
-        root.setSpacing(12)
+        root.setContentsMargins(16, 14, 16, 14)
+        root.setSpacing(10)
 
         title = QLabel("Importar proposta do Nomus")
-        title.setStyleSheet("font-size: 18px; font-weight: 800;")
-        subtitle = QLabel("Informe o numero da proposta ou ID do pedido. Nada sera salvo automaticamente.")
-        subtitle.setObjectName("Caption")
-        subtitle.setWordWrap(True)
-        root.addWidget(title)
-        root.addWidget(subtitle)
+        subtitle = QLabel("Informe o número da proposta ou ID do pedido. Nada será salvo automaticamente.")
+        root.addWidget(dialog_header(title, subtitle))
 
         panel = QFrame()
-        panel.setObjectName("Panel")
+        panel.setObjectName("DetailPanel")
         panel_layout = QVBoxLayout(panel)
-        panel_layout.setContentsMargins(14, 12, 14, 12)
+        panel_layout.setContentsMargins(16, 14, 16, 14)
         panel_layout.setSpacing(8)
 
         label = QLabel("Proposta ou ID")
@@ -91,23 +87,19 @@ class NomusApiImportDialog(QDialog):
         self.identifier = QLineEdit()
         self.identifier.setPlaceholderText("Ex.: CP05252 ou ID interno do pedido")
         self.identifier.returnPressed.connect(self.start_lookup)
-        self.status = QLabel("A consulta usa apenas dados operacionais e ignora informacoes financeiras.")
-        self.status.setObjectName("Caption")
+        self.status = QLabel("A consulta usa apenas dados operacionais e ignora informações financeiras.")
+        self.status.setObjectName("InlineNotice")
         self.status.setWordWrap(True)
         panel_layout.addWidget(label)
         panel_layout.addWidget(self.identifier)
         panel_layout.addWidget(self.status)
         root.addWidget(panel)
 
-        actions = QHBoxLayout()
-        actions.addStretch()
-        self.cancel_button = ModernButton("Cancelar", "clear")
+        self.cancel_button = ModernButton("Cancelar", "clear", variant="ghost")
         self.search_button = ModernButton("Buscar no Nomus", "search", accent=True)
         self.cancel_button.clicked.connect(self.reject)
         self.search_button.clicked.connect(self.start_lookup)
-        actions.addWidget(self.cancel_button)
-        actions.addWidget(self.search_button)
-        root.addLayout(actions)
+        root.addWidget(dialog_footer(right=[self.cancel_button, self.search_button]))
 
     def start_lookup(self):
         identifier = self._validated_identifier()

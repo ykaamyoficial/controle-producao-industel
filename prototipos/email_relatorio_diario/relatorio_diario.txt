@@ -1,0 +1,76 @@
+Assunto: Resumo de 13/10 — 112 propostas abertas · 26 mudaram de status · 60 atrasadas
+
+Resumo das propostas — terça, 13/10/2026 (Fábrica inteira)
+Olá, Administrador.
+
+Abertas: 112 · Mudaram de status: 26 · Entregues: 8 · Atrasadas: 60
+
+Onde estão agora:
+  Produção: 18 (Iniciado 9, Liberado produção 7, Item pendente fabricação 2)
+  Galvanização: 13 (Aguardando envio 8, Enviado galvanização 3, Retornou parcial 2)
+  Expedição: 80 (Em separação 75, Separado 3, Entregue parcial 2)
+  Outras etapas: 1 (Controle geral · Em produção 1)
+
+Concluíram a produção (8):
+  CP 05591 MNS ENGENHARIA: Produção · Iniciado -> Produção · Finalizado (11 peças)
+  CP 05592 MNS ENGENHARIA: Produção · Iniciado -> Produção · Finalizado (11 peças)
+  CP 05593 MNS ENGENHARIA: Produção · Iniciado -> Produção · Finalizado (26 peças)
+  CP 05602 EQUATORIAL PIAUI DISTRIBUIDORA DE ENERGIA S.A: Produção · Iniciado -> Produção · Finalizado (21 peças)
+  CP 05607 EQUATORIAL GOIAS DIST. DE ENERGIA S/A: Produção · Iniciado -> Produção · Finalizado (3 peças)
+  CP 05610 EQUATORIAL MARANHAO DISTRIBUIDORA DE ENERGIA S.A: Produção · Iniciado -> Produção · Finalizado (135 peças)
+  CP 05623 BR INFRA SISTEMAS E CONSTRUÇÕES LDTA-ME: Produção · Iniciado -> Produção · Finalizado (1 peça)
+  CP 05637 EQUATORIAL PARÁ DISTRIBUIDORA DE ENERGIA S.A.: Produção · Iniciado -> Produção · Finalizado (30 peças)
+
+Seguiram para a galvanização (2):
+  CP 05569 EQUATORIAL MARANHAO DISTRIBUIDORA DE ENERGIA S.A: Galvanização · Aguardando envio -> Galvanização · Enviado galvanização (102 peças)
+  CP 05579 EQUATORIAL GOIAS DIST. DE ENERGIA S/A: Produção · Iniciado -> Galvanização · Enviado galvanização (720 peças)
+
+Retornaram da galvanização (2):
+  CP 05511 MNS ENGENHARIA: Galvanização · Retornou galvanização -> Galvanização · Retornou parcial (11 peças)
+  CP 05566 CLEMAR ENGENHARIA LTDA - DF: Galvanização · Retornou galvanização -> Galvanização · Retornou parcial (30 peças)
+
+Na expedição (6):
+  CP 05486 BR INFRA SISTEMAS E CONSTRUÇÕES LDTA-ME: — -> Expedição · Separado (10 peças)
+  CP 05493-1 MNS ENGENHARIA: — -> Expedição · Separado (10 peças)
+  CP 05494 MNS ENGENHARIA: — -> Expedição · Separado (11 peças)
+  CP 05530 MNS ENGENHARIA: Controle geral · Em produção -> Expedição · Em separação (56 peças)
+  CP 05530-2 MNS ENGENHARIA: Produção · Item pendente fabricação -> Expedição · Em separação
+  CP 05590 MNS ENGENHARIA: Produção · Iniciado -> Expedição · Em separação (11 peças)
+
+Entregues ao cliente (8):
+  CP 05483 MNS ENGENHARIA: — -> Finalizado · Entregue (335 peças)
+  CP 05495 MNS ENGENHARIA: — -> Finalizado · Entregue (11 peças)
+  CP 05500 MNS ENGENHARIA: Almoxarifado · Em separação -> Almoxarifado · Almoxarifado entregue (11 peças)
+  CP 05508 MNS ENGENHARIA: Expedição · Em separação -> Finalizado · Entregue (11 peças)
+  CP05377 MNS ENGENHARIA ENGº LEONARDO M. N. SOUZA: — -> Finalizado · Entregue (11 peças)
+  CP05412 MNS ENGENHARIA ENGº LEONARDO M. N. SOUZA: — -> Finalizado · Entregue (11 peças)
+  CP05413 MNS ENGENHARIA ENGº LEONARDO M. N. SOUZA: — -> Finalizado · Entregue (11 peças)
+  CP05414 MNS ENGENHARIA ENGº LEONARDO M. N. SOUZA: — -> Finalizado · Entregue (11 peças)
+
+Atrasadas (60):
+  CP05236 ENERGY SYSTEN CONSTRUÇÕES E: prazo 22/07 · 84 d de atraso
+  CP05349 EQUATORIAL PIAUI DISTRIBUIDORA DE ENERGIA S.A: prazo 25/08 · 50 d de atraso
+  CP05432 EQUATORIAL ENERGIA - CEEE JOSÉ RAIMUNDO R. MARQUES: prazo 28/08 · 47 d de atraso
+  CP05434 EQUATORIAL GOIAS DIST. DE JOSÉ RAIMUNDO R. MARQUES: prazo 28/08 · 47 d de atraso
+  CP05446 EQUATORIAL ALAGOAS CONTRATO TRIENAL: prazo 31/08 · 44 d de atraso
+
+Vencem em até 3 dias (21):
+  CP 05567 EQUATORIAL MARANHAO DISTRIBUIDORA DE ENERGIA S.A: vence hoje
+  CP 05570 EQUATORIAL MARANHAO DISTRIBUIDORA DE ENERGIA S.A: vence hoje
+  CP 05578 EQUATORIAL MARANHAO DISTRIBUIDORA DE ENERGIA S.A: vence hoje
+  CP 05580 MNS ENGENHARIA: vence hoje
+  CP 05571 EQUATORIAL PARÁ DISTRIBUIDORA DE ENERGIA S.A.: vence hoje
+
+Paradas há muito tempo (87):
+  CP05433 EQUATORIAL MARANHAO JOSÉ RAIMUNDO: sem movimento há 16 dias
+  CP05432 EQUATORIAL ENERGIA - CEEE JOSÉ RAIMUNDO R. MARQUES: sem movimento há 16 dias
+  CP05430 EQUATORIAL MARANHAO CAMILA BUENO DE OLIVEIRA: sem movimento há 16 dias
+  CP05419 EQUATORIAL GOIAS DIST. DE CONTRATO TRIENAL: sem movimento há 16 dias
+  CP05434 EQUATORIAL GOIAS DIST. DE JOSÉ RAIMUNDO R. MARQUES: sem movimento há 16 dias
+
+Parciais pendentes (3):
+  CP 05493 MNS ENGENHARIA: 2 parcial(is) em aberto
+  CP 05642 MNS ENGENHARIA: 1 parcial(is) em aberto
+  CP 05640 MNS ENGENHARIA: 1 parcial(is) em aberto
+
+Abra o programa para ver os detalhes.

@@ -162,7 +162,7 @@ class ActionCardButton(QPushButton):
         QPushButton#ActionCard {{
             background: {variant['bg']};
             border: 1px solid {variant['border']};
-            border-radius: 11px;
+            border-radius: 16px;
             text-align: left;
         }}
         QPushButton#ActionCard:hover {{
@@ -178,7 +178,7 @@ class ActionCardButton(QPushButton):
         }}
         QPushButton#ActionCard QLabel#ActionCardIconBox {{
             background: {variant['icon_bg']};
-            border-radius: 10px;
+            border-radius: 14px;
         }}
         QPushButton#ActionCard QLabel#ActionCardTitle {{
             color: {variant['title']};

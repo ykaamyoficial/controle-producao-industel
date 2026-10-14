@@ -74,24 +74,26 @@ class GalvanizationItemsPage(QWidget):
             area="GALVANIZACAO",
             palette=self.service.palette,
         )
-        title = QLabel("Itens de galvanizacao")
+        title = QLabel("Itens de galvanização")
         title.setObjectName("FilterTitle")
         style_area_title(title, "GALVANIZACAO", self.service.palette)
         self.search = QLineEdit()
         self.search.setPlaceholderText("Proposta, cliente, obra/site ou lote")
         self.search.textChanged.connect(lambda _text: self.refresh(debounced=True))
         self.situation = QComboBox()
-        self.situation.addItem("Todos", "")
-        self.situation.addItem("Disponivel para carga", "DISPONIVEL")
-        self.situation.addItem("Em galvanizacao", "EM_GALVANIZACAO")
-        apply_btn = ModernButton("Aplicar", "search", accent=True)
-        clear_btn = ModernButton("Limpar", "clear")
+        self.situation.addItem("Todas as situações", "")
+        self.situation.addItem("Disponível para carga", "DISPONIVEL")
+        self.situation.addItem("Em galvanização", "EM_GALVANIZACAO")
+        apply_btn = ModernButton("Aplicar", "search")
+        clear_btn = ModernButton("Limpar", "clear", variant="ghost")
         apply_btn.clicked.connect(self.refresh)
         clear_btn.clicked.connect(self.clear)
+        self.search.setAccessibleName("Busca")
+        self.situation.setAccessibleName("Situação")
+        for field in (self.search, self.situation):
+            field.setMinimumHeight(34)
         fl.addWidget(title)
-        fl.addWidget(QLabel("Buscar"))
         fl.addWidget(self.search, 1)
-        fl.addWidget(QLabel("Situacao"))
         fl.addWidget(self.situation)
         fl.addWidget(apply_btn)
         fl.addWidget(clear_btn)
@@ -118,8 +120,8 @@ class GalvanizationItemsPage(QWidget):
         self.table.setToolTip("")
         self.table.setModel(self.model)
         self.empty_state = EmptyState(
-            "Nenhum item para galvanizacao",
-            "Itens disponiveis, em carga ou em retorno aparecerao aqui.",
+            "Nenhum item para galvanização",
+            "Itens disponíveis, em carga ou em retorno aparecerão aqui.",
             self.service.palette,
             icon="load",
         )
@@ -155,7 +157,7 @@ class GalvanizationItemsPage(QWidget):
             return
         dialog = GalvanizationLoadDialog(self.service, preselected_item_ids=item_ids, parent=self)
         if dialog.exec():
-            ToastNotification(self.window(), "Carga de galvanizacao salva.", "success")
+            ToastNotification(self.window(), "Carga de galvanização salva.", "success")
             self.refresh()
 
     def open_register_return(self):
@@ -181,7 +183,7 @@ class GalvanizationItemsPage(QWidget):
             if dialog.exec():
                 any_changed = True
         if any_changed:
-            ToastNotification(self.window(), "Retorno da galvanizacao registrado.", "success")
+            ToastNotification(self.window(), "Retorno da galvanização registrado.", "success")
             self.refresh()
 
     def clear(self):
@@ -252,26 +254,28 @@ class GalvanizationLoadsPage(QWidget):
             area="GALVANIZACAO",
             palette=self.service.palette,
         )
-        title = QLabel("Cargas de galvanizacao")
+        title = QLabel("Cargas de galvanização")
         title.setObjectName("FilterTitle")
         style_area_title(title, "GALVANIZACAO", self.service.palette)
         self.search = QLineEdit()
         self.search.setPlaceholderText("Carga ou motorista")
         self.search.textChanged.connect(lambda _text: self.refresh(debounced=True))
         self.status = QComboBox()
-        self.status.addItem("Todos", "")
-        self.status.addItem("Aguardando liberacao", "AGUARDANDO_LIBERACAO")
+        self.status.addItem("Todos os status", "")
+        self.status.addItem("Aguardando liberação", "AGUARDANDO_LIBERACAO")
         self.status.addItem("Enviada", "LIBERADA_PARA_ENVIO")
         self.status.addItem("Retorno parcial", "RETORNO_PARCIAL")
         self.status.addItem("Retornada", "RETORNADA_GALVANIZACAO")
-        apply_btn = ModernButton("Aplicar", "search", accent=True)
-        clear_btn = ModernButton("Limpar", "clear")
+        apply_btn = ModernButton("Aplicar", "search")
+        clear_btn = ModernButton("Limpar", "clear", variant="ghost")
         apply_btn.clicked.connect(self.refresh)
         clear_btn.clicked.connect(self.clear)
+        self.search.setAccessibleName("Busca")
+        self.status.setAccessibleName("Status")
+        for field in (self.search, self.status):
+            field.setMinimumHeight(34)
         fl.addWidget(title)
-        fl.addWidget(QLabel("Buscar"))
         fl.addWidget(self.search, 1)
-        fl.addWidget(QLabel("Status"))
         fl.addWidget(self.status)
         fl.addWidget(apply_btn)
         fl.addWidget(clear_btn)
@@ -285,14 +289,14 @@ class GalvanizationLoadsPage(QWidget):
         self.table = ModernTable(self.service)
         self.table.setModel(self.model)
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)
-        self.table.setToolTip("Clique no icone da primeira coluna para abrir as acoes da carga.")
+        self.table.setToolTip("Clique no ícone da primeira coluna para abrir as ações da carga.")
         self.table.status_shortcut_requested.connect(self.open_actions_for_load)
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self.open_context_menu)
         self.table.doubleClicked.connect(self._open_details_from_index)
         self.empty_state = EmptyState(
             "Nenhuma carga encontrada",
-            "Cargas montadas para galvanizacao aparecerao aqui.",
+            "Cargas montadas para galvanização aparecerão aqui.",
             self.service.palette,
             icon="load",
         )
@@ -496,7 +500,7 @@ class GalvanizationAreaPage(QWidget):
         layout.setContentsMargins(*OPERATIONAL_PAGE_MARGINS)
         self.tabs = QTabWidget()
         configure_operational_tabs(self.tabs, area="GALVANIZACAO", palette=self.service.palette)
-        self.proposals_page = ProcessPage(service, "GALVANIZACAO", "Galvanizacao")
+        self.proposals_page = ProcessPage(service, "GALVANIZACAO", "Galvanização")
         self.items_page = GalvanizationItemsPage(service)
         self.loads_page = GalvanizationLoadsPage(service)
         self.tabs.addTab(self.proposals_page, "Propostas")

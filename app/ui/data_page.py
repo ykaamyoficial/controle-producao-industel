@@ -15,7 +15,7 @@ from app.ui.components.operational_layout import (
     OPERATIONAL_TABLE_STACK_MARGINS,
 )
 from app.ui.components.operational_table import configure_operational_table
-from app.ui.components.modern_table import ProcessFilterProxy
+from app.ui.components.modern_table import TABLE_HEADER_HEIGHT, TABLE_ROW_HEIGHT, ProcessFilterProxy
 
 
 class DataPage(QWidget):
@@ -43,7 +43,7 @@ class DataPage(QWidget):
         title.setObjectName("FilterTitle")
         self.search = QLineEdit()
         self.search.setPlaceholderText("Pesquisar")
-        refresh = ModernButton("Atualizar", "search", accent=True)
+        refresh = ModernButton("Atualizar", "search")
         self.refresh_button = refresh
         self.loading = QLabel("Carregando...")
         self.loading.setObjectName("Caption")
@@ -62,6 +62,9 @@ class DataPage(QWidget):
         self.table.verticalHeader().setVisible(False)
         self.table.setShowGrid(False)
         self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.horizontalHeader().setFixedHeight(TABLE_HEADER_HEIGHT)
+        self.table.horizontalHeader().setDefaultAlignment(Qt.AlignCenter)
+        self.table.verticalHeader().setDefaultSectionSize(TABLE_ROW_HEIGHT)
         self.empty_state = EmptyState(
             "Nenhum registro encontrado",
             "Atualize a consulta ou ajuste a pesquisa para ampliar os resultados.",
@@ -92,7 +95,7 @@ class DataPage(QWidget):
     def _refresh_error(self, exc):
         self.model.set_rows([])
         self.table.resizeColumnsToContents()
-        self.empty_state.set_text("Nao foi possivel carregar os registros", str(exc))
+        self.empty_state.set_text("Não foi possível carregar os registros", str(exc))
         self.table_stack.setCurrentWidget(self.empty_state)
         self._set_loading(False)
 

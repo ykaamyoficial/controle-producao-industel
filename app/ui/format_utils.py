@@ -13,6 +13,40 @@ from app.ui.numeric_utils import format_decimal, parse_decimal
 
 EMPTY_PLACEHOLDER = "-"
 
+# Titulos de cartao que o servico manda sem acento. A chave de dados continua
+# a mesma; so o texto mostrado ganha acento.
+_ACCENTED_LABELS = {
+    "propostas em producao": "Propostas em produção",
+    "producao completa": "Produção completa",
+    "producao parcial": "Produção parcial",
+    "producao concluida": "Produção concluída",
+    "producao em andamento": "Produção em andamento",
+    "em separacao": "Em separação",
+    "peso enviado galvanizacao": "Peso enviado galvanização",
+    "peso retornado galvanizacao": "Peso retornado galvanização",
+    "pendencias criticas": "Pendências críticas",
+    "pendencias de remanejamento": "Pendências de remanejamento",
+    "expedicoes concluidas": "Expedições concluídas",
+    "+7 dias sem emissao": "+7 dias sem emissão",
+    "producao": "Produção",
+    "galvanizacao": "Galvanização",
+    "expedicao": "Expedição",
+}
+
+_RELIABILITY = {"alta": "Alta", "media": "Média", "baixa": "Baixa"}
+
+
+def reliability_label(value: Any) -> str:
+    """"media" -> "Média"; valor ausente vira "-"."""
+    raw = str(value or "").strip()
+    return _RELIABILITY.get(raw.lower(), raw.title()) if raw else "-"
+
+
+def accent_label(text: Any) -> str:
+    """Devolve o titulo com acentuacao correta quando ele e um dos conhecidos."""
+    raw = str(text or "")
+    return _ACCENTED_LABELS.get(raw.strip().lower(), raw)
+
 
 def format_empty(value: Any, default: str = EMPTY_PLACEHOLDER) -> str:
     """Nunca deixa None/""/{}/[] aparecerem crus numa tela - troca por um
@@ -48,13 +82,13 @@ def format_proposal_header(proposal_labels: Iterable[Any], cliente: Any) -> str:
 
 
 def format_weight_or_missing(value: Any, *, suffix: str = " kg") -> str:
-    """Peso ausente exibe "Nao informado", nunca "0" - a mesma regra em todo
+    """Peso ausente exibe "Não informado", nunca "0" - a mesma regra em todo
     lugar que mostra peso (Resumo, Fluxo, Itens)."""
     if value in (None, ""):
-        return "Nao informado"
+        return "Não informado"
     quantity = parse_decimal(value, "0")
     if quantity <= 0:
-        return "Nao informado"
+        return "Não informado"
     return f"{format_decimal(quantity)}{suffix}"
 
 

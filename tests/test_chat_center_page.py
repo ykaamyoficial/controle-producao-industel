@@ -7,7 +7,7 @@ from PySide6.QtCore import QThread
 from PySide6.QtWidgets import QApplication
 
 from app.services.backend_adapter import OFFICIAL_COLOR_PALETTES
-from app.ui.chat_center_page import ChatCenterPage
+from app.ui.chat_center_page import ChatCenterDialog, ChatCenterPage
 
 
 class FakeService:
@@ -130,10 +130,147 @@ class ChatCenterPageTargetTests(unittest.TestCase):
         page = self._build_page(service, proposal_id=42, message_id=99)
         self.assertEqual(page.panel._pending_focus_message_id, 99)
 
+    def test_closing_the_dialog_stops_the_page_timers_and_threads(self):
+        # Fechar o dialogo nao dispara closeEvent na pagina filha. Sem o
+        # cleanup em done(), as threads de carga seguiam vivas depois de o
+        # dialogo sumir e o processo caia (violacao de acesso) ao abrir e
+        # fechar o chat em sequencia, p. ex. clicando numa notificacao.
+        service = FakeService()
+        service.conversations = [_conversation(1, 42)]
+        dialog = ChatCenterDialog(service, None, proposal_id=42)
+        dialog.show()
+        self._pump(dialog.page, cycles=5)
+        panel = dialog.page.panel
+        self.assertIsNotNone(panel)
+        dialog.accept()
+        self.assertTrue(dialog.page._closing)
+        self.assertTrue(panel._closing)
+        self.assertFalse(panel._poll_timer.isActive())
+        for thread in dialog.findChildren(QThread):
+            self.assertFalse(thread.isRunning())
+        dialog.deleteLater()
+
+    def test_dialog_has_a_close_x_in_the_top_right_corner(self):
+        # O dialogo e sem moldura do Windows: sem este X nao havia como fechar
+        # a Central de Chats com o mouse.
+        service = FakeService()
+        dialog = ChatCenterDialog(service, None, proposal_id=42)
+        dialog.show()
+        self._pump(dialog.page, cycles=3)
+        button = dialog.page.close_button
+        self.assertFalse(button.isHidden())
+        self.assertEqual(button.toolTip(), "Fechar a central de chats")
+        # No canto superior direito do dialogo.
+        top_right = button.mapTo(dialog, button.rect().topRight())
+        self.assertGreater(top_right.x(), dialog.width() * 0.9)
+        self.assertLess(top_right.y(), 60)
+        self.assertTrue(dialog.isVisible())
+        button.click()
+        self.assertFalse(dialog.isVisible())
+        self.assertEqual(dialog.result(), ChatCenterDialog.Rejected)
+        self.assertTrue(dialog.page._closing)
+        dialog.deleteLater()
+
+    def test_page_outside_a_dialog_has_no_close_button(self):
+        page = self._build_page(FakeService())
+        self.assertTrue(page.close_button.isHidden())
+
     def test_opening_without_target_shows_empty_state(self):
         service = FakeService()
         page = self._build_page(service)
         self.assertIsNone(page.panel)
+
+    def _timeline(self, count: int) -> list[dict]:
+        return [
+            {
+                "id": index,
+                "entry_kind": "MENSAGEM",
+                "body": f"mensagem {index}",
+                "author_user_id": 2,
+                "author_name": "Outro",
+                "created_at": f"2026-10-14T10:{index:02d}:00Z",
+            }
+            for index in range(1, count + 1)
+        ]
+
+    def _open_dialog(self, service) -> ChatCenterDialog:
+        dialog = ChatCenterDialog(service, None, proposal_id=42)
+        dialog.resize(1000, 600)
+        dialog.show()
+        self._pump(dialog.page, cycles=80)
+        return dialog
+
+    def test_empty_state_has_a_close_button_inside_a_dialog(self):
+        # Sem conversa selecionada nao ha cabecalho de conversa: o X da tela
+        # vazia e a unica saida com o mouse.
+        service = FakeService()
+        dialog = ChatCenterDialog(service, None)
+        dialog.show()
+        self._pump(dialog.page, cycles=3)
+        self.assertIsNone(dialog.page.panel)
+        self.assertFalse(dialog.page.close_button.isHidden())
+        dialog.page.close_button.click()
+        self.assertFalse(dialog.isVisible())
+        dialog.deleteLater()
+
+    def test_reading_history_is_not_pulled_back_to_the_bottom_by_a_refresh(self):
+        service = FakeService()
+        service.conversations = [_conversation(1, 42)]
+        service.timeline_items = self._timeline(40)
+        dialog = self._open_dialog(service)
+        panel = dialog.page.panel
+        bar = panel.scroll.verticalScrollBar()
+        self.assertGreater(bar.maximum(), 0)
+        bar.setValue(bar.maximum() // 3)
+        self._pump(dialog.page, cycles=5)
+        position = bar.value()
+        for _ in range(3):
+            panel.refresh()
+            self._pump(dialog.page, cycles=40)
+        self.assertEqual(bar.value(), position)
+        dialog.accept()
+        dialog.deleteLater()
+
+    def test_sending_a_message_goes_to_the_bottom_and_ends_visible(self):
+        service = FakeService()
+        service.conversations = [_conversation(1, 42)]
+        service.timeline_items = self._timeline(40)
+        dialog = self._open_dialog(service)
+        panel = dialog.page.panel
+        bar = panel.scroll.verticalScrollBar()
+        bar.setValue(0)
+        self._pump(dialog.page, cycles=5)
+        panel._append_sent_message(
+            {
+                "id": 9001,
+                "body": "minha mensagem",
+                "author_user_id": 1,
+                "author_name": "Eu",
+                "created_at": "2026-10-14T12:00:00Z",
+                "message_type": "MENSAGEM",
+            }
+        )
+        self._pump(dialog.page, cycles=120)
+        self.assertEqual(bar.value(), bar.maximum())
+        self.assertEqual(panel._send_running, {})
+        self.assertNotIn(9001, panel._send_pending)
+        _row, content = panel._entry_widgets[("chat", 9001)]
+        self.assertFalse(content.isHidden())
+        dialog.accept()
+        dialog.deleteLater()
+
+    def test_bottom_mask_follows_the_message_area_when_it_resizes(self):
+        service = FakeService()
+        service.conversations = [_conversation(1, 42)]
+        service.timeline_items = self._timeline(10)
+        dialog = self._open_dialog(service)
+        panel = dialog.page.panel
+        dialog.resize(1000, 760)
+        self._pump(dialog.page, cycles=40)
+        host = panel._feed_stack_host
+        self.assertEqual(panel._bottom_fade.geometry().bottom() + 1, host.height())
+        dialog.accept()
+        dialog.deleteLater()
 
 
 if __name__ == "__main__":

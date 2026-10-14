@@ -7,6 +7,7 @@ from PySide6.QtWidgets import QDialog, QFrame, QHBoxLayout, QLabel, QMessageBox,
 
 from app.services.update_coordinator import UpdateCoordinator
 from app.ui.components.modern_button import ModernButton
+from app.ui.dialog_utils import style_dialog_from_parent
 from app.ui.icons import AppIcons, icon_provider
 
 
@@ -37,8 +38,9 @@ class UpdateDialog(QDialog):
         self._update_coordinator_factory = update_coordinator_factory
         self._worker_thread = None
         self._progress_animation = None
-        self.setWindowTitle("Nova versao disponivel")
+        self.setWindowTitle("Nova versão disponível")
         self.setMinimumSize(640, 520)
+        style_dialog_from_parent(self, parent, standalone=True)
         self._build()
         self._apply_update_style()
 
@@ -58,9 +60,9 @@ class UpdateDialog(QDialog):
         if refresh_icon is not None:
             icon.setPixmap(refresh_icon.pixmap(28, 28))
         header_text = QVBoxLayout()
-        title = QLabel("Nova versao disponivel")
+        title = QLabel("Nova versão disponível")
         title.setObjectName("UpdateTitle")
-        subtitle = QLabel("Atualizacao assistida com download seguro, validacao e backup antes de instalar.")
+        subtitle = QLabel("Atualização assistida com download seguro, validação e backup antes de instalar.")
         subtitle.setObjectName("Caption")
         subtitle.setWordWrap(True)
         header_text.addWidget(title)
@@ -78,14 +80,14 @@ class UpdateDialog(QDialog):
         info_layout.addWidget(self._info_chip("Publicada em", self.update_info.get("published_at") or "-"))
         root.addWidget(info)
 
-        notes_label = QLabel("Notas da versao")
+        notes_label = QLabel("Notas da versão")
         notes_label.setObjectName("UpdateSectionTitle")
         root.addWidget(notes_label)
 
         notes = QTextEdit()
         notes.setObjectName("UpdateNotes")
         notes.setReadOnly(True)
-        notes.setPlainText(self.update_info.get("release_notes") or "Sem notas de versao informadas.")
+        notes.setPlainText(self.update_info.get("release_notes") or "Sem notas de versão informadas.")
         root.addWidget(notes, 1)
 
         progress_panel = QFrame()
@@ -93,7 +95,7 @@ class UpdateDialog(QDialog):
         progress_layout = QVBoxLayout(progress_panel)
         progress_layout.setContentsMargins(16, 14, 16, 14)
         progress_layout.setSpacing(10)
-        self.progress_title = QLabel("Aguardando confirmacao")
+        self.progress_title = QLabel("Aguardando confirmação")
         self.progress_title.setObjectName("UpdateProgressTitle")
         self.progress_bar = QProgressBar()
         self.progress_bar.setObjectName("UpdateProgressBar")
@@ -112,7 +114,7 @@ class UpdateDialog(QDialog):
         self.download_button = ModernButton("Atualizar agora", "download", accent=True)
         self.download_button.clicked.connect(self.download_update)
         footer.addWidget(self.download_button, alignment=Qt.AlignRight)
-        close = ModernButton("Fechar", "close")
+        close = ModernButton("Fechar", "close", variant="ghost")
         close.clicked.connect(self.accept)
         footer.addWidget(close, alignment=Qt.AlignRight)
         root.addLayout(footer)
@@ -215,10 +217,10 @@ class UpdateDialog(QDialog):
         confirm = QMessageBox.question(
             self,
             "Atualizar sistema",
-            "O sistema vai baixar a atualizacao, validar a integridade do arquivo "
-            "e preparar a instalacao.\n\n"
-            "O banco PostgreSQL fica no servidor e nao sera alterado por esta atualizacao.\n\n"
-            "O programa sera fechado automaticamente para concluir a instalacao e reabrira em seguida.\n\n"
+            "O sistema vai baixar a atualização, validar a integridade do arquivo "
+            "e preparar a instalação.\n\n"
+            "O banco PostgreSQL fica no servidor e não será alterado por esta atualização.\n\n"
+            "O programa será fechado automaticamente para concluir a instalação e reabrirá em seguida.\n\n"
             "Deseja continuar?",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,
@@ -257,8 +259,13 @@ class UpdateDialog(QDialog):
         self._progress_animation.start()
 
     def _prepare_update(self, progress):
-        progress("Baixando e validando a atualizacao", 30)
+        progress("Baixando e validando a atualizacao", 5)
         coordinator = self._update_coordinator_factory()
+        # Progresso real (download e preparacao pelo Updater). Coordenadores de
+        # teste/legados sem o gancho seguem so com os marcos fixos.
+        set_callback = getattr(coordinator, "set_progress_callback", None)
+        if callable(set_callback):
+            set_callback(progress)
         result = coordinator.start_required_update(expected_version=self.update_info.get("latest_version"))
         progress("Atualizacao preparada", 90)
         return result
@@ -270,10 +277,10 @@ class UpdateDialog(QDialog):
         QMessageBox.warning(
             self,
             "Atualizar sistema",
-            "Nao foi possivel preparar a atualizacao.\n\n"
-            "Verifique internet, data/hora do computador, proxy ou bloqueio do antivirus. "
-            "O sistema continuara funcionando normalmente.\n\n"
-            "Consulte os logs tecnicos para mais detalhes.",
+            "Não foi possível preparar a atualização.\n\n"
+            "Verifique internet, data/hora do computador, proxy ou bloqueio do antivírus. "
+            "O sistema continuará funcionando normalmente.\n\n"
+            "Consulte os logs técnicos para mais detalhes.",
         )
 
     def _update_ready(self, result):
@@ -294,6 +301,6 @@ class UpdateDialog(QDialog):
         QMessageBox.warning(
             self,
             "Atualizar sistema",
-            f"Nao foi possivel concluir a atualizacao.\n\n{error_message}\n\n"
-            "O sistema continuara funcionando normalmente.",
+            f"Não foi possível concluir a atualização.\n\n{error_message}\n\n"
+            "O sistema continuará funcionando normalmente.",
         )

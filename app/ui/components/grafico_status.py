@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QPainter, QPen
+from PySide6.QtGui import QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QSizePolicy, QVBoxLayout, QWidget
 
 from app.ui.components.empty_state import EmptyState
+from app.ui.fonts import scaled_px
 
 
 class DonutCanvas(QWidget):
@@ -42,12 +43,19 @@ class DonutCanvas(QWidget):
             painter.drawArc(rect, start, span)
             self._segments.append((_label, start / 16, (start + span) / 16))
             start += span
+        # Total no centro, com a legenda "processos" logo abaixo.
+        number_font = QFont(painter.font())
+        number_font.setPixelSize(scaled_px(28))
+        number_font.setWeight(QFont.Weight.Bold)
+        painter.setFont(number_font)
         painter.setPen(QColor(self.palette["text"]))
-        font = painter.font()
-        font.setPointSize(19)
-        font.setBold(True)
-        painter.setFont(font)
-        painter.drawText(rect, Qt.AlignCenter, str(total))
+        painter.drawText(rect.adjusted(0, -10, 0, -10), Qt.AlignCenter, str(total))
+        caption_font = QFont(painter.font())
+        caption_font.setPixelSize(scaled_px(12))
+        caption_font.setWeight(QFont.Weight.Normal)
+        painter.setFont(caption_font)
+        painter.setPen(QColor(self.palette["muted"]))
+        painter.drawText(rect.adjusted(0, 28, 0, 28), Qt.AlignCenter, "processos")
         painter.end()
 
     def mouseReleaseEvent(self, event):
@@ -72,6 +80,48 @@ class DonutCanvas(QWidget):
         super().mouseReleaseEvent(event)
 
 
+class _Dot(QWidget):
+    def __init__(self, color: str, parent=None):
+        super().__init__(parent)
+        self._color = color
+        self.setFixedSize(10, 10)
+
+    def paintEvent(self, _event) -> None:  # noqa: N802
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor(self._color))
+        painter.drawEllipse(QRectF(self.rect()))
+        painter.end()
+
+
+class _LegendRow(QWidget):
+    """Linha da legenda: ponto da cor, nome e total. A linha inteira e clicavel."""
+
+    clicked = Signal(str)
+
+    def __init__(self, key: str, label: str, value: int, color: str, parent=None):
+        super().__init__(parent)
+        self.key = key
+        self.setObjectName("LegendRow")
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setCursor(Qt.PointingHandCursor)
+        line = QHBoxLayout(self)
+        line.setContentsMargins(8, 4, 8, 4)
+        line.setSpacing(10)
+        name = QLabel(label.replace("_", " ").title())
+        number = QLabel(str(value))
+        number.setObjectName("ValueLabel")
+        line.addWidget(_Dot(color))
+        line.addWidget(name, 1)
+        line.addWidget(number)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.clicked.emit(self.key)
+        super().mouseReleaseEvent(event)
+
+
 class GraficoStatus(QWidget):
     item_clicked = Signal(str)
 
@@ -83,28 +133,17 @@ class GraficoStatus(QWidget):
         normalized = [(str(row["label"] if isinstance(row, dict) else row[0]), int(row["total"] if isinstance(row, dict) else row[1])) for row in rows]
         normalized = [(label, value) for label, value in normalized if value > 0]
         if not normalized:
-            root.addWidget(EmptyState("Sem dados de status", "Os indicadores aparecerao assim que houver processos ativos.", palette))
+            root.addWidget(EmptyState("Sem dados de status", "Os indicadores aparecerão assim que houver processos ativos.", palette))
             return
         donut = DonutCanvas(normalized, colors, palette)
         donut.segment_clicked.connect(self.item_clicked)
         root.addWidget(donut, 1)
         legend = QVBoxLayout()
-        legend.setSpacing(8)
+        legend.setSpacing(2)
         legend.addStretch()
         for index, (label, value) in enumerate(normalized[:7]):
-            line = QHBoxLayout()
-            dot = QLabel()
-            dot.setFixedSize(9, 9)
-            dot.setStyleSheet(f"background: {colors[index % len(colors)]}; border-radius: 4px;")
-            name = QLabel(label.replace("_", " ").title())
-            name.setStyleSheet("font-size: 10px;")
-            name.setCursor(Qt.PointingHandCursor)
-            name.mouseReleaseEvent = lambda event, key=label: self.item_clicked.emit(key)
-            number = QLabel(str(value))
-            number.setStyleSheet("font-weight: 800;")
-            line.addWidget(dot)
-            line.addWidget(name, 1)
-            line.addWidget(number)
-            legend.addLayout(line)
+            row = _LegendRow(label, label, value, colors[index % len(colors)])
+            row.clicked.connect(self.item_clicked)
+            legend.addWidget(row)
         legend.addStretch()
         root.addLayout(legend, 1)

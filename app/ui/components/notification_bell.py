@@ -67,7 +67,8 @@ class NotificationBell(AppIconButton):
         panel.move(point)
         panel.show()
         self._panel = panel
-        fade_in(panel, duration=140)
+        if getattr(panel, "_window_shell", None) is None:  # com a casca, a entrada e dela
+            fade_in(panel, duration=140)
 
     def is_center_open(self) -> bool:
         return self._panel is not None and self._panel.isVisible()

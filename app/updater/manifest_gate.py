@@ -61,6 +61,7 @@ def download_and_verify_artifact(
     *,
     source: str | None = None,
     downloader=download_package,
+    progress=None,
 ) -> Path:
     """Baixa e valida o artefato contra o manifesto. So retorna um caminho
     quando VALID; em qualquer outro caso levanta ManifestGateError e move o
@@ -72,7 +73,8 @@ def download_and_verify_artifact(
 
     log.info("artifact_download_started | filename=%s | size_bytes=%s", manifest.artifact.filename, manifest.artifact.size_bytes)
     try:
-        downloaded_path = downloader(effective_source, destination_dir, expected_size=manifest.artifact.size_bytes)
+        extra = {} if progress is None else {"progress": progress}
+        downloaded_path = downloader(effective_source, destination_dir, expected_size=manifest.artifact.size_bytes, **extra)
     except DownloadError as exc:
         log.error("verification_error | etapa=download | erro=%s", exc)
         raise ManifestGateError(f"Download falhou: {exc}") from exc

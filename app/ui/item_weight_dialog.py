@@ -4,7 +4,6 @@ from PySide6.QtCore import QRegularExpression, Qt
 from PySide6.QtGui import QRegularExpressionValidator
 from PySide6.QtWidgets import (
     QDialog,
-    QHBoxLayout,
     QHeaderView,
     QLabel,
     QLineEdit,
@@ -14,6 +13,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from app.ui.components.dialog_shell import dialog_footer, dialog_header
 from app.ui.components.modern_button import ModernButton
 from app.ui.dialog_utils import apply_large_dialog_geometry, style_dialog_from_parent
 from app.ui.table_utils import configure_wrapping_table, item_product_code, resize_rows_to_contents
@@ -34,18 +34,15 @@ class ItemWeightDialog(QDialog):
 
     def _build(self):
         root = QVBoxLayout(self)
-        root.setContentsMargins(22, 20, 22, 18)
-        root.setSpacing(12)
+        root.setContentsMargins(16, 14, 16, 14)
+        root.setSpacing(10)
         process = self.service.get_process_dict(self.process_id)
         title = QLabel(f"{process.get('proposta') or '-'} | {process.get('cliente') or '-'}")
-        title.setStyleSheet("font-size: 19px; font-weight: 800;")
-        subtitle = QLabel("Informe o peso unitario dos itens. Descricao e quantidade permanecem inalteradas.")
-        subtitle.setObjectName("Caption")
-        root.addWidget(title)
-        root.addWidget(subtitle)
+        subtitle = QLabel("Informe o peso unitário dos itens. Descrição e quantidade permanecem inalteradas.")
+        root.addWidget(dialog_header(title, subtitle))
 
         self.table = QTableWidget(0, 6)
-        self.table.setHorizontalHeaderLabels(["Item", "Codigo", "Descricao", "Quantidade", "Peso atual (kg)", "Novo peso (kg)"])
+        self.table.setHorizontalHeaderLabels(["Item", "Código", "Descrição", "Quantidade", "Peso atual (kg)", "Novo peso (kg)"])
         configure_wrapping_table(
             self.table,
             description_columns=(2,),
@@ -80,15 +77,11 @@ class ItemWeightDialog(QDialog):
         resize_rows_to_contents(self.table)
         root.addWidget(self.table, 1)
 
-        footer = QHBoxLayout()
-        footer.addStretch()
-        cancel = ModernButton("Cancelar", "clear")
+        cancel = ModernButton("Cancelar", "clear", variant="ghost")
         save = ModernButton("Salvar pesos", "save", accent=True)
         cancel.clicked.connect(self.reject)
         save.clicked.connect(self.save)
-        footer.addWidget(cancel)
-        footer.addWidget(save)
-        root.addLayout(footer)
+        root.addWidget(dialog_footer(right=[cancel, save]))
 
     @staticmethod
     def parse_weight(text: str) -> float | None:

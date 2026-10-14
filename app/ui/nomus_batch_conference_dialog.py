@@ -19,7 +19,6 @@ from PySide6.QtWidgets import (
     QTableView,
     QTableWidget,
     QTableWidgetItem,
-    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -39,6 +38,8 @@ from app.services.nomus_batch_persistence import (
     ProposalImportPersistenceService,
 )
 from app.services.nomus_import_metrics import NomusImportMetricsCollector, NomusImportMetricsSnapshot
+from app.ui.components.detail_widgets import CountTabWidget
+from app.ui.components.dialog_shell import dialog_footer, dialog_header
 from app.ui.components.modern_button import ModernButton
 from app.ui.dialog_utils import apply_large_dialog_geometry, style_dialog_from_parent
 from app.ui.nomus_batch_persistence_worker import NomusBatchPersistenceWorker
@@ -194,7 +195,7 @@ class NomusBatchConferenceDialog(QDialog):
         synchronous: bool = False,
     ):
         super().__init__(parent)
-        self.setWindowTitle("Conferir importacao do Nomus")
+        self.setWindowTitle("Conferir importação do Nomus")
         self.setModal(True)
         apply_large_dialog_geometry(self, parent, minimum_width=1080, minimum_height=700)
         style_dialog_from_parent(self, parent)
@@ -222,27 +223,25 @@ class NomusBatchConferenceDialog(QDialog):
 
     def _build(self) -> None:
         root = QVBoxLayout(self)
-        root.setContentsMargins(18, 16, 18, 16)
-        root.setSpacing(12)
+        root.setContentsMargins(16, 14, 16, 14)
+        root.setSpacing(10)
 
-        title = QLabel("Conferir importacao do Nomus")
-        title.setStyleSheet("font-size: 20px; font-weight: 800;")
+        title = QLabel("Conferir importação do Nomus")
         subtitle = QLabel("Revise e selecione as propostas prontas antes de gravar no sistema.")
-        subtitle.setObjectName("Caption")
-        root.addWidget(title)
-        root.addWidget(subtitle)
-
-        selection_row = QHBoxLayout()
         self.selection_label = QLabel("")
-        self.selection_label.setObjectName("Caption")
+        self.selection_label.setObjectName("ValueLabel")
         self.select_all_button = ModernButton("Selecionar prontas", "status")
-        self.clear_selection_button = ModernButton("Limpar selecao", "clear")
+        self.clear_selection_button = ModernButton("Limpar seleção", "clear")
         self.select_all_button.clicked.connect(lambda: self.model.select_eligible(True))
         self.clear_selection_button.clicked.connect(lambda: self.model.select_eligible(False))
-        selection_row.addWidget(self.selection_label, 1)
-        selection_row.addWidget(self.select_all_button)
-        selection_row.addWidget(self.clear_selection_button)
-        root.addLayout(selection_row)
+        root.addWidget(
+            dialog_header(
+                title,
+                subtitle,
+                status=[self.selection_label],
+                actions=[self.select_all_button, self.clear_selection_button],
+            )
+        )
 
         table_panel = self._section("Propostas do lote")
         self.table = QTableView()
@@ -262,7 +261,7 @@ class NomusBatchConferenceDialog(QDialog):
         table_panel.layout().addWidget(self.table, 1)
         root.addWidget(table_panel, 2)
 
-        self.details_tabs = QTabWidget()
+        self.details_tabs = CountTabWidget()
         self.details_tabs.addTab(self._build_summary_tab(), "Resumo")
         self.details_tabs.addTab(self._build_items_tab(), "Itens")
         self.details_tabs.addTab(self._build_warnings_tab(), "Avisos")
@@ -282,24 +281,23 @@ class NomusBatchConferenceDialog(QDialog):
         self.summary_label.setObjectName("Caption")
         root.addWidget(self.summary_label)
 
-        footer = QHBoxLayout()
-        self.status_label = QLabel("Aguardando confirmacao.")
-        self.status_label.setObjectName("Caption")
+        self.status_label = QLabel("Aguardando confirmação.")
+        self.status_label.setObjectName("InlineNotice")
         self.status_label.setWordWrap(True)
-        footer.addWidget(self.status_label, 1)
-        self.back_button = ModernButton("Voltar", "clear")
-        self.cancel_button = ModernButton("Cancelar", "clear")
+        self.back_button = ModernButton("Voltar", "previous")
+        self.cancel_button = ModernButton("Cancelar", "clear", variant="ghost")
         self.retry_button = ModernButton("Tentar falhas novamente", "refresh")
         self.save_button = ModernButton("Gravar 0 propostas", "status", accent=True)
         self.back_button.clicked.connect(self._close_dialog)
         self.cancel_button.clicked.connect(self.cancel_persistence)
         self.retry_button.clicked.connect(self.retry_failed)
         self.save_button.clicked.connect(self.start_persistence)
-        footer.addWidget(self.back_button)
-        footer.addWidget(self.cancel_button)
-        footer.addWidget(self.retry_button)
-        footer.addWidget(self.save_button)
-        root.addLayout(footer)
+        root.addWidget(
+            dialog_footer(
+                left=[self.status_label],
+                right=[self.back_button, self.cancel_button, self.retry_button, self.save_button],
+            )
+        )
 
         self.model.selection_changed.connect(self._update_actions)
         self.table.selectionModel().currentRowChanged.connect(self._show_row_details)
@@ -311,7 +309,7 @@ class NomusBatchConferenceDialog(QDialog):
         layout.setContentsMargins(14, 12, 14, 12)
         layout.setSpacing(8)
         label = QLabel(title)
-        label.setStyleSheet("font-size: 13px; font-weight: 800;")
+        label.setObjectName("PanelTitle")
         layout.addWidget(label)
         return frame
 
@@ -339,7 +337,7 @@ class NomusBatchConferenceDialog(QDialog):
         layout = QVBoxLayout(widget)
         layout.setContentsMargins(0, 6, 0, 0)
         self.items_table = QTableWidget(0, 5)
-        self.items_table.setHorizontalHeaderLabels(["Item", "Codigo", "Descricao", "Quantidade", "Peso unit."])
+        self.items_table.setHorizontalHeaderLabels(["Item", "Código", "Descrição", "Quantidade", "Peso unit."])
         self.items_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.items_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.items_table.verticalHeader().setVisible(False)
@@ -423,7 +421,7 @@ class NomusBatchConferenceDialog(QDialog):
             )
         self.progress_bar.setValue(0)
         self.progress_label.setText(f"0 de {len(rows)} processadas")
-        self.status_label.setText("Iniciando gravacao segura pela API oficial.")
+        self.status_label.setText("Iniciando gravação segura pela API oficial.")
         self._update_actions()
         prepared_results = [row.prepared_result for row in rows]
         if self.synchronous:
@@ -467,7 +465,7 @@ class NomusBatchConferenceDialog(QDialog):
             self._token.cancel()
         if self._worker:
             self._worker.cancel()
-        self.status_label.setText("Cancelamento solicitado. A proposta em andamento sera concluida com seguranca.")
+        self.status_label.setText("Cancelamento solicitado. A proposta em andamento será concluída com segurança.")
         self.cancel_button.setEnabled(False)
 
     def retry_failed(self) -> None:
@@ -511,12 +509,12 @@ class NomusBatchConferenceDialog(QDialog):
     def _on_worker_cancelled(self, result: object) -> None:
         if isinstance(result, NomusBatchPersistenceResult):
             self._handle_persistence_result(result)
-        self.status_label.setText("Gravacao cancelada. O resumo mostra o que foi efetivamente processado.")
+        self.status_label.setText("Gravação cancelada. O resumo mostra o que foi efetivamente processado.")
 
     def _on_worker_failed(self, exc: Exception) -> None:
         self._running = False
         self.model.set_locked(False)
-        self.status_label.setText(str(exc).strip() or "Falha inesperada durante a gravacao.")
+        self.status_label.setText(str(exc).strip() or "Falha inesperada durante a gravação.")
         self._update_actions()
 
     def _handle_persistence_result(self, result: NomusBatchPersistenceResult) -> None:
@@ -531,7 +529,7 @@ class NomusBatchConferenceDialog(QDialog):
         self._running = False
         self.model.set_locked(False)
         self._on_progress(len(result.results), result.selected_count)
-        self.status_label.setText("Gravacao concluida." if not result.cancelled else "Gravacao cancelada com seguranca.")
+        self.status_label.setText("Gravação concluída." if not result.cancelled else "Gravação cancelada com segurança.")
         self._update_summary()
         self._update_actions()
 
@@ -544,8 +542,8 @@ class NomusBatchConferenceDialog(QDialog):
         ready_total = len([row for row in self.model.rows if row.target.state == NomusBatchTargetState.READY])
         untouched = max(0, ready_total - len(self.persistence_results))
         self.summary_label.setText(
-            f"Gravadas: {saved} | Ja cadastradas: {existing} | Falharam: {failed} | "
-            f"Nao processadas por cancelamento: {cancelled} | Nao selecionadas: {untouched}"
+            f"Gravadas: {saved} | Já cadastradas: {existing} | Falharam: {failed} | "
+            f"Não processadas por cancelamento: {cancelled} | Não selecionadas: {untouched}"
         )
 
     def _update_actions(self) -> None:
@@ -576,7 +574,7 @@ class NomusBatchConferenceDialog(QDialog):
             QMessageBox.information(
                 self,
                 "Gravar propostas",
-                "Cancelamento solicitado. Aguarde a finalizacao segura da proposta em andamento.",
+                "Cancelamento solicitado. Aguarde a finalização segura da proposta em andamento.",
             )
             return
         super().reject()

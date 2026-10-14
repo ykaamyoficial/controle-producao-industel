@@ -275,6 +275,19 @@ def main():
     app.setApplicationName("Controle de Producao Industel")
     app.setWindowIcon(app_icon())
 
+    from app.ui.components.floating_chrome import install_floating_chrome
+    from app.ui.components.message_boxes import install_message_boxes
+    from app.ui.fonts import load_app_fonts
+    from app.ui.wheel_guard import install_combo_wheel_guard
+
+    load_app_fonts()
+    # A roda do mouse nao troca a opcao de um combo (rota, status...): rola a tela.
+    install_combo_wheel_guard(app)
+    # Menus de contexto e listas de combo com canto liso e fade (casca nova das janelas).
+    install_floating_chrome(app)
+    # Caixas de mensagem e de entrada de texto do Qt com a mesma casca.
+    install_message_boxes()
+
     if not run_startup_bootstrap():
         return 0
 
@@ -286,12 +299,26 @@ def main():
     if update_launched:
         return 0
 
+    # O Updater/instalador encerram o agente de avisos; religa-o assim que o
+    # programa abre (antes do login), sem esperar o usuario entrar.
+    try:
+        from app.services.notifier_agent import ensure_notifier_running
+
+        ensure_notifier_running()
+    except Exception:
+        log.exception("Falha ao religar o agente de avisos na abertura")
+
     from app.ui.main_window import MainWindow
 
     window = MainWindow(skip_auto_update_check=update_checked, update_available_notice=update_available_message)
     if not window.start():
         return 0
     window.showMaximized()
+
+    # O Updater pede a saida de todos os processos antes de ativar a versao nova.
+    from app.services.update_quit_watcher import install_quit_watcher
+
+    install_quit_watcher(app, lambda: (window.close(), app.quit()))
     return app.exec()
 
 

@@ -19,7 +19,6 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QScrollArea,
-    QSpinBox,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -28,6 +27,7 @@ from PySide6.QtWidgets import (
 
 from app.services.nomus_pdf_parser import NomusPdfParserError, parse_nomus_pdf as parse_nomus_pdf_legacy
 from app.services.proposal_import import import_nomus_pdf as import_nomus_pdf_hybrid
+from app.ui.components.dialog_shell import dialog_footer, dialog_header
 from app.ui.components.modern_button import ModernButton
 from app.ui.dialog_utils import apply_large_dialog_geometry, style_dialog_from_parent
 from app.ui.proposal_import_viewmodel import ImportVisualModel, build_import_visual_model
@@ -78,25 +78,17 @@ class ProposalImportDialog(QDialog):
 
     def _build(self):
         root = QVBoxLayout(self)
-        root.setContentsMargins(18, 16, 18, 16)
-        root.setSpacing(12)
+        root.setContentsMargins(16, 14, 16, 14)
+        root.setSpacing(10)
 
-        heading_row = QHBoxLayout()
-        heading_box = QVBoxLayout()
-        heading = QLabel("Conferencia da proposta Nomus")
-        heading.setStyleSheet("font-size: 20px; font-weight: 800;")
+        heading = QLabel("Conferência da proposta Nomus")
         caption = QLabel(
             "Revise e corrija os dados operacionais antes de preparar o futuro cadastro."
         )
-        caption.setObjectName("Caption")
-        heading_box.addWidget(heading)
-        heading_box.addWidget(caption)
-        heading_row.addLayout(heading_box, 1)
-        self.select_button = ModernButton("Selecionar PDF", "pdf", accent=True)
+        self.select_button = ModernButton("Selecionar PDF", "pdf")
         self.select_button.clicked.connect(self.select_pdf)
         self.select_button.setVisible(self.allow_pdf_selection)
-        heading_row.addWidget(self.select_button, alignment=Qt.AlignTop)
-        root.addLayout(heading_row)
+        root.addWidget(dialog_header(heading, caption, actions=[self.select_button]))
 
         source_panel = self._section(self.source_label_text)
         source_row = QHBoxLayout()
@@ -105,11 +97,11 @@ class ProposalImportDialog(QDialog):
         self.path_field.setPlaceholderText("Selecione uma proposta Nomus em PDF")
         source_row.addWidget(self.path_field, 1)
         source_panel.layout().addLayout(source_row)
-        self.import_summary_label = QLabel("Aguardando PDF para conferencia.")
+        self.import_summary_label = QLabel("Aguardando PDF para conferência.")
         self.import_summary_label.setObjectName("Caption")
         self.import_summary_label.setWordWrap(True)
         self.import_summary_label.setToolTip(
-            "A conferencia e obrigatoria. Nada e salvo ate o cadastro ser confirmado manualmente."
+            "A conferência é obrigatória. Nada é salvo até o cadastro ser confirmado manualmente."
         )
         self.import_details_label = QLabel("")
         self.import_details_label.setObjectName("Caption")
@@ -165,7 +157,7 @@ class ProposalImportDialog(QDialog):
 
         items_panel = self._section("Itens extraidos")
         items_caption = QLabel(
-            "Edite descricao, quantidade e peso. Peso vazio permanece pendente de confirmacao."
+            "Edite descrição, quantidade e peso. Peso vazio permanece pendente de confirmação."
         )
         items_caption.setObjectName("Caption")
         items_panel.layout().addWidget(items_caption)
@@ -191,7 +183,7 @@ class ProposalImportDialog(QDialog):
         content_layout.addWidget(items_panel, 1)
 
         alerts = self._section("Alertas de conferencia")
-        self.alerts_label = QLabel("Selecione um PDF para iniciar a conferencia.")
+        self.alerts_label = QLabel("Selecione um PDF para iniciar a conferência.")
         self.alerts_label.setWordWrap(True)
         self.alerts_label.setObjectName("Caption")
         alerts.layout().addWidget(self.alerts_label)
@@ -199,20 +191,15 @@ class ProposalImportDialog(QDialog):
         scroll.setWidget(content)
         root.addWidget(scroll, 1)
 
-        footer = QHBoxLayout()
         self.validation_result = QLabel("")
         self.validation_result.setWordWrap(True)
-        footer.addWidget(self.validation_result, 1)
-        close_button = ModernButton("Fechar", "clear")
+        close_button = ModernButton("Fechar", "clear", variant="ghost")
         validate_button = ModernButton("Validar", "status")
         use_button = ModernButton("Usar dados no cadastro", "status", accent=True)
         close_button.clicked.connect(self.reject)
         validate_button.clicked.connect(self.validate_import)
         use_button.clicked.connect(self.use_data_in_registration)
-        footer.addWidget(close_button)
-        footer.addWidget(validate_button)
-        footer.addWidget(use_button)
-        root.addLayout(footer)
+        root.addWidget(dialog_footer(left=[self.validation_result], right=[close_button, validate_button, use_button]))
 
     def _section(self, title: str) -> QFrame:
         frame = QFrame()
@@ -221,7 +208,7 @@ class ProposalImportDialog(QDialog):
         layout.setContentsMargins(14, 12, 14, 12)
         layout.setSpacing(8)
         label = QLabel(title)
-        label.setStyleSheet("font-size: 13px; font-weight: 800;")
+        label.setObjectName("PanelTitle")
         layout.addWidget(label)
         return frame
 
@@ -250,14 +237,14 @@ class ProposalImportDialog(QDialog):
                 self.loaded_with_fallback = True
                 data.setdefault("warnings", []).insert(
                     0,
-                    "A importacao hibrida nao interpretou totalmente este PDF; "
+                    "A importação híbrida não interpretou totalmente este PDF; "
                     "foi usado o leitor anterior como fallback. Revise os dados manualmente.",
                 )
             except NomusPdfParserError as legacy_exc:
                 QMessageBox.warning(
                     self,
                     "Importar proposta Nomus",
-                    "Nao foi possivel interpretar totalmente este PDF. "
+                    "Não foi possível interpretar totalmente este PDF. "
                     f"Revise os dados manualmente.\n\nDetalhe: {legacy_exc or hybrid_exc}",
                 )
                 return False
@@ -503,7 +490,7 @@ class ProposalImportDialog(QDialog):
 
     def _apply_visual_metadata(self):
         if not self.import_visual:
-            self.import_summary_label.setText("Importacao preparada para conferencia.")
+            self.import_summary_label.setText("Importação preparada para conferência.")
             self.import_details_label.hide()
             return
         self.import_summary_label.setText(self.import_visual.summary)
@@ -806,8 +793,8 @@ class ProposalImportDialog(QDialog):
             details.append("prazo ainda relativo")
         self.validation_result.setObjectName("ValidationSuccess")
         self.validation_result.setText(
-            "Importacao operacional validada em memoria."
-            + (" Pendencias: " + "; ".join(details) + "." if details else "")
+            "Importação operacional validada em memória."
+            + (" Pendências: " + "; ".join(details) + "." if details else "")
         )
         self.validation_result.style().unpolish(self.validation_result)
         self.validation_result.style().polish(self.validation_result)

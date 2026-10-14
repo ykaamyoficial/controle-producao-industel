@@ -4,6 +4,8 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 
+from app.ui.components.floating_chrome import soften_floating
+from app.ui.components.window_shell import install_popup_shell, window_shell_enabled
 from app.ui.components.avatar import make_avatar_label
 
 from PySide6.QtCore import QDateTime, QEasingCurve, QParallelAnimationGroup, QPropertyAnimation, QSize, Qt, Signal
@@ -21,6 +23,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from app.ui.components.style_state import set_style_state
 from app.ui.icons import make_icon
 from app.ui.components.chat_pending_attachments import (
     AttachmentState,
@@ -126,6 +129,9 @@ class _MentionPopup(QFrame):
     def __init__(self, service, parent=None):
         super().__init__(parent, Qt.ToolTip | Qt.FramelessWindowHint)
         self.setAttribute(Qt.WA_ShowWithoutActivating)
+        if window_shell_enabled():
+            # Canto liso sem mexer na geometria: o popup e reposicionado a cada tecla.
+            soften_floating(self)
         self.service = service
         self.setObjectName("Panel")
         self.setFixedWidth(280)
@@ -152,7 +158,7 @@ class _MentionPopup(QFrame):
             if widget:
                 widget.deleteLater()
         if not self._filtered:
-            empty = QLabel("Nenhum usuario encontrado.")
+            empty = QLabel("Nenhum usuário encontrado.")
             empty.setObjectName("Caption")
             self.layout_.addWidget(empty)
             self.adjustSize()
@@ -173,7 +179,7 @@ class _MentionPopup(QFrame):
         text_col = QVBoxLayout()
         text_col.setSpacing(0)
         name_label = QLabel(user.get("display_name") or "-")
-        name_label.setStyleSheet("font-weight: 700;")
+        name_label.setObjectName("ValueLabel")
         text_col.addWidget(name_label)
         if user.get("sector"):
             sector_label = QLabel(user["sector"])
@@ -184,13 +190,14 @@ class _MentionPopup(QFrame):
         is_online = bool(user.get("is_online"))
         dot = QLabel()
         dot.setFixedSize(8, 8)
-        dot_color = self.service.palette.get("success", "#16a34a") if is_online else self.service.palette.get("muted", "#94a3b8")
-        dot.setStyleSheet(f"background: {dot_color}; border-radius: 4px;")
+        dot.setObjectName("PresenceDot")
+        dot.setProperty("online", is_online)
         dot.setToolTip("Online" if is_online else "Offline")
         row_layout.addWidget(dot)
 
-        if selected:
-            row.setStyleSheet(f"background: {self.service.palette.get('surface_alt', '#e2e8f0')}; border-radius: 8px;")
+        row.setObjectName("MentionRow")
+        row.setAttribute(Qt.WA_StyledBackground, True)
+        row.setProperty("selected", selected)
         row.setCursor(Qt.PointingHandCursor)
         row.mousePressEvent = lambda _event, u=user: self.user_selected.emit(u)
         return row
@@ -212,6 +219,7 @@ class _EmojiPopup(QFrame):
     def __init__(self, parent=None):
         super().__init__(parent, Qt.Popup)
         self.setObjectName("Panel")
+        install_popup_shell(self, anchor="bottom-left")
         layout = QGridLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(2)
@@ -251,35 +259,25 @@ class MentionComposeBar(QFrame):
         self._pending_attachments: list[PendingChatAttachment] = []
         self._sending = False
         self._drag_active = False
-        self._base_style = ""
         self._build()
 
     def _build(self):
         palette = self.service.palette
         self.setObjectName("ComposeBar")
         self.setAcceptDrops(True)
-        self._base_style = (
-            f"QFrame#ComposeBar {{ background: {palette.get('surface', '#ffffff')}; "
-            f"border: 1px solid {palette.get('border', '#cbd5e1')}; border-radius: 10px; }}"
-        )
-        self.setStyleSheet(self._base_style)
         outer = QVBoxLayout(self)
         outer.setContentsMargins(8, 6, 8, 6)
         outer.setSpacing(2)
 
         self._reply_preview = QFrame()
         self._reply_preview.setObjectName("ReplyPreviewBar")
-        self._reply_preview.setStyleSheet(
-            f"QFrame#ReplyPreviewBar {{ background: {palette.get('surface_alt', '#e2e8f0')}; "
-            f"border-left: 3px solid {palette.get('accent', '#0078d4')}; border-radius: 4px; }}"
-        )
         reply_layout = QHBoxLayout(self._reply_preview)
         reply_layout.setContentsMargins(8, 4, 6, 4)
         reply_layout.setSpacing(6)
         self._reply_preview_label = QLabel()
         self._reply_preview_label.setWordWrap(True)
         self._reply_preview_label.setMinimumHeight(QFontMetrics(self.font()).lineSpacing() * 2)
-        self._reply_preview_label.setStyleSheet("font-size: 11px;")
+        self._reply_preview_label.setObjectName("QuoteText")
         reply_layout.addWidget(self._reply_preview_label, 1)
         cancel_reply_btn = QPushButton("x")
         cancel_reply_btn.setObjectName("GhostButton")
@@ -328,8 +326,7 @@ class MentionComposeBar(QFrame):
 
         self.text_edit = _ComposeTextEdit()
         self.text_edit.setObjectName("ComposeTextEdit")
-        self.text_edit.setStyleSheet("QTextEdit#ComposeTextEdit { border: none; background: transparent; }")
-        self.text_edit.setPlaceholderText("Digite uma mensagem ou utilize @ para mencionar alguem...")
+        self.text_edit.setPlaceholderText("Digite uma mensagem ou utilize @ para mencionar alguém...")
         self.text_edit.setAcceptRichText(False)
         self.text_edit.setLineWrapMode(QTextEdit.WidgetWidth)
         self.text_edit.setWordWrapMode(QTextOption.WrapAtWordBoundaryOrAnywhere)
@@ -361,19 +358,6 @@ class MentionComposeBar(QFrame):
         self.send_btn.setFixedSize(36, 36)
         self.send_btn.setToolTip("Enviar mensagem")
         self.send_btn.setCursor(Qt.PointingHandCursor)
-        self.send_btn.setStyleSheet(f"""
-            QPushButton#ChatSendButton {{
-                background: {palette.get('accent', '#0078d4')};
-                border: none;
-                border-radius: 18px;
-            }}
-            QPushButton#ChatSendButton:hover:enabled {{
-                background: {palette.get('accent_hover', '#005a9e')};
-            }}
-            QPushButton#ChatSendButton:disabled {{
-                background: {palette.get('surface_alt', '#e2e8f0')};
-            }}
-        """)
         self.send_btn.setEnabled(False)
         self.send_btn.clicked.connect(self.send_requested.emit)
         row.addWidget(self.send_btn)
@@ -443,16 +427,8 @@ class MentionComposeBar(QFrame):
         if active == self._drag_active:
             return
         self._drag_active = active
-        if active:
-            palette = self.service.palette
-            self.setStyleSheet(
-                f"QFrame#ComposeBar {{ background: {palette.get('surface', '#ffffff')}; "
-                f"border: 2px dashed {palette.get('accent', '#0078d4')}; border-radius: 10px; }}"
-            )
-            self.setToolTip("Solte os arquivos para anexar")
-            return
-        self.setStyleSheet(self._base_style)
-        self.setToolTip("")
+        set_style_state(self, dropActive=active)
+        self.setToolTip("Solte os arquivos para anexar" if active else "")
 
     @staticmethod
     def _drop_paths(mime_data) -> list[str]:

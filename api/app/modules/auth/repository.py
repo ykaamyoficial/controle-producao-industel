@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from api.app.modules.auth.models import AuthSession, Permission, Role, RolePermission, SecurityEvent, User, UserRole
+from api.app.modules.notifications.models import NotificationDevice
 
 
 def normalize_username(username: str) -> str:
@@ -95,5 +96,12 @@ async def revoke_user_sessions(session: AsyncSession, user_id: int, reason: str)
     await session.execute(
         update(AuthSession)
         .where(AuthSession.user_id == user_id, AuthSession.revoked_at.is_(None))
+        .values(revoked_at=datetime.now(UTC), revoke_reason=reason)
+    )
+    # A credencial do agente de avisos acompanha a conta: desativar, excluir,
+    # redefinir senha ou "sair de todos" tambem silencia os avisos do Windows.
+    await session.execute(
+        update(NotificationDevice)
+        .where(NotificationDevice.user_id == user_id, NotificationDevice.revoked_at.is_(None))
         .values(revoked_at=datetime.now(UTC), revoke_reason=reason)
     )

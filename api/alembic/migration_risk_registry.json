@@ -173,5 +173,25 @@
     "classification": "ADDITIVE",
     "summary": "Cria a tabela change_log, outbox de mudancas lido pelos endpoints /sync para a replica local dos Desktops.",
     "justification": "CREATE TABLE nova e vazia, sem FK e sem alterar tabelas existentes. Sem backfill: Desktops fazem carga inicial por /sync/snapshot. Codigo antigo ignora a tabela; o downgrade apenas a remove."
+  },
+  "20261008_0035": {
+    "classification": "TRANSITIONAL",
+    "summary": "Cria a tabela remanagement_stage_transfers, que registra a troca de dono de pecas ja fabricadas (aguardando galvanizacao ou dentro de uma carga) entre dois itens num remanejamento.",
+    "justification": "Somente CREATE TABLE de uma tabela nova e vazia, com PK propria, CHECKs e FKs (para proposal_remanagement_items com ON DELETE CASCADE e para proposal_items, galvanization_loads, galvanization_load_items e users) mais tres CREATE INDEX; classificada TRANSITIONAL (nao ADDITIVE puro) apenas porque o scanner sinaliza as FKs da tabela nova, mesmo padrao de 20260908_0031. Nenhuma tabela, coluna, linha ou constraint existente e alterada; nenhum codigo anterior le a tabela e a ausencia de linhas significa 'esteira igual ao pedido'. O downgrade apenas remove a tabela e volta a revisao registrada para 20261006_0034."
+  },
+  "20261009_0036": {
+    "classification": "TRANSITIONAL",
+    "summary": "Adiciona proposal_remanagement_items.mode (TRANSFER = motor de transferencias ja existente, ROWS = remanejamento por linhas) e received_lot_item_id (linha que recebeu o lote pronto).",
+    "justification": "Duas ADD COLUMN: mode com server_default 'TRANSFER' (todas as linhas ja gravadas continuam sendo do motor antigo, sem backfill) e received_lot_item_id nullable; mais um CHECK que so aceita os dois valores e uma FK com ON DELETE SET NULL para proposal_items. Classificada TRANSITIONAL (e nao ADDITIVE puro) apenas porque o scanner sinaliza a FK nova numa tabela existente. Nenhum dado, coluna ou constraint existente e alterado, e o codigo antigo ignora as colunas novas. As consultas que somam remanejamentos para a disponibilidade da Expedicao e para o controle de pecas passam a filtrar mode = 'TRANSFER', entao uma linha ROWS nunca e contada em dobro. O downgrade remove as duas colunas e volta a revisao registrada para 20261008_0035."
+  },
+  "20261013_0037": {
+    "classification": "ADDITIVE",
+    "summary": "Cria notification_devices (credencial propria do agente de avisos do Windows, uma por instalacao + usuario do Windows, sempre do ultimo login).",
+    "justification": "Apenas CREATE TABLE de uma tabela nova com tres indices e uma FK para users (ON DELETE CASCADE). Nenhuma tabela, coluna ou constraint existente e alterada e nenhum dado e migrado. O codigo antigo nao conhece a tabela; o agente antigo continua usando /notifications/catch-up com o refresh token da sessao, entao Desktop antigo + API nova continuam compativeis. O downgrade remove so a tabela nova (as credenciais de aviso se perdem e sao recriadas no proximo login)."
+  },
+  "20261014_0038": {
+    "classification": "ADDITIVE",
+    "summary": "Adiciona notification_user_settings.daily_report_enabled (default true) e daily_report_hour (nullable) para o relatorio diario por e-mail.",
+    "justification": "Duas ADD COLUMN em tabela pequena: daily_report_enabled com server_default true (todo usuario existente continua recebendo, comportamento igual ao anterior) e daily_report_hour nullable (NULL = horario padrao do servidor), mais um CHECK que so aceita 0-23. Nenhuma coluna, linha ou constraint existente e alterada e o codigo antigo ignora as colunas novas. Desktop antigo + API nova continuam compativeis (campos opcionais no PUT /notifications/settings). O downgrade remove o CHECK e as duas colunas, perdendo apenas a preferencia escolhida."
   }
 }

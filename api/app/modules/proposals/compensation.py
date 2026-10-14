@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal
 
+from api.app.modules.proposals import remanagement
 from api.app.modules.proposals.remanagement import items_are_compatible, quantity
 
 ZERO = Decimal("0.0000")
@@ -225,12 +226,12 @@ def build_compensation_plan(
                 item_has_error = True
                 continue
             seen_sources.add(key)
-            compatible, reason = items_are_compatible(source_snapshot, destination_snapshot)
+            compatible, reason = items_are_compatible(source_snapshot, destination_snapshot, strict_flow=False)
             if not compatible:
                 errors.append(CompensationError("PRODUCT_INCOMPATIBLE", reason or "Item de origem incompativel com o item destino.", destination_item_id=requested.destination_item_id, source_item_id=allocation.source_item_id))
                 item_has_error = True
                 continue
-            if source_snapshot.requires_galvanization == "SIM":
+            if remanagement.galvanized_remanagement_blocked(source_snapshot.requires_galvanization):
                 errors.append(CompensationError("OPERATIONAL_STATE_NOT_SUPPORTED", "Itens pendentes de galvanizacao nao podem ser origem de remanejamento ate essa etapa ficar rastreavel quantitativamente.", destination_item_id=requested.destination_item_id, source_item_id=allocation.source_item_id))
                 item_has_error = True
                 continue

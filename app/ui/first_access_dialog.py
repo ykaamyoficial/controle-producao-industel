@@ -16,6 +16,7 @@ from app.services.bootstrap_service import (
 )
 from app.ui.background_worker import start_worker
 from app.ui.components.modern_button import ModernButton
+from app.ui.components.dialog_shell import window_title_row
 from app.ui.dialog_utils import style_dialog_from_parent
 
 log = get_logger("first_access_dialog")
@@ -66,18 +67,19 @@ class FirstAccessDialog(QDialog):
         self._bootstrap_thread = None
         self._test_thread = None
 
-        self.setWindowTitle("Conexao com o servidor")
+        self.setWindowTitle("Conexão com o servidor")
         self.setModal(True)
         self.setMinimumWidth(460)
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
+        style_dialog_from_parent(self, parent, standalone=True)
         self._build()
-        style_dialog_from_parent(self, parent)
         self._start_bootstrap()
 
     def _build(self) -> None:
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 24, 24, 20)
         layout.setSpacing(14)
+        layout.addWidget(window_title_row(self))
 
         self.message_label = QLabel(_CHECKING_MESSAGE)
         self.message_label.setWordWrap(True)
@@ -92,7 +94,7 @@ class FirstAccessDialog(QDialog):
         self.field_container = QWidget()
         field_row = QHBoxLayout(self.field_container)
         field_row.setContentsMargins(0, 0, 0, 0)
-        field_row.addWidget(QLabel("Endereco da API"))
+        field_row.addWidget(QLabel("Endereço da API"))
         self.url_field = QLineEdit()
         self.url_field.setPlaceholderText("http://192.168.1.50:8000")
         self.url_field.textChanged.connect(self._on_field_changed)
@@ -100,7 +102,7 @@ class FirstAccessDialog(QDialog):
         self.field_container.hide()
         layout.addWidget(self.field_container)
 
-        self.status_label = QLabel("Status: ainda nao testado")
+        self.status_label = QLabel("Status: ainda não testado")
         self.status_label.setObjectName("Caption")
         self.status_label.setWordWrap(True)
         self.status_label.hide()
@@ -112,7 +114,7 @@ class FirstAccessDialog(QDialog):
         self.retry_known_button.hide()
         footer.addWidget(self.retry_known_button)
         footer.addStretch()
-        self.test_button = ModernButton("Testar conexao", "refresh")
+        self.test_button = ModernButton("Testar conexão", "refresh")
         self.test_button.clicked.connect(self._test_connection)
         self.test_button.hide()
         footer.addWidget(self.test_button)
@@ -204,7 +206,7 @@ class FirstAccessDialog(QDialog):
         ok, code = outcome
         self._last_test_ok = ok
         if ok:
-            self.status_label.setText("Status: conexao confirmada.")
+            self.status_label.setText("Status: conexão confirmada.")
             self.save_button.setEnabled(True)
         else:
             self.status_label.setText(f"Status: falha ({_ERROR_DETAILS.get(code, 'nao foi possivel conectar')}).")
@@ -215,7 +217,7 @@ class FirstAccessDialog(QDialog):
         self.test_button.setEnabled(True)
         self._last_test_ok = False
         log.exception("Falha inesperada ao testar conexao no primeiro acesso")
-        self.status_label.setText("Status: nao foi possivel concluir o teste agora.")
+        self.status_label.setText("Status: não foi possível concluir o teste agora.")
         self.save_button.setEnabled(False)
 
     def _save_and_continue(self) -> None:
@@ -224,7 +226,7 @@ class FirstAccessDialog(QDialog):
             # Falha/edicao apos o teste nao pode destruir a configuracao
             # funcional existente -- exige um novo teste bem-sucedido do
             # valor atual antes de permitir salvar (Fase 3, Secao 15).
-            self.status_label.setText("Status: teste a conexao com este endereco antes de salvar.")
+            self.status_label.setText("Status: teste a conexão com este endereço antes de salvar.")
             return
         try:
             settings = self.store.save_settings(enabled=True, base_url=current)

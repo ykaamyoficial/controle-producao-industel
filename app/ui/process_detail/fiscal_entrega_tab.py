@@ -3,15 +3,27 @@ from __future__ import annotations
 from typing import Any
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QFrame, QGridLayout, QHeaderView, QLabel, QScrollArea, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QFrame, QHeaderView, QLabel, QScrollArea, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget
 
 from app.models.fiscal_table_model import fiscal_status_label
+from app.ui.components.detail_widgets import (
+    IconChip,
+    ThinProgressBar,
+    block_grid,
+    clear_panel,
+    key_label,
+    kv_grid,
+    make_panel,
+    note_box,
+)
 from app.ui.format_utils import format_empty, format_quantity, format_weight_or_missing
+from app.ui.numeric_utils import parse_decimal
+from app.ui.styles import area_color
 from app.ui.table_utils import resize_rows_to_contents
 
 
 class FiscalEntregaTab(QWidget):
-    """Aba "Fiscal/Entrega": duas sub-secoes lado a lado.
+    """Aba "Fiscal/Entrega": dois paineis, um embaixo do outro.
 
     Fiscal reaproveita `service.fiscal_rows()`/`fiscal_emissions()` (multiplas
     notas por proposta) - sem novo bloqueio, o sistema pode emitir NF antes do
@@ -39,47 +51,25 @@ class FiscalEntregaTab(QWidget):
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         content = QWidget()
         layout = QVBoxLayout(content)
-        layout.setContentsMargins(2, 2, 6, 8)
+        layout.setContentsMargins(0, 0, 8, 8)
         layout.setSpacing(12)
 
-        self.fiscal_panel = self._panel("Fiscal")
+        palette = self.service.palette
+        self.fiscal_panel, _ = make_panel("Fiscal", left=IconChip("fiscal", area_color("FISCAL", palette)))
         layout.addWidget(self.fiscal_panel)
-        self.entrega_panel = self._panel("Entrega")
+        self.entrega_panel, _ = make_panel("Entrega", left=IconChip("expedition", area_color("EXPEDICAO", palette)))
         layout.addWidget(self.entrega_panel)
         layout.addStretch(1)
 
         scroll.setWidget(content)
         outer.addWidget(scroll)
 
-    def _panel(self, title: str) -> QFrame:
-        panel = QFrame()
-        panel.setObjectName("Panel")
-        panel_layout = QVBoxLayout(panel)
-        panel_layout.setContentsMargins(16, 14, 16, 14)
-        panel_layout.setSpacing(8)
-        label = QLabel(title)
-        label.setStyleSheet("font-size: 14px; font-weight: 800;")
-        panel_layout.addWidget(label)
-        return panel
-
-    def _clear(self, panel: QFrame):
-        panel_layout = panel.layout()
-        while panel_layout.count() > 1:
-            item = panel_layout.takeAt(1)
-            if item.widget():
-                item.widget().deleteLater()
-            elif item.layout():
-                while item.layout().count():
-                    child = item.layout().takeAt(0)
-                    if child.widget():
-                        child.widget().deleteLater()
-
     def load(self, process: dict[str, Any], process_ids: list[int], history: list[dict[str, Any]]):
         self._load_fiscal(process_ids)
         self._load_entrega(process, history)
 
     def _load_fiscal(self, process_ids: list[int]):
-        self._clear(self.fiscal_panel)
+        clear_panel(self.fiscal_panel)
         layout = self.fiscal_panel.layout()
         try:
             all_rows = self.service.fiscal_rows({})
@@ -88,14 +78,13 @@ class FiscalEntregaTab(QWidget):
         ids = set(int(value) for value in process_ids)
         fiscal_rows = [row for row in all_rows if int(row.get("processo_id") or 0) in ids]
         if not fiscal_rows:
-            layout.addWidget(QLabel("Nenhuma movimentacao fiscal registrada."))
+            layout.addWidget(key_label("Nenhuma movimentação fiscal registrada."))
             return
         for fiscal_row in fiscal_rows:
-            grid = QGridLayout()
             summary_rows = [
-                ("Situacao fiscal", fiscal_status_label(fiscal_row.get("situacao_fiscal") or fiscal_row.get("status_fiscal") or "")),
+                ("Situação fiscal", fiscal_status_label(fiscal_row.get("situacao_fiscal") or fiscal_row.get("status_fiscal") or "")),
                 ("Entrada fiscal", format_empty(fiscal_row.get("data_entrada_fiscal"))),
-                ("Ultima emissao", format_empty(fiscal_row.get("data_ultima_emissao"))),
+                ("Última emissão", format_empty(fiscal_row.get("data_ultima_emissao"))),
                 ("Quantidade de itens", format_quantity(fiscal_row.get("quantidade_itens"))),
                 ("Itens faturados", format_quantity(fiscal_row.get("itens_faturados"))),
                 ("Itens pendentes", format_quantity(fiscal_row.get("itens_pendentes"))),
@@ -103,16 +92,8 @@ class FiscalEntregaTab(QWidget):
                 ("Peso faturado", format_weight_or_missing(fiscal_row.get("peso_faturado"))),
                 ("Peso pendente", format_weight_or_missing(fiscal_row.get("peso_pendente"))),
             ]
-            for row, (field_label, value) in enumerate(summary_rows):
-                left = QLabel(field_label)
-                left.setObjectName("Caption")
-                right = QLabel(value)
-                right.setStyleSheet("font-weight: 700;")
-                grid.addWidget(left, row, 0, Qt.AlignTop)
-                grid.addWidget(right, row, 1)
-            grid.setColumnMinimumWidth(0, 150)
-            grid.setColumnStretch(1, 1)
-            layout.addLayout(grid)
+            layout.addLayout(block_grid(summary_rows, 3))
+            self._add_invoiced_progress(layout, fiscal_row)
 
             fiscal_processo_id = fiscal_row.get("fiscal_processo_id")
             invoices = []
@@ -123,15 +104,37 @@ class FiscalEntregaTab(QWidget):
                     invoices = []
             layout.addWidget(self._invoices_table(invoices))
 
+    @staticmethod
+    def _add_invoiced_progress(layout, fiscal_row: dict[str, Any]) -> None:
+        """Barra "X de Y itens faturados" - so quando os dois numeros existem."""
+        try:
+            total = parse_decimal(fiscal_row.get("quantidade_itens"), "0")
+            invoiced = parse_decimal(fiscal_row.get("itens_faturados"), "0")
+        except Exception:
+            return
+        if total <= 0:
+            return
+        fraction = max(0.0, min(1.0, float(invoiced / total)))
+        layout.addWidget(
+            key_label(
+                f"{format_quantity(fiscal_row.get('itens_faturados') or 0)} de "
+                f"{format_quantity(fiscal_row.get('quantidade_itens'))} itens faturados ({round(fraction * 100)}%)"
+            )
+        )
+        layout.addWidget(ThinProgressBar(fraction))
+
     def _invoices_table(self, invoices: list[dict[str, Any]]) -> QWidget:
         if not invoices:
-            label = QLabel("Nenhuma nota fiscal emitida.")
-            label.setObjectName("Caption")
-            return label
+            return key_label("Nenhuma nota fiscal emitida.")
         table = QTableWidget(len(invoices), 5)
-        table.setHorizontalHeaderLabels(["Numero/Controle", "Serie", "Emissao", "Qtd. emitida", "Peso emitido"])
+        table.setHorizontalHeaderLabels(["Número/Controle", "Série", "Emissão", "Qtd. emitida", "Peso emitido"])
         table.verticalHeader().setVisible(False)
+        table.verticalHeader().setDefaultSectionSize(40)
+        table.verticalHeader().setMinimumSectionSize(40)
         table.setEditTriggers(QTableWidget.NoEditTriggers)
+        table.setAlternatingRowColors(True)
+        table.setShowGrid(False)
+        table.horizontalHeader().setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         for row, invoice in enumerate(invoices):
             values = [
@@ -143,48 +146,37 @@ class FiscalEntregaTab(QWidget):
             ]
             for col, value in enumerate(values):
                 cell = QTableWidgetItem(str(value or ""))
-                cell.setTextAlignment(Qt.AlignVCenter | (Qt.AlignLeft if col == 0 else Qt.AlignCenter))
+                cell.setTextAlignment(Qt.AlignVCenter | (Qt.AlignRight if col >= 3 else Qt.AlignLeft))
                 table.setItem(row, col, cell)
         resize_rows_to_contents(table)
-        table.setMinimumHeight(40 + max(1, len(invoices)) * 32)
-        table.setMaximumHeight(40 + max(1, min(len(invoices), 5)) * 32)
+        table.setMinimumHeight(40 + max(1, len(invoices)) * 40)
+        table.setMaximumHeight(40 + max(1, min(len(invoices), 5)) * 40)
         return table
 
     def _load_entrega(self, process: dict[str, Any], history: list[dict[str, Any]]):
-        self._clear(self.entrega_panel)
+        clear_panel(self.entrega_panel)
         layout = self.entrega_panel.layout()
         delivered = process.get("quantidade_entregue")
         pending = process.get("saldo_pendente")
         status = process.get("status_expedicao") or ""
         if delivered in (None, "") and pending in (None, "") and not status:
-            layout.addWidget(QLabel("Nenhuma entrega registrada."))
+            layout.addWidget(key_label("Nenhuma entrega registrada."))
             return
         last_delivery = self._latest_delivery_event(history)
         rows = [
-            ("Status de expedicao", self.service.area_status_label("EXPEDICAO", status) if status else "-"),
+            ("Status de expedição", self.service.area_status_label("EXPEDICAO", status) if status else "-"),
             ("Quantidade entregue", format_quantity(delivered)),
             ("Saldo pendente", format_quantity(pending)),
-            ("Ultima movimentacao de entrega", last_delivery),
+            ("Última movimentação de entrega", last_delivery),
         ]
-        grid = QGridLayout()
-        for row, (field_label, value) in enumerate(rows):
-            left = QLabel(field_label)
-            left.setObjectName("Caption")
-            right = QLabel(value)
-            right.setWordWrap(True)
-            right.setStyleSheet("font-weight: 700;")
-            grid.addWidget(left, row, 0, Qt.AlignTop)
-            grid.addWidget(right, row, 1)
-        grid.setColumnMinimumWidth(0, 190)
-        grid.setColumnStretch(1, 1)
-        layout.addLayout(grid)
-        note = QLabel(
-            "Transportadora/motorista/placa nao sao registrados para a entrega ao cliente neste sistema - "
-            "esses dados existem apenas para o transporte de envio/retorno de galvanizacao (aba \"Cargas\")."
+        layout.addLayout(kv_grid(rows, key_width=210))
+        layout.addWidget(
+            note_box(
+                "Transportadora, motorista e placa não são registrados para a entrega ao cliente neste sistema. "
+                "Esses dados existem apenas para o transporte de envio e retorno de galvanização (aba \"Cargas\").",
+                self.service.palette,
+            )
         )
-        note.setObjectName("Caption")
-        note.setWordWrap(True)
-        layout.addWidget(note)
 
     @staticmethod
     def _latest_delivery_event(history: list[dict[str, Any]]) -> str:

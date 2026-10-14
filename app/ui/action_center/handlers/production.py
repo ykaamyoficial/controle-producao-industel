@@ -10,7 +10,7 @@ from app.ui.dialog_utils import style_dialog_from_parent
 from app.ui.flow_review_dialog import FlowReviewDialog
 from app.ui.icons import AppIcons
 from app.ui.item_weight_dialog import ItemWeightDialog
-from app.ui.production_registration_dialog import ProductionRegistrationDialog
+from app.ui.production_wizard import ProductionWizardDialog
 
 
 class ProductionPauseDialog(QDialog):
@@ -27,7 +27,7 @@ class ProductionPauseDialog(QDialog):
         root.setContentsMargins(20, 18, 20, 16)
         root.setSpacing(10)
         title = QLabel("Motivo da pausa")
-        title.setStyleSheet("font-size: 15px; font-weight: 800;")
+        title.setObjectName("PanelTitle")
         help_text = QLabel("Informe por que a fabricação será interrompida temporariamente.")
         help_text.setWordWrap(True)
         help_text.setObjectName("Caption")
@@ -37,7 +37,7 @@ class ProductionPauseDialog(QDialog):
 
         footer = QHBoxLayout()
         footer.addStretch()
-        cancel = ModernButton("Cancelar", AppIcons.CLOSE)
+        cancel = ModernButton("Cancelar", AppIcons.CLOSE, variant="ghost")
         pause = ModernButton("Pausar produção", AppIcons.CIRCLE_PAUSE, accent=True)
         cancel.clicked.connect(self.reject)
         pause.clicked.connect(self._accept_pause)
@@ -60,36 +60,21 @@ class ProductionPauseDialog(QDialog):
 
 
 class RegisterProductionHandler:
-    """REGISTER_PRODUCTION: se houver itens sem fluxo definido, oferece
-    definir o fluxo primeiro; senao abre o registro de producao. Replica
-    `StatusDialog._register_production` sem alterar a regra."""
+    """REGISTER_PRODUCTION: abre o assistente de registro de producao (itens,
+    fluxo quando faltar, revisao e conclusao numa janela so). A central de
+    acoes sai da tela enquanto o assistente esta aberto."""
 
     def execute(self, context: ProposalActionContext, action: ActionDescriptor, dialog) -> ActionResult:
-        summary = dialog.service.item_flow_summary(context.proposal_id)
-        if summary.get("undefined_count"):
-            answer = QMessageBox.question(
-                dialog,
-                "Fluxo dos itens",
-                "Existem itens sem definicao de fluxo. Deseja definir agora antes de registrar a producao?",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.Yes,
-            )
-            if answer == QMessageBox.Yes:
-                flow_dialog = FlowReviewDialog(dialog.service, [context.proposal_id], dialog, origin="Producao")
-                if flow_dialog.exec():
-                    dialog.accept()
-                    return ActionResult(success=True, changed=True, refresh_required=True)
-            return ActionResult(success=True, changed=False, close_action_center=False)
-        registration_dialog = ProductionRegistrationDialog(
-            dialog.service,
-            [context.proposal_id],
-            dialog,
-            observation=dialog.observation.toPlainText().strip(),
-        )
-        if registration_dialog.exec():
+        parent = dialog.parentWidget() or dialog
+        observation = dialog.observation.toPlainText().strip()
+        dialog.hide()
+        wizard = ProductionWizardDialog(dialog.service, [context.proposal_id], parent, observation=observation)
+        wizard.exec()
+        if wizard.registered:
             dialog.accept()
             return ActionResult(success=True, changed=True, refresh_required=True)
-        return ActionResult(success=True, changed=False, close_action_center=False)
+        dialog.reject()
+        return ActionResult(success=True, changed=False, close_action_center=True)
 
 
 class DefineItemFlowHandler:

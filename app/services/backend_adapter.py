@@ -3,12 +3,14 @@ import json
 import threading
 import time
 from dataclasses import dataclass, field
+from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any
 from urllib.parse import urlparse, urlunparse
 from app.integrations.api.exceptions import ApiBusinessError
 from app.services.api_proposal_storage import OfficialProposalApiStorage, api_permission_level, user_message_for_api_error
 from app.services.api_reports import ApiExecutiveDashboardService, ApiOperationalReportsService
+from app.services.remanagement_badges import decorate_rows as decorate_remanagement_rows, index_badges as index_remanagement_badges, situation_label
 from app.services.status_sorting import sort_fiscal_rows, sort_process_rows
 from app.services.app_paths import ensure_app_data_dirs, get_config_example_path, get_config_path
 from app.services.app_logging import get_logger
@@ -33,14 +35,14 @@ PERMISSION_LEVEL_EDIT = 'EDIT'
 PERMISSION_LEVELS = (PERMISSION_LEVEL_NONE, PERMISSION_LEVEL_VIEW, PERMISSION_LEVEL_EDIT)
 PERMISSION_LEVEL_LABELS = {PERMISSION_LEVEL_NONE: 'Sem acesso', PERMISSION_LEVEL_VIEW: 'Visualizar', PERMISSION_LEVEL_EDIT: 'Visualizar e alterar'}
 OFFICIAL_AREAS = {'CONTROLE GERAL': {'column': 'status_geral'}, 'PRODUCAO': {'column': 'status_producao'}, 'GALVANIZACAO': {'column': 'status_galvanizacao'}, 'EXPEDICAO': {'column': 'status_expedicao'}, 'ALMOXARIFADO': {'column': 'status_almoxarifado'}}
-PERMISSION_AREAS = [('dashboard', 'Painel Geral', 'PAINEL GERAL'), ('executive_dashboard', 'Dashboard Executivo', 'DASHBOARD EXECUTIVO'), ('control_general', 'Controle Geral', 'CONTROLE GERAL'), ('production', 'Producao', 'PRODUCAO'), ('galvanization', 'Galvanizacao', 'GALVANIZACAO'), ('expedition', 'Expedicao', 'EXPEDICAO'), ('fiscal', 'Fiscal', 'FISCAL'), ('partials', 'Parciais', 'PARCIAIS'), ('warehouse', 'Almoxarifado', 'ALMOXARIFADO'), ('operational_reports', 'Relatorios Operacionais', 'RELATORIOS OPERACIONAIS'), ('history', 'Historico', 'HISTORICO'), ('settings', 'Configuracoes', 'CONFIGURACOES'), ('users_permissions', 'Usuarios e Permissoes', 'USUARIOS_PERMISSOES'), ('chats', 'Chats', 'CHATS')]
+PERMISSION_AREAS = [('dashboard', 'Painel Geral', 'PAINEL GERAL'), ('executive_dashboard', 'Dashboard Executivo', 'DASHBOARD EXECUTIVO'), ('control_general', 'Controle Geral', 'CONTROLE GERAL'), ('production', 'Produção', 'PRODUCAO'), ('galvanization', 'Galvanização', 'GALVANIZACAO'), ('expedition', 'Expedição', 'EXPEDICAO'), ('fiscal', 'Fiscal', 'FISCAL'), ('partials', 'Parciais', 'PARCIAIS'), ('warehouse', 'Almoxarifado', 'ALMOXARIFADO'), ('operational_reports', 'Relatórios Operacionais', 'RELATORIOS OPERACIONAIS'), ('history', 'Histórico', 'HISTORICO'), ('settings', 'Configurações', 'CONFIGURACOES'), ('users_permissions', 'Usuários e Permissões', 'USUARIOS_PERMISSOES'), ('chats', 'Chats', 'CHATS')]
 NAV_PERMISSION_KEYS = {nav: key for key, _label, nav in PERMISSION_AREAS}
 LEGACY_AREA_PERMISSION_KEYS = {'CONTROLE GERAL': 'control_general', 'PRODUCAO': 'production', 'GALVANIZACAO': 'galvanization', 'EXPEDICAO': 'expedition', 'ALMOXARIFADO': 'warehouse'}
 PERMISSION_LEGACY_AREAS = {value: key for key, value in LEGACY_AREA_PERMISSION_KEYS.items()}
-STATUS_LABELS = {'': '', 'AGUARDANDO_LIBERACAO': 'Aguardando liberacao', 'NAO_LIBERADO': 'Nao liberado', 'LIBERADO_PRODUCAO': 'Liberado para producao', 'EM_PRODUCAO': 'Em producao', 'EM_GALVANIZACAO': 'Em galvanizacao', 'EM_EXPEDICAO': 'Em expedicao', 'ENTREGUE': 'Entregue', 'CANCELADA': 'Cancelada', 'NAO_INICIADO': 'Aguardando inicio', 'FLUXO_INDEFINIDO': 'Fluxo indefinido', 'ITEM_PENDENTE_FABRICACAO': 'Item pendente de fabricacao', 'INICIADO': 'Em producao', 'FINALIZADO': 'Producao concluida', 'FINALIZADO_PARCIAL': 'Produzido parcialmente', 'PARADO': 'Producao pausada', 'AGUARDANDO_ENVIO': 'Aguardando montagem de carga', 'AGUARDANDO_RETORNO': 'Aguardando retorno', 'DISPONIVEL_PARCIAL': 'Disponivel parcialmente', 'EM_CARGA': 'Em carga', 'ENVIADO_GALVANIZACAO': 'Enviado para galvanizacao', 'RETORNO_PARCIAL': 'Retorno parcial', 'RETORNADO': 'Retornado', 'RETORNOU_GALVANIZACAO': 'Retornou da galvanizacao', 'RETORNOU_PARCIAL': 'Retornou parcialmente', 'EM_SEPARACAO': 'Aguardando separacao', 'AGUARDANDO_SEPARACAO_PARCIAL': 'Aguardando separacao parcial', 'SEPARACAO_INICIADA': 'Em separacao', 'SEPARADO': 'Separado para entrega', 'ENTREGUE_PARCIAL': 'Entregue parcialmente', 'AGUARDANDO_CONFIRMACAO': 'Aguardando confirmacao', 'SEM_PARAFUSOS': 'Sem almoxarifado', 'ALMOXARIFADO_ENTREGUE': 'Almoxarifado entregue', 'ALMOXARIFADO_ENTREGUE_PARCIAL': 'Almoxarifado entregue parcial', 'NAO_DEFINIDO': 'Nao definido', 'SIM': 'Sim', 'NAO': 'Nao', 'PRINCIPAL': 'Principal', 'PARCIAL': 'Parcial'}
-AREA_STATUS_LABEL_OVERRIDES = {'ALMOXARIFADO': {'NAO_DEFINIDO': 'Aguardando definicao', '': 'Aguardando definicao', 'AGUARDANDO_CONFIRMACAO': 'Aguardando confirmacao', 'EM_SEPARACAO': 'Em separacao', 'SEM_PARAFUSOS': 'Sem almoxarifado', 'SEPARADO': 'Separado', 'ALMOXARIFADO_ENTREGUE_PARCIAL': 'Entregue parcial', 'ALMOXARIFADO_ENTREGUE': 'Entregue', 'FINALIZADO': 'Entregue'}, 'PRODUCAO': {'FINALIZADO': 'Producao concluida', 'FINALIZADO_PARCIAL': 'Produzido parcialmente'}, 'GALVANIZACAO': {'RETORNOU_GALVANIZACAO': 'Retornou da galvanizacao', 'RETORNOU_PARCIAL': 'Retornou parcialmente', 'DISPONIVEL': 'Disponivel para carga'}, 'EXPEDICAO': {'ENTREGUE': 'Entregue', 'ENTREGUE_PARCIAL': 'Entregue parcial'}}
-LOAD_STATUS_LABELS = {'AGUARDANDO_LIBERACAO': 'Aguardando liberacao', 'LIBERADA_PARA_ENVIO': 'Liberada para envio', 'RETORNO_PARCIAL': 'Retorno parcial', 'RETORNADA_GALVANIZACAO': 'Retornada da galvanizacao'}
-STATUS_LABELS['SEPARADO_COM_PENDENCIA'] = 'Separado com pendencia'
+STATUS_LABELS = {'': '', 'AGUARDANDO_LIBERACAO': 'Aguardando liberação', 'NAO_LIBERADO': 'Não liberado', 'LIBERADO_PRODUCAO': 'Liberado para produção', 'EM_PRODUCAO': 'Em produção', 'EM_GALVANIZACAO': 'Em galvanização', 'EM_EXPEDICAO': 'Em expedição', 'ENTREGUE': 'Entregue', 'CANCELADA': 'Cancelada', 'NAO_INICIADO': 'Aguardando início', 'FLUXO_INDEFINIDO': 'Fluxo indefinido', 'ITEM_PENDENTE_FABRICACAO': 'Item pendente de fabricação', 'INICIADO': 'Em produção', 'FINALIZADO': 'Produção concluída', 'FINALIZADO_PARCIAL': 'Produzido parcialmente', 'PARADO': 'Produção pausada', 'AGUARDANDO_ENVIO': 'Aguardando montagem de carga', 'AGUARDANDO_RETORNO': 'Aguardando retorno', 'DISPONIVEL_PARCIAL': 'Disponível parcialmente', 'EM_CARGA': 'Em carga', 'ENVIADO_GALVANIZACAO': 'Enviado para galvanização', 'RETORNO_PARCIAL': 'Retorno parcial', 'RETORNADO': 'Retornado', 'RETORNOU_GALVANIZACAO': 'Retornou da galvanização', 'RETORNOU_PARCIAL': 'Retornou parcialmente', 'EM_SEPARACAO': 'Aguardando separação', 'AGUARDANDO_SEPARACAO_PARCIAL': 'Aguardando separação parcial', 'SEPARACAO_INICIADA': 'Em separação', 'SEPARADO': 'Separado para entrega', 'ENTREGUE_PARCIAL': 'Entregue parcialmente', 'AGUARDANDO_CONFIRMACAO': 'Aguardando confirmação', 'SEM_PARAFUSOS': 'Sem almoxarifado', 'ALMOXARIFADO_ENTREGUE': 'Almoxarifado entregue', 'ALMOXARIFADO_ENTREGUE_PARCIAL': 'Almoxarifado entregue parcial', 'NAO_DEFINIDO': 'Não definido', 'SIM': 'Sim', 'NAO': 'Não', 'PRINCIPAL': 'Principal', 'PARCIAL': 'Parcial'}
+AREA_STATUS_LABEL_OVERRIDES = {'ALMOXARIFADO': {'NAO_DEFINIDO': 'Aguardando definição', '': 'Aguardando definição', 'AGUARDANDO_CONFIRMACAO': 'Aguardando confirmação', 'EM_SEPARACAO': 'Em separação', 'SEM_PARAFUSOS': 'Sem almoxarifado', 'SEPARADO': 'Separado', 'ALMOXARIFADO_ENTREGUE_PARCIAL': 'Entregue parcial', 'ALMOXARIFADO_ENTREGUE': 'Entregue', 'FINALIZADO': 'Entregue'}, 'PRODUCAO': {'FINALIZADO': 'Produção concluída', 'FINALIZADO_PARCIAL': 'Produzido parcialmente'}, 'GALVANIZACAO': {'RETORNOU_GALVANIZACAO': 'Retornou da galvanização', 'RETORNOU_PARCIAL': 'Retornou parcialmente', 'DISPONIVEL': 'Disponível para carga'}, 'EXPEDICAO': {'ENTREGUE': 'Entregue', 'ENTREGUE_PARCIAL': 'Entregue parcial'}}
+LOAD_STATUS_LABELS = {'AGUARDANDO_LIBERACAO': 'Aguardando liberação', 'LIBERADA_PARA_ENVIO': 'Liberada para envio', 'RETORNO_PARCIAL': 'Retorno parcial', 'RETORNADA_GALVANIZACAO': 'Retornada da galvanização'}
+STATUS_LABELS['SEPARADO_COM_PENDENCIA'] = 'Separado com pendência'
 DEFAULT_REPORT_DEFINITIONS = [{'name': 'Processos em andamento', 'source': 'ANDAMENTO', 'columns': ['proposta', 'cliente', 'obra_site', 'lote', 'peso', 'prazo_entrega', 'status_geral', 'status_producao', 'status_galvanizacao', 'status_expedicao', 'situacao_fluxo']}, {'name': 'Parciais e pendencias', 'source': 'PARCIAIS', 'columns': ['proposta', 'tipo_processo', 'cliente', 'obra_site', 'peso_parcial', 'saldo_pendente', 'status_producao', 'status_galvanizacao', 'status_expedicao', 'situacao_fluxo', 'origem_remanejamento', 'observacao_remanejamento']}, {'name': 'Galvanizacao enviada/retorno', 'source': 'GALVANIZACAO', 'columns': ['proposta', 'cliente', 'obra_site', 'lote', 'peso', 'data_envio_galv', 'data_prevista_retorno_galv', 'data_retorno_galv', 'status_galvanizacao', 'status_expedicao']}, {'name': 'Entregas por cliente', 'source': 'ENTREGAS', 'columns': ['cliente', 'proposta', 'pedido_compra', 'obra_site', 'prazo_entrega', 'data_retirada', 'status_expedicao', 'status_geral']}]
 ITEM_NO_PRODUCTION_LABELS = {'pronta_entrega': 'Pronta entrega', 'comprado_terceiro': 'Comprado de terceiro', 'terceirizado': 'Terceirizado', 'outro': 'Outro'}
 AREA_FINISHED_STATUS = {'PRODUCAO': {'FINALIZADO'}, 'GALVANIZACAO': {'RETORNOU_GALVANIZACAO'}, 'EXPEDICAO': {'ENTREGUE'}, 'ALMOXARIFADO': {'ALMOXARIFADO_ENTREGUE', 'SEM_PARAFUSOS'}}
@@ -285,6 +287,7 @@ class BackendService:
                 self._api_refresh_token = self.official_proposal_storage.token_store.get_refresh_token()
             except Exception:
                 self._api_refresh_token = None
+            self._register_notifier_device(state.access_token, api_user.id, force=True)
             return True
         except Exception as exc:
             log.warning('Falha no login via API | detalhe=%s', user_message_for_api_error(exc))
@@ -292,6 +295,37 @@ class BackendService:
             self._api_access_token = None
             self._api_refresh_token = None
             return False
+
+    def _register_notifier_device(self, access_token: str | None, user_id: int | None, *, force: bool) -> None:
+        """Torna este computador destino dos avisos do Windows em nome do usuario
+        logado (o ultimo login vence). Em segundo plano e sem nunca falhar o login."""
+        try:
+            from app.services.notifier_registration import register_in_background
+
+            register_in_background(access_token or '', int(user_id or 0), force=force)
+        except Exception:
+            log.warning('Nao foi possivel registrar o computador para avisos do Windows', exc_info=True)
+
+    def ensure_notifier_registration(self) -> None:
+        """Sessao restaurada sem senha: garante a credencial local do avisador
+        (sem forcar: so registra se faltar ou for de outro usuario). O token de
+        acesso pode exigir renovacao de rede, entao tudo roda em segundo plano."""
+        user_id = int((self.user or {}).get('id') or 0)
+        if not user_id:
+            return
+        storage = self.official_proposal_storage
+
+        def _run() -> None:
+            try:
+                from app.services.notifier_registration import register_current_login
+
+                register_current_login(storage.current_access_token(), user_id, force=False)
+            except Exception:
+                log.debug('ensure_notifier_registration ignorado', exc_info=True)
+
+        import threading
+
+        threading.Thread(target=_run, name='notifier-ensure-registration', daemon=True).start()
 
     def user_name(self) -> str:
         if not self.user:
@@ -435,6 +469,56 @@ class BackendService:
             ttl=15.0,
         )
 
+    def _dashboard_withdrawn_proposal_ids(self) -> set[Any]:
+        """Propostas cuja NF foi retirada pelo cliente: ficam fora da distribuicao por status."""
+        def load() -> list[dict[str, Any]]:
+            return self.official_proposal_storage.fiscal_rows(
+                {'situacao_fiscal': 'NF_RETIRADA_CLIENTE', 'limit': 200, 'offset': 0}
+            )
+        try:
+            rows = self._cached_read('dashboard_withdrawn_fiscal', load, ttl=15.0)
+        except Exception:
+            return set()
+        return {row.get('processo_id') for row in rows if row.get('processo_id') is not None}
+
+    @staticmethod
+    def _parse_deadline(value: Any) -> date | None:
+        text = str(value or '').strip()[:10]
+        for pattern in ('%d/%m/%Y', '%Y-%m-%d'):
+            try:
+                return datetime.strptime(text, pattern).date()
+            except ValueError:
+                continue
+        return None
+
+    def _dashboard_deadline_buckets(self) -> dict[str, list[dict[str, Any]]]:
+        """Agrupa as propostas por situacao do prazo de entrega (retiradas ficam de fora)."""
+        today = date.today()
+        next_week = today + timedelta(days=7)
+        withdrawn = self._dashboard_withdrawn_proposal_ids()
+        buckets: dict[str, list[dict[str, Any]]] = {'Vencidos': [], 'Hoje': [], 'Prox. 7 dias': [], 'No prazo': [], 'Entregues': []}
+        for row in self._dashboard_proposals_full():
+            if row.get('id') in withdrawn:
+                continue
+            status = row.get('status_geral') or row.get('current_status')
+            if status == 'ENTREGUE':
+                buckets['Entregues'].append(row)
+                continue
+            if status in {'CANCELADA', 'FINALIZADO'}:
+                continue
+            due = self._parse_deadline(row.get('prazo_entrega'))
+            if due is None:
+                continue
+            if due < today:
+                buckets['Vencidos'].append(row)
+            elif due == today:
+                buckets['Hoje'].append(row)
+            elif due <= next_week:
+                buckets['Prox. 7 dias'].append(row)
+            else:
+                buckets['No prazo'].append(row)
+        return buckets
+
     def dashboard(self) -> dict[str, Any]:
         rows = self._dashboard_proposals_full()
         production = len(self._dashboard_production_full())
@@ -442,26 +526,75 @@ class BackendService:
         fiscal = self._dashboard_fiscal_indicators()
         galvanization = len(self._dashboard_galvanization_candidates())
         delivered = sum((1 for row in rows if row.get('status_geral') == 'ENTREGUE' or row.get('current_status') == 'ENTREGUE'))
-        active = sum((1 for row in rows if row.get('status_geral') not in {'ENTREGUE', 'CANCELADA'} and row.get('current_status') not in {'ENTREGUE', 'CANCELADA'}))
-        return {'Ativas': active, 'Vencidos': 0, 'Prox. 7 dias': 0, 'Producao': production, 'Galvanizacao': galvanization, 'Expedicao': expedition, 'Pend. remanej.': 0, 'Entregues': delivered, 'Fiscal': fiscal.get('falta_emitir', 0) + fiscal.get('nf_parcial', 0)}
+        withdrawn = self._dashboard_withdrawn_proposal_ids()
+        active = sum((1 for row in rows if row.get('id') not in withdrawn and row.get('status_geral') not in {'ENTREGUE', 'CANCELADA'} and row.get('current_status') not in {'ENTREGUE', 'CANCELADA'}))
+        buckets = self._dashboard_deadline_buckets()
+        return {'Ativas': active, 'Vencidos': len(buckets['Vencidos']), 'Prox. 7 dias': len(buckets['Prox. 7 dias']), 'Producao': production, 'Galvanizacao': galvanization, 'Expedicao': expedition, 'Pend. remanej.': 0, 'Entregues': delivered, 'Fiscal': fiscal.get('falta_emitir', 0) + fiscal.get('nf_parcial', 0)}
 
     def dashboard_charts(self) -> dict[str, Any]:
         data = self.dashboard()
         areas = [{'label': 'Producao', 'total': data.get('Producao', 0)}, {'label': 'Galvanizacao', 'total': data.get('Galvanizacao', 0)}, {'label': 'Expedicao', 'total': data.get('Expedicao', 0)}, {'label': 'Fiscal', 'total': data.get('Fiscal', 0)}]
+        withdrawn_ids = self._dashboard_withdrawn_proposal_ids()
         status_counts: dict[str, int] = {}
         for row in self._dashboard_proposals_full():
+            if row.get('id') in withdrawn_ids:
+                continue
             status = row.get('status_geral') or row.get('current_status') or '-'
+            if str(status).upper() == 'ENTREGUE':
+                continue
             status_counts[status] = status_counts.get(status, 0) + 1
-        return {'areas': areas, 'status': [{'label': key, 'total': value} for key, value in status_counts.items()], 'prazos': []}
+        return {'areas': areas, 'status': [{'label': key, 'total': value} for key, value in status_counts.items()], 'prazos': [{'label': key, 'total': len(rows)} for key, rows in self._dashboard_deadline_buckets().items()]}
 
     def focus_text(self) -> str:
         return 'Operacao oficial conectada ao PostgreSQL via API.'
 
+    def _dashboard_fiscal_pending_rows(self) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        for indicator in ('falta_emitir', 'nf_parcial'):
+            rows.extend(self.official_proposal_storage.fiscal_indicator_rows(indicator))
+        return rows
+
+    def _dashboard_sorted(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return sorted(rows, key=lambda row: (str(row.get('cliente') or ''), str(row.get('proposta') or '')))
+
+    def _dashboard_rows_for(self, key: str) -> list[dict[str, Any]]:
+        """Linhas por tras de cada numero do dashboard, pela mesma fonte que gerou o numero."""
+        key = 'Prox. 7 dias' if key == '7 dias' else key
+        if key == 'Producao':
+            return list(self._dashboard_production_full())
+        if key == 'Expedicao':
+            return list(self._dashboard_expedition_full())
+        if key == 'Galvanizacao':
+            return list(self._dashboard_galvanization_candidates())
+        if key == 'Fiscal':
+            return self._dashboard_fiscal_pending_rows()
+        if key == 'Pend. remanej.':
+            return []
+        if key in {'Vencidos', 'Hoje', 'Prox. 7 dias', 'No prazo', 'Entregues'}:
+            return list(self._dashboard_deadline_buckets().get(key, []))
+        withdrawn = self._dashboard_withdrawn_proposal_ids()
+        rows = [row for row in self._dashboard_proposals_full() if row.get('id') not in withdrawn]
+        if key == 'Ativas':
+            closed = {'ENTREGUE', 'CANCELADA'}
+            return [
+                row for row in rows
+                if row.get('status_geral') not in closed and row.get('current_status') not in closed
+            ]
+        return rows
+
     def dashboard_metric_rows(self, metric: str) -> list[dict[str, Any]]:
-        return self.process_rows('CONTROLE GERAL', {})
+        return self._dashboard_sorted(self._dashboard_rows_for(metric))
 
     def dashboard_chart_rows(self, chart_key: str, label: str) -> list[dict[str, Any]]:
-        return self.process_rows('CONTROLE GERAL', {'text': label if chart_key == 'status' else ''})
+        if chart_key == 'status':
+            withdrawn = self._dashboard_withdrawn_proposal_ids()
+            rows = [
+                row for row in self._dashboard_proposals_full()
+                if row.get('id') not in withdrawn
+                and (row.get('status_geral') or row.get('current_status') or '-') == label
+            ]
+            return self._dashboard_sorted(rows)
+        return self._dashboard_sorted(self._dashboard_rows_for(label))
 
     def operational_report(self, area: str, filters: dict[str, Any] | None=None) -> dict[str, Any]:
         try:
@@ -576,7 +709,7 @@ class BackendService:
         if area == 'PRODUCAO':
             try:
                 rows = self.official_proposal_storage.list_production_proposals(search=filters.get('text') or None, status=filters.get('status') or None, limit=200, offset=0)
-                return sort_process_rows(area, self._merge_partial_operational_rows(rows, area))
+                return sort_process_rows(area, self._with_remanagement_badges(self._merge_partial_operational_rows(rows, area)))
             except Exception as exc:
                 raise AppError(user_message_for_api_error(exc)) from exc
         if area == 'EXPEDICAO':
@@ -585,12 +718,12 @@ class BackendService:
                 status_filter = (filters.get('status') or '').strip().upper()
                 if status_filter:
                     rows = [row for row in rows if (row.get('status_expedicao') or row.get('current_status') or '').upper() == status_filter]
-                return sort_process_rows(area, self._merge_partial_operational_rows(rows, area))
+                return sort_process_rows(area, self._with_remanagement_badges(self._merge_partial_operational_rows(rows, area)))
             except Exception as exc:
                 raise AppError(user_message_for_api_error(exc)) from exc
         if area == 'GALVANIZACAO':
             try:
-                return sort_process_rows(area, self._official_galvanization_rows(filters))
+                return sort_process_rows(area, self._with_remanagement_badges(self._official_galvanization_rows(filters)))
             except Exception as exc:
                 raise AppError(user_message_for_api_error(exc)) from exc
         if area == 'PARCIAIS':
@@ -607,6 +740,21 @@ class BackendService:
 
     def sort_process_rows(self, area: str | None, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return sort_process_rows(area, rows)
+
+    def _with_remanagement_badges(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Marca nas linhas das listas de Producao, Galvanizacao e Expedicao as propostas que ainda estao
+        fora do lugar por causa de um remanejamento. O selo e so um enfeite: se a API nao responder (ou for
+        uma versao anterior, sem o endpoint), a lista aparece normal, sem selos."""
+        try:
+            badges = self._cached_read(
+                'remanagement_badges',
+                lambda: index_remanagement_badges(self.official_proposal_storage.remanagement_badges()),
+                ttl=2.0,
+            )
+        except Exception:
+            log.debug('Selos de remanejamento indisponiveis; listas seguem sem selo', exc_info=True)
+            return rows
+        return decorate_remanagement_rows(rows, badges)
 
     def _merge_partial_operational_rows(self, rows: list[dict[str, Any]], area: str) -> list[dict[str, Any]]:
         """Une filhas somente no mesmo bloco operacional.
@@ -659,6 +807,14 @@ class BackendService:
             combined['proposal_number'] = display
             combined['grouped_partial'] = len(ids) > 1
             combined['group_partial_numbers'] = partials
+            # NFs de todas as parciais do grupo, sem repetir.
+            invoice_numbers: list[str] = []
+            for row in group:
+                for number in str(row.get('numero_nf') or '').split(','):
+                    number = number.strip()
+                    if number and number not in invoice_numbers:
+                        invoice_numbers.append(number)
+            combined['numero_nf'] = ', '.join(invoice_numbers)
             for numeric_key in ('quantidade_itens', 'item_count', 'itens_pendentes', 'quantidade_disponivel', 'quantidade_separada', 'quantidade_entregue', 'saldo_pendente'):
                 values = [row.get(numeric_key) for row in group if row.get(numeric_key) not in (None, '')]
                 if values and all(isinstance(value, (int, float)) for value in values):
@@ -889,6 +1045,24 @@ class BackendService:
             return self._cached_read(
                 key,
                 lambda: self.official_proposal_storage.production_items_queue(search=filters.get('text') or None, pending=filters.get('pending'), limit=500, offset=0),
+                ttl=2.0,
+            )
+        except Exception as exc:
+            raise self._api_app_error(exc) from exc
+
+    def expedition_items_queue(self, filters: dict[str, Any] | None=None) -> list[dict[str, Any]]:
+        """Itens da Expedicao (aba "Itens em expedicao"). `pending` (padrao True)
+        so traz os que ainda tem saldo a entregar; `status` e o do item."""
+        filters = filters or {}
+        try:
+            key = f"expedition_items:{tuple(sorted(filters.items()))}"
+            return self._cached_read(
+                key,
+                lambda: self.official_proposal_storage.expedition_items_queue(
+                    search=filters.get('text') or None,
+                    status=filters.get('status') or None,
+                    pending_only=bool(filters.get('pending', True)),
+                ),
                 ttl=2.0,
             )
         except Exception as exc:
@@ -1475,11 +1649,26 @@ class BackendService:
         labels = {'FALTA_EMITIR_NOTA_FISCAL': 'Falta emitir NF', 'AGUARDANDO_NF': 'CP em processamento', 'CP_EM_PROCESSAMENTO': 'CP em processamento', 'NF_EM_PROCESSAMENTO': 'NF em processamento', 'DISPONIVEL_PARA_EMISSAO': 'Disponivel para emitir NF', 'PENDENCIA_FISCAL_CRITICA': 'Pendencia fiscal critica', 'NOTA_FISCAL_PARCIAL': 'NF parcial', 'NF_PARCIAL': 'NF parcial', 'NOTA_FISCAL_EMITIDA': 'NF emitida', 'NF_EMITIDA': 'NF emitida', 'NF_RETIRADA_CLIENTE': 'NF retirada pelo cliente', 'FISCAL_CANCELADO': 'Fiscal cancelado', 'PENDENTE': 'Pendente', 'PARCIAL': 'Parcial', 'FATURADO': 'Faturado', 'CANCELADO': 'Cancelado'}
         return labels.get(legacy.normalize_status(status or ''), status or '-')
 
+    # Areas em que uma proposta ainda pode ser adiantada com material pronto de
+    # outra: o que ja chegou a Expedicao (ou foi entregue) nao precisa receber.
+    REMANAGEMENT_DESTINATION_AREAS = ('PRODUCAO', 'GALVANIZACAO')
+
     def early_delivery_destination_candidates(self, search: str='') -> list[dict[str, Any]]:
+        """Propostas que podem RECEBER material por remanejamento: as que ainda
+        estao em Producao ou Galvanizacao. Ficam de fora as que ja estao na
+        Expedicao ou alem dela (Fiscal, entregues, finalizadas) e as canceladas."""
         try:
-            rows = self.official_proposal_storage.list_proposals(sort_by='updated_at', sort_dir='desc', limit=200, offset=0)
-            text = search.strip().upper()
-            return [row for row in rows if not text or text in (row.get('proposta') or '').upper() or text in (row.get('cliente') or '').upper() or (text in (row.get('obra_site') or '').upper())]
+            text = (search or '').strip()
+            found: dict[int, dict[str, Any]] = {}
+            for area in self.REMANAGEMENT_DESTINATION_AREAS:
+                rows = self.official_proposal_storage.list_proposals(
+                    current_area=area, search=text or None, sort_by='updated_at', sort_dir='desc', limit=200, offset=0,
+                )
+                for row in rows:
+                    if row.get('is_cancelled') or row.get('is_completed'):
+                        continue
+                    found.setdefault(int(row['id']), row)
+            return sorted(found.values(), key=lambda row: str(row.get('proposta') or ''))
         except Exception as exc:
             raise self._api_app_error(exc) from exc
 
@@ -1619,6 +1808,36 @@ class BackendService:
         except Exception as exc:
             raise self._api_app_error(exc) from exc
 
+    def proposal_family(self, process_id: int) -> dict[str, Any]:
+        """Mae + parciais ativas com a localizacao dos itens (`GET /proposals/{id}/family`).
+
+        So enriquece o Detalhe: se a API for anterior ao endpoint ou falhar, devolve `{}` e a tela segue
+        como sempre (cabecalho e itens da propria proposta)."""
+        try:
+            family = self.official_proposal_storage.proposal_family(process_id)
+        except Exception:
+            log.debug('Familia da proposta indisponivel; Detalhe segue sem parciais', exc_info=True)
+            return {}
+        if not isinstance(family, dict) or not isinstance(family.get('members'), list):
+            return {}
+        try:
+            badges = self._cached_read(
+                'remanagement_badges',
+                lambda: index_remanagement_badges(self.official_proposal_storage.remanagement_badges()),
+                ttl=2.0,
+            )
+        except Exception:
+            badges = {}
+        member_ids = {int(member.get('proposal_id') or 0) for member in family['members']}
+        situations: list[str] = []
+        for proposal_id, badge in (badges or {}).items():
+            if int(proposal_id) in member_ids:
+                label = situation_label(badge.get('status'))
+                if label and label not in situations:
+                    situations.append(label)
+        family['remanagement_labels'] = situations
+        return family
+
     def process_loads(self, process_id: int) -> list[dict[str, Any]]:
         try:
             return self.official_proposal_storage.galvanization_loads_page(proposal_id=process_id, limit=200, offset=0)["items"]
@@ -1642,6 +1861,11 @@ class BackendService:
         # (que pode estar desatualizado em relacao a outras gravacoes feitas por
         # outras telas/threads desde que este BackendService foi inicializado).
         self.config = update_app_config({'color_palette': palette_name})
+
+    def save_reduce_motion(self, enabled: bool) -> None:
+        """Preferencia de acessibilidade: com ela ligada toda animacao da
+        interface dura zero (ver app/ui/animations.py)."""
+        self.config = update_app_config({'reduce_motion': bool(enabled)})
 
     def toggle_palette(self) -> str:
         next_palette = 'escuro' if self.palette_name == 'claro' else 'claro'

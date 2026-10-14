@@ -106,18 +106,18 @@ class SettingsDialogTests(unittest.TestCase):
 
         admin_buttons = {button.text() for button in admin_page.findChildren(QPushButton)}
         user_buttons = {button.text() for button in user_page.findChildren(QPushButton)}
-        for text in ("Testar conexao", "Salvar", "Diagnostico da API", "Consultar propostas na API"):
+        for text in ("Testar conexão", "Salvar", "Diagnóstico da API", "Consultar propostas na API"):
             self.assertIn(text, admin_buttons)
             self.assertNotIn(text, user_buttons)
 
     def test_existing_action_buttons_keep_their_callbacks(self):
         callbacks = {
             "Aplicar visual": "apply_palette",
-            "Diagnostico API/PostgreSQL": "open_api_diagnostic",
-            "Diagnostico da API": "open_api_diagnostic",
+            "Diagnóstico API/PostgreSQL": "open_api_diagnostic",
+            "Diagnóstico da API": "open_api_diagnostic",
             "Consultar propostas na API": "open_api_proposals",
-            "Verificar atualizacoes": "check_updates",
-            "Testar servidor de atualizacao": "test_update_server",
+            "Verificar atualizações": "check_updates",
+            "Testar servidor de atualização": "test_update_server",
             "Abrir pasta de logs": "open_logs_folder",
         }
         with ExitStack() as stack:

@@ -9,6 +9,7 @@ from app.services.app_logging import get_logger
 from app.services.compatibility_check import CompatibilityCheckResult
 from app.ui.background_worker import start_worker
 from app.ui.components.modern_button import ModernButton
+from app.ui.dialog_utils import style_dialog_from_parent
 from app.version import APP_VERSION
 from app.versioning.models import CompatibilityStatus
 
@@ -57,7 +58,7 @@ class MaintenanceModeDialog(QDialog):
         self._thread = None
         self._poll_interval_ms = _BASE_POLL_INTERVAL_MS
 
-        self.setWindowTitle("Sistema em manutencao")
+        self.setWindowTitle("Sistema em manutenção")
         self.setModal(True)
         self.setMinimumWidth(460)
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
@@ -66,6 +67,7 @@ class MaintenanceModeDialog(QDialog):
         self._timer.setSingleShot(True)
         self._timer.timeout.connect(self._poll)
 
+        style_dialog_from_parent(self, parent, standalone=True)
         self._build()
         self._apply_result(initial_result)
         if auto_start_timer:
@@ -78,7 +80,7 @@ class MaintenanceModeDialog(QDialog):
         layout.setContentsMargins(28, 26, 28, 20)
         layout.setSpacing(10)
 
-        self.title_label = QLabel("Sistema em manutencao")
+        self.title_label = QLabel("Sistema em manutenção")
         title_font = self.title_label.font()
         title_font.setPointSize(title_font.pointSize() + 3)
         title_font.setBold(True)
@@ -91,15 +93,15 @@ class MaintenanceModeDialog(QDialog):
 
         self.details_label = QLabel()
         self.details_label.setWordWrap(True)
-        self.details_label.setStyleSheet("color: #64748b;")
+        self.details_label.setObjectName("Caption")
         layout.addWidget(self.details_label)
 
         self.status_label = QLabel()
-        self.status_label.setStyleSheet("color: #94a3b8; font-size: 11px;")
+        self.status_label.setObjectName("Caption")
         layout.addWidget(self.status_label)
 
-        version_label = QLabel(f"Versao do Desktop: {APP_VERSION}")
-        version_label.setStyleSheet("color: #94a3b8; font-size: 11px;")
+        version_label = QLabel(f"Versão do Desktop: {APP_VERSION}")
+        version_label.setObjectName("Caption")
         layout.addWidget(version_label)
 
         footer = QHBoxLayout()
@@ -107,7 +109,7 @@ class MaintenanceModeDialog(QDialog):
         self.retry_button = ModernButton("Tentar novamente", "refresh")
         self.retry_button.clicked.connect(self._poll)
         footer.addWidget(self.retry_button)
-        self.exit_button = ModernButton("Fechar", "clear")
+        self.exit_button = ModernButton("Fechar", "clear", variant="ghost")
         self.exit_button.clicked.connect(self._on_exit)
         footer.addWidget(self.exit_button)
         layout.addLayout(footer)
@@ -145,7 +147,7 @@ class MaintenanceModeDialog(QDialog):
         self.retry_button.setEnabled(True)
         log.warning("Falha ao consultar manutencao -- aplicando backoff", exc_info=True)
         self._poll_interval_ms = min(self._poll_interval_ms * 2, _MAX_POLL_INTERVAL_MS)
-        self.status_label.setText("Nao foi possivel confirmar o status agora. Nova tentativa em instantes.")
+        self.status_label.setText("Não foi possível confirmar o status agora. Nova tentativa em instantes.")
         self._schedule_next_poll()
 
     # -- apresentacao -------------------------------------------------------
@@ -155,12 +157,12 @@ class MaintenanceModeDialog(QDialog):
         maintenance = dto.maintenance if dto is not None else None
 
         if maintenance is None:
-            self.message_label.setText("O sistema esta em manutencao no servidor. Tente novamente em instantes.")
+            self.message_label.setText("O sistema está em manutenção no servidor. Tente novamente em instantes.")
             self.details_label.setText("")
             self.status_label.setText("")
             return
 
-        self.message_label.setText(maintenance.message or "O sistema esta em manutencao no servidor.")
+        self.message_label.setText(maintenance.message or "O sistema está em manutenção no servidor.")
 
         details: list[str] = []
         reason_label = _REASON_LABELS.get(getattr(maintenance, "reason_code", ""), None)

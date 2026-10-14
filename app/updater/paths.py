@@ -53,6 +53,14 @@ def updater_logs_dir() -> Path:
     return updater_root_dir() / "logs"
 
 
+def status_dir() -> Path:
+    return updater_root_dir() / "status"
+
+
+def quit_request_path() -> Path:
+    return updater_root_dir() / "quit.request"
+
+
 def lock_path() -> Path:
     return updater_root_dir() / ".updater.lock"
 

@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, Query, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.app.database.session import get_db_session
-from api.app.modules.auth.dependencies import require_permission, require_superuser
+from api.app.modules.auth.dependencies import require_any_permission, require_permission, require_superuser
 from api.app.modules.auth.models import User
 from api.app.modules.auth.permissions import (
     AUDIT_VIEW,
@@ -30,7 +30,7 @@ from api.app.modules.auth.permissions import (
     PRODUCTION_UPDATE,
     PRODUCTION_VIEW,
 )
-from api.app.modules.proposals import service
+from api.app.modules.proposals import family, service
 from api.app.modules.proposals.schemas import (
     ExpeditionItemsRequest,
     ExpeditionProposalDetail,
@@ -55,7 +55,11 @@ from api.app.modules.proposals.schemas import (
     PaginatedGalvanizationCandidateResponse,
     PaginatedGalvanizationLoadResponse,
     PaginatedPartialProposalResponse,
+    ProposalFamilyResponse,
+    PaginatedExpeditionItemResponse,
     PaginatedExpeditionResponse,
+    RemanagementBadgesResponse,
+    StageLedgerResponse,
     PaginatedFiscalResponse,
     PaginatedProposalResponse,
     PaginatedProductionItemResponse,
@@ -145,6 +149,15 @@ async def list_proposals(
         limit=limit,
         offset=offset,
     )
+
+
+@router.get("/proposals/{proposal_id}/family", response_model=ProposalFamilyResponse)
+async def get_proposal_family(
+    proposal_id: int,
+    session: AsyncSession = Depends(get_db_session),
+    _actor: User = Depends(require_permission(PROPOSALS_VIEW)),
+):
+    return await family.get_proposal_family(session, proposal_id)
 
 
 @router.post("/proposals", response_model=ProposalDetail, status_code=status.HTTP_201_CREATED)
@@ -378,6 +391,21 @@ async def list_expedition_proposals(
     return await service.list_expedition_proposals(session, search=search, limit=limit, offset=offset)
 
 
+@router.get("/shipping/items", response_model=PaginatedExpeditionItemResponse)
+async def list_expedition_items(
+    search: str | None = Query(default=None, max_length=180),
+    status_filter: str | None = Query(default=None, alias="status", max_length=80),
+    pending_only: bool = Query(default=True),
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    session: AsyncSession = Depends(get_db_session),
+    _actor: User = Depends(require_permission(EXPEDITION_VIEW)),
+):
+    return await service.list_expedition_items(
+        session, search=search, status=status_filter, pending_only=pending_only, limit=limit, offset=offset,
+    )
+
+
 @router.get("/shipping/proposals/{proposal_id}", response_model=ExpeditionProposalDetail)
 async def get_expedition_detail(proposal_id: int, session: AsyncSession = Depends(get_db_session), _actor: User = Depends(require_permission(EXPEDITION_VIEW))):
     return await service.get_expedition_detail(session, proposal_id)
@@ -418,6 +446,20 @@ async def get_compatible_remanagement_items(source_proposal_id: int = Query(gt=0
     return await service.compatible_remanagement_items(session, source_proposal_id, destination_proposal_id)
 
 
+@router.get("/shipping/remanagements/stage-ledger", response_model=StageLedgerResponse)
+async def get_remanagement_stage_ledger(proposal_id: int = Query(gt=0), session: AsyncSession = Depends(get_db_session), _actor: User = Depends(require_permission(EXPEDITION_VIEW))):
+    """Pecas de cada item da proposta por estagio (a fabricar, aguardando galvanizacao, na
+    galvanizacao, prontas, entregues) e as contas que nao fecham. So leitura."""
+    return await service.get_stage_ledger(session, proposal_id)
+
+
+@router.get("/shipping/remanagements/badges", response_model=RemanagementBadgesResponse)
+async def get_remanagement_badges(session: AsyncSession = Depends(get_db_session), _actor: User = Depends(require_any_permission(PRODUCTION_VIEW, GALVANIZATION_VIEW, EXPEDITION_VIEW))):
+    """Selos de remanejamento das listas de Producao, Galvanizacao e Expedicao: so as propostas que ainda
+    estao fora do lugar por causa de um remanejamento (some quando ela fica inteira). So leitura."""
+    return await service.list_remanagement_badges(session)
+
+
 @router.get("/shipping/remanagements/destination-items", response_model=list[RemanagementDestinationItem])
 async def get_remanagement_destination_items(destination_proposal_id: int = Query(gt=0), session: AsyncSession = Depends(get_db_session), _actor: User = Depends(require_permission(EXPEDITION_UPDATE))):
     return await service.remanagement_destination_items(session, destination_proposal_id)
@@ -439,11 +481,11 @@ async def get_remanagement_compensation_plan(payload: RemanagementCompensationRe
 
 
 @router.post("/shipping/remanagements/review", response_model=RemanagementReviewResult)
-async def get_remanagement_review(payload: RemanagementReviewRequest, session: AsyncSession = Depends(get_db_session), _actor: User = Depends(require_permission(EXPEDITION_UPDATE))):
+async def get_remanagement_review(payload: RemanagementReviewRequest, session: AsyncSession = Depends(get_db_session), actor: User = Depends(require_permission(EXPEDITION_UPDATE))):
     """Fase 6: revisao/simulacao final, somente leitura - nunca chama
     `session.commit()`. Revalida saldos (mesma fonte da Fase 5) e valida o
     motivo antes de habilitar a confirmacao."""
-    return await service.simulate_remanagement_review(session, payload)
+    return await service.simulate_remanagement_review(session, payload, actor)
 
 
 @router.post("/shipping/remanagements/confirm", response_model=RemanagementConfirmResult, status_code=status.HTTP_201_CREATED)

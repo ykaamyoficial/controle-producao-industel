@@ -1,16 +1,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
 from typing import Any
 
 from PySide6.QtCore import QDate, Qt
 from PySide6.QtWidgets import (
     QAbstractItemView, QDateEdit, QDialog, QHBoxLayout, QLabel, QLineEdit,
-    QMessageBox, QPushButton, QTableWidget, QTableWidgetItem, QTextEdit,
-    QVBoxLayout,
+    QMessageBox, QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout,
 )
 
+from app.ui.components.dialog_shell import StepIndicator, dialog_footer, dialog_header, set_notice_kind, set_validation_state
 from app.ui.components.modern_button import ModernButton
 from app.ui.dialog_utils import apply_large_dialog_geometry, style_dialog_from_parent
 from app.ui.numeric_utils import format_decimal
@@ -53,7 +52,7 @@ class FiscalEmissionDraftDialog(QDialog):
         self.drafts = {int(key): dict(value) for key, value in (drafts or {}).items()}
         self.result: list[dict[str, Any]] | None = None
         self._row_proposals: list[int] = []
-        self.setWindowTitle("Registrar emissao fiscal")
+        self.setWindowTitle("Registrar emissão fiscal")
         apply_large_dialog_geometry(self, parent, minimum_width=1180, minimum_height=680)
         style_dialog_from_parent(self, parent)
         self._build()
@@ -61,17 +60,19 @@ class FiscalEmissionDraftDialog(QDialog):
 
     def _build(self):
         root = QVBoxLayout(self)
-        root.setContentsMargins(22, 20, 22, 18)
+        root.setContentsMargins(16, 14, 16, 14)
         root.setSpacing(10)
-        title = QLabel("Registrar emissao fiscal")
-        title.setStyleSheet("font-size: 20px; font-weight: 800;")
-        root.addWidget(title)
+        title = QLabel("Registrar emissão fiscal")
         self.summary = QLabel()
-        self.summary.setStyleSheet("font-weight: 700;")
-        root.addWidget(self.summary)
+        self.summary.setObjectName("ValueLabel")
+        root.addWidget(
+            dialog_header(title, "Informe NF/controle, série e data de cada proposta antes de revisar.", status=[self.summary])
+        )
 
         date_bar = QHBoxLayout()
-        date_bar.addWidget(QLabel("Data padrao da emissao:"))
+        date_label = QLabel("Data padrão da emissão:")
+        date_label.setObjectName("KeyLabel")
+        date_bar.addWidget(date_label)
         self.default_date = QDateEdit(QDate.currentDate())
         self.default_date.setCalendarPopup(True)
         self.default_date.setDisplayFormat("dd/MM/yyyy")
@@ -83,7 +84,7 @@ class FiscalEmissionDraftDialog(QDialog):
         root.addLayout(date_bar)
 
         self.table = QTableWidget(0, 9)
-        self.table.setHorizontalHeaderLabels(["Proposta / Cliente", "Selecao", "Itens", "Peso", "NF/Controle", "Serie", "Data", "Observacao", "Conferencia"])
+        self.table.setHorizontalHeaderLabels(["Proposta / Cliente", "Seleção", "Itens", "Peso", "NF/Controle", "Série", "Data", "Observação", "Conferência"])
         self.table.setSelectionMode(QAbstractItemView.NoSelection)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.verticalHeader().setVisible(False)
@@ -91,15 +92,11 @@ class FiscalEmissionDraftDialog(QDialog):
         self.table.setAlternatingRowColors(True)
         root.addWidget(self.table, 1)
 
-        footer = QHBoxLayout()
-        back = ModernButton("Voltar", "clear")
+        back = ModernButton("Voltar", "previous")
         back.clicked.connect(self.reject)
-        self.advance = ModernButton("Revisar e continuar", "status", accent=True)
+        self.advance = ModernButton("Revisar e continuar", "next", accent=True)
         self.advance.clicked.connect(self._advance)
-        footer.addWidget(back)
-        footer.addStretch()
-        footer.addWidget(self.advance)
-        root.addLayout(footer)
+        root.addWidget(dialog_footer(left=[StepIndicator(2, 3)], right=[back, self.advance]))
 
     def _payload_rows(self) -> list[dict[str, Any]]:
         rows = [dict(row) for row in self.selection.get("proposals", []) if row.get("items")]
@@ -143,7 +140,7 @@ class FiscalEmissionDraftDialog(QDialog):
 
             old = self.drafts.get(proposal_id, {})
             nf = QLineEdit(str(old.get("invoice_number") or ""))
-            nf.setPlaceholderText("Numero da NF ou controle")
+            nf.setPlaceholderText("Número da NF ou controle")
             nf.setMaxLength(120)
             series = QLineEdit(str(old.get("series") or old.get("invoice_series") or ""))
             series.setPlaceholderText("Opcional")
@@ -156,7 +153,7 @@ class FiscalEmissionDraftDialog(QDialog):
             view = QPushButton(f"Ver itens ({len(items)})")
             view.clicked.connect(lambda _checked=False, p=proposal_id, its=items: self._show_items(p, its))
             error = QLabel()
-            error.setStyleSheet("color: #b42318; font-size: 11px;")
+            set_notice_kind(error, "danger")
             error.setWordWrap(True)
             self.table.setCellWidget(row_index, 4, nf)
             self.table.setCellWidget(row_index, 5, series)
@@ -165,7 +162,7 @@ class FiscalEmissionDraftDialog(QDialog):
             self.table.setCellWidget(row_index, 8, view)
             nf.returnPressed.connect(lambda p=proposal_id: self._focus_next(p))
             nf.textChanged.connect(lambda _text, p=proposal_id: self._clear_row_error(p))
-            nf.setToolTip("Regra atual: NF/controle livre, sem mascara numerica obrigatoria.")
+            nf.setToolTip("Regra atual: NF/controle livre, sem máscara numérica obrigatória.")
             self.table.setRowHeight(row_index, 58)
             if first_nf is None:
                 first_nf = nf
@@ -187,8 +184,8 @@ class FiscalEmissionDraftDialog(QDialog):
         row = self._row_index(proposal_id)
         field = self.table.cellWidget(row, 4)
         if isinstance(field, QLineEdit):
-            field.setStyleSheet("")
-            field.setToolTip("Regra atual: NF/controle livre, sem mascara numerica obrigatoria.")
+            set_validation_state(field, "")
+            field.setToolTip("Regra atual: NF/controle livre, sem máscara numérica obrigatória.")
 
     def _focus_next(self, proposal_id: int):
         row = self._row_index(proposal_id)
@@ -243,7 +240,7 @@ class FiscalEmissionDraftDialog(QDialog):
         for proposal_id, message in errors:
             field = self.table.cellWidget(self._row_index(proposal_id), 4)
             if isinstance(field, QLineEdit):
-                field.setStyleSheet("border: 1px solid #b42318;")
+                set_validation_state(field, "error")
                 field.setToolTip(message)
         if errors:
             QMessageBox.warning(self, "Dados fiscais", "Corrija os campos destacados antes de continuar.\n\n" + "\n".join(message for _proposal_id, message in errors))

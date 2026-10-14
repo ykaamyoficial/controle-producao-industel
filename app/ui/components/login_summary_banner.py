@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
+from app.ui.components.app_icon_button import AppIconButton
 from app.ui.components.modern_button import ModernButton
-from app.ui.icons import AppIcons, make_icon
+from app.ui.icons import AppIcons, IconColorRole, make_icon
 
 
 def _pluralize(count: int, singular: str, plural: str) -> str:
@@ -33,35 +34,29 @@ class LoginSummaryBanner(QFrame):
     ):
         super().__init__(parent)
         self.service = service
-        self.setObjectName("Panel")
+        self.setObjectName("LoginSummaryBanner")
         self.setAttribute(Qt.WA_StyledBackground, True)
         self._build(display_name, unread_messages, unread_mentions, open_action_required)
 
     def _build(self, display_name: str, unread_messages: int, unread_mentions: int, open_action_required: int) -> None:
         palette = self.service.palette
-        self.setStyleSheet(
-            f"QFrame#Panel {{ background: {palette.get('surface', '#ffffff')}; "
-            f"border: 1px solid {palette.get('border', '#cbd5e1')}; border-radius: 10px; }}"
-        )
         outer = QVBoxLayout(self)
         outer.setContentsMargins(16, 12, 16, 12)
         outer.setSpacing(8)
 
         header = QHBoxLayout()
         title = QLabel(f"Bem-vindo, {display_name}" if display_name else "Bem-vindo")
-        title.setStyleSheet("font-size: 14px; font-weight: 800;")
+        title.setObjectName("BannerTitle")
         title.setWordWrap(True)
         header.addWidget(title, 1)
-        close_btn = QPushButton("x")
-        close_btn.setObjectName("GhostButton")
-        close_btn.setFixedSize(20, 20)
-        close_btn.setCursor(Qt.PointingHandCursor)
-        close_btn.setToolTip("Fechar")
+        close_btn = AppIconButton("clear", palette=palette, color_role=IconColorRole.MUTED, size=14, tooltip="Fechar")
+        close_btn.setObjectName("CloseIconButton")
+        close_btn.setFixedSize(24, 24)
         close_btn.clicked.connect(self._dismiss)
         header.addWidget(close_btn)
         outer.addLayout(header)
 
-        subtitle = QLabel("Voce possui itens que precisam da sua atencao.")
+        subtitle = QLabel("Você possui itens que precisam da sua atenção.")
         subtitle.setObjectName("Caption")
         subtitle.setWordWrap(True)
         outer.addWidget(subtitle)
@@ -75,7 +70,7 @@ class LoginSummaryBanner(QFrame):
         if unread_mentions > 0:
             rows.addLayout(
                 self._indicator(
-                    "at", palette.get("secondary", palette.get("accent", "#7c3aed")), _pluralize(unread_mentions, "mencao", "mencoes")
+                    "at", palette.get("secondary", palette.get("accent", "#7c3aed")), _pluralize(unread_mentions, "menção", "menções")
                 )
             )
         if open_action_required > 0:
@@ -83,7 +78,7 @@ class LoginSummaryBanner(QFrame):
                 self._indicator(
                     AppIcons.WARNING,
                     palette.get("warning", "#d97706"),
-                    _pluralize(open_action_required, "pendencia aberta", "pendencias abertas"),
+                    _pluralize(open_action_required, "pendência aberta", "pendências abertas"),
                 )
             )
         rows.addStretch()
@@ -93,11 +88,11 @@ class LoginSummaryBanner(QFrame):
         buttons.setSpacing(8)
         buttons.addStretch()
         if unread_messages > 0:
-            view_messages_btn = ModernButton("Ver mensagens", "chat")
+            view_messages_btn = ModernButton("Ver mensagens", "chat", accent=open_action_required <= 0)
             view_messages_btn.clicked.connect(self._on_view_messages)
             buttons.addWidget(view_messages_btn)
         if open_action_required > 0:
-            view_pending_btn = ModernButton("Ver pendencias", "warning")
+            view_pending_btn = ModernButton("Ver pendências", "warning", accent=True)
             view_pending_btn.clicked.connect(self._on_view_pending)
             buttons.addWidget(view_pending_btn)
         outer.addLayout(buttons)
@@ -109,7 +104,7 @@ class LoginSummaryBanner(QFrame):
         icon_label.setPixmap(make_icon(icon, color, 16).pixmap(16, 16))
         row.addWidget(icon_label)
         text_label = QLabel(text)
-        text_label.setStyleSheet("font-size: 12px; font-weight: 600;")
+        text_label.setObjectName("IndicatorText")
         row.addWidget(text_label)
         return row
 

@@ -7,7 +7,7 @@ from PySide6.QtGui import QPainterPath, QRegion
 from PySide6.QtWidgets import QDialog
 
 
-DIALOG_CORNER_RADIUS = 14
+DIALOG_CORNER_RADIUS = 16
 HEADER_DRAG_HEIGHT = 64
 
 

@@ -19,9 +19,12 @@ from PySide6.QtWidgets import (
 
 from app.ui.animations import fade_in
 from app.ui.background_worker import start_worker
+from app.ui.components.app_icon_button import AppIconButton
 from app.ui.components.modern_button import ModernButton
+from app.ui.components.style_state import StatusDot
 from app.ui.components.toast_notification import ToastNotification
 from app.ui.dialog_utils import apply_large_dialog_geometry, style_dialog_from_parent
+from app.ui.icons import AppIcons, IconSize
 from app.ui.resilience import show_operation_error
 from app.ui.proposal_chat_dialog import ChatConversationPanel
 from app.ui.styles import status_color
@@ -75,6 +78,7 @@ class ChatCenterPage(QWidget):
         # carrega e consegue selecionar o card correspondente sozinha.
         self._pending_target_proposal_id = proposal_id
         self._pending_target_conversation_id = conversation_id
+        self._close_handler = None
         self._build()
         if proposal_id is not None or conversation_id is not None:
             self._show_panel(proposal_id=proposal_id, conversation_id=conversation_id)
@@ -83,13 +87,17 @@ class ChatCenterPage(QWidget):
         self.refresh()
 
     def _build(self):
+        # Folga minima ate a borda da janela; o titulo "Chats" fica no topo da
+        # coluna da esquerda, entao as duas colunas sobem ate o topo.
         root = QVBoxLayout(self)
-        root.setContentsMargins(4, 2, 4, 4)
-        root.setSpacing(6)
+        root.setContentsMargins(3, 3, 3, 3)
+        root.setSpacing(0)
 
-        title = QLabel("\U0001F4AC Chats")
-        title.setStyleSheet("font-size: 15px; font-weight: 800;")
-        root.addWidget(title)
+        # X de fechar: so aparece quando a pagina esta num dialogo
+        # (set_close_handler), onde nao ha barra de titulo do Windows. Com uma
+        # conversa aberta o X fica no cabecalho dela, ao lado de "Atualizar";
+        # este aqui serve ao estado vazio (nenhuma conversa selecionada).
+        self.close_button = self._make_close_button()
 
         self.left_column = self._build_left_column()
         self.center_column = self._build_center_column()
@@ -98,7 +106,7 @@ class ChatCenterPage(QWidget):
 
         self.splitter = QSplitter(Qt.Horizontal)
         self.splitter.setChildrenCollapsible(False)
-        self.splitter.setHandleWidth(8)
+        self.splitter.setHandleWidth(4)
         self.splitter.addWidget(self.left_column)
         self.splitter.addWidget(self.center_column)
         self.splitter.setStretchFactor(0, 2)
@@ -106,12 +114,46 @@ class ChatCenterPage(QWidget):
         self.splitter.setSizes([CONVERSATION_LIST_WIDTH, max(360, self.width() - CONVERSATION_LIST_WIDTH)])
         root.addWidget(self.splitter, 1)
 
+    def _make_close_button(self) -> AppIconButton:
+        button = AppIconButton(
+            AppIcons.CLOSE,
+            palette=self.service.palette,
+            size=IconSize.LG,
+            tooltip="Fechar a central de chats",
+        )
+        button.setFixedSize(36, 36)
+        button.setVisible(False)
+        return button
+
+    def set_close_handler(self, handler) -> None:
+        """Mostra o X de fechar e liga ele a `handler` (o dialogo que hospeda)."""
+        self._close_handler = handler
+        self.close_button.clicked.connect(lambda _checked=False: handler())
+        self.close_button.setVisible(True)
+        if self.panel is not None:
+            self._wire_panel_close(self.panel)
+
+    def _wire_panel_close(self, panel: ChatConversationPanel) -> None:
+        """O X do cabecalho da conversa fecha a janela, como o da tela vazia."""
+        handler = self._close_handler
+        if handler is None:
+            return
+        panel.close_requested.connect(lambda: handler())
+        panel.set_close_button_visible(True)
+        self.close_button = panel.close_button
+
     def _build_left_column(self) -> QFrame:
         container = QFrame()
         container.setObjectName("Panel")
         layout = QVBoxLayout(container)
         layout.setContentsMargins(6, 6, 6, 6)
         layout.setSpacing(4)
+
+        title = QLabel("\U0001F4AC Chats")
+        title.setObjectName("FilterTitle")
+        title.setProperty("tone", "accent")
+        title.setContentsMargins(4, 2, 0, 2)
+        layout.addWidget(title)
 
         self.search = QLineEdit()
         self.search.setPlaceholderText("Pesquisar conversas...")
@@ -139,11 +181,6 @@ class ChatCenterPage(QWidget):
         self.conversation_list.setObjectName("ConversationList")
         self.conversation_list.setSpacing(3)
         self.conversation_list.setFrameShape(QFrame.NoFrame)
-        self.conversation_list.setStyleSheet(
-            "QListWidget#ConversationList { border: none; background: transparent; }"
-            "QListWidget#ConversationList QScrollBar:vertical { width: 5px; margin: 0px; }"
-            "QListWidget#ConversationList QScrollBar::handle:vertical { min-height: 24px; }"
-        )
         self.conversation_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.conversation_list.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.conversation_list.setUniformItemSizes(True)
@@ -155,21 +192,26 @@ class ChatCenterPage(QWidget):
 
     def _build_center_column(self) -> QFrame:
         self.center_container = QFrame()
-        # Nao usa "Panel" (borda + cantos arredondados) de proposito: com a
-        # margem zerada, um card arredondado ali vazaria por baixo do
-        # cabecalho reto da conversa. A unica divisoria agora e o
-        # border-bottom do proprio QFrame#ChatHeaderCard.
+        # Coluna da conversa com a mesma borda arredondada da lista da
+        # esquerda (QSS: QFrame#ChatCenterColumn[framed="true"]); o conteudo
+        # dentro dela fica sem borda, so com 1 px para nao cobrir a moldura.
         self.center_container.setObjectName("ChatCenterColumn")
+        self.center_container.setProperty("framed", True)
         self.center_layout = QVBoxLayout(self.center_container)
-        # Sem margem: o cabecalho da conversa (QFrame#ChatHeaderCard) e a
-        # unica divisoria, o resto preenche a coluna inteira edge-to-edge -
-        # ver ChatConversationPanel._build() em proposal_chat_dialog.py.
-        self.center_layout.setContentsMargins(0, 0, 0, 0)
+        self.center_layout.setContentsMargins(1, 1, 1, 1)
         self.center_layout.setSpacing(0)
-        self.empty_center_label = QLabel("Selecione uma conversa a esquerda para comecar.")
+        self.empty_center_label = QLabel("Selecione uma conversa a esquerda para começar.")
         self.empty_center_label.setAlignment(Qt.AlignCenter)
         self.empty_center_label.setObjectName("Caption")
-        self.center_layout.addWidget(self.empty_center_label)
+        empty_state = QWidget()
+        empty_layout = QVBoxLayout(empty_state)
+        empty_layout.setContentsMargins(16, 16, 16, 16)
+        top_row = QHBoxLayout()
+        top_row.addStretch()
+        top_row.addWidget(self.close_button)
+        empty_layout.addLayout(top_row)
+        empty_layout.addWidget(self.empty_center_label, 1)
+        self.center_layout.addWidget(empty_state)
         return self.center_container
 
     def _set_status_tab(self, status: str):
@@ -316,22 +358,17 @@ class ChatCenterPage(QWidget):
         top_row.setSpacing(5)
         if not is_general and conversation.get("proposal_status"):
             dot_color, _fg = status_color(conversation["proposal_status"], self.service.palette, conversation.get("proposal_area") or "")
-            status_dot = QLabel()
-            status_dot.setFixedSize(8, 8)
-            status_dot.setStyleSheet(f"background: {dot_color}; border-radius: 4px;")
-            top_row.addWidget(status_dot)
+            top_row.addWidget(StatusDot(dot_color))
         name_label = QLabel(name)
         name_label.setObjectName("ConversationProposal")
         name_label.setProperty("full_text", name)
-        name_label.setStyleSheet("font-weight: 700; font-size: 11px;")
         name_label.setMinimumWidth(0)
         name_label.setWordWrap(False)
         name_label.setText(name_label.fontMetrics().elidedText(name, Qt.ElideRight, max(90, card.width() - 90)))
         top_row.addWidget(name_label)
         top_row.addStretch()
         time_label = QLabel(_relative_time(conversation.get("last_activity_at")))
-        time_label.setStyleSheet("font-size: 9px;")
-        time_label.setObjectName("Caption")
+        time_label.setObjectName("ChatCaption")
         top_row.addWidget(time_label)
         layout.addLayout(top_row)
 
@@ -339,8 +376,7 @@ class ChatCenterPage(QWidget):
         subtitle = QLabel(subtitle_text)
         subtitle.setObjectName("ConversationClient")
         subtitle.setProperty("full_text", subtitle_text)
-        subtitle.setObjectName("Caption")
-        subtitle.setStyleSheet("font-size: 10px;")
+        subtitle.setObjectName("ChatCaption")
         subtitle.setMinimumWidth(0)
         subtitle.setWordWrap(False)
         subtitle.setText(subtitle.fontMetrics().elidedText(subtitle_text, Qt.ElideRight, max(120, card.width() - 26)))
@@ -357,8 +393,7 @@ class ChatCenterPage(QWidget):
         preview_label = QLabel(preview_text)
         preview_label.setObjectName("ConversationPreview")
         preview_label.setProperty("full_text", preview_text)
-        preview_label.setObjectName("Caption")
-        preview_label.setStyleSheet("font-size: 10px;")
+        preview_label.setObjectName("ChatCaption")
         preview_label.setWordWrap(False)
         preview_label.setMinimumWidth(0)
         metrics = preview_label.fontMetrics()
@@ -368,11 +403,8 @@ class ChatCenterPage(QWidget):
         if unread:
             badge = QLabel(str(unread) if unread < 100 else "99+")
             badge.setAlignment(Qt.AlignCenter)
-            badge.setFixedSize(19, 18)
-            badge.setStyleSheet(
-                f"background: {self.service.palette.get('danger', '#dc2626')}; color: #ffffff; "
-                "border-radius: 9px; font-weight: 800; font-size: 9px;"
-            )
+            badge.setFixedSize(22, 18)
+            badge.setObjectName("UnreadBadge")
             bottom_row.addWidget(badge)
         layout.addLayout(bottom_row)
         return card
@@ -421,6 +453,7 @@ class ChatCenterPage(QWidget):
                     cleanup()
                 widget.deleteLater()
         self.panel = ChatConversationPanel(self.service, proposal_id=proposal_id, conversation_id=conversation_id, parent=self.center_container)
+        self._wire_panel_close(self.panel)
         self.center_layout.addWidget(self.panel, 1)
         self._panel_fade = fade_in(self.panel, duration=220)
         return self.panel
@@ -434,6 +467,14 @@ class ChatCenterPage(QWidget):
             return
         if self._closing:
             return
+        # A thread da ultima atualizacao pontual pode ja ter sido apagada pelo
+        # Qt (finished -> deleteLater) enquanto a referencia continua aqui:
+        # isRunning() estourava RuntimeError a cada evento de tempo real.
+        if self._targeted_thread is not None:
+            try:
+                self._targeted_thread.isRunning()
+            except RuntimeError:
+                self._targeted_thread = None
         if self.panel is not None and self.panel.conversation_id == conversation_id:
             self.panel.refresh()
         index = next((i for i, row in enumerate(self.conversations) if int(row.get("id") or 0) == conversation_id), None)
@@ -542,5 +583,13 @@ class ChatCenterDialog(QDialog):
             message_id=message_id,
         )
         root.addWidget(self.page, 1)
+        self.page.set_close_handler(self.reject)
 
         self.setWindowTitle("Chats")
+
+    def done(self, result: int) -> None:  # noqa: N802 (Qt override)
+        # Fechar o dialogo (Fechar, Esc, X) nao dispara closeEvent na pagina
+        # filha: sem isto as threads de carga da conversa seguiam vivas depois
+        # de o dialogo sumir. Para timers, cancela envios e espera as threads.
+        self.page.cleanup()
+        super().done(result)

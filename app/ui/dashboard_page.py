@@ -3,11 +3,11 @@ from __future__ import annotations
 from datetime import datetime
 
 from PySide6.QtCore import QTimer
-from PySide6.QtGui import QColor
-from PySide6.QtWidgets import QFrame, QGraphicsDropShadowEffect, QGridLayout, QLabel, QScrollArea, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QFrame, QGridLayout, QScrollArea, QVBoxLayout, QWidget
 
 from app.ui.components.barra_progresso_area import BarraProgressoArea
 from app.ui.components.card_indicador import CardIndicador
+from app.ui.components.detail_widgets import key_label, make_panel
 from app.ui.components.grafico_status import GraficoStatus
 from app.ui.components.header_dashboard import HeaderDashboard
 from app.ui.components.tabela_prazos import TabelaPrazos
@@ -16,6 +16,20 @@ from app.ui.styles import area_color
 from app.ui.components.empty_state import EmptyState
 from app.ui.background_worker import start_worker
 from app.ui.theme_tokens import dashboard_chart_colors, dashboard_tokens
+
+# Chaves de dados que a API manda sem acento; so o texto mostrado ganha acento.
+_DISPLAY = {
+    "producao": "Produção",
+    "galvanizacao": "Galvanização",
+    "expedicao": "Expedição",
+    "prox. 7 dias": "Próx. 7 dias",
+    "7 dias": "Próx. 7 dias",
+    "pend. remanej.": "Pend. remanejadas",
+}
+
+
+def _display(key: str) -> str:
+    return _DISPLAY.get(key.strip().lower()) or key.replace("_", " ").title()
 
 
 class DashboardPage(QWidget):
@@ -36,8 +50,9 @@ class DashboardPage(QWidget):
     def _build(self):
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(14)
+        root.setSpacing(0)
         self.header = HeaderDashboard(self.service.palette)
+        self.header.refresh_button.clicked.connect(self.refresh)
         root.addWidget(self.header)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -46,9 +61,9 @@ class DashboardPage(QWidget):
         self.content = QWidget()
         self.content.setObjectName("DashboardContent")
         self.grid = QGridLayout(self.content)
-        self.grid.setContentsMargins(2, 2, 10, 12)
-        self.grid.setHorizontalSpacing(14)
-        self.grid.setVerticalSpacing(14)
+        self.grid.setContentsMargins(16, 16, 16, 16)
+        self.grid.setHorizontalSpacing(12)
+        self.grid.setVerticalSpacing(12)
         scroll.setWidget(self.content)
         root.addWidget(scroll, 1)
 
@@ -58,11 +73,9 @@ class DashboardPage(QWidget):
         self._refreshing = True
         self.tokens = dashboard_tokens(self.service.palette)
         self.header.set_palette(self.service.palette)
-        self._clear_dashboard_widgets()
-        self.header.update_content(
-            "Carregando indicadores operacionais...",
-            "Atualizando",
-        )
+        # Os cartoes antigos ficam na tela ate os novos chegarem (sem piscar).
+        self.header.refresh_button.rotate_while(True)
+        self.header.update_content("Carregando indicadores operacionais...", "")
         self._refresh_thread = start_worker(
             self,
             lambda: {"data": self.service.dashboard(), "charts": self.service.dashboard_charts()},
@@ -72,27 +85,30 @@ class DashboardPage(QWidget):
 
     def _refresh_success(self, payload):
         self._refreshing = False
+        self.header.refresh_button.rotate_while(False)
         data = payload.get("data") or {}
         charts = payload.get("charts") or {}
         self._render(data, charts)
 
     def _refresh_error(self, exc):
         self._refreshing = False
+        self.header.refresh_button.rotate_while(False)
         self.header.update_content(str(exc), "Falha ao atualizar")
 
     def _render(self, data: dict, charts: dict):
+        self._clear_dashboard_widgets()
         self.header.update_content(
             self._focus_text(data),
-            "Ultima atualizacao\n" + datetime.now().strftime("%d/%m/%Y  %H:%M"),
+            "Última atualização: " + datetime.now().strftime("%d/%m/%Y %H:%M"),
         )
         colors = dashboard_chart_colors(self.service.palette)
         definitions = [
             ("Ativas", data.get("Ativas", 0), "dashboard", self.service.palette["accent"]),
             ("Vencidos", data.get("Vencidos", 0), "history", self.service.palette["danger"]),
-            ("Prox. 7 dias", data.get("Prox. 7 dias", 0), "clock", self.service.palette["warning"]),
-            ("Producao", data.get("Producao", 0), "production", colors[0]),
-            ("Galvanizacao", data.get("Galvanizacao", 0), "galvanization", colors[2]),
-            ("Expedicao", data.get("Expedicao", 0), "expedition", self.service.palette["secondary"]),
+            ("Próx. 7 dias", data.get("Prox. 7 dias", 0), "clock", self.service.palette["warning"]),
+            ("Produção", data.get("Producao", 0), "production", colors[0]),
+            ("Galvanização", data.get("Galvanizacao", 0), "galvanization", colors[2]),
+            ("Expedição", data.get("Expedicao", 0), "expedition", self.service.palette["secondary"]),
             ("Pend. remanejadas", data.get("Pend. remanej.", 0), "partial", self.service.palette["warning"]),
             ("Entregues", data.get("Entregues", 0), "status", self.service.palette["success"]),
         ]
@@ -123,7 +139,8 @@ class DashboardPage(QWidget):
                 "pend. remanej.": "PRODUCAO",
             }.get(label.lower(), "CONTROLE GERAL")
             bar = BarraProgressoArea(
-                label, value, area_total, area_color(area_key, self.service.palette), self.service.palette
+                label, value, area_total, area_color(area_key, self.service.palette), self.service.palette,
+                display=_display(label) if label.lower() in _DISPLAY else None,
             )
             bar.clicked.connect(lambda key, source="areas": self._show_related(source, key))
             area_layout.addWidget(bar)
@@ -131,7 +148,7 @@ class DashboardPage(QWidget):
             area_layout.addWidget(
                 EmptyState(
                     "Sem filas operacionais",
-                    "As areas aparecerao aqui quando houver processos ativos.",
+                    "As áreas aparecerão aqui quando houver processos ativos.",
                     self.service.palette,
                 )
             )
@@ -141,10 +158,10 @@ class DashboardPage(QWidget):
         deadline_panel = TabelaPrazos(charts.get("prazos", []), self.service.palette)
         deadline_panel.item_clicked.connect(lambda key, source="prazos": self._show_related(source, key))
         self.panels = [
-            self._panel("Fila operacional por area", "Volume atual e participacao de cada setor", area_body),
+            self._panel("Fila operacional por área", "Volume atual e participação de cada setor", area_body),
             self._panel(
-                "Distribuicao por status",
-                "Composicao dos processos ativos",
+                "Distribuição por status",
+                "Composição dos processos ativos",
                 status_chart,
             ),
             self._panel(
@@ -158,10 +175,10 @@ class DashboardPage(QWidget):
 
     def _focus_text(self, data: dict) -> str:
         queues = {
-            "Producao": data.get("Producao", 0),
-            "Galvanizacao": data.get("Galvanizacao", 0),
-            "Expedicao": data.get("Expedicao", 0),
-            "Pend. remanej.": data.get("Pend. remanej.", 0),
+            "Produção": data.get("Producao", 0),
+            "Galvanização": data.get("Galvanizacao", 0),
+            "Expedição": data.get("Expedicao", 0),
+            "Pend. remanejadas": data.get("Pend. remanej.", 0),
         }
         label, value = max(queues.items(), key=lambda item: item[1])
         alerts = []
@@ -169,7 +186,7 @@ class DashboardPage(QWidget):
             alerts.append(f"{data['Vencidos']} vencida(s)")
         if data.get("Prox. 7 dias", 0):
             alerts.append(f"{data['Prox. 7 dias']} vencendo em 7 dias")
-        alert_text = ", ".join(alerts) if alerts else "sem atrasos criticos"
+        alert_text = ", ".join(alerts) if alerts else "sem atrasos críticos"
         queue_text = "sem filas operacionais" if not value else f"maior fila em {label} ({value})"
         return f"Foco operacional: {queue_text}. Alertas: {alert_text}."
 
@@ -179,33 +196,14 @@ class DashboardPage(QWidget):
             rows = self.service.dashboard_metric_rows(query_key)
         else:
             rows = self.service.dashboard_chart_rows(source, query_key)
-        title = key.replace("_", " ").title()
-        dialog = DashboardDetailsDialog(self.service, f"Propostas - {title}", rows, self)
-        dialog.setStyleSheet(self.window().styleSheet())
+        dialog = DashboardDetailsDialog(self.service, f"Propostas - {_display(key)}", rows, self)
         dialog.exec()
 
     def _panel(self, title: str, subtitle: str, body: QWidget) -> QFrame:
-        panel = QFrame()
-        panel.setObjectName("DashboardPanel")
+        panel, layout = make_panel(title)
         panel.setMinimumHeight(252)
-        panel.setStyleSheet(
-            f"QFrame#DashboardPanel {{ background: {self.tokens['surface']}; border: 1px solid {self.tokens['border']}; border-radius: 16px; }}"
-        )
-        shadow = QGraphicsDropShadowEffect(panel)
-        shadow.setBlurRadius(20)
-        shadow.setOffset(0, 1)
-        shadow.setColor(QColor(self.tokens["shadow"]))
-        panel.setGraphicsEffect(shadow)
-        layout = QVBoxLayout(panel)
-        layout.setContentsMargins(18, 16, 18, 16)
-        layout.setSpacing(4)
-        heading = QLabel(title)
-        heading.setStyleSheet("font-size: 15px; font-weight: 800;")
-        caption = QLabel(subtitle)
-        caption.setStyleSheet(f"color: {self.tokens['muted']}; font-size: 10px;")
-        layout.addWidget(heading)
-        layout.addWidget(caption)
-        layout.addSpacing(8)
+        layout.addWidget(key_label(subtitle))
+        layout.addSpacing(4)
         layout.addWidget(body, 1)
         return panel
 

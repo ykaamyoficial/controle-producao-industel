@@ -374,22 +374,22 @@ class SpecializedDialogRoutingTests(unittest.TestCase):
         dialog = BatchProposalActionCenter(service, [10, 20], "PRODUCAO")
         action = next(a for a in dialog.actions if a.id == "REGISTER_PRODUCTION")
         fake = MagicMock()
-        fake.exec.return_value = 1  # QDialog.Accepted
+        fake.registered = True
         with patch(
-            "app.ui.action_center.batch_action_center.ProductionRegistrationDialog", return_value=fake
+            "app.ui.action_center.batch_action_center.ProductionWizardDialog", return_value=fake
         ) as ctor:
             dialog.run_action(action)
         ctor.assert_called_once_with(service, [10, 20], dialog, observation="")
         self.assertTrue(dialog.changed)
         self.assertTrue(dialog.result())
 
-    def test_register_production_cancel_does_not_close_or_write(self):
+    def test_register_production_cancel_closes_the_center_without_changes(self):
         service = FakeBatchService("PRODUCAO", common_statuses=["FINALIZADO"])
         dialog = BatchProposalActionCenter(service, [10, 20], "PRODUCAO")
         action = next(a for a in dialog.actions if a.id == "REGISTER_PRODUCTION")
         fake = MagicMock()
-        fake.exec.return_value = 0  # usuario cancela a mesa de registro
-        with patch("app.ui.action_center.batch_action_center.ProductionRegistrationDialog", return_value=fake):
+        fake.registered = False  # usuario cancela o assistente
+        with patch("app.ui.action_center.batch_action_center.ProductionWizardDialog", return_value=fake):
             dialog.run_action(action)
         self.assertFalse(dialog.changed)
         self.assertFalse(dialog.result())
@@ -555,39 +555,29 @@ class SpecializedDialogRoutingTests(unittest.TestCase):
         passed_loads = chooser_ctor.call_args.args[0]
         self.assertEqual([row["id"] for row in passed_loads], [14])
 
-    def test_register_delivery_loops_item_selection_per_proposal(self):
-        service = FakeBatchService(
-            "EXPEDICAO", common_statuses=["ENTREGUE"],
-            pending_delivery_items={10: [{"id": 1}, {"id": 2}], 20: []},
-        )
+    def test_register_delivery_opens_the_wizard_with_exact_ids_and_closes_changed(self):
+        service = FakeBatchService("EXPEDICAO", common_statuses=["ENTREGUE"], pending_delivery_items={10: [{"id": 1}], 20: []})
         dialog = BatchProposalActionCenter(service, [10, 20], "EXPEDICAO")
         action = next(a for a in dialog.actions if a.id == "REGISTER_DELIVERY")
-        fake_selector = MagicMock()
-        fake_selector.exec.return_value = 1
-        fake_selector.selected_ids = [1, 2]
-        with patch(
-            "app.ui.action_center.batch_action_center.ItemSelectionDialog", return_value=fake_selector
-        ) as ctor, patch(
-            "app.ui.action_center.batch_action_center.QMessageBox.question", return_value=QMessageBox.Yes
-        ), patch("app.ui.action_center.batch_action_center.start_worker", side_effect=_run_synchronously):
+        fake = MagicMock()
+        fake.registered = True
+        with patch("app.ui.action_center.batch_action_center.DeliveryWizardDialog", return_value=fake) as ctor:
             dialog.run_action(action)
-        ctor.assert_called_once()  # so a proposta 10 tem itens pendentes
-        update_calls = {call[1]: call[3] for call in service.calls if call[0] == "update_status"}
-        self.assertEqual(update_calls, {10: "ENTREGUE", 20: "ENTREGUE"})
+        ctor.assert_called_once_with(service, [10, 20], dialog, observation="")
+        self.assertTrue(dialog.changed)
+        self.assertTrue(dialog.result())
 
-    def test_register_delivery_cancel_mid_loop_aborts_without_writing(self):
-        service = FakeBatchService(
-            "EXPEDICAO", common_statuses=["ENTREGUE"],
-            pending_delivery_items={10: [{"id": 1}]},
-        )
+    def test_register_delivery_cancel_closes_the_center_without_writing(self):
+        service = FakeBatchService("EXPEDICAO", common_statuses=["ENTREGUE"], pending_delivery_items={10: [{"id": 1}]})
         dialog = BatchProposalActionCenter(service, [10], "EXPEDICAO")
         action = next(a for a in dialog.actions if a.id == "REGISTER_DELIVERY")
-        fake_selector = MagicMock()
-        fake_selector.exec.return_value = 0  # usuario cancela a selecao de itens
-        with patch("app.ui.action_center.batch_action_center.ItemSelectionDialog", return_value=fake_selector):
+        fake = MagicMock()
+        fake.registered = False
+        with patch("app.ui.action_center.batch_action_center.DeliveryWizardDialog", return_value=fake):
             dialog.run_action(action)
         self.assertFalse(any(call[0] == "update_status" for call in service.calls))
         self.assertFalse(dialog.changed)
+        self.assertFalse(dialog.result())
 
 
 class RoutingErrorTests(unittest.TestCase):

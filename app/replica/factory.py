@@ -4,7 +4,7 @@ Desligada por padrao. No arquivo de configuracao:
 
 * `"local_replica": {"enabled": true}` mantem o arquivo sincronizado;
 * `"local_replica": {"enabled": true, "read": true}` tambem faz as telas ja
-  migradas lerem dele (hoje: Controle Geral). So listagens sem regra de negocio
+  migradas lerem dele (hoje: Controle Geral e a aba "Itens em expedicao"). So listagens sem regra de negocio
   sao lidas da replica; status, acoes e calculos continuam vindo da API.
 """
 

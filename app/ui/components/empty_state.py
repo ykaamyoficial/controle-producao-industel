@@ -19,6 +19,7 @@ class EmptyState(QWidget):
     ):
         super().__init__(parent)
         self._palette = palette or {}
+        self._action = action
         self.setObjectName("OperationalEmptyState")
 
         layout = QVBoxLayout(self)
@@ -38,8 +39,10 @@ class EmptyState(QWidget):
         icon_label = QLabel()
         icon_label.setObjectName("EmptyStateIcon")
         muted = self._palette.get("muted", "#64748b")
-        icon_label.setPixmap(make_icon(icon, muted, 32).pixmap(32, 32))
+        icon_label.setPixmap(make_icon(icon, muted, 26).pixmap(26, 26))
         icon_label.setAlignment(Qt.AlignCenter)
+        # Icone dentro de um circulo (fundo vem da folha de estilo).
+        icon_label.setFixedSize(56, 56)
 
         heading = QLabel(title)
         heading.setObjectName("EmptyStateTitle")
@@ -51,7 +54,7 @@ class EmptyState(QWidget):
         caption.setAlignment(Qt.AlignCenter)
         caption.setWordWrap(True)
 
-        block_layout.addWidget(icon_label)
+        block_layout.addWidget(icon_label, alignment=Qt.AlignCenter)
         block_layout.addWidget(heading)
         if description:
             block_layout.addWidget(caption)
@@ -61,6 +64,12 @@ class EmptyState(QWidget):
 
         layout.addWidget(block, 0, Qt.AlignCenter)
         layout.addStretch(1)
+
+    def set_action_visible(self, visible: bool) -> None:
+        """Mostra/esconde o botao de acao (ex.: "Limpar filtros" so faz
+        sentido quando ha filtro ativo)."""
+        if self._action is not None:
+            self._action.setVisible(visible)
 
     def set_text(self, title: str, description: str = "") -> None:
         heading = self.findChild(QLabel, "EmptyStateTitle")

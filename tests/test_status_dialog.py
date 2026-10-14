@@ -188,7 +188,7 @@ class StatusDialogAdminCorrectionTests(unittest.TestCase):
         from PySide6.QtWidgets import QPushButton
 
         labels = [btn.text() for btn in dialog.findChildren(QPushButton)]
-        self.assertNotIn("Correcao administrativa", labels)
+        self.assertNotIn("Correção administrativa", labels)
 
     def test_admin_button_visible_with_permission(self):
         service = FakeService("INICIADO", admin=True)
@@ -196,7 +196,7 @@ class StatusDialogAdminCorrectionTests(unittest.TestCase):
         from PySide6.QtWidgets import QPushButton
 
         labels = [btn.text() for btn in dialog.findChildren(QPushButton)]
-        self.assertIn("Correcao administrativa", labels)
+        self.assertIn("Correção administrativa", labels)
 
     def test_manual_correction_uses_only_api_options_preview_version_and_idempotency(self):
         service = FakeService("FINALIZADO", admin=True)

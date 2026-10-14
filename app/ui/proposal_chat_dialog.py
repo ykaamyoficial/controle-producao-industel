@@ -1,12 +1,28 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+import math
 from pathlib import Path
 import shutil
 import uuid
 
-from PySide6.QtCore import QEvent, QEasingCurve, QParallelAnimationGroup, QPropertyAnimation, QSize, Qt, QThread, QTimer, QUrl, Signal
-from PySide6.QtGui import QColor, QDesktopServices, QLinearGradient, QPainter
+from PySide6.QtCore import (
+    QEvent,
+    QEasingCurve,
+    QParallelAnimationGroup,
+    QPoint,
+    QPointF,
+    QPropertyAnimation,
+    QRect,
+    QSize,
+    Qt,
+    QThread,
+    QTimer,
+    QUrl,
+    QVariantAnimation,
+    Signal,
+)
+from PySide6.QtGui import QColor, QDesktopServices, QLinearGradient, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -27,16 +43,20 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from app.ui.animations import fade_in
+from app.ui.animations import fade_in, motion_duration
 from app.ui.background_worker import start_worker
 from app.ui.components.app_icon_button import AppIconButton
 from app.ui.components.chat_pending_attachments import AttachmentState
+from app.ui.components.dialog_shell import dialog_header
 from app.ui.chat_attachment_download_worker import AttachmentCacheManager, ChatAttachmentDownloadWorker, cached_attachment_path, safe_attachment_filename
 from app.ui.components.chat_message_attachments import MediaViewerDialog, attachment_display_category, attachment_filename, build_media_sequence, resolve_media_kind
 from app.ui.components.chat_shared_content import SharedContentPanel
 from app.ui.components.mention_compose_bar import MentionComposeBar
 from app.ui.components.modern_button import ModernButton
 from app.ui.components.proposal_activity_panel import ProposalActivityPanel
+from app.ui.components.status_badge import StatusBadge
+from app.ui.components.style_state import set_style_state
+from app.ui.dialog_utils import style_dialog_from_parent
 from app.ui.components.timeline_entries import (
     GROUP_WINDOW_SECONDS,
     CurrentUserMessageWidget,
@@ -55,6 +75,8 @@ from app.ui.chat_attachment_upload_worker import ChatAttachmentUploadWorker
 from app.ui.process_detail_dialog import ProcessDetailDialog
 from app.ui.styles import status_color
 
+
+HEADER_VERTICAL_PADDING = 18  # folga acima/abaixo do cabecalho da conversa
 
 NOTE_AREA_OPTIONS = [
     "CONTROLE GERAL",
@@ -98,20 +120,23 @@ class InternalNoteDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Registrar nota interna")
         self.setMinimumWidth(380)
+        style_dialog_from_parent(self, parent)
         layout = QVBoxLayout(self)
         layout.setSpacing(8)
+        # Sem a barra de titulo do Windows o titulo passa a ficar no cabecalho.
+        layout.addWidget(dialog_header("Registrar nota interna"))
 
-        area_label = QLabel("Area de origem")
+        area_label = QLabel("Área de origem")
         layout.addWidget(area_label)
         self.area_combo = QComboBox()
         for area in NOTE_AREA_OPTIONS:
             self.area_combo.addItem(area.title(), area)
         layout.addWidget(self.area_combo)
 
-        recipient_label = QLabel("Destinatario (opcional)")
+        recipient_label = QLabel("Destinatário (opcional)")
         layout.addWidget(recipient_label)
         self.recipient_combo = QComboBox()
-        self.recipient_combo.addItem("Nenhum — visivel para quem acessa a conversa", None)
+        self.recipient_combo.addItem("Nenhum — visível para quem acessa a conversa", None)
         for user in mentionable_users or []:
             self.recipient_combo.addItem(user.get("display_name") or "-", user.get("id"))
         layout.addWidget(self.recipient_combo)
@@ -122,7 +147,7 @@ class InternalNoteDialog(QDialog):
         body_label = QLabel("Nota")
         layout.addWidget(body_label)
         self.body_edit = QTextEdit()
-        self.body_edit.setPlaceholderText("Descreva a informacao interna importante...")
+        self.body_edit.setPlaceholderText("Descreva a informação interna importante...")
         self.body_edit.setMinimumHeight(100)
         layout.addWidget(self.body_edit)
 
@@ -196,28 +221,9 @@ class ChatTabButton(QPushButton):
         self.set_active(False)
 
     def set_active(self, active: bool) -> None:
-        palette = self._palette
-        accent = palette.get("accent", "#0078d4")
-        muted = palette.get("muted", "#64748b")
-        text_color = palette.get("text", "#0f172a")
-        color = accent if active else muted
-        underline = accent if active else "transparent"
-        self.setStyleSheet(f"""
-            QPushButton#ChatTabButton {{
-                background: transparent;
-                border: none;
-                border-bottom: 2px solid {underline};
-                border-radius: 0;
-                padding: 6px 2px 7px 2px;
-                color: {color};
-                font-weight: {700 if active else 600};
-                font-size: 12px;
-                text-align: left;
-            }}
-            QPushButton#ChatTabButton:hover {{
-                color: {accent if active else text_color};
-            }}
-        """)
+        # Cor, negrito e traco inferior vem de QPushButton#ChatTabButton[active]
+        # na folha de estilo.
+        set_style_state(self, active=bool(active))
 
 
 class _TopFadeOverlay(QWidget):
@@ -226,7 +232,7 @@ class _TopFadeOverlay(QWidget):
     sensacao do fade no topo da lista de mensagens do chat do Claude. So
     aparece quando ha algo rolado pra cima (ver _on_scroll_value_changed)."""
 
-    HEIGHT = 32
+    HEIGHT = 16  # discreto: so um respiro sob o cabecalho
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -279,15 +285,80 @@ class _BottomFadeOverlay(QWidget):
         self.update()
 
     def paintEvent(self, _event):
+        # Transicao em smoothstep (devagar -> firme -> devagar): as bolhas
+        # somem sem parecer "lavadas"; depois dela, 100% opaco ate o fundo.
         painter = QPainter(self)
         total_height = max(1, self.height())
         fade_ratio = min(1.0, self._fade_height / total_height)
         gradient = QLinearGradient(0, 0, 0, total_height)
-        for stop, alpha in ((0.0, 0), (fade_ratio * 0.55, 150), (fade_ratio, 255), (1.0, 255)):
+        steps = 12
+        for index in range(steps + 1):
+            t = index / steps
             color = QColor(self._color)
-            color.setAlpha(alpha)
-            gradient.setColorAt(min(1.0, max(0.0, stop)), color)
+            color.setAlpha(int(255 * (t * t * (3 - 2 * t))))
+            gradient.setColorAt(min(1.0, t * fade_ratio), color)
+        opaque = QColor(self._color)
+        opaque.setAlpha(255)
+        gradient.setColorAt(1.0, opaque)
         painter.fillRect(self.rect(), gradient)
+
+
+SEND_ANIMATION_MS = 420
+SEND_RISE_PX = 30
+SEND_SPRING_RESPONSE = 0.30  # s por ciclo (a mola das janelas usa 0.40)
+SEND_SPRING_DAMPING = 0.84  # quase sem quique: sobe e assenta
+BOTTOM_FADE_HEIGHT = 64
+
+
+def _send_spring(progress: float) -> float:
+    """Mesma formula da `animations.spring` das janelas, mais firme: o balao
+    assenta em ~250 ms sem quique perceptivel."""
+    elapsed = progress * SEND_ANIMATION_MS / 1000
+    natural = 2 * math.pi / SEND_SPRING_RESPONSE
+    decay = SEND_SPRING_DAMPING * natural
+    swing = natural * math.sqrt(1 - SEND_SPRING_DAMPING**2)
+    return 1 - math.exp(-decay * elapsed) * (math.cos(swing * elapsed) + decay / swing * math.sin(swing * elapsed))
+
+
+class _SendOverlay(QWidget):
+    """Foto do balao recem-enviado que sobe de tras da barra de digitacao ate
+    o lugar dele. O balao real fica oculto (reservando o espaco no layout)
+    enquanto a foto anima - nada de animar geometria de widget gerenciado
+    por layout."""
+
+    def __init__(self, viewport: QWidget, target: QWidget, pixmap: QPixmap):
+        super().__init__(viewport)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self._target = target
+        self._pixmap = pixmap
+        self._progress = 0.0
+        self.show()
+        self.raise_()
+        self._place()
+
+    def set_progress(self, progress: float) -> None:
+        self._progress = progress
+        self._place()
+        self.update()
+
+    def _place(self) -> None:
+        # Segue a posicao REAL do balao a cada quadro: a rolagem do feed
+        # continua acontecendo por baixo da animacao.
+        origin = self._target.mapTo(self.parentWidget(), QPoint(0, 0))
+        lift = (1.0 - _send_spring(self._progress)) * SEND_RISE_PX
+        self.setGeometry(QRect(origin.x(), origin.y() + int(lift), self._target.width(), self._target.height()))
+
+    def paintEvent(self, _event):
+        value = _send_spring(self._progress)
+        scale = 0.9 + 0.1 * min(1.0, value)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
+        painter.setOpacity(min(1.0, self._progress * 4.0))
+        anchor = QPointF(self.width(), self.height())  # sai do canto inferior direito
+        painter.translate(anchor)
+        painter.scale(scale, scale)
+        painter.translate(-anchor)
+        painter.drawPixmap(0, 0, self._pixmap)
 
 
 class ChatConversationPanel(QWidget):
@@ -299,10 +370,17 @@ class ChatConversationPanel(QWidget):
     tudo junto, sem duplicar nada."""
 
     entries_loaded = Signal()
+    close_requested = Signal()
 
     def __init__(self, service, proposal_id: int | None = None, conversation_id: int | None = None, parent=None):
         super().__init__(parent)
         self.service = service
+        # Animacao de envio (foto do balao que sobe) e rolagem: ver
+        # _start_send_animation e _render_entries.
+        self._send_pending: set = set()
+        self._send_running: dict = {}
+        self._force_bottom_once = False
+        self._close_button: AppIconButton | None = None
         self.proposal_id = proposal_id
         self.conversation_id = conversation_id
         self.entries: list[dict] = []
@@ -441,8 +519,10 @@ class ChatConversationPanel(QWidget):
         feed_stack_host = QWidget()
         feed_stack_host.setObjectName("ChatFeedStack")
         feed_stack_host.setAcceptDrops(True)
-        feed_stack_host.setStyleSheet("QWidget#ChatFeedStack { border: 0; }")
         self._feed_stack_host = feed_stack_host
+        # A mascara do fundo precisa acompanhar a area das mensagens, nao so o
+        # painel inteiro (senao mensagens apareciam abaixo da barra).
+        feed_stack_host.installEventFilter(self)
         self._feed_stack = QStackedLayout(feed_stack_host)
         self._feed_stack.setContentsMargins(0, 0, 0, 0)
         self._feed_stack.addWidget(self.scroll)
@@ -473,16 +553,15 @@ class ChatConversationPanel(QWidget):
 
         content_row.addLayout(left_col, 1)
 
+        # Sem espaco reservado entre os paineis laterais (recolhidos, largura
+        # 0): antes cada um deixava 8 px vazios entre as mensagens e a borda.
         if self.proposal_id is not None:
-            content_row.addSpacing(8)
             content_row.addWidget(self._build_drawer())
             self.activity_panel = ProposalActivityPanel(self.service, self.proposal_id)
-            content_row.addSpacing(8)
             content_row.addWidget(self.activity_panel)
 
         # Fase 7 - "Midia e arquivos": disponivel tanto em propostas quanto no
         # Chat Geral (ao contrario do drawer/atividade, que sao so de proposta).
-        content_row.addSpacing(8)
         self.shared_content_panel = SharedContentPanel(self.service)
         self.shared_content_panel.open_attachment_requested.connect(self._open_attachment)
         self.shared_content_panel.download_attachment_requested.connect(self._save_attachment_as)
@@ -530,16 +609,11 @@ class ChatConversationPanel(QWidget):
         if active == self._attachment_drag_active or not hasattr(self, "_feed_stack_host"):
             return
         self._attachment_drag_active = active
+        set_style_state(self._feed_stack_host, dropActive=active)
         if active:
-            palette = self.service.palette
-            self._feed_stack_host.setStyleSheet(
-                f"QWidget#ChatFeedStack {{ border: 2px dashed {palette.get('accent', '#0078d4')}; "
-                f"background: {palette.get('surface_alt', '#e2e8f0')}; }}"
-            )
             self.loading.setText("Solte os arquivos para anexar")
             self.loading.setVisible(True)
             return
-        self._feed_stack_host.setStyleSheet("QWidget#ChatFeedStack { border: 0; }")
         if self.loading.text() == "Solte os arquivos para anexar":
             self.loading.setVisible(False)
             self.loading.setText("Carregando...")
@@ -559,7 +633,7 @@ class ChatConversationPanel(QWidget):
 
         title = QLabel("Nenhuma mensagem nesta proposta")
         title.setAlignment(Qt.AlignCenter)
-        title.setStyleSheet("font-weight: 700; font-size: 13px;")
+        title.setObjectName("PanelTitle")
         layout.addWidget(title)
 
         subtitle = QLabel("Inicie uma conversa com os participantes da proposta.")
@@ -632,7 +706,7 @@ class ChatConversationPanel(QWidget):
         # sem nenhuma mascara e mensagens rolando voltam a aparecer ali.
         # _BottomFadeOverlay.paintEvent so faz a transicao nos primeiros
         # fade_height px do proprio overlay; o resto fica 100% opaco.
-        fade_height = 80
+        fade_height = BOTTOM_FADE_HEIGHT
         overlay_top = max(0, wrapper_y - fade_height)
         overlay_height = height - overlay_top
         self._bottom_fade.set_fade_height(fade_height)
@@ -671,7 +745,7 @@ class ChatConversationPanel(QWidget):
         header = QFrame()
         header.setObjectName("ChatHeaderCard")
         layout = QVBoxLayout(header)
-        layout.setContentsMargins(16, 10, 16, 0)
+        layout.setContentsMargins(16, HEADER_VERTICAL_PADDING, 16, HEADER_VERTICAL_PADDING - 6)
         layout.setSpacing(2)
 
         palette = self.service.palette
@@ -684,7 +758,7 @@ class ChatConversationPanel(QWidget):
         title_col = QVBoxLayout()
         title_col.setSpacing(0)
         proposal_label = QLabel(proposal.get("proposta") or str(self.proposal_id))
-        proposal_label.setStyleSheet("font-size: 17px; font-weight: 800;")
+        proposal_label.setObjectName("DetailTitle")
         title_col.addWidget(proposal_label)
         client_label = QLabel(proposal.get("cliente") or "-")
         client_label.setObjectName("Caption")
@@ -695,11 +769,7 @@ class ChatConversationPanel(QWidget):
 
         if status:
             bg, fg = status_color(status, palette, area or "")
-            status_badge = QLabel(self.service.status_label(status))
-            status_badge.setStyleSheet(
-                f"background: {bg}; color: {fg}; border-radius: 9px; padding: 2px 10px; font-weight: 700; font-size: 11px;"
-            )
-            top_row.addWidget(status_badge)
+            top_row.addWidget(StatusBadge(self.service.status_label(status), bg, fg))
 
         refresh_btn = AppIconButton(AppIcons.REFRESH, palette=palette, size=IconSize.LG, tooltip="Atualizar conversa")
         refresh_btn.setFixedSize(36, 36)
@@ -710,6 +780,7 @@ class ChatConversationPanel(QWidget):
         self.info_btn.setFixedSize(36, 36)
         self.info_btn.clicked.connect(self._toggle_drawer)
         top_row.addWidget(self.info_btn)
+        top_row.addWidget(self._build_close_button())
         layout.addLayout(top_row)
 
         tabs_row = QHBoxLayout()
@@ -736,11 +807,35 @@ class ChatConversationPanel(QWidget):
         self._apply_header_shadow(header)
         return header
 
+    def _build_close_button(self) -> AppIconButton:
+        """X de fechar a janela, ao lado de "Atualizar conversa". Fica oculto
+        ate a tela que hospeda o painel pedir (set_close_button_visible):
+        painel embutido fora de um dialogo nao tem o que fechar."""
+        button = AppIconButton(
+            AppIcons.CLOSE,
+            palette=self.service.palette,
+            size=IconSize.LG,
+            tooltip="Fechar a central de chats",
+        )
+        button.setFixedSize(36, 36)
+        button.setVisible(False)
+        button.clicked.connect(lambda _checked=False: self.close_requested.emit())
+        self._close_button = button
+        return button
+
+    def set_close_button_visible(self, visible: bool) -> None:
+        if self._close_button is not None:
+            self._close_button.setVisible(bool(visible))
+
+    @property
+    def close_button(self) -> AppIconButton | None:
+        return self._close_button
+
     def _build_general_header(self) -> QFrame:
         header = QFrame()
         header.setObjectName("ChatHeaderCard")
         layout = QHBoxLayout(header)
-        layout.setContentsMargins(16, 10, 16, 10)
+        layout.setContentsMargins(16, HEADER_VERTICAL_PADDING, 16, HEADER_VERTICAL_PADDING)
         self.shared_content_btn = ChatTabButton("Midia e arquivos", AppIcons.ATTACH, self.service.palette)
         self.shared_content_btn.clicked.connect(self._toggle_shared_content_panel)
         layout.addWidget(self.shared_content_btn)
@@ -749,6 +844,7 @@ class ChatConversationPanel(QWidget):
         refresh_btn.setFixedSize(36, 36)
         refresh_btn.clicked.connect(self.refresh)
         layout.addWidget(refresh_btn)
+        layout.addWidget(self._build_close_button())
         self._apply_header_shadow(header)
         return header
 
@@ -774,7 +870,7 @@ class ChatConversationPanel(QWidget):
         layout.setSpacing(10)
 
         title = QLabel("Detalhes da proposta")
-        title.setStyleSheet("font-weight: 800;")
+        title.setObjectName("ValueLabel")
         layout.addWidget(title)
 
         proposal = self.proposal or {}
@@ -792,14 +888,14 @@ class ChatConversationPanel(QWidget):
             caption = QLabel(label)
             caption.setObjectName("Caption")
             content = QLabel(str(value))
-            content.setStyleSheet("font-weight: 700;")
+            content.setObjectName("ValueLabel")
             content.setWordWrap(True)
             cell.addWidget(caption)
             cell.addWidget(content)
             layout.addLayout(cell)
 
         participants_title = QLabel("Participantes")
-        participants_title.setStyleSheet("font-weight: 800;")
+        participants_title.setObjectName("ValueLabel")
         layout.addWidget(participants_title)
         self._drawer_participants_layout = QVBoxLayout()
         self._drawer_participants_layout.setSpacing(4)
@@ -981,7 +1077,7 @@ class ChatConversationPanel(QWidget):
             "attach": "Anexos ainda nao estao disponiveis nesta versao.",
             "mic": "Gravacao de audio ainda nao esta disponivel nesta versao.",
         }
-        ToastNotification(self.window(), messages.get(action, "Ainda nao disponivel nesta versao."), "error")
+        ToastNotification(self.window(), messages.get(action, "Ainda não disponível nesta versão."), "error")
 
     def refresh(self):
         if self._closing:
@@ -1101,7 +1197,7 @@ class ChatConversationPanel(QWidget):
             self._load_older_messages()
             return
         self._pending_jump_message_id = None
-        ToastNotification(self.window(), "Mensagem original nao esta mais disponivel no historico carregado.", "error")
+        ToastNotification(self.window(), "Mensagem original não está mais disponível no histórico carregado.", "error")
 
     def _older_error(self, exc):
         self._loading_older = False
@@ -1126,6 +1222,13 @@ class ChatConversationPanel(QWidget):
         if message["id"] in existing_ids:
             return
         previous_entries = list(self.entries)
+        message_id = message["id"]
+        # Enviou: sempre ve a propria mensagem, e ela entra com a animacao
+        # (a menos que "Reduzir animacoes" esteja ligado).
+        self._force_bottom_once = True
+        animate = motion_duration(SEND_ANIMATION_MS) > 0
+        if animate:
+            self._send_pending.add(message_id)
         try:
             self.entries.append(_messages_to_entries([message])[0])
             self._annotate_entries()
@@ -1133,6 +1236,72 @@ class ChatConversationPanel(QWidget):
         except Exception:
             self.entries = previous_entries
             self._annotate_entries()
+            self._send_pending.discard(message_id)
+            return
+        if animate:
+            QTimer.singleShot(30, lambda: self._start_send_animation(message_id))
+
+    def _hide_while_sending(self, content: QWidget) -> None:
+        policy = content.sizePolicy()
+        policy.setRetainSizeWhenHidden(True)
+        content.setSizePolicy(policy)
+        content.hide()
+
+    def _start_send_animation(self, message_id) -> None:
+        if self._closing or message_id in self._send_running:
+            self._finish_send_animation(message_id)
+            return
+        cached = self._entry_widgets.get(("chat", message_id))
+        if cached is None:
+            self._finish_send_animation(message_id)
+            return
+        _row, content = cached
+        try:
+            overlay = _SendOverlay(self.scroll.viewport(), content, content.grab())
+        except RuntimeError:
+            self._finish_send_animation(message_id)
+            return
+        animation = QVariantAnimation(overlay)
+        animation.setStartValue(0.0)
+        animation.setEndValue(1.0)
+        animation.setDuration(motion_duration(SEND_ANIMATION_MS))
+        animation.valueChanged.connect(lambda value: self._tick_send_animation(message_id, float(value)))
+        animation.finished.connect(lambda: self._finish_send_animation(message_id))
+        self._send_running[message_id] = (overlay, animation)
+        animation.start()
+
+    def _tick_send_animation(self, message_id, progress: float) -> None:
+        running = self._send_running.get(message_id)
+        if running is None:
+            return
+        try:
+            running[0].set_progress(progress)
+        except RuntimeError:
+            pass
+
+    def _finish_send_animation(self, message_id) -> None:
+        self._send_pending.discard(message_id)
+        running = self._send_running.pop(message_id, None)
+        if running is not None:
+            try:
+                running[1].stop()
+                running[0].deleteLater()
+            except RuntimeError:
+                pass
+        cached = self._entry_widgets.get(("chat", message_id))
+        if cached is not None:
+            try:
+                cached[1].show()
+            except RuntimeError:
+                pass
+
+    def eventFilter(self, watched, event):  # noqa: N802 (Qt override)
+        if event.type() == QEvent.Resize and watched is getattr(self, "_feed_stack_host", None):
+            try:
+                self._reposition_compose_overlay()
+            except (RuntimeError, AttributeError):
+                pass  # painel ainda em construcao ou ja destruido
+        return super().eventFilter(watched, event)
 
     def apply_realtime_event(self, event_type: str, data: dict) -> None:
         if event_type not in {"attachment.created", "attachment.deleted"} or not isinstance(data, dict):
@@ -1182,6 +1351,8 @@ class ChatConversationPanel(QWidget):
         if self._closing:
             return
         self._closing = True
+        for message_id in list(self._send_running):
+            self._finish_send_animation(message_id)
         self._stop_all_media()
         if hasattr(self, "_poll_timer"):
             self._poll_timer.stop()
@@ -1320,7 +1491,12 @@ class ChatConversationPanel(QWidget):
             content = CurrentUserMessageWidget(entry, self.service, current_user_id, self._mentionable_names, grouped)
             content.reply_requested.connect(self._start_reply)
             self._connect_entry_widget(content)
-            return self._wrap_row(content, "right"), content
+            row = self._wrap_row(content, "right")
+            # Depois do _wrap_row (reparentar limpa o "oculto" explicito): a
+            # foto animada do envio ocupa o lugar ate a animacao terminar.
+            if entry.get("id") in self._send_pending:
+                self._hide_while_sending(content)
+            return row, content
         content = OtherUserMessageWidget(entry, self.service, current_user_id, self._mentionable_names, grouped)
         content.reply_requested.connect(self._start_reply)
         self._connect_entry_widget(content)
@@ -1341,7 +1517,7 @@ class ChatConversationPanel(QWidget):
     def _jump_to_message(self, message_id: int):
         cached = self._entry_widgets.get(("chat", message_id))
         if cached is None:
-            ToastNotification(self.window(), "Mensagem original nao esta carregada nesta pagina.", "error")
+            ToastNotification(self.window(), "Mensagem original não está carregada nesta página.", "error")
             return
         row, _content = cached
         self.scroll.ensureWidgetVisible(row)
@@ -1357,7 +1533,7 @@ class ChatConversationPanel(QWidget):
             self._jump_to_message(message_id)
             return
         if not self._has_more_older:
-            ToastNotification(self.window(), "Mensagem original nao esta mais disponivel no historico carregado.", "error")
+            ToastNotification(self.window(), "Mensagem original não está mais disponível no histórico carregado.", "error")
             return
         self._pending_jump_message_id = message_id
         if not self._loading_older:
@@ -1381,9 +1557,17 @@ class ChatConversationPanel(QWidget):
             QTimer.singleShot(0, lambda: self._jump_to_message(message_id))
 
     def _flash_highlight(self, row: QWidget):
-        original_style = row.styleSheet()
-        row.setStyleSheet(original_style + "background: rgba(0, 120, 212, 60);")
-        QTimer.singleShot(700, lambda: row.setStyleSheet(original_style))
+        row.setObjectName("ChatFlashRow")
+        row.setAttribute(Qt.WA_StyledBackground, True)
+        set_style_state(row, flash=True)
+
+        def clear_flash():
+            try:
+                set_style_state(row, flash=False)
+            except RuntimeError:  # a linha pode ter sido recriada no refresh
+                pass
+
+        QTimer.singleShot(700, clear_flash)
 
     def _wrap_row(self, content: QWidget, align: str) -> QWidget:
         row = QWidget()
@@ -1493,11 +1677,17 @@ class ChatConversationPanel(QWidget):
                 self.feed_layout.removeWidget(separator)
                 separator.deleteLater()
 
+        force_bottom = self._force_bottom_once
+        self._force_bottom_once = False
         if suppress_autoscroll:
             return has_new_from_others
-        if at_bottom or not has_new_from_others:
+        # So desce se o usuario ja estava no fim ou acabou de enviar uma
+        # mensagem. Antes descia sempre que nao chegava mensagem nova de
+        # outra pessoa, e cada atualizacao automatica (15 s, tempo real)
+        # puxava a conversa de volta enquanto ele lia o historico.
+        if at_bottom or force_bottom:
             QTimer.singleShot(0, self._scroll_to_bottom)
-        else:
+        elif has_new_from_others:
             self._show_new_messages_button()
         return has_new_from_others
 
@@ -1560,7 +1750,7 @@ class ChatConversationPanel(QWidget):
 
     def _reassign_question(self, message_id: int):
         if not self._mentionable_users:
-            ToastNotification(self.window(), "Nenhum usuario disponivel para reatribuicao.", "error")
+            ToastNotification(self.window(), "Nenhum usuário disponível para reatribuição.", "error")
             return
         names = [user.get("display_name") or "-" for user in self._mentionable_users]
         name, ok = QInputDialog.getItem(self, "Reatribuir pergunta", "Novo responsavel:", names, 0, False)
@@ -1577,12 +1767,12 @@ class ChatConversationPanel(QWidget):
         except Exception as exc:
             ToastNotification(self.window(), str(exc), "error")
             return
-        ToastNotification(self.window(), "Pergunta reatribuida.", "success")
+        ToastNotification(self.window(), "Pergunta reatribuída.", "success")
         self.refresh()
 
     def _open_internal_note_dialog(self):
         if not self.conversation_id:
-            ToastNotification(self.window(), "Conversa ainda nao carregada, tente novamente.", "error")
+            ToastNotification(self.window(), "Conversa ainda não carregada, tente novamente.", "error")
             return
         dialog = InternalNoteDialog(self, mentionable_users=self._mentionable_users)
         if dialog.exec() != QDialog.Accepted:
@@ -1608,7 +1798,7 @@ class ChatConversationPanel(QWidget):
             ToastNotification(self.window(), "Escreva uma mensagem ou adicione um anexo antes de enviar.", "error")
             return
         if not self.conversation_id:
-            ToastNotification(self.window(), "Conversa ainda nao carregada, tente novamente.", "error")
+            ToastNotification(self.window(), "Conversa ainda não carregada, tente novamente.", "error")
             return
         if self._upload_thread is not None and self._upload_thread.isRunning():
             ToastNotification(self.window(), "Aguarde o envio dos anexos em andamento.", "error")
@@ -1789,10 +1979,10 @@ class ChatConversationPanel(QWidget):
         try:
             attachment_id = int(attachment["id"])
         except (KeyError, TypeError, ValueError):
-            ToastNotification(self.window(), "Anexo invalido para download.", "error")
+            ToastNotification(self.window(), "Anexo inválido para download.", "error")
             return
         if attachment_id in self._download_jobs:
-            ToastNotification(self.window(), "Este anexo ja esta sendo baixado.", "error")
+            ToastNotification(self.window(), "Este anexo já está sendo baixado.", "error")
             return
         thread = QThread(self)
         worker = ChatAttachmentDownloadWorker(self.service, attachment, destination)
@@ -1825,7 +2015,7 @@ class ChatConversationPanel(QWidget):
     def _on_attachment_download_failed(self, attachment: dict, message: str) -> None:
         name = attachment_filename(attachment)
         self._remember_attachment_error(attachment, message)
-        ToastNotification(self.window(), f"Nao foi possivel baixar {name}: {message}", "error")
+        ToastNotification(self.window(), f"Não foi possível baixar {name}: {message}", "error")
 
     def _open_downloaded_attachment(self, attachment: dict, path: str) -> None:
         if attachment_display_category(attachment) == "image" or resolve_media_kind(attachment) == "video":
@@ -1833,7 +2023,7 @@ class ChatConversationPanel(QWidget):
             return
         opened = QDesktopServices.openUrl(QUrl.fromLocalFile(path))
         if not opened:
-            ToastNotification(self.window(), "Nao foi possivel abrir o arquivo no Windows.", "error")
+            ToastNotification(self.window(), "Não foi possível abrir o arquivo no Windows.", "error")
 
     def _remember_attachment_cache_path(self, attachment: dict, path: str) -> None:
         attachment_id = attachment.get("id")
@@ -1871,7 +2061,7 @@ class ChatConversationPanel(QWidget):
         failed = [item for item in self.compose_bar.pending_attachments() if item.state in {AttachmentState.FAILED, AttachmentState.CANCELLED}]
         if failed:
             self.compose_bar.set_sending(False)
-            ToastNotification(self.window(), "Alguns anexos nao foram enviados. Voce pode remover ou tentar novamente.", "error")
+            ToastNotification(self.window(), "Alguns anexos não foram enviados. Você pode remover ou tentar novamente.", "error")
             self.refresh()
             return
         self._pending_attachment_message_id = None

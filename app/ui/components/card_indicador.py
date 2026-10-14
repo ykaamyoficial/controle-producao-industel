@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QColor
-from PySide6.QtWidgets import QFrame, QGraphicsDropShadowEffect, QHBoxLayout, QLabel, QVBoxLayout
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout
 
-from app.ui.icons import make_icon
-from app.ui.theme_tokens import dashboard_tokens, with_alpha
+from app.ui.components.detail_widgets import IconChip
+from app.ui.theme_tokens import dashboard_tokens
 
 
 class CardIndicador(QFrame):
+    """Cartao de indicador do Painel geral. Clicavel (mouse ou Enter/Espaco);
+    cor e hover vem da folha de estilo (`IndicatorCard`), sem estilo inline."""
+
     clicked = Signal(str)
 
     def __init__(self, title: str, value: int, icon_name: str, tone: str, palette: dict, parent=None):
@@ -17,51 +19,32 @@ class CardIndicador(QFrame):
         self.tone = tone
         self.metric_key = title
         self.setObjectName("IndicatorCard")
-        self.setMinimumHeight(112)
+        self.setMinimumHeight(96)
         self.setCursor(Qt.PointingHandCursor)
-        self._apply_style(False)
-        shadow = QGraphicsDropShadowEffect(self)
-        shadow.setBlurRadius(20)
-        shadow.setOffset(0, 1)
-        shadow.setColor(QColor(self.tokens["shadow"]))
-        self.setGraphicsEffect(shadow)
+        self.setFocusPolicy(Qt.StrongFocus)
+        self.setAccessibleName(f"{title}: {value}")
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setContentsMargins(16, 14, 16, 14)
         layout.setSpacing(14)
-        icon = QLabel()
-        icon.setPixmap(make_icon(icon_name, tone, 32).pixmap(32, 32))
-        icon.setFixedSize(52, 52)
-        icon.setAlignment(Qt.AlignCenter)
-        icon.setStyleSheet(f"background: {with_alpha(tone, 30)}; border-radius: 14px;")
         copy = QVBoxLayout()
-        copy.setSpacing(1)
-        label = QLabel(title)
-        label.setStyleSheet(f"color: {self.tokens['muted']}; font-size: 11px; font-weight: 700;")
-        label.setWordWrap(True)
-        label.setMinimumHeight(28)
-        number = QLabel(str(value))
-        number.setStyleSheet(f"color: {self.tokens['text']}; font-size: 27px; font-weight: 800;")
-        copy.addWidget(label)
-        copy.addWidget(number)
-        layout.addWidget(icon)
+        copy.setSpacing(0)
+        self.title_label = QLabel(title)
+        self.title_label.setObjectName("IndicatorLabel")
+        self.title_label.setWordWrap(True)
+        self.number_label = QLabel(str(value))
+        self.number_label.setObjectName("IndicatorValue")
+        copy.addWidget(self.title_label)
+        copy.addWidget(self.number_label)
+        layout.addWidget(IconChip(icon_name, tone, size=44), 0, Qt.AlignVCenter)
         layout.addLayout(copy, 1)
-
-    def _apply_style(self, hovered: bool):
-        background = self.tokens["hover"] if hovered else self.tokens["surface"]
-        border = self.tone if hovered else self.tokens["border"]
-        self.setStyleSheet(
-            f"QFrame#IndicatorCard {{ background: {background}; border: 1px solid {border}; border-radius: 16px; }}"
-        )
-
-    def enterEvent(self, event):
-        self._apply_style(True)
-        super().enterEvent(event)
-
-    def leaveEvent(self, event):
-        self._apply_style(False)
-        super().leaveEvent(event)
 
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.LeftButton and self.rect().contains(event.position().toPoint()):
             self.clicked.emit(self.metric_key)
         super().mouseReleaseEvent(event)
+
+    def keyPressEvent(self, event):
+        if event.key() in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space):
+            self.clicked.emit(self.metric_key)
+            return
+        super().keyPressEvent(event)

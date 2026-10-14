@@ -92,3 +92,42 @@ class ActivityHeadlineTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HistoryReadabilityTests(unittest.TestCase):
+    def test_every_emitted_event_type_has_a_template(self):
+        import re
+        from pathlib import Path
+
+        from api.app.modules.proposals import service
+
+        source = Path(service.__file__).read_text(encoding="utf-8")
+        emitted = set(re.findall(r'_record_(?:expedition_|load_|fiscal_)?event\([^"\n]*?"([A-Z][A-Z_]+)"', source))
+        self.assertGreater(len(emitted), 30)
+        missing = sorted(emitted - set(service.ACTIVITY_TEMPLATES))
+        self.assertEqual(missing, [], f"event_type sem frase legivel: {missing}")
+
+    def test_batch_events_collapse_into_one_row(self):
+        from datetime import datetime, timezone
+
+        from api.app.modules.proposals.schemas import ProposalHistoryItem
+        from api.app.modules.proposals.service import _group_history_rows
+
+        moment = datetime(2026, 9, 28, 19, 17, 49, tzinfo=timezone.utc)
+        rows = [
+            ProposalHistoryItem(
+                id=i, source="proposal", proposal_id=1, event_type="PRODUCTION_ITEM_FLOW_UPDATED", actor_user_id=7,
+                actor_name="Joao", title="Joao definiu o fluxo de producao do item.", request_id="req-1", created_at=moment,
+            )
+            for i in range(8)
+        ]
+        rows.append(rows[0].model_copy(update={"id": 99, "event_type": "PRODUCTION_STARTED", "title": "Joao iniciou a producao.", "request_id": "req-2"}))
+        grouped = _group_history_rows(rows)
+        self.assertEqual(len(grouped), 2)
+        self.assertEqual(grouped[0].count, 8)
+        self.assertEqual(grouped[0].title, "Joao definiu o fluxo de producao de 8 itens.")
+        self.assertEqual(grouped[1].count, 1)
+
+    def test_remanagement_headlines_are_readable(self):
+        text = _activity_headline("GALVANIZATION_ITEM_OWNER_CHANGED", "Ana", {"direction": "OUT", "quantity": "5.0000"}, None, None)
+        self.assertEqual(text, "Ana passou 5 unidade(s) para outra proposta na carga de galvanizacao (remanejamento).")

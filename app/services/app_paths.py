@@ -15,6 +15,30 @@ def is_packaged() -> bool:
     return bool(getattr(sys, "frozen", False))
 
 
+def get_install_root() -> Path:
+    """Raiz da instalacao (onde fica o launcher). No layout versionado o exe
+    roda em <raiz>/versions/<v>/; no layout antigo (plano) a raiz e a propria
+    pasta do exe. Fora do pacote PyInstaller devolve a raiz do repositorio."""
+    if not is_packaged():
+        return ROOT_DIR
+    exe_dir = Path(sys.executable).resolve().parent
+    if exe_dir.parent.name == "versions":
+        return exe_dir.parent.parent
+    return exe_dir
+
+
+def get_launcher_path() -> Path:
+    """Executavel que atalhos/Startup/toasts devem apontar. Estavel entre
+    versoes (no layout antigo e o proprio exe)."""
+    if not is_packaged():
+        return Path(sys.executable)
+    root = get_install_root()
+    launcher = root / "ControleProducao.exe"
+    if launcher.is_file():
+        return launcher
+    return Path(sys.executable).resolve()
+
+
 def get_program_data_root() -> Path:
     override = os.environ.get("CONTROLE_PRODUCAO_DATA_DIR")
     if override:

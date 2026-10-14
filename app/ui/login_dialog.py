@@ -5,7 +5,10 @@ from PySide6.QtWidgets import QCheckBox, QDialog, QLabel, QLineEdit, QVBoxLayout
 
 from app.services.login_preferences import load_login_preferences, save_login_preferences
 from app.ui.app_icon import app_icon
+from app.ui.components.dialog_shell import window_title_row
 from app.ui.components.modern_button import ModernButton
+from app.ui.dialog_utils import style_dialog_from_parent
+from app.version import APP_DISPLAY_NAME
 
 
 class LoginDialog(QDialog):
@@ -16,20 +19,22 @@ class LoginDialog(QDialog):
         self.setWindowIcon(app_icon())
         self.setMinimumWidth(420)
         self.preferences = load_login_preferences()
+        style_dialog_from_parent(self, parent, standalone=True)
         self._build()
 
     def _build(self):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(28, 26, 28, 24)
         layout.setSpacing(12)
-        title = QLabel("Controle de Producao Industel")
-        title.setStyleSheet("font-size: 21px; font-weight: 800;")
+        layout.addWidget(window_title_row(self, ""))
+        title = QLabel(APP_DISPLAY_NAME)
+        title.setObjectName("DetailTitle")
         subtitle = QLabel("Acesse o painel operacional")
         subtitle.setObjectName("Caption")
         self.error = QLabel("")
         self.error.setObjectName("ErrorText")
         self.login = QLineEdit()
-        self.login.setPlaceholderText("Usuario")
+        self.login.setPlaceholderText("Usuário")
         remembered_login = str(self.preferences.get("last_user") or "")
         self.login.setText(remembered_login)
         self.password = QLineEdit()
@@ -58,4 +63,4 @@ class LoginDialog(QDialog):
             save_login_preferences(login, self.remember_user.isChecked())
             self.accept()
         else:
-            self.error.setText("Usuario ou senha invalidos.")
+            self.error.setText("Usuário ou senha inválidos.")

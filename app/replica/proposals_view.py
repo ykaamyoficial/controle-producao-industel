@@ -19,7 +19,8 @@ from typing import Any
 from app.replica.replica_db import ReplicaDatabase
 from app.replica.view_common import api_datetime
 
-REQUIRED_ENTITIES = ("proposals",)
+# proposal_items: a lista traz as parciais ativas, e so conta a filha que tem item ativo (como a API).
+REQUIRED_ENTITIES = ("proposals", "proposal_items")
 
 _FILTERS = (
     "proposal_number", "customer", "project", "current_area", "current_status",
@@ -95,6 +96,40 @@ def _list_item(row: dict[str, Any]) -> dict[str, Any]:
     return item
 
 
+def _partials_by_root(database: ReplicaDatabase, root_ids: list[int]) -> dict[int, list[dict[str, Any]]]:
+    """Parciais ativas (com item ativo) de cada mae -- mesma regra e ordem de
+    `family.partials_overview` da API (partial_number ASC, NULL por ultimo, depois id)."""
+    if not root_ids:
+        return {}
+    children = [
+        row for row in database.find("proposals", parent_proposal_id=root_ids) if row.get("active") and not row.get("is_cancelled")
+    ]
+    if not children:
+        return {}
+    with_items = {
+        int(item["proposal_id"])
+        for item in database.find("proposal_items", proposal_id=[int(row["id"]) for row in children])
+        if item.get("active")
+    }
+    children = [row for row in children if int(row["id"]) in with_items]
+    children.sort(
+        key=lambda row: (int(row["parent_proposal_id"]), row.get("partial_number") is None, row.get("partial_number") or 0, int(row["id"]))
+    )
+    overview: dict[int, list[dict[str, Any]]] = {}
+    for row in children:
+        number = row.get("partial_number")
+        overview.setdefault(int(row["parent_proposal_id"]), []).append(
+            {
+                "proposal_id": int(row["id"]),
+                "label": f"P{number}" if number else row.get("proposal_number"),
+                "partial_number": number,
+                "current_area": row.get("current_area"),
+                "current_status": row.get("current_status"),
+            }
+        )
+    return overview
+
+
 def list_proposals(database: ReplicaDatabase, **filters: Any) -> dict[str, Any]:
     if not can_serve(filters):
         raise ValueError(f"Filtros nao atendidos pela replica: {sorted(filters)}")
@@ -155,8 +190,17 @@ def list_proposals(database: ReplicaDatabase, **filters: Any) -> dict[str, Any]:
 
     limit = int(filters.get("limit") or 50)
     offset = int(filters.get("offset") or 0)
+    page = ordered[offset : offset + limit]
+    overview = _partials_by_root(database, [int(row["id"]) for row in page])
+    items = []
+    for row in page:
+        item = _list_item(row)
+        badges = overview.get(int(row["id"]), [])
+        item["partials_count"] = len(badges)
+        item["partials"] = badges
+        items.append(item)
     return {
-        "items": [_list_item(row) for row in ordered[offset : offset + limit]],
+        "items": items,
         "total": len(ordered),
         "limit": limit,
         "offset": offset,

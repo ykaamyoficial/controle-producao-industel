@@ -3,12 +3,13 @@ from __future__ import annotations
 from PySide6.QtCore import QRegularExpression, Qt
 from PySide6.QtGui import QAction, QTextDocument
 from PySide6.QtPrintSupport import QPrinter
-from PySide6.QtWidgets import QAbstractItemView, QDialog, QFileDialog, QComboBox, QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMenu, QStackedLayout, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QAbstractItemView, QDialog, QFileDialog, QComboBox, QFrame, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMenu, QStackedLayout, QVBoxLayout, QWidget
 
 from app.controllers.process_controller import ProcessController
 from app.models.process_table_model import ProcessTableModel
 from app.services.app_logging import get_logger
-from app.services.remanagement_flow_state import RemanagementFlowState
+from app.services.remanagement_badges import LINKS_KEY as REMANAGEMENT_LINKS_KEY, SITUATION_KEY as REMANAGEMENT_SITUATION_KEY
+from app.ui.format_utils import format_proposal_label
 from app.ui.action_center.batch_action_center import BatchProposalActionCenter
 from app.ui.background_worker import start_worker
 from app.ui.refresh_coordinator import RefreshCoordinator
@@ -19,25 +20,23 @@ from app.ui.components.operational_layout import (
     OPERATIONAL_ACTION_SPACING,
     OPERATIONAL_FIELD_HORIZONTAL_SPACING,
     OPERATIONAL_PAGE_MARGINS,
-    OPERATIONAL_PAGE_SPACING,
     OPERATIONAL_TABLE_STACK_MARGINS,
 )
 from app.ui.components.operational_header import configure_operational_header
-from app.ui.components.modern_table import ModernTable, ProcessFilterProxy
+from app.ui.components.modern_table import TABLE_HEADER_HEIGHT, ModernTable, ProcessFilterProxy
+from app.ui.components.segmented_control import SegmentedControl
+from app.ui.components.skeleton import SkeletonRows
 from app.ui.components.batch_selection import BatchSelectionController, BatchSelectionHeader
 from app.ui.status_dialog import open_proposal_action_center
 from app.ui.components.toast_notification import ToastNotification
 from app.ui.resilience import show_operation_error
 from app.ui.process_form_dialog import ProcessFormDialog
 from app.ui.batch_status_dialog import BatchStatusDialog
-from app.ui.remanagement_allocation_dialog import RemanagementAllocationStepDialog
-from app.ui.remanagement_availability_dialog import RemanagementAvailabilityStepDialog
-from app.ui.remanagement_destination_step_dialog import RemanagementDestinationStepDialog
-from app.ui.remanagement_item_selection_dialog import RemanagementItemSelectionStepDialog
-from app.ui.remanagement_review_dialog import RemanagementReviewStepDialog
 from app.ui.flow_review_dialog import FlowReviewDialog
 from app.ui.process_detail_dialog import ProcessDetailDialog
 from app.ui.chat_center_page import ChatCenterDialog
+from app.ui.remanagement_info_dialog import RemanagementInfoDialog
+from app.ui.remanagement_wizard import RemanagementWizardDialog
 from app.ui.batch_selection_review_dialog import BatchSelectionReviewDialog
 
 log = get_logger("process_page")
@@ -56,6 +55,17 @@ _CHECKBOX_BATCH_AREAS = ("PRODUCAO", "CONTROLE GERAL", "EXPEDICAO", "ALMOXARIFAD
 # enxuta visualmente - "status_localizacao" resolve a Etapa/Status de forma
 # universal (`BackendService.display_cell` chama `current_location()`),
 # funcionando igual em qualquer area, nao so em Controle Geral.
+# Filtro de prazo: o rotulo e so apresentacao; o valor (itemData) e o que vai
+# para o filtro da API.
+PRAZO_OPTIONS = [
+    ("Todos os prazos", ""),
+    ("Vencidos", "VENCIDOS"),
+    ("Próximos 7 dias", "PROXIMOS_7_DIAS"),
+]
+
+# Acima disto o filtro de status volta a ser um combo (nao cabe na linha).
+MAX_STATUS_SEGMENTS = 4
+
 EXPORT_COLUMNS = [
     ("proposta", "Proposta"),
     ("cliente", "Cliente"),
@@ -103,32 +113,57 @@ class ProcessPage(QWidget):
     def _build(self):
         root = QVBoxLayout(self)
         root.setContentsMargins(*OPERATIONAL_PAGE_MARGINS)
-        root.setSpacing(OPERATIONAL_PAGE_SPACING)
+        root.setSpacing(0)
 
         filters = QFrame()
         fl = QVBoxLayout(filters)
         configure_operational_header(
             filters,
             fl,
-            margins=(16, 12, 16, 10),
-            spacing=8,
+            margins=(16, 12, 16, 12),
+            spacing=10,
             area=self.area,
             palette=self.service.palette,
         )
         self.search = QLineEdit()
-        self.search.setPlaceholderText("Pesquisar proposta, cliente, site ou lote")
+        # Expedicao tem a coluna "Nº da NF" e a busca da API tambem casa por NF.
+        self.search.setPlaceholderText(
+            "Pesquisar proposta, cliente, site, lote ou NF" if self.area == "EXPEDICAO" else "Pesquisar proposta, cliente, site ou lote"
+        )
+        self.search.setClearButtonEnabled(True)
+        self.search.setAccessibleName("Busca geral")
+        self.search.setMinimumWidth(220)
+        # `self.status` (QComboBox) continua sendo a fonte da verdade do filtro
+        # de status. Quando a area tem poucos status, quem aparece e o controle
+        # segmentado, que so espelha o combo (ver _sync_status_segments).
         self.status = QComboBox()
         self.status.addItem("Todos", "")
+        self.status.setAccessibleName("Status")
+        self.status.setMinimumWidth(190)
+        self.status_segments = SegmentedControl()
+        self.status_segments.setAccessibleName("Status")
+        self.status_segments.setVisible(False)
+        self.status_segments.changed.connect(self._on_status_segment_changed)
         self.prazo = QComboBox()
-        self.prazo.addItems(["TODOS", "VENCIDOS", "PROXIMOS_7_DIAS"])
-        apply_btn = ModernButton("Aplicar", "search", accent=True)
-        clear_btn = ModernButton("Limpar", "clear")
+        self.prazo.setAccessibleName("Prazo")
+        self.prazo.setMinimumWidth(170)
+        for label, value in PRAZO_OPTIONS:
+            self.prazo.addItem(label, value)
+        for field in (self.search, self.status, self.prazo):
+            field.setMinimumHeight(34)
+
+        # Um unico botao primario por tela: "Novo processo" onde ele existe
+        # (Controle Geral com permissao de edicao), "Acoes" nas demais areas.
+        can_edit_current_area = self._can_edit_area(self.area or "")
+        can_create = self.area == "CONTROLE GERAL" and self.service.can_edit_process()
+        apply_btn = ModernButton("Aplicar", "search")
+        clear_btn = ModernButton("Limpar", "clear", variant="ghost")
         details_btn = ModernButton("Detalhes", "search")
         new_btn = ModernButton("Novo processo", "new", accent=True)
         edit_btn = ModernButton("Editar", "status")
-        status_btn = ModernButton("Acoes", "status", accent=True)
-        batch_btn = ModernButton("Ações em lote", "batch", accent=True)
-        remanage_btn = ModernButton("Remanejamento compensado", "load", accent=True)
+        status_btn = ModernButton("Ações", "status", accent=not can_create)
+        batch_btn = ModernButton("Ações em lote", "batch")
+        remanage_btn = ModernButton("Remanejamento compensado", "load")
         self.action_buttons = [
             apply_btn,
             clear_btn,
@@ -158,41 +193,29 @@ class ProcessPage(QWidget):
         title_col.setSpacing(1)
         title_col.addWidget(title)
         title_col.addWidget(subtitle)
-        top_row = QHBoxLayout()
-        top_row.setSpacing(10)
-        top_row.addLayout(title_col)
-        top_row.addStretch()
-        fl.addLayout(top_row)
-
-        filter_actions = QHBoxLayout()
-        filter_actions.setSpacing(OPERATIONAL_ACTION_SPACING)
-        filter_actions.addWidget(apply_btn)
-        filter_actions.addWidget(clear_btn)
 
         proposal_actions = QHBoxLayout()
         proposal_actions.setSpacing(OPERATIONAL_ACTION_SPACING)
-        proposal_actions.addStretch()
         proposal_actions.addWidget(details_btn)
-        can_edit_current_area = self._can_edit_area(self.area or "")
-        if self.area == "CONTROLE GERAL" and self.service.can_edit_process():
-            proposal_actions.addWidget(new_btn)
-        if self.area == "CONTROLE GERAL" and self.service.can_edit_process():
+        if can_create:
             proposal_actions.addWidget(edit_btn)
         if can_edit_current_area:
             proposal_actions.addWidget(status_btn)
             proposal_actions.addWidget(batch_btn)
         if self.area == "EXPEDICAO" and self._can_edit_area("EXPEDICAO"):
             proposal_actions.addWidget(remanage_btn)
+        if can_create:
+            proposal_actions.addWidget(new_btn)
 
         self.normal_action_buttons = [details_btn, new_btn, edit_btn, status_btn, batch_btn, remanage_btn]
         self.batch_mode_label = QLabel("Modo de seleção")
-        self.batch_mode_label.setObjectName("FilterTitle")
+        self.batch_mode_label.setObjectName("BatchModeLabel")
         self.batch_count_label = QLabel("0 propostas selecionadas")
         self.batch_count_label.setObjectName("Caption")
         self.view_selected_button = ModernButton("Ver selecionadas", "search")
         self.clear_selection_button = ModernButton("Limpar seleção", "clear")
         self.batch_actions_button = ModernButton("Ações", "batch", accent=True)
-        self.cancel_selection_button = ModernButton("Cancelar", "close")
+        self.cancel_selection_button = ModernButton("Cancelar", "close", variant="ghost")
         self.view_selected_button.clicked.connect(self.show_batch_selection)
         self.clear_selection_button.clicked.connect(self.batch_selection.clear)
         self.cancel_selection_button.clicked.connect(self.cancel_batch_selection)
@@ -215,61 +238,73 @@ class ProcessPage(QWidget):
             widget.setVisible(False)
             proposal_actions.addWidget(widget)
 
-        field_row = QGridLayout()
-        field_row.setHorizontalSpacing(OPERATIONAL_FIELD_HORIZONTAL_SPACING)
-        field_row.setVerticalSpacing(3)
-        self._add_filter_field(field_row, 0, 0, "Busca geral", self.search)
-        self._add_filter_field(field_row, 0, 2, "Status", self.status)
-        self._add_filter_field(field_row, 0, 4, "Prazo", self.prazo)
-        field_row.addLayout(filter_actions, 0, 6, 1, 1)
-        field_row.setColumnStretch(1, 4)
-        field_row.setColumnStretch(3, 2)
-        field_row.setColumnStretch(5, 2)
-        field_row.setColumnStretch(6, 1)
-        fl.addLayout(field_row)
-        fl.addLayout(proposal_actions)
+        # Titulo a esquerda e acoes a direita na mesma linha; filtros na linha
+        # de baixo, sem rotulo ao lado (o placeholder e as opcoes explicam).
+        top_row = QHBoxLayout()
+        top_row.setSpacing(10)
+        top_row.addLayout(title_col)
+        top_row.addStretch()
+        top_row.addLayout(proposal_actions)
+        fl.addLayout(top_row)
+
+        filter_row = QHBoxLayout()
+        filter_row.setSpacing(OPERATIONAL_FIELD_HORIZONTAL_SPACING)
+        filter_row.addWidget(self.search, 1)
+        filter_row.addWidget(self.status_segments)
+        filter_row.addWidget(self.status)
+        filter_row.addWidget(self.prazo)
+        filter_row.addWidget(apply_btn)
+        filter_row.addWidget(clear_btn)
+        fl.addLayout(filter_row)
         root.addWidget(filters)
 
-        self.loading = QLabel("Carregando...")
+        # Mantido para quem ainda consulta `page.loading`; o carregamento
+        # agora aparece como esqueleto no lugar da tabela (ver _set_loading).
+        self.loading = QLabel("Carregando...", self)
         self.loading.setObjectName("Caption")
         self.loading.setVisible(False)
-        root.addWidget(self.loading)
 
         self.table = ModernTable(self.service)
         self.batch_header = BatchSelectionHeader(Qt.Horizontal, self.table)
         self.table.setHorizontalHeader(self.batch_header)
-        self.batch_header.setMinimumHeight(26)
-        self.batch_header.setFixedHeight(28)
+        self.batch_header.setFixedHeight(TABLE_HEADER_HEIGHT)
         self.batch_header.setStretchLastSection(True)
         self.batch_header.setSectionResizeMode(QHeaderView.Interactive)
+        self.batch_header.setDefaultAlignment(Qt.AlignCenter)
         self.table.setModel(self.proxy)
         self.table.status_shortcut_requested.connect(self.change_status_for_id)
         self.table.chat_shortcut_requested.connect(self.open_chat_for_id)
+        self.table.remanagement_mark_requested.connect(self.open_remanagement_info_for_id)
         self.table.clicked.connect(self._handle_table_click)
         self.table.doubleClicked.connect(self._handle_table_double_click)
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self.open_context_menu)
+        self.empty_clear_button = ModernButton("Limpar filtros", "clear", variant="ghost")
+        self.empty_clear_button.clicked.connect(self.clear)
         self.empty_state = EmptyState(
             "Nenhuma proposta encontrada",
             "Ajuste os filtros ou cadastre uma nova proposta.",
             self.service.palette,
             icon="search",
+            action=self.empty_clear_button,
         )
+        self.skeleton = SkeletonRows(top_offset=TABLE_HEADER_HEIGHT)
         table_stack_frame = QFrame()
         table_stack_frame.setObjectName("TableStack")
         table_stack = QStackedLayout(table_stack_frame)
         table_stack.setContentsMargins(*OPERATIONAL_TABLE_STACK_MARGINS)
         table_stack.addWidget(self.table)
         table_stack.addWidget(self.empty_state)
+        table_stack.addWidget(self.skeleton)
         self.table_stack = table_stack
         root.addWidget(table_stack_frame, 1)
 
         self.pager = QFrame()
         pager_row = QHBoxLayout(self.pager)
-        pager_row.setContentsMargins(16, 0, 16, 6)
+        pager_row.setContentsMargins(16, 6, 16, 8)
         pager_row.setSpacing(OPERATIONAL_ACTION_SPACING)
-        self.previous_page_btn = ModernButton("Anterior", "previous")
-        self.next_page_btn = ModernButton("Próxima", "next")
+        self.previous_page_btn = ModernButton("Anterior", "previous", variant="ghost")
+        self.next_page_btn = ModernButton("Próxima", "next", variant="ghost")
         self.page_label = QLabel("")
         self.page_label.setObjectName("Caption")
         self.previous_page_btn.clicked.connect(lambda: self._go_to_page(self._page - 1))
@@ -295,6 +330,36 @@ class ProcessPage(QWidget):
             signal.connect(lambda *_args: self._sync_batch_header())
         self._update_batch_controls()
 
+    def _reload_status_options(self) -> None:
+        """Recarrega os status da area no combo, preservando o escolhido."""
+        self.status.blockSignals(True)
+        current = self.status.currentData() or ""
+        self.status.clear()
+        self.status.addItem("Todos", "")
+        for status in self.service.list_status(self.area if self.area in self.service.visible_areas() else None):
+            self.status.addItem(self.service.status_label(status), status)
+        idx = self.status.findData(current)
+        self.status.setCurrentIndex(max(0, idx))
+        self.status.blockSignals(False)
+        self._sync_status_segments()
+
+    def _sync_status_segments(self) -> None:
+        """Espelha o combo de status no controle segmentado. O segmentado so
+        entra quando cabe (ate 4 status alem de "Todos"); com mais opcoes o
+        combo continua sendo o filtro visivel."""
+        options = [(str(self.status.itemData(i) or ""), self.status.itemText(i), None) for i in range(self.status.count())]
+        use_segments = 2 <= len(options) <= MAX_STATUS_SEGMENTS + 1
+        self.status_segments.setVisible(use_segments)
+        self.status.setVisible(not use_segments)
+        if use_segments:
+            self.status_segments.set_options(options)
+            self.status_segments.set_current_key(str(self.status.currentData() or ""), emit=False)
+
+    def _on_status_segment_changed(self, key: str) -> None:
+        index = self.status.findData(key)
+        self.status.setCurrentIndex(max(0, index))
+        self.refresh()
+
     def _area_subtitle(self) -> str:
         return area_subtitle(self.area)
 
@@ -304,8 +369,12 @@ class ProcessPage(QWidget):
         self._sync_batch_header()
 
     def _update_empty_state(self):
+        if self._refreshing and not self.model.rows:
+            # Primeira carga ainda em andamento: o esqueleto fica ate ela terminar.
+            return
         has_rows = self.proxy.rowCount() > 0
         if not has_rows:
+            self.empty_state.set_action_visible(self._has_active_filters())
             if self._has_active_filters():
                 self.empty_state.set_text(
                     "Nenhum resultado para os filtros aplicados",
@@ -313,8 +382,8 @@ class ProcessPage(QWidget):
                 )
             else:
                 self.empty_state.set_text(
-                    "Nenhum registro disponivel",
-                    "Assim que houver propostas nesta area, elas aparecerao aqui.",
+                    "Nenhum registro disponível",
+                    "Assim que houver propostas nesta área, elas aparecerão aqui.",
                 )
         self.table_stack.setCurrentWidget(self.table if has_rows else self.empty_state)
 
@@ -322,15 +391,8 @@ class ProcessPage(QWidget):
         return bool(
             self.search.text().strip()
             or (self.status.currentData() or "")
-            or (self.prazo.currentText() and self.prazo.currentText() != "TODOS")
+            or (self.prazo.currentData() or "")
         )
-
-    def _add_filter_field(self, layout, row, column, label_text, widget):
-        label = QLabel(label_text)
-        label.setObjectName("FieldLabel")
-        widget.setMinimumHeight(32)
-        layout.addWidget(label, row, column)
-        layout.addWidget(widget, row, column + 1)
 
     def _can_edit_area(self, area: str) -> bool:
         if hasattr(self.service, "can_edit_area"):
@@ -347,21 +409,13 @@ class ProcessPage(QWidget):
             self.table.verticalScrollBar().value() if hasattr(self, "table") else 0,
             self.table.horizontalScrollBar().value() if hasattr(self, "table") else 0,
         )
-        self.status.blockSignals(True)
-        current = self.status.currentData() or ""
-        self.status.clear()
-        self.status.addItem("Todos", "")
-        for status in self.service.list_status(self.area if self.area in self.service.visible_areas() else None):
-            self.status.addItem(self.service.status_label(status), status)
-        idx = self.status.findData(current)
-        self.status.setCurrentIndex(max(0, idx))
-        self.status.blockSignals(False)
+        self._reload_status_options()
 
         filters = self.controller.filters(
             self.search.text(),
             "",
             self.status.currentData() or "",
-            self.prazo.currentText() if self.prazo.currentText() != "TODOS" else "",
+            self.prazo.currentData() or "",
         )
         self._set_loading(True)
         if self._paged:
@@ -465,11 +519,16 @@ class ProcessPage(QWidget):
 
     def _refresh_error(self, exc):
         self._set_loading(False)
-        show_operation_error(self, exc, self.refresh, title="Controle geral")
+        show_operation_error(self, exc, self.refresh, title=self.title)
 
     def _set_loading(self, loading: bool):
         self._refreshing = loading
-        self.loading.setVisible(loading)
+        # Esqueleto so na primeira carga: nas atualizacoes periodicas a tabela
+        # ja tem linhas e trocar de tela a cada refresh faria a pagina piscar.
+        if loading and not self.model.rows:
+            self.table_stack.setCurrentWidget(self.skeleton)
+        elif not loading and self.table_stack.currentWidget() is self.skeleton:
+            self._update_empty_state()
         self.table.setEnabled(not loading)
         for button in getattr(self, "action_buttons", []):
             button.setEnabled(not loading)
@@ -478,6 +537,7 @@ class ProcessPage(QWidget):
     def clear(self):
         self.search.clear()
         self.status.setCurrentIndex(0)
+        self.status_segments.set_current_key("", emit=False)
         self.prazo.setCurrentIndex(0)
         self.refresh()
 
@@ -508,7 +568,7 @@ class ProcessPage(QWidget):
             self.change_status_batch()
             return
         if not self._can_edit_area(self.area or ""):
-            ToastNotification(self.window(), "Seu usuario tem apenas visualizacao nesta area.", "error")
+            ToastNotification(self.window(), "Seu usuário tem apenas visualização nesta área.", "error")
             return
         self.batch_selection.activate()
         self.model.set_batch_selection_mode(True)
@@ -612,7 +672,7 @@ class ProcessPage(QWidget):
 
     def open_batch_action_center(self):
         if not self._can_edit_area(self.area or ""):
-            ToastNotification(self.window(), "Seu usuario tem apenas visualizacao nesta area.", "error")
+            ToastNotification(self.window(), "Seu usuário tem apenas visualização nesta área.", "error")
             return
         process_ids = self.batch_selection.ordered_selected_ids
         if not process_ids:
@@ -648,14 +708,14 @@ class ProcessPage(QWidget):
             grouped_ids = [int(value) for value in (row.get("proposal_ids") or []) if value]
             dialog = ProcessDetailDialog(self.service, process_id, self, process_ids=grouped_ids or None, area=self.area)
         except Exception as exc:
-            ToastNotification(self.window(), f"Nao foi possivel abrir os detalhes da proposta: {exc}", "error")
+            ToastNotification(self.window(), f"Não foi possível abrir os detalhes da proposta: {exc}", "error")
             return
         if dialog.exec() or dialog.changed:
             self.refresh()
 
     def change_status(self):
         if not self._can_edit_area(self.area or ""):
-            ToastNotification(self.window(), "Seu usuario tem apenas visualizacao nesta area.", "error")
+            ToastNotification(self.window(), "Seu usuário tem apenas visualização nesta área.", "error")
             return
         process_id = self.selected_process_id()
         if not process_id:
@@ -674,7 +734,7 @@ class ProcessPage(QWidget):
 
     def change_status_for_id(self, process_id: int, row_context: dict | None = None):
         if not self._can_edit_area(self.area or ""):
-            ToastNotification(self.window(), "Seu usuario tem apenas visualizacao nesta area.", "error")
+            ToastNotification(self.window(), "Seu usuário tem apenas visualização nesta área.", "error")
             return
         if row_context is None:
             dialog = open_proposal_action_center(self.service, process_id, self, area=self.area)
@@ -683,7 +743,17 @@ class ProcessPage(QWidget):
         if dialog.exec():
             self.refresh()
             if not dialog.success_message:
-                ToastNotification(self.window(), "Acao registrada com sucesso.", "success")
+                ToastNotification(self.window(), "Ação registrada com sucesso.", "success")
+
+    def open_remanagement_info_for_id(self, process_id: int):
+        """Clique no icone ou no codigo vermelho da proposta marcada: mostra para onde as pecas foram."""
+        row = next((row for row in self.model.rows if int(row.get("id") or 0) == int(process_id)), None)
+        if row is None or not row.get(REMANAGEMENT_SITUATION_KEY):
+            return
+        dialog = RemanagementInfoDialog(
+            format_proposal_label(row.get("proposta")), row.get(REMANAGEMENT_SITUATION_KEY), list(row.get(REMANAGEMENT_LINKS_KEY) or []), self,
+        )
+        dialog.exec()
 
     def open_chat_for_id(self, process_id: int):
         dialog = ChatCenterDialog(self.service, self, proposal_id=process_id)
@@ -695,18 +765,18 @@ class ProcessPage(QWidget):
             self.activate_batch_selection()
             return
         if not self._can_edit_area(self.area or ""):
-            ToastNotification(self.window(), "Seu usuario tem apenas visualizacao nesta area.", "error")
+            ToastNotification(self.window(), "Seu usuário tem apenas visualização nesta área.", "error")
             return
         ids = self.selected_process_ids()
         area = self.area if self.area in self.service.visible_areas() else None
         dialog = BatchStatusDialog(self.service, ids, area, self)
         if dialog.exec():
             self.refresh()
-            ToastNotification(self.window(), "Acoes em lote aplicadas com sucesso.", "success")
+            ToastNotification(self.window(), "Ações em lote aplicadas com sucesso.", "success")
 
     def open_flow_review_batch(self):
         if not self._can_edit_area("PRODUCAO"):
-            ToastNotification(self.window(), "Seu usuario nao pode definir fluxo dos itens.", "error")
+            ToastNotification(self.window(), "Seu usuário não pode definir fluxo dos itens.", "error")
             return
         process_ids = self.selected_process_ids()
         if not process_ids:
@@ -717,89 +787,17 @@ class ProcessPage(QWidget):
             self.refresh()
 
     def open_early_remanagement_delivery(self):
-        # Novo fluxo de Remanejamento: Etapa 1 (destino) -> Etapa 2 (itens do
-        # destino) -> Etapa 3 (busca automatica na Expedicao) -> Etapa 4
-        # (alocacao por origem) -> Etapa 6 (revisao/simulacao) -> Etapa 7
-        # (persistencia transacional real, dentro do proprio dialogo da
-        # Etapa 6 - ver `RemanagementReviewStepDialog._confirm_clicked`). A
-        # ponte para a tela legada foi removida: o novo fluxo agora grava de
-        # fato. As telas compartilham um unico `RemanagementFlowState` para
-        # que "Voltar" preserve o que ja foi escolhido.
+        # Remanejamento em uma unica janela com quatro passos (destino, itens,
+        # origem do material, revisao). A gravacao transacional acontece na
+        # confirmacao do ultimo passo - ver `ReviewPage.commit`.
         if not self._can_edit_area("EXPEDICAO"):
-            ToastNotification(self.window(), "Seu usuario nao pode realizar remanejamentos.", "error")
+            ToastNotification(self.window(), "Seu usuário não pode realizar remanejamentos.", "error")
             return
-        flow_state = RemanagementFlowState()
-        stage = "destination"
-        while True:
-            if stage == "destination":
-                step1 = RemanagementDestinationStepDialog(self.service, self, state=flow_state)
-                if step1.exec() != QDialog.Accepted:
-                    return
-                stage = "items"
-                continue
-
-            if stage == "items":
-                step2 = RemanagementItemSelectionStepDialog(self.service, self, flow_state)
-                if step2.load_error:
-                    ToastNotification(self.window(), step2.load_error, "error")
-                    stage = "destination"
-                    continue
-                result = step2.exec()
-                if result == RemanagementItemSelectionStepDialog.RESULT_BACK:
-                    stage = "destination"
-                    continue
-                if result != QDialog.Accepted:
-                    return
-                stage = "availability"
-                continue
-
-            if stage == "availability":
-                step3 = RemanagementAvailabilityStepDialog(self.service, self, flow_state)
-                if step3.load_error:
-                    ToastNotification(self.window(), step3.load_error, "error")
-                    stage = "items"
-                    continue
-                result = step3.exec()
-                if result == RemanagementAvailabilityStepDialog.RESULT_BACK:
-                    stage = "items"
-                    continue
-                if result != QDialog.Accepted:
-                    return
-                stage = "allocation"
-                continue
-
-            if stage == "allocation":
-                step4 = RemanagementAllocationStepDialog(self.service, self, flow_state)
-                if step4.load_error:
-                    ToastNotification(self.window(), step4.load_error, "error")
-                    stage = "availability"
-                    continue
-                result = step4.exec()
-                if result == RemanagementAllocationStepDialog.RESULT_BACK:
-                    stage = "availability"
-                    continue
-                if result != QDialog.Accepted:
-                    return
-                stage = "review"
-                continue
-
-            if stage == "review":
-                step6 = RemanagementReviewStepDialog(self.service, self, flow_state)
-                if step6.load_error:
-                    ToastNotification(self.window(), step6.load_error, "error")
-                    stage = "allocation"
-                    continue
-                result = step6.exec()
-                if result == RemanagementReviewStepDialog.RESULT_BACK:
-                    stage = "allocation"
-                    continue
-                if result != QDialog.Accepted:
-                    return
-                self.refresh()
-                ToastNotification(self.window(), "Remanejamento compensado registrado com sucesso.", "success")
-                return
-
+        dialog = RemanagementWizardDialog(self.service, self)
+        if dialog.exec() != QDialog.Accepted:
             return
+        self.refresh()
+        ToastNotification(self.window(), "Remanejamento compensado registrado com sucesso.", "success")
 
     def open_context_menu(self, position):
         index = self.table.indexAt(position)
@@ -828,13 +826,13 @@ class ProcessPage(QWidget):
         if self.area == "CONTROLE GERAL" and self.service.can_edit_process():
             menu.addAction(QAction("Editar proposta", self, triggered=self.edit_process))
         if self._can_edit_area(self.area or ""):
-            menu.addAction(QAction(f"Acoes da proposta ({count})", self, triggered=self.change_status))
-            menu.addAction(QAction("Acoes em lote...", self, triggered=self.change_status_batch))
+            menu.addAction(QAction(f"Ações da proposta ({count})", self, triggered=self.change_status))
+            menu.addAction(QAction("Ações em lote...", self, triggered=self.change_status_batch))
         if self.area == "PRODUCAO" and self._can_edit_area("PRODUCAO") and count > 1:
             menu.addAction(QAction(f"Definir fluxo em lote ({count})", self, triggered=self.open_flow_review_batch))
-        menu.addAction(QAction("Historico da proposta", self, triggered=self.show_details))
-        menu.addAction(QAction("Exportar selecao Excel", self, triggered=lambda: self.export_selected("csv")))
-        menu.addAction(QAction("Exportar selecao PDF", self, triggered=lambda: self.export_selected("pdf")))
+        menu.addAction(QAction("Histórico da proposta", self, triggered=self.show_details))
+        menu.addAction(QAction("Exportar seleção Excel", self, triggered=lambda: self.export_selected("csv")))
+        menu.addAction(QAction("Exportar seleção PDF", self, triggered=lambda: self.export_selected("pdf")))
         if self.area == "CONTROLE GERAL" and self.service.can_edit_process():
             menu.addSeparator()
             menu.addAction(QAction("Duplicar proposta", self, triggered=self.duplicate_process))
@@ -867,14 +865,14 @@ class ProcessPage(QWidget):
             return
         columns = EXPORT_COLUMNS
         suffix = "csv" if kind == "csv" else "pdf"
-        path, _ = QFileDialog.getSaveFileName(self, "Exportar selecao", f"processos_selecionados.{suffix}", f"*.{suffix}")
+        path, _ = QFileDialog.getSaveFileName(self, "Exportar seleção", f"processos_selecionados.{suffix}", f"*.{suffix}")
         if not path:
             return
         if kind == "csv":
             self._export_csv(path, rows, columns)
         else:
             self._export_pdf(path, rows, columns)
-        ToastNotification(self.window(), "Exportacao gerada com sucesso.", "success")
+        ToastNotification(self.window(), "Exportação gerada com sucesso.", "success")
 
     def _export_csv(self, path: str, rows: list[dict], columns: list[tuple[str, str]]):
         import csv
@@ -903,7 +901,7 @@ class ProcessPage(QWidget):
 
     def new_process(self):
         if not self.service.can_edit_process():
-            ToastNotification(self.window(), "Seu usuario nao pode cadastrar propostas.", "error")
+            ToastNotification(self.window(), "Seu usuário não pode cadastrar propostas.", "error")
             return
         dialog = ProcessFormDialog(self.service, None, self)
         if dialog.exec():
@@ -912,7 +910,7 @@ class ProcessPage(QWidget):
 
     def edit_process(self):
         if not self.service.can_edit_process():
-            ToastNotification(self.window(), "Seu usuario nao pode editar propostas.", "error")
+            ToastNotification(self.window(), "Seu usuário não pode editar propostas.", "error")
             return
         process_id = self.selected_process_id()
         if not process_id:

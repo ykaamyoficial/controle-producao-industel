@@ -21,6 +21,14 @@ AREA_ITEM_COLUMNS = {
         ("obra_site", "Obra/Site"),
         ("lote", "Lote"),
     ],
+    # Mesmo desenho da aba de Producao, so as colunas que importam.
+    "EXPEDICAO": [
+        ("codigo_produto", "Código"),
+        ("descricao", "Descrição"),
+        ("quantidade", "Quantidade"),
+        ("proposta", "Proposta"),
+        ("status_expedicao_item", "Situação"),
+    ],
     "GALVANIZACAO": [
         ("numero_item", "Item"),
         ("proposta", "Proposta"),
@@ -41,10 +49,20 @@ AREA_ITEM_COLUMNS = {
 AREA_STATUS_COLUMN_MAP = {
     "status_producao_item": "PRODUCAO",
     "status_galvanizacao": "GALVANIZACAO",
+    "status_expedicao_item": "EXPEDICAO",
 }
 
 WEIGHT_COLUMNS = {"peso_total"}
 NUMERIC_COLUMNS = {"quantidade", "quantidade_disponivel", "quantidade_em_galvanizacao"}
+# Se a linha traz a unidade (itens da Expedicao), a quantidade sai com ela ("12 UN", "7.5 kg").
+QUANTITY_WITH_UNIT = {"quantidade"}
+
+
+def _number(value) -> float:
+    try:
+        return float(str(value or "0").replace(",", "."))
+    except ValueError:
+        return 0.0
 
 
 class ItemTableModel(QAbstractTableModel):
@@ -124,6 +142,8 @@ class ItemTableModel(QAbstractTableModel):
         if key in WEIGHT_COLUMNS:
             value = row.get(key)
             return f"{value} kg" if value not in (None, "") else "-"
+        if key in QUANTITY_WITH_UNIT and row.get("unidade"):
+            return f"{row.get(key, '')} {row['unidade']}".strip()
         return self.service.display_cell(key, row.get(key), row)
 
     def headerData(self, section: int, orientation: Qt.Orientation, role=Qt.DisplayRole):
@@ -166,7 +186,11 @@ class ItemTableModel(QAbstractTableModel):
         key, _label = self.columns[column]
         reverse = order == Qt.DescendingOrder
         self.layoutAboutToBeChanged.emit()
-        self.rows.sort(key=lambda row: str(row.get(key) or "").lower(), reverse=reverse)
+        if key in NUMERIC_COLUMNS:
+            # "40" vem antes de "1600": quantidade ordena como numero, nao como texto.
+            self.rows.sort(key=lambda row: _number(row.get(key)), reverse=reverse)
+        else:
+            self.rows.sort(key=lambda row: str(row.get(key) or "").lower(), reverse=reverse)
         self.layoutChanged.emit()
 
     def process_id_at(self, row: int) -> int | None:

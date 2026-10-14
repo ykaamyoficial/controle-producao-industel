@@ -13,3 +13,4 @@ httpx>=0.27,<1
 argon2-cffi>=23.1,<26
 PyJWT>=2.8,<3
 winotify>=1.1,<2; sys_platform == "win32"
+windows-toasts>=1.3,<2; sys_platform == "win32"

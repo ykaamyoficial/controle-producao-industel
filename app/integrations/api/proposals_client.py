@@ -66,8 +66,16 @@ class ProposalsApiClient:
         path = "/api/v1/production/items" + (f"?{params}" if params else "")
         return self.client.get(path, access_token=access_token).data
 
+    def list_expedition_items(self, access_token: str, **filters) -> dict[str, Any]:
+        params = urlencode({key: value for key, value in filters.items() if value not in (None, "")})
+        path = "/api/v1/shipping/items" + (f"?{params}" if params else "")
+        return self.client.get(path, access_token=access_token).data
+
     def get_item(self, access_token: str, item_id: int) -> dict[str, Any]:
         return self.client.get(f"/api/v1/proposal-items/{item_id}", access_token=access_token).data
+
+    def get_family(self, access_token: str, proposal_id: int) -> dict[str, Any]:
+        return self.client.get(f"/api/v1/proposals/{int(proposal_id)}/family", access_token=access_token).data
 
     def list_partial_proposals(self, access_token: str, **filters) -> dict[str, Any]:
         params = urlencode({key: value for key, value in filters.items() if value not in (None, "")})
@@ -155,6 +163,9 @@ class ProposalsApiClient:
         params = urlencode({"source_proposal_id": source_proposal_id, "destination_proposal_id": destination_proposal_id})
         data = self.client.get(f"/api/v1/shipping/remanagements/compatible-items?{params}", access_token=access_token).data
         return data if isinstance(data, list) else []
+
+    def remanagement_badges(self, access_token: str) -> dict[str, Any]:
+        return self.client.get("/api/v1/shipping/remanagements/badges", access_token=access_token).data
 
     def remanagement_destination_items(self, access_token: str, destination_proposal_id: int) -> list[dict[str, Any]]:
         params = urlencode({"destination_proposal_id": destination_proposal_id})

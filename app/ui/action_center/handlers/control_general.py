@@ -44,13 +44,13 @@ class ControlGeneralStatusHandler:
     def _cancel(context: ProposalActionContext, action: ActionDescriptor, dialog) -> ActionResult:
         observation = dialog.observation.toPlainText().strip()
         if not observation:
-            QMessageBox.warning(dialog, "Cancelar proposta", "Informe o motivo do cancelamento na observacao.")
+            QMessageBox.warning(dialog, "Cancelar proposta", "Informe o motivo do cancelamento na observação.")
             return ActionResult(success=True, changed=False, close_action_center=False)
         answer = QMessageBox.question(
             dialog,
             "Cancelar proposta",
             f"Cancelar definitivamente a proposta {context.proposal_number} — {context.client_name or '-'}?\n\n"
-            "Esta operacao nao pode ser desfeita pela tela e ficara registrada na auditoria.",
+            "Esta operação não pode ser desfeita pela tela e ficará registrada na auditoria.",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,
         )

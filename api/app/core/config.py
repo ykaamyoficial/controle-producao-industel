@@ -11,7 +11,7 @@ API_VERSION = "0.10.0"
 API_STAGE = "official-fiscal"
 API_CONTRACT_VERSION = "v1"
 SERVICE_NAME = "controle-producao-api"
-EXPECTED_DATABASE_REVISION = "20261006_0034"
+EXPECTED_DATABASE_REVISION = "20261014_0038"
 # Revisao mais antiga que este server_version ainda consegue operar (Fase 04, Secao 19).
 # Hoje e igual a EXPECTED_DATABASE_REVISION porque esta release depende da
 # hierarquia mae/filhas e nao possui tolerancia retroativa deliberada -- sera
@@ -42,6 +42,7 @@ class Settings(BaseSettings):
     secret_key: str = Field(default="", alias="SECRET_KEY")
     access_token_expire_minutes: int = Field(default=15, ge=1, alias="ACCESS_TOKEN_EXPIRE_MINUTES")
     refresh_token_expire_days: int = Field(default=7, ge=1, alias="REFRESH_TOKEN_EXPIRE_DAYS")
+    notifier_device_expire_days: int = Field(default=90, ge=1, alias="NOTIFIER_DEVICE_EXPIRE_DAYS")
     login_max_failed_attempts: int = Field(default=5, ge=1, alias="LOGIN_MAX_FAILED_ATTEMPTS")
     login_lock_minutes: int = Field(default=15, ge=1, alias="LOGIN_LOCK_MINUTES")
     password_min_length: int = Field(default=4, ge=4, alias="PASSWORD_MIN_LENGTH")
@@ -62,6 +63,11 @@ class Settings(BaseSettings):
     # (desligado): so habilitar depois de confirmar que a frota suportada
     # ja envia X-Client-Version corretamente (rollout controlado).
     client_version_enforcement_enabled: bool = Field(default=False, alias="CLIENT_VERSION_ENFORCEMENT_ENABLED")
+
+    # Remanejamento por linhas (lotes fisicos) e parciais - plano em
+    # docs/architecture/REMANEJAMENTO_PARCIAIS_PLANO.md. Default desligado (segue o motor de transferencias);
+    # a dev liga por variavel de ambiente ate o plano ser aprovado para a API oficial.
+    remanagement_by_rows_enabled: bool = Field(default=False, alias="REMANAGEMENT_BY_ROWS_ENABLED")
 
     nomus_encryption_key: str = Field(default="", alias="NOMUS_ENCRYPTION_KEY")
 
@@ -145,6 +151,11 @@ class Settings(BaseSettings):
     notifications_delivery_interval_seconds: float = Field(default=45.0, ge=5, alias="NOTIFICATIONS_DELIVERY_INTERVAL_SECONDS")
     notifications_digest_hour: int = Field(default=7, ge=0, le=23, alias="NOTIFICATIONS_DIGEST_HOUR")
     notifications_email_max_attempts: int = Field(default=5, ge=1, alias="NOTIFICATIONS_EMAIL_MAX_ATTEMPTS")
+    # Relatorio diario em HTML (substitui o digest em texto quando ligado).
+    # REDIRECT_TO: enquanto preenchido, so o relatorio global (superusuario) e
+    # gerado e vai inteiro para este endereco -- ninguem mais recebe nada.
+    notifications_daily_report_enabled: bool = Field(default=False, alias="NOTIFICATIONS_DAILY_REPORT_ENABLED")
+    notifications_daily_report_redirect_to: str = Field(default="", alias="NOTIFICATIONS_DAILY_REPORT_REDIRECT_TO")
     # Retencao de dados de autenticacao (api/app/modules/auth/retention.py).
     # Sessoes ja EXPIRADAS e eventos de token (renovacao/reuso) sao apagados apos
     # estes prazos; logins, trocas de senha e acoes de negocio nunca sao apagados.

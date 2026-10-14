@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -23,6 +24,9 @@ from app.updater.elevation import is_admin, is_writable, relaunch_elevated
 from app.updater.exceptions import ConcurrentUpdateError, UpdateFailedError, UpdaterError
 from app.updater.journal_store import UpdateJournalStore
 from app.updater.orchestrator import OrchestratorConfig, UpdaterOrchestrator
+from app.updater import versions
+from app.updater.status import PHASE_FAILED, UpdateStatus, write_status
+from app.updater.versioned import VersionedConfig, VersionedUpdater
 from app.updater.paths import backup_dir, download_dir, ensure_updater_dirs, journal_dir, lock_path, staging_dir, updater_logs_dir
 
 LOGGER_NAME = "controle_producao.updater"
@@ -43,12 +47,66 @@ def _configure_logging() -> logging.Logger:
     return logger
 
 
+def _can_write_pointer(install_root: Path) -> bool:
+    pointer = versions.pointer_path(install_root)
+    return os.access(pointer, os.W_OK) if pointer.exists() else is_writable(install_root)
+
+
+def _run_versioned(request: UpdateRequest, args, argv, log: logging.Logger) -> int:
+    install_root = Path(request.install_dir)
+    # Preparar escreve em versions/ (precisa de escrita na raiz); ativar so troca
+    # o current.json, que o instalador deixa gravavel por usuarios -- assim o
+    # UAC aparece uma vez (na preparacao) e nao de novo ao reiniciar.
+    can_write = is_writable(install_root) if args.stage else _can_write_pointer(install_root)
+    if not is_admin() and not can_write:
+        log.warning("update_elevation_required | install_root=%s | mode=%s", install_root, "stage" if args.stage else "activate")
+        if relaunch_elevated(argv if argv is not None else sys.argv[1:]):
+            log.warning("update_elevation_relaunched | request_id=%s", request.request_id)
+            return 0
+        log.warning("update_elevation_declined_or_failed | request_id=%s", request.request_id)
+
+    updater = VersionedUpdater(
+        lock_path=lock_path(),
+        config=VersionedConfig(
+            graceful_exit_timeout_seconds=args.app_exit_timeout_seconds if args.app_exit_timeout_seconds != 60.0 else 20.0,
+            handshake_timeout_seconds=args.handshake_timeout_seconds if args.handshake_timeout_seconds != 30.0 else 45.0,
+        ),
+    )
+    try:
+        if args.stage:
+            status = updater.stage(request, download_dir=download_dir(request.request_id))
+        else:
+            status = updater.activate(request)
+    except InvalidUpdateRequestError as exc:
+        log.error("update_request_invalid | erro=%s", exc)
+        write_status(UpdateStatus(request.request_id, PHASE_FAILED, 0, "Pedido de atualizacao invalido.", str(exc)))
+        print(f"ERRO: request invalido: {exc}")
+        return 1
+    except Exception as exc:  # noqa: BLE001 - nunca terminar sem status legivel
+        log.exception("update_versioned_unexpected_error | request_id=%s", request.request_id)
+        write_status(UpdateStatus(request.request_id, PHASE_FAILED, 0, "Erro inesperado na atualizacao.", str(exc)))
+        return 1
+
+    log.info("update_versioned_finished | request_id=%s | phase=%s | error=%s", request.request_id, status.phase, status.error)
+    print(f"{status.phase}: {status.message}")
+    return 1 if status.is_failure else 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Updater do Desktop (Fase 10) -- componente separado.")
     parser.add_argument("--request", required=True, help="Caminho do arquivo JSON com o UpdateRequest.")
     parser.add_argument(
         "--allow-force-close", action="store_true",
         help="Permite encerrar o Desktop a forca se ele nao sair dentro do timeout (politica explicita, Secao 18 -- nunca o padrao).",
+    )
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
+        "--stage", action="store_true",
+        help="Layout versionado, fase 1: prepara versions/<v> com o Desktop aberto (nao fecha nada).",
+    )
+    mode.add_argument(
+        "--activate", action="store_true",
+        help="Layout versionado, fase 2: troca o ponteiro, fecha o app, abre a nova versao e confirma.",
     )
     parser.add_argument("--app-exit-timeout-seconds", type=float, default=60.0)
     parser.add_argument("--handshake-timeout-seconds", type=float, default=30.0)
@@ -64,6 +122,9 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     install_dir = Path(request.install_dir)
+    if args.stage or args.activate:
+        return _run_versioned(request, args, argv, log)
+
     if not is_admin() and not is_writable(install_dir):
         log.warning("update_elevation_required | install_dir=%s", install_dir)
         if relaunch_elevated(argv if argv is not None else sys.argv[1:]):

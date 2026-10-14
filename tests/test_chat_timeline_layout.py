@@ -8,6 +8,7 @@ from PySide6.QtWidgets import QApplication, QFrame, QLabel, QPushButton
 from app.services.backend_adapter import OFFICIAL_COLOR_PALETTES
 from app.ui.components.timeline_entries import TimelineDaySeparator
 from app.ui.proposal_chat_dialog import ChatConversationPanel
+from app.ui.styles import app_stylesheet
 
 
 class FakeService:
@@ -373,8 +374,13 @@ class ChatTimelineLayoutTests(unittest.TestCase):
         bubbles = [frame for frame in rows[0].findChildren(QFrame) if frame.objectName() == "BubbleOwn"]
 
         self.assertTrue(bubbles)
-        self.assertNotIn("transparent", bubbles[0].styleSheet())
-        self.assertIn("border-radius", bubbles[0].styleSheet())
+        # O fundo azul e o canto arredondado vem da folha de estilo do app
+        # (QFrame#BubbleOwn), nao de estilo escrito na bolha.
+        self.assertEqual(bubbles[0].styleSheet(), "")
+        palette = OFFICIAL_COLOR_PALETTES["claro"]
+        rule = app_stylesheet(palette).split("QFrame#BubbleOwn {", 1)[1].split("}", 1)[0]
+        self.assertIn(f"background: {palette['accent']}", rule)
+        self.assertIn("border-radius", rule)
 
     def test_realtime_attachment_event_merges_without_duplicate(self):
         entries = [_entry(1, body="segue", attachments=[{"id": 10, "message_id": 1, "original_filename": "a.pdf", "category": "document", "file_size": 10, "sha256": "a" * 64}])]

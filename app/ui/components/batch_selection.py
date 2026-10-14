@@ -3,9 +3,9 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable
 from typing import Any
 
-from PySide6.QtCore import QObject, QRect, Qt, Signal
-from PySide6.QtGui import QPainter
-from PySide6.QtWidgets import QHeaderView, QStyle, QStyleOptionButton
+from PySide6.QtCore import QObject, Qt, Signal
+
+from app.ui.components.modern_header import ModernHeaderView
 
 
 class BatchSelectionController(QObject):
@@ -164,58 +164,6 @@ class BatchSelectionController(QObject):
         return int(value)
 
 
-class BatchSelectionHeader(QHeaderView):
-    """Cabeçalho tri-state que opera somente sobre as linhas visíveis."""
-
-    toggle_visible_requested = Signal(bool)
-
-    def __init__(self, orientation=Qt.Horizontal, parent=None):
-        super().__init__(orientation, parent)
-        self._batch_active = False
-        self._check_state = Qt.Unchecked
-        self._has_visible_rows = False
-
-    @property
-    def check_state(self) -> Qt.CheckState:
-        return self._check_state
-
-    def set_batch_state(
-        self,
-        active: bool,
-        state: Qt.CheckState = Qt.Unchecked,
-        *,
-        has_visible_rows: bool = False,
-    ) -> None:
-        self._batch_active = bool(active)
-        self._check_state = state
-        self._has_visible_rows = bool(has_visible_rows)
-        self.viewport().update()
-
-    def paintSection(self, painter: QPainter, rect: QRect, logical_index: int) -> None:  # noqa: N802
-        super().paintSection(painter, rect, logical_index)
-        if not self._batch_active or logical_index != 0:
-            return
-        option = QStyleOptionButton()
-        indicator = self.style().subElementRect(QStyle.SE_CheckBoxIndicator, option, self)
-        option.rect = QRect(
-            rect.x() + (rect.width() - indicator.width()) // 2,
-            rect.y() + (rect.height() - indicator.height()) // 2,
-            indicator.width(),
-            indicator.height(),
-        )
-        option.state = QStyle.State_Enabled if self._has_visible_rows else QStyle.State_None
-        if self._check_state == Qt.Checked:
-            option.state |= QStyle.State_On
-        elif self._check_state == Qt.PartiallyChecked:
-            option.state |= QStyle.State_NoChange
-        else:
-            option.state |= QStyle.State_Off
-        self.style().drawControl(QStyle.CE_CheckBox, option, painter, self)
-
-    def mousePressEvent(self, event) -> None:  # noqa: N802
-        logical_index = self.logicalIndexAt(event.position().toPoint())
-        if self._batch_active and self._has_visible_rows and logical_index == 0:
-            self.toggle_visible_requested.emit(self._check_state != Qt.Checked)
-            event.accept()
-            return
-        super().mousePressEvent(event)
+# O cabecalho do modo lote e o proprio cabecalho padrao das tabelas (ModernHeaderView): mesmo contrato
+# (`set_batch_state`, `check_state`, `toggle_visible_requested`), com o acabamento novo.
+BatchSelectionHeader = ModernHeaderView

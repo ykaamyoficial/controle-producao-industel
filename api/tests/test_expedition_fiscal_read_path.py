@@ -175,6 +175,11 @@ class ExpeditionFiscalReadPathTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         return response.json()
 
+    def _shipping_items(self, **params):
+        response = self.client.get("/api/v1/shipping/items", params=params, headers=self.headers)
+        self.assertEqual(response.status_code, 200, response.text)
+        return response.json()
+
     def _fiscal_list(self, **params):
         response = self.client.get("/api/v1/fiscal/records", params=params, headers=self.headers)
         self.assertEqual(response.status_code, 200, response.text)
@@ -221,6 +226,150 @@ class ExpeditionFiscalReadPathTests(unittest.TestCase):
         self.assertEqual(detail.status_code, 200)
         self.assertEqual(len(detail.json()["items"]), 2)
         self.assertEqual(detail.json()["shipping_status"], "SEPARACAO_INICIADA")
+
+    def test_lists_and_details_expose_the_invoice_numbers(self):
+        # Coluna "NF" nas telas de Fiscal e Expedicao: a lista traz os numeros
+        # das NFs registradas, sem uma consulta por linha.
+        ids = self._build_scenario()
+        fiscal = {row["proposal_number"]: row for row in self._fiscal_list(limit=200)["items"]}
+        self.assertEqual(fiscal["EXP-C"]["invoice_numbers"], ["1001"])
+        self.assertEqual(fiscal["EXP-B"]["invoice_numbers"], ["1002"])
+        self.assertEqual(fiscal["EXP-A"]["invoice_numbers"], [])
+        shipping = {row["proposal_number"]: row for row in self._shipping_list(limit=200)["items"]}
+        self.assertEqual(shipping["EXP-C"]["invoice_numbers"], ["1001"])
+        self.assertEqual(shipping["EXP-B"]["invoice_numbers"], ["1002"])
+        self.assertEqual(shipping["EXP-A"]["invoice_numbers"], [])
+        detail = self.client.get(f"/api/v1/shipping/proposals/{ids['B']}", headers=self.headers).json()
+        self.assertEqual(detail["invoice_numbers"], ["1002"])
+        fiscal_detail = self.client.get(f"/api/v1/fiscal/records/{fiscal['EXP-C']['id']}", headers=self.headers).json()
+        self.assertEqual(fiscal_detail["invoice_numbers"], ["1001"])
+
+    def test_search_finds_proposals_by_invoice_number_in_fiscal_and_expedition(self):
+        # Busca pelo numero da NF (coluna "Nº da NF"): EXP-C tem a NF 1001 e
+        # EXP-B a 1002; texto sem NF correspondente continua sem resultado.
+        self._build_scenario()
+        self.assertEqual(self._nums(self._fiscal_list(search="1001", limit=200)), ["EXP-C"])
+        self.assertEqual(self._nums(self._fiscal_list(search="1002", limit=200)), ["EXP-B"])
+        self.assertEqual(self._nums(self._shipping_list(search="1001", limit=200)), ["EXP-C"])
+        self.assertEqual(self._nums(self._shipping_list(search=" 1002 ", limit=200)), ["EXP-B"])
+        self.assertEqual(self._fiscal_list(search="1001", limit=200)["total"], 1)
+        self.assertEqual(self._shipping_list(search="9999", limit=200)["items"], [])
+        self.assertEqual(self._fiscal_list(search="9999", limit=200)["items"], [])
+        # Busca por texto de proposta/cliente segue igual.
+        self.assertEqual(self._nums(self._fiscal_list(search="beta", limit=200)), EXPECTED_FISCAL_SEARCH_BETA)
+        # Substring: "100" casa 1001 e 1002.
+        self.assertEqual(sorted(self._nums(self._fiscal_list(search="100", limit=200))), ["EXP-B", "EXP-C"])
+
+    def test_expedition_items_list_has_one_row_per_item_with_the_proposal_context(self):
+        # Aba "Itens em expedicao": uma linha por item que ainda tem saldo a
+        # entregar, das propostas que estao na Expedicao.
+        self._build_scenario()
+        payload = self._shipping_items(limit=200)
+        self.assertEqual(payload["total"], 5)
+        # EM_SEPARACAO (A, E), SEPARACAO_INICIADA (B x2), SEPARADO (C); D foi
+        # entregue por inteiro e F nem chegou na Expedicao.
+        self.assertEqual(self._nums(payload), ["EXP-A", "EXP-E", "EXP-B", "EXP-B", "EXP-C"])
+        self.assertEqual([row["item_number"] for row in payload["items"] if row["proposal_number"] == "EXP-B"], ["1", "2"])
+        self.assertEqual([row["status"] for row in payload["items"]], ["EM_SEPARACAO", "EM_SEPARACAO", "SEPARACAO_INICIADA", "SEPARACAO_INICIADA", "SEPARADO"])
+        first = payload["items"][0]
+        for key in (
+            "id", "proposal_id", "proposal_version", "proposal_number", "customer_name", "project_name", "lot", "item_number",
+            "product_code", "description", "unit", "available_quantity", "separated_quantity", "delivered_quantity",
+            "remanaged_quantity", "pending_quantity", "origin", "status", "version",
+        ):
+            self.assertIn(key, first)
+        self.assertEqual((first["proposal_number"], first["customer_name"], first["unit"]), ("EXP-A", "Alfa Ltda", "un"))
+        self.assertEqual((first["available_quantity"], first["pending_quantity"]), ("2.0000", "2.0000"))
+        by_number = {(row["proposal_number"], row["item_number"]): row for row in payload["items"]}
+        self.assertEqual(by_number[("EXP-B", "2")]["available_quantity"], "4.0000")
+
+    def test_expedition_items_list_filters_search_status_and_paginates(self):
+        self._build_scenario()
+        self.assertEqual(self._nums(self._shipping_items(search="beta", limit=200)), ["EXP-E", "EXP-B", "EXP-B"])
+        self.assertEqual(self._nums(self._shipping_items(search=" exp-c ")), ["EXP-C"])
+        # Numero da NF (EXP-C tem a 1001) e texto do item (codigo/descricao).
+        self.assertEqual(self._nums(self._shipping_items(search="1001")), ["EXP-C"])
+        self.assertEqual(self._shipping_items(search="cod", limit=200)["total"], 5)
+        self.assertEqual(self._shipping_items(search="linha 2", limit=200)["total"], 5)
+        self.assertEqual(self._shipping_items(search="nada disso")["items"], [])
+        self.assertEqual(self._shipping_items(search="%")["total"], 0)
+        # Status do item.
+        self.assertEqual(self._nums(self._shipping_items(status="SEPARADO")), ["EXP-C"])
+        self.assertEqual(self._shipping_items(status="separacao_iniciada")["total"], 2)
+        self.assertEqual(self._shipping_items(status="ENTREGUE")["items"], [])
+        # Paginacao.
+        page = self._shipping_items(limit=2, offset=1)
+        self.assertEqual((page["total"], page["limit"], page["offset"]), (5, 2, 1))
+        self.assertEqual(self._nums(page), ["EXP-E", "EXP-B"])
+        self.assertEqual(self._shipping_items(limit=5, offset=50)["items"], [])
+
+    def test_expedition_items_list_can_include_the_items_already_delivered(self):
+        ids = self._build_scenario()
+        detail = self.client.get(f"/api/v1/shipping/proposals/{ids['B']}", headers=self.headers).json()
+        separated = self._post(f"/api/v1/shipping/proposals/{ids['B']}/separate-items", {"version": detail["version"]})
+        first = sorted(separated["items"], key=lambda row: row["item_number"])[0]
+        self._post(f"/api/v1/shipping/proposals/{ids['B']}/deliver-items", {"version": separated["version"], "items": [{"expedition_item_id": first["id"]}]})
+        pending = self._shipping_items(limit=200)
+        self.assertEqual(pending["total"], 4)
+        self.assertNotIn(("EXP-B", "1"), [(row["proposal_number"], row["item_number"]) for row in pending["items"]])
+        # Com pending_only=false volta o item entregue, mas so porque a proposta B
+        # continua na Expedicao (o item 2 ainda tem saldo); D, entregue por
+        # inteiro, segue de fora.
+        everything = self._shipping_items(pending_only="false", limit=200)
+        self.assertEqual(everything["total"], 5)
+        delivered = [row for row in everything["items"] if row["status"] == "ENTREGUE"]
+        self.assertEqual([(row["proposal_number"], row["item_number"]) for row in delivered], [("EXP-B", "1")])
+        self.assertEqual(delivered[0]["pending_quantity"], "0.0000")
+        self.assertEqual(delivered[0]["delivered_quantity"], "2.0000")
+        self.assertNotIn("EXP-D", self._nums(everything))
+        self.assertEqual(self._nums(self._shipping_items(pending_only="false", status="ENTREGUE")), ["EXP-B"])
+
+    def _stage_ledger(self, proposal_id):
+        response = self.client.get("/api/v1/shipping/remanagements/stage-ledger", params={"proposal_id": proposal_id}, headers=self.headers)
+        self.assertEqual(response.status_code, 200, response.text)
+        return response.json()
+
+    def test_stage_ledger_places_every_piece_in_a_stage_and_the_accounts_close(self):
+        ids = self._build_scenario()
+        expected = {
+            # proposta -> (a fabricar, aguardando galv., na galv., pronta, entregue) do primeiro item
+            "A": ("0.0000", "0.0000", "0.0000", "2.0000", "0.0000"),   # fabricada, na Expedicao
+            "D": ("0.0000", "0.0000", "0.0000", "0.0000", "2.0000"),   # entregue
+            "F": ("2.0000", "0.0000", "0.0000", "0.0000", "0.0000"),   # nem foi liberada: a fabricar
+        }
+        for key, stages in expected.items():
+            with self.subTest(proposal=key):
+                payload = self._stage_ledger(ids[key])
+                self.assertEqual(payload["anomalies"], [])
+                item = payload["items"][0]
+                self.assertEqual((item["to_produce"], item["awaiting_galvanization"], item["in_galvanization"], item["ready"], item["delivered"]), stages)
+                self.assertEqual(item["gap"], "0.0000")
+                self.assertEqual(item["flow"], "SIMPLES")
+        both = self._stage_ledger(ids["B"])
+        self.assertEqual([row["requested"] for row in both["items"]], ["2.0000", "4.0000"])
+        self.assertEqual([row["ready"] for row in both["items"]], ["2.0000", "4.0000"])
+        for key in ids:
+            self.assertEqual([a for a in self._stage_ledger(ids[key])["anomalies"] if a["severity"] == "ERROR"], [], key)
+
+    def test_stage_ledger_follows_a_partial_delivery(self):
+        ids = self._build_scenario()
+        detail = self.client.get(f"/api/v1/shipping/proposals/{ids['B']}", headers=self.headers).json()
+        separated = self._post(f"/api/v1/shipping/proposals/{ids['B']}/separate-items", {"version": detail["version"]})
+        first = sorted(separated["items"], key=lambda row: row["item_number"])[0]
+        self._post(f"/api/v1/shipping/proposals/{ids['B']}/deliver-items", {"version": separated["version"], "items": [{"expedition_item_id": first["id"], "quantity": "1.0000"}]})
+        payload = self._stage_ledger(ids["B"])
+        rows = {row["requested"]: row for row in payload["items"]}
+        self.assertEqual((rows["2.0000"]["ready"], rows["2.0000"]["delivered"]), ("1.0000", "1.0000"))
+        self.assertEqual(payload["anomalies"], [])
+
+    def test_stage_ledger_requires_authentication_and_a_known_proposal(self):
+        self.assertEqual(self.client.get("/api/v1/shipping/remanagements/stage-ledger", params={"proposal_id": 1}).status_code, 401)
+        missing = self.client.get("/api/v1/shipping/remanagements/stage-ledger", params={"proposal_id": 999999}, headers=self.headers)
+        self.assertEqual(missing.status_code, 404)
+
+    def test_expedition_items_list_requires_the_expedition_view_permission(self):
+        response = self.client.get("/api/v1/shipping/items")
+        self.assertEqual(response.status_code, 401)
 
     def test_fiscal_list_filters_order_pagination_and_indicators(self):
         self._build_scenario()

@@ -34,9 +34,10 @@ from app.ui.background_worker import start_worker
 from app.ui.refresh_coordinator import RefreshCoordinator
 from app.ui.resilience import show_operation_error
 from app.ui.components.area_identity import style_area_title
+from app.ui.components.detail_widgets import IconChip
 from app.ui.components.kpi_card import KpiCard
 from app.ui.components.modern_button import ModernButton
-from app.ui.components.modern_table import ModernTable, ProcessFilterProxy
+from app.ui.components.modern_table import TABLE_HEADER_HEIGHT, ModernTable, ProcessFilterProxy
 from app.ui.components.batch_selection import BatchSelectionController, BatchSelectionHeader
 from app.ui.components.operational_layout import (
     OPERATIONAL_ACTION_SPACING,
@@ -88,12 +89,12 @@ class FiscalProposalDetailDialog(QDialog):
         tabs.setObjectName("ModernTabs")
         tabs.addTab(self._summary_tab(), "Resumo")
         tabs.addTab(self._items_tab(), "Itens")
-        tabs.addTab(self._emissions_tab(), "Emissoes")
-        tabs.addTab(self._history_tab(), "Historico Fiscal")
+        tabs.addTab(self._emissions_tab(), "Emissões")
+        tabs.addTab(self._history_tab(), "Histórico Fiscal")
         tabs.addTab(self._alerts_tab(), "Alertas")
         root.addWidget(tabs, 1)
 
-        close = ModernButton("Fechar", "clear")
+        close = ModernButton("Fechar", "clear", variant="ghost")
         close.clicked.connect(self.accept)
         footer = QHBoxLayout()
         footer.addStretch()
@@ -119,7 +120,7 @@ class FiscalProposalDetailDialog(QDialog):
             ("Status Fiscal", self.service.fiscal_status_label(self.fiscal_row.get("situacao_fiscal") or self.fiscal_row.get("status_fiscal") or "")),
             ("Entrada Fiscal", self.fiscal_row.get("data_entrada_fiscal")),
             ("Ultima Emissao", self.fiscal_row.get("data_ultima_emissao") or "-"),
-            ("Numero da NF", latest_nf),
+            ("Número da NF", latest_nf),
             ("Alerta atual", alert),
         ]
         for index, (label, value) in enumerate(rows):
@@ -159,8 +160,8 @@ class FiscalProposalDetailDialog(QDialog):
         layout.setContentsMargins(0, 12, 0, 0)
         columns = [
             ("numero_item", "Item"),
-            ("codigo_produto", "Codigo"),
-            ("descricao", "Descricao"),
+            ("codigo_produto", "Código"),
+            ("descricao", "Descrição"),
             ("quantidade_total", "Quantidade Total"),
             ("quantidade_faturada", "Quantidade Faturada"),
             ("quantidade_pendente", "Quantidade Pendente"),
@@ -179,13 +180,13 @@ class FiscalProposalDetailDialog(QDialog):
         layout = QVBoxLayout(tab)
         layout.setContentsMargins(0, 12, 0, 0)
         columns = [
-            ("id", "Numero da emissao"),
-            ("numero_controle", "Numero da NF"),
+            ("id", "Número da emissão"),
+            ("numero_controle", "Número da NF"),
             ("data_emissao", "Data"),
-            ("usuario", "Usuario"),
+            ("usuario", "Usuário"),
             ("quantidade_emitida", "Quantidade faturada"),
             ("peso_emitido", "Peso faturado"),
-            ("observacao", "Observacao"),
+            ("observacao", "Observação"),
         ]
         layout.addWidget(self._table(self.emissions, columns, description_key="observacao"), 1)
         return tab
@@ -197,11 +198,11 @@ class FiscalProposalDetailDialog(QDialog):
         layout.setContentsMargins(0, 12, 0, 0)
         columns = [
             ("data_hora", "Data/Hora"),
-            ("usuario", "Usuario"),
-            ("tipo_movimento", "Acao"),
+            ("usuario", "Usuário"),
+            ("tipo_movimento", "Ação"),
             ("status_anterior", "Status Anterior"),
             ("status_novo", "Status Novo"),
-            ("observacao", "Observacao"),
+            ("observacao", "Observação"),
         ]
         layout.addWidget(self._table(self.movements, columns, description_key="observacao"), 1)
         return tab
@@ -250,10 +251,7 @@ class FiscalProposalDetailDialog(QDialog):
         frame.setObjectName("KpiCard")
         layout = QHBoxLayout(frame)
         layout.setContentsMargins(16, 12, 16, 12)
-        icon = QLabel("!")
-        icon.setAlignment(Qt.AlignCenter)
-        icon.setFixedSize(34, 34)
-        icon.setStyleSheet(f"background: {color}22; color: {color}; border-radius: 10px; font-weight: 900;")
+        icon = IconChip("audit", color, size=34)
         text = QLabel(f"<b>{title}</b><br>{detail}")
         text.setWordWrap(True)
         layout.addWidget(icon)
@@ -311,10 +309,10 @@ class FiscalProposalDetailDialog(QDialog):
     def _alerts(self) -> list[tuple[str, str, str]]:
         alerts = []
         if int(self.fiscal_row.get("pendencia_critica") or 0):
-            alerts.append(("Pendencia Fiscal Critica", "Proposta entregue ou critica sem NF totalmente emitida.", "danger"))
-            alerts.append(("Entregue sem NF", "A expedicao ja concluiu a entrega e o fiscal ainda possui pendencia.", "warning"))
+            alerts.append(("Pendência Fiscal Crítica", "Proposta entregue ou crítica sem NF totalmente emitida.", "danger"))
+            alerts.append(("Entregue sem NF", "A expedição já concluiu a entrega e o fiscal ainda possui pendência.", "warning"))
         if int(self.fiscal_row.get("mais_7_dias_sem_emissao") or 0):
-            alerts.append(("Mais de 7 dias sem emissao", "Entrada fiscal antiga sem emissao total registrada.", "secondary"))
+            alerts.append(("Mais de 7 dias sem emissão", "Entrada fiscal antiga sem emissão total registrada.", "secondary"))
         if self.fiscal_row.get("status_fiscal") == "NOTA_FISCAL_PARCIAL":
             alerts.append(("Nota Fiscal Parcial", "Ainda existem itens ou peso pendentes de faturamento.", "warning"))
         return alerts
@@ -396,43 +394,43 @@ class FiscalPage(QWidget):
         title = QLabel("Fiscal")
         title.setObjectName("FilterTitle")
         style_area_title(title, "FISCAL", self.service.palette)
-        caption = QLabel("Controle visual das propostas que retornaram da galvanizacao e precisam de acompanhamento fiscal.")
+        caption = QLabel("Controle visual das propostas que retornaram da galvanização e precisam de acompanhamento fiscal.")
         caption.setObjectName("Caption")
         caption.setWordWrap(True)
         header = QHBoxLayout()
         header.addWidget(title)
         header.addStretch()
-        self.register_btn = ModernButton("Registrar emissao fiscal", "status", accent=True)
+        self.register_btn = ModernButton("Registrar emissão fiscal", "status", accent=True)
         self.register_btn.clicked.connect(self.register_emission)
         if not self.service.can_register_fiscal_emission():
             self.register_btn.setEnabled(False)
-            self.register_btn.setToolTip("Disponivel apenas para administrador ou perfil Fiscal.")
+            self.register_btn.setToolTip("Disponível apenas para administrador ou perfil Fiscal.")
         header.addWidget(self.register_btn)
-        self.batch_btn = ModernButton("Acoes em lote", "batch")
+        self.batch_btn = ModernButton("Ações em lote", "batch")
         self.batch_btn.clicked.connect(self.activate_batch_selection)
         header.addWidget(self.batch_btn)
         fl.addLayout(header)
         fl.addWidget(caption)
 
         self.search = QLineEdit()
-        self.search.setPlaceholderText("Pesquisar proposta, cliente ou obra/site")
+        self.search.setPlaceholderText("Pesquisar proposta, cliente, obra/site ou NF")
         self.status = QComboBox()
-        self.status.addItem("Todos", "")
+        self.status.addItem("Todos os status fiscais", "")
         self.status.addItem("CP em processamento", "situacao:CP_EM_PROCESSAMENTO")
         self.status.addItem("NF em processamento", "situacao:NF_EM_PROCESSAMENTO")
-        self.status.addItem("Disponivel para emitir NF", "situacao:DISPONIVEL_PARA_EMISSAO")
-        self.status.addItem("Pendencia fiscal critica", "situacao:PENDENCIA_FISCAL_CRITICA")
+        self.status.addItem("Disponível para emitir NF", "situacao:DISPONIVEL_PARA_EMISSAO")
+        self.status.addItem("Pendência fiscal crítica", "situacao:PENDENCIA_FISCAL_CRITICA")
         self.status.addItem("Falta emitir NF", "FALTA_EMITIR_NOTA_FISCAL")
         self.status.addItem("NF parcial", "NOTA_FISCAL_PARCIAL")
         self.status.addItem("NF emitida", "NOTA_FISCAL_EMITIDA")
         self.entry_date = QLineEdit()
-        self.entry_date.setPlaceholderText("AAAA-MM-DD ou DD/MM/AAAA")
+        self.entry_date.setPlaceholderText("Data de entrada (AAAA-MM-DD ou DD/MM/AAAA)")
         self.critical = QComboBox()
-        self.critical.addItem("Todas", "")
-        self.critical.addItem("Pendencia critica", "1")
-        self.critical.addItem("Mais de 7 dias sem emissao", "7")
-        apply_btn = ModernButton("Aplicar", "search", accent=True)
-        clear_btn = ModernButton("Limpar", "clear")
+        self.critical.addItem("Todos os alertas", "")
+        self.critical.addItem("Pendência crítica", "1")
+        self.critical.addItem("Mais de 7 dias sem emissão", "7")
+        apply_btn = ModernButton("Aplicar", "search")
+        clear_btn = ModernButton("Limpar", "clear", variant="ghost")
         self.refresh_buttons = [apply_btn, clear_btn]
         self.loading = QLabel("Carregando...")
         self.loading.setObjectName("Caption")
@@ -444,31 +442,31 @@ class FiscalPage(QWidget):
         fields.setHorizontalSpacing(OPERATIONAL_FIELD_HORIZONTAL_SPACING)
         fields.setVerticalSpacing(OPERATIONAL_FIELD_VERTICAL_SPACING)
         self._add_filter_field(fields, 0, 0, "Busca geral", self.search)
-        self._add_filter_field(fields, 0, 2, "Status Fiscal", self.status)
-        self._add_filter_field(fields, 0, 4, "Entrada", self.entry_date)
-        self._add_filter_field(fields, 0, 6, "Alerta", self.critical)
+        self._add_filter_field(fields, 0, 1, "Status Fiscal", self.status)
+        self._add_filter_field(fields, 0, 2, "Data de entrada", self.entry_date)
+        self._add_filter_field(fields, 0, 3, "Alerta", self.critical)
         actions = QHBoxLayout()
         actions.setSpacing(OPERATIONAL_ACTION_SPACING)
         actions.addWidget(self.loading)
         actions.addWidget(apply_btn)
         actions.addWidget(clear_btn)
-        fields.addLayout(actions, 0, 8)
-        fields.setColumnStretch(1, 4)
+        fields.addLayout(actions, 0, 4)
+        fields.setColumnStretch(0, 4)
+        fields.setColumnStretch(1, 2)
+        fields.setColumnStretch(2, 2)
         fields.setColumnStretch(3, 2)
-        fields.setColumnStretch(5, 2)
-        fields.setColumnStretch(7, 2)
         fl.addLayout(fields)
 
         self.selection_bar = QHBoxLayout()
         self.selection_bar.setSpacing(OPERATIONAL_ACTION_SPACING)
-        self.selection_mode_label = QLabel("Modo de selecao")
-        self.selection_mode_label.setObjectName("FilterTitle")
+        self.selection_mode_label = QLabel("Modo de seleção")
+        self.selection_mode_label.setObjectName("BatchModeLabel")
         self.selection_count_label = QLabel("0 propostas selecionadas")
         self.selection_count_label.setObjectName("Caption")
         self.view_selected_btn = ModernButton("Ver selecionadas", "search")
-        self.clear_selection_btn = ModernButton("Limpar selecao", "clear")
-        self.batch_actions_btn = ModernButton("Acoes", "batch", accent=True)
-        self.cancel_selection_btn = ModernButton("Cancelar", "close")
+        self.clear_selection_btn = ModernButton("Limpar seleção", "clear")
+        self.batch_actions_btn = ModernButton("Ações", "batch", accent=True)
+        self.cancel_selection_btn = ModernButton("Cancelar", "close", variant="ghost")
         self.view_selected_btn.clicked.connect(self.toggle_selected_view)
         self.clear_selection_btn.clicked.connect(self.batch_selection.clear)
         self.batch_actions_btn.clicked.connect(self.show_batch_actions_placeholder)
@@ -483,17 +481,18 @@ class FiscalPage(QWidget):
         self.table = ModernTable(self.service)
         self.batch_header = BatchSelectionHeader(Qt.Horizontal, self.table)
         self.table.setHorizontalHeader(self.batch_header)
-        self.batch_header.setFixedHeight(28)
+        self.batch_header.setFixedHeight(TABLE_HEADER_HEIGHT)
+        self.batch_header.setDefaultAlignment(Qt.AlignCenter)
         self.batch_header.setStretchLastSection(True)
         self.table.status_shortcut_enabled = False
         self.table.setModel(self.proxy)
-        self.table.setToolTip("Clique com o botao direito ou na coluna Acoes para consultar detalhes fiscais.")
+        self.table.setToolTip("Clique com o botão direito ou na coluna Ações para consultar detalhes fiscais.")
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self.open_tracking_menu)
         self.table.clicked.connect(self.handle_tracking_click)
         root.addWidget(self.table, 1)
 
-        hint = QLabel("Dica: use o botao direito do mouse ou a coluna Acoes para ver itens, resumo, historico e emissoes.")
+        hint = QLabel("Dica: use o botão direito do mouse ou a coluna Ações para ver itens, resumo, histórico e emissões.")
         hint.setObjectName("HintLabel")
         root.addWidget(hint)
 
@@ -506,7 +505,7 @@ class FiscalPage(QWidget):
             signal.connect(lambda *_args: self._sync_batch_header())
         tabs.addTab(tracking, "Acompanhamento fiscal")
         tabs.addTab(self._build_withdrawn_tab(), "Notas fiscais retiradas")
-        tabs.addTab(self._build_report_tab(), "Relatorios fiscais")
+        tabs.addTab(self._build_report_tab(), "Relatórios fiscais")
 
     def _build_withdrawn_tab(self) -> QWidget:
         tab = QWidget()
@@ -528,7 +527,7 @@ class FiscalPage(QWidget):
         title = QLabel("Notas fiscais retiradas")
         title.setObjectName("FilterTitle")
         style_area_title(title, "FISCAL", self.service.palette)
-        caption = QLabel("Consulta das notas fiscais ja retiradas pelo cliente. Somente leitura.")
+        caption = QLabel("Consulta das notas fiscais já retiradas pelo cliente. Somente leitura.")
         caption.setObjectName("Caption")
         caption.setWordWrap(True)
         layout.addWidget(title)
@@ -543,16 +542,16 @@ class FiscalPage(QWidget):
         self.withdrawn_table.clicked.connect(self.handle_withdrawn_click)
         root.addWidget(self.withdrawn_table, 1)
 
-        hint = QLabel("Dica: use o botao direito do mouse ou a coluna Acoes para consultar os detalhes fiscais.")
+        hint = QLabel("Dica: use o botão direito do mouse ou a coluna Ações para consultar os detalhes fiscais.")
         hint.setObjectName("HintLabel")
         root.addWidget(hint)
         return tab
 
-    def _add_filter_field(self, layout, row, column, label_text, widget):
-        label = QLabel(label_text)
-        label.setObjectName("FieldLabel")
-        layout.addWidget(label, row, column)
-        layout.addWidget(widget, row, column + 1)
+    def _add_filter_field(self, layout, row, column, name, widget):
+        # Sem rotulo ao lado do campo: o placeholder e as opcoes explicam o filtro.
+        widget.setAccessibleName(name)
+        widget.setMinimumHeight(34)
+        layout.addWidget(widget, row, column)
 
     def refresh(self, *, debounced: bool = False):
         self._refresh_view_state = (
@@ -627,7 +626,7 @@ class FiscalPage(QWidget):
 
     def activate_batch_selection(self):
         if not self.service.can_register_fiscal_emission():
-            QMessageBox.warning(self, "Fiscal", "Seu usuario nao tem permissao para selecionar propostas fiscais.")
+            QMessageBox.warning(self, "Fiscal", "Seu usuário não tem permissão para selecionar propostas fiscais.")
             return
         if self.batch_selection.active:
             return
@@ -726,7 +725,7 @@ class FiscalPage(QWidget):
             draft_dialog = FiscalEmissionDraftDialog(self.service, selection_payload, selected_rows, self, drafts=drafts)
             if draft_dialog.exec() and draft_dialog.result is not None:
                 if not hasattr(self.service, "register_fiscal_batch"):
-                    QMessageBox.warning(self, "Emissao fiscal", "O motor fiscal em lote nao esta disponivel.")
+                    QMessageBox.warning(self, "Emissão fiscal", "O motor fiscal em lote não está disponível.")
                     return
                 self.last_fiscal_batch_draft = draft_dialog.result
                 review = FiscalEmissionReviewDialog(draft_dialog.result, self, confirm_callback=self.service.register_fiscal_batch)
@@ -737,7 +736,7 @@ class FiscalPage(QWidget):
                 self.last_fiscal_batch_result = result
                 processed = len((result or {}).get("proposals") or draft_dialog.result)
                 item_count = sum(len(row.get("items", [])) for row in draft_dialog.result)
-                QMessageBox.information(self, "Emissao fiscal", f"Emissoes fiscais registradas com sucesso.\n\n{processed} proposta(s) processada(s)\n{item_count} item(ns) atualizado(s)")
+                QMessageBox.information(self, "Emissão fiscal", f"Emissões fiscais registradas com sucesso.\n\n{processed} proposta(s) processada(s)\n{item_count} item(ns) atualizado(s)")
                 self.batch_selection.clear()
                 self._sync_selection_ui()
                 self.refresh()
@@ -749,14 +748,14 @@ class FiscalPage(QWidget):
     def _fiscal_error_message(exc: Exception) -> str:
         code = str(getattr(exc, "error_code", "") or getattr(exc, "technical_message", "") or "").upper()
         messages = {
-            "FISCAL_QUANTITY_EXCEEDED": "O saldo fiscal deste item foi alterado. Atualize os dados e revise a emissao.",
-            "FISCAL_ITEM_INVALID": "Um item fiscal ficou indisponivel ou invalido. Atualize os dados e revise a emissao.",
-            "FISCAL_INVOICE_DUPLICATED": "A NF informada ja esta registrada conforme a regra de unicidade atual.",
-            "FISCAL_VERSION_CONFLICT": "Os dados fiscais foram alterados por outra operacao. Atualize e tente novamente.",
-            "FISCAL_INVALID_STATE": "Esta proposta fiscal ja esta concluida (NF emitida). Atualize a lista e revise a selecao.",
-            "PERMISSION_DENIED": "Seu usuario nao possui permissao para registrar esta emissao.",
+            "FISCAL_QUANTITY_EXCEEDED": "O saldo fiscal deste item foi alterado. Atualize os dados e revise a emissão.",
+            "FISCAL_ITEM_INVALID": "Um item fiscal ficou indisponível ou inválido. Atualize os dados e revise a emissão.",
+            "FISCAL_INVOICE_DUPLICATED": "A NF informada já está registrada conforme a regra de unicidade atual.",
+            "FISCAL_VERSION_CONFLICT": "Os dados fiscais foram alterados por outra operação. Atualize e tente novamente.",
+            "FISCAL_INVALID_STATE": "Esta proposta fiscal já está concluída (NF emitida). Atualize a lista e revise a seleção.",
+            "PERMISSION_DENIED": "Seu usuário não possui permissão para registrar esta emissão.",
         }
-        return messages.get(code, str(exc) or "Nao foi possivel concluir a emissao fiscal.")
+        return messages.get(code, str(exc) or "Não foi possível concluir a emissão fiscal.")
 
     def clear(self):
         self.search.clear()
@@ -871,9 +870,9 @@ class FiscalPage(QWidget):
         menu.addAction(QAction("Detalhes da Proposta", self, triggered=lambda: self.show_fiscal_details(row)))
         status = str(row.get("status_fiscal") or "").strip().upper()
         if self.service.can_register_fiscal_emission() and status not in {"NOTA_FISCAL_EMITIDA", "FISCAL_CANCELADO"}:
-            menu.addAction(QAction("Registrar emissao fiscal", self, triggered=self.register_emission))
+            menu.addAction(QAction("Registrar emissão fiscal", self, triggered=self.register_emission))
         if getattr(self.service, "can_cancel_fiscal_emission", lambda: False)() and self.service.fiscal_emissions(int(row["fiscal_processo_id"])):
-            menu.addAction(QAction("Cancelar ultima emissao interna", self, triggered=lambda: self.cancel_latest_emission(row)))
+            menu.addAction(QAction("Cancelar última emissão interna", self, triggered=lambda: self.cancel_latest_emission(row)))
         return menu
 
     def show_fiscal_details(self, row: dict) -> bool:
@@ -926,7 +925,7 @@ class FiscalPage(QWidget):
         resize_rows_to_contents(table)
         table.resizeColumnsToContents()
         layout.addWidget(table, 1)
-        close = ModernButton("Fechar", "clear")
+        close = ModernButton("Fechar", "clear", variant="ghost")
         close.clicked.connect(dialog.accept)
         row = QHBoxLayout()
         row.addStretch()
@@ -937,30 +936,30 @@ class FiscalPage(QWidget):
 
     def register_emission(self, row: dict | None = None) -> bool:
         if not self.service.can_register_fiscal_emission():
-            QMessageBox.warning(self, "Fiscal", "Seu usuario nao tem permissao para registrar emissao fiscal.")
+            QMessageBox.warning(self, "Fiscal", "Seu usuário não tem permissão para registrar emissão fiscal.")
             return False
         fiscal_row = row or self.selected_fiscal_row()
         if not fiscal_row:
             QMessageBox.warning(self, "Fiscal", "Selecione uma proposta fiscal.")
             return False
         if fiscal_row.get("status_fiscal") == "NOTA_FISCAL_EMITIDA":
-            QMessageBox.information(self, "Fiscal", "Esta proposta ja esta totalmente faturada.")
+            QMessageBox.information(self, "Fiscal", "Esta proposta já está totalmente faturada.")
             return False
         dialog = FiscalEmissionDialog(self.service, fiscal_row, self)
         if dialog.exec():
             self.refresh()
-            QMessageBox.information(self, "Fiscal", "Emissao fiscal registrada com sucesso.")
+            QMessageBox.information(self, "Fiscal", "Emissão fiscal registrada com sucesso.")
             return True
         return False
 
     def cancel_latest_emission(self, row: dict) -> bool:
         if not getattr(self.service, "can_cancel_fiscal_emission", lambda: False)():
-            QMessageBox.warning(self, "Fiscal", "Seu usuario nao tem permissao para cancelar emissao fiscal.")
+            QMessageBox.warning(self, "Fiscal", "Seu usuário não tem permissão para cancelar emissão fiscal.")
             return False
         answer = QMessageBox.question(
             self,
-            "Cancelar emissao fiscal",
-            "Cancelar a ultima emissao fiscal interna desta proposta?",
+            "Cancelar emissão fiscal",
+            "Cancelar a última emissão fiscal interna desta proposta?",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,
         )
@@ -972,7 +971,7 @@ class FiscalPage(QWidget):
                 "Cancelamento interno pelo Desktop",
             )
             self.refresh()
-            QMessageBox.information(self, "Fiscal", f"{cancelled} vinculo(s) fiscal(is) cancelado(s).")
+            QMessageBox.information(self, "Fiscal", f"{cancelled} vínculo(s) fiscal(is) cancelado(s).")
             return True
         except Exception as exc:
             QMessageBox.warning(self, "Fiscal", str(exc))
@@ -995,10 +994,10 @@ class FiscalPage(QWidget):
         )
 
         header = QHBoxLayout()
-        title = QLabel("Relatorios fiscais")
+        title = QLabel("Relatórios fiscais")
         title.setObjectName("FilterTitle")
         style_area_title(title, "FISCAL", self.service.palette)
-        caption = QLabel("Consultas fiscais por proposta, item, cliente, periodo e emissao. Nao inclui valores financeiros.")
+        caption = QLabel("Consultas fiscais por proposta, item, cliente, período e emissão. Não inclui valores financeiros.")
         caption.setObjectName("Caption")
         caption.setWordWrap(True)
         header.addWidget(title)
@@ -1012,13 +1011,13 @@ class FiscalPage(QWidget):
             ("Propostas com NF pendente", "PENDENTES"),
             ("Propostas com NF parcial", "PARCIAIS"),
             ("Propostas com NF emitida", "EMITIDAS"),
-            ("Pendencia fiscal critica", "CRITICAS"),
+            ("Pendência fiscal crítica", "CRITICAS"),
             ("Propostas entregues sem NF", "ENTREGUES_SEM_NF"),
             ("Itens pendentes de faturamento", "ITENS_PENDENTES"),
-            ("Historico de emissoes fiscais", "EMISSOES"),
+            ("Histórico de emissões fiscais", "EMISSOES"),
             ("Fiscal por cliente", "POR_CLIENTE"),
             ("Fiscal por periodo", "POR_PERIODO"),
-            ("Propostas ha mais de 7 dias sem emissao", "MAIS_7_DIAS"),
+            ("Propostas há mais de 7 dias sem emissão", "MAIS_7_DIAS"),
         ]
         for label, value in report_options:
             self.report_type.addItem(label, value)
@@ -1033,27 +1032,27 @@ class FiscalPage(QWidget):
         self.report_site.setMinimumWidth(150)
         self.report_status = QComboBox()
         self.report_status.setMinimumWidth(150)
-        self.report_status.addItem("Todos", "")
+        self.report_status.addItem("Todos os status", "")
         self.report_status.addItem("Falta emitir NF", "FALTA_EMITIR_NOTA_FISCAL")
         self.report_status.addItem("NF parcial", "NOTA_FISCAL_PARCIAL")
         self.report_status.addItem("NF emitida", "NOTA_FISCAL_EMITIDA")
         self.report_start = QLineEdit()
-        self.report_start.setPlaceholderText("Inicio AAAA-MM-DD")
+        self.report_start.setPlaceholderText("Início AAAA-MM-DD")
         self.report_start.setMinimumWidth(150)
         self.report_end = QLineEdit()
         self.report_end.setPlaceholderText("Fim AAAA-MM-DD")
         self.report_end.setMinimumWidth(150)
         self.report_alert = QComboBox()
         self.report_alert.setMinimumWidth(190)
-        self.report_alert.addItem("Todos", "")
-        self.report_alert.addItem("Pendencia critica", "critica")
-        self.report_alert.addItem("Mais de 7 dias sem emissao", "7")
-        generate = ModernButton("Gerar relatorio", "search", accent=True)
-        clear = ModernButton("Limpar filtros", "clear")
-        self.export_csv_btn = ModernButton("Exportar CSV", "reports", accent=True)
+        self.report_alert.addItem("Todos os alertas", "")
+        self.report_alert.addItem("Pendência crítica", "critica")
+        self.report_alert.addItem("Mais de 7 dias sem emissão", "7")
+        generate = ModernButton("Gerar relatório", "search", accent=True)
+        clear = ModernButton("Limpar filtros", "clear", variant="ghost")
+        self.export_csv_btn = ModernButton("Exportar CSV", "reports")
         self.export_pdf_btn = ModernButton("Exportar PDF", "pdf")
         self.export_pdf_btn.setEnabled(False)
-        self.export_pdf_btn.setToolTip("PDF fiscal ficara para uma etapa futura; CSV ja esta seguro nesta fase.")
+        self.export_pdf_btn.setToolTip("PDF fiscal ficará para uma etapa futura; CSV já está seguro nesta fase.")
         generate.clicked.connect(self.refresh_report)
         clear.clicked.connect(self.clear_report_filters)
         self.export_csv_btn.clicked.connect(self.export_report_csv)
@@ -1061,13 +1060,13 @@ class FiscalPage(QWidget):
         grid = QGridLayout()
         grid.setHorizontalSpacing(OPERATIONAL_FIELD_HORIZONTAL_SPACING)
         grid.setVerticalSpacing(OPERATIONAL_FIELD_VERTICAL_SPACING)
-        self._add_filter_field(grid, 0, 0, "Relatorio", self.report_type)
-        self._add_filter_field(grid, 0, 2, "Periodo inicial", self.report_start)
-        self._add_filter_field(grid, 0, 4, "Periodo final", self.report_end)
-        self._add_filter_field(grid, 0, 6, "Cliente", self.report_client)
+        self._add_filter_field(grid, 0, 0, "Relatório", self.report_type)
+        self._add_filter_field(grid, 0, 1, "Período inicial", self.report_start)
+        self._add_filter_field(grid, 0, 2, "Período final", self.report_end)
+        self._add_filter_field(grid, 0, 3, "Cliente", self.report_client)
         self._add_filter_field(grid, 1, 0, "Obra/Site", self.report_site)
-        self._add_filter_field(grid, 1, 2, "Status fiscal", self.report_status)
-        self._add_filter_field(grid, 1, 4, "Pendencia critica / +7 dias", self.report_alert)
+        self._add_filter_field(grid, 1, 1, "Status fiscal", self.report_status)
+        self._add_filter_field(grid, 1, 2, "Pendência crítica / +7 dias", self.report_alert)
         layout.addLayout(grid)
         actions = QHBoxLayout()
         actions.setSpacing(OPERATIONAL_ACTION_SPACING)
@@ -1077,7 +1076,7 @@ class FiscalPage(QWidget):
         actions.addWidget(self.export_csv_btn)
         actions.addWidget(self.export_pdf_btn)
         layout.addLayout(actions)
-        for column in (1, 3, 5, 7):
+        for column in range(4):
             grid.setColumnStretch(column, 1)
         root.addWidget(filters)
 
@@ -1088,7 +1087,7 @@ class FiscalPage(QWidget):
         self.report_partial_card = KpiCard("NF parcial", 0, "partial", palette["warning"])
         self.report_emitted_card = KpiCard("NF emitida", 0, "status", palette["success"])
         self.report_critical_card = KpiCard("Pendencia critica", 0, "clear", palette["danger"])
-        self.report_old_card = KpiCard("+7 dias sem emissao", 0, "history", palette["secondary"])
+        self.report_old_card = KpiCard("+7 dias sem emissão", 0, "history", palette["secondary"])
         self.report_pending_weight_card = KpiCard("Peso conhecido pendente", "0 kg", "clock", palette["warning"])
         for card in (
             self.report_missing_card,
@@ -1153,7 +1152,7 @@ class FiscalPage(QWidget):
     def export_report_csv(self):
         rows = self.report_model.rows
         if not rows:
-            QMessageBox.information(self, "Relatorios fiscais", "Nao ha dados para exportar.")
+            QMessageBox.information(self, "Relatórios fiscais", "Não há dados para exportar.")
             return
         path, _ = QFileDialog.getSaveFileName(
             self,
@@ -1176,4 +1175,4 @@ class FiscalPage(QWidget):
                         value = format_weight(value)
                     values.append(value or "")
                 writer.writerow(values)
-        QMessageBox.information(self, "Relatorios fiscais", "CSV gerado com sucesso.")
+        QMessageBox.information(self, "Relatórios fiscais", "CSV gerado com sucesso.")

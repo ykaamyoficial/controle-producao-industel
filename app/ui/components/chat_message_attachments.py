@@ -43,13 +43,33 @@ except ImportError:  # pragma: no cover - ambiente sem QtMultimediaWidgets
 
 from app.ui.chat_attachment_download_worker import AttachmentCacheManager, ChatAttachmentDownloadWorker, cached_attachment_path
 from app.ui.components.chat_pending_attachments import attachment_category, format_file_size, icon_for_category
-from app.ui.icons import make_icon
+from app.ui.dialog_utils import style_dialog_from_parent
+from app.ui.icons import AppIcons, icon_provider, make_icon
+from app.ui.theme_tokens import active_tokens
 
 
 IMAGE_PREVIEW_SIZE = QSize(280, 240)
 IMAGE_PREVIEW_COMPACT_SIZE = QSize(230, 190)
 IMAGE_LOADING_SIZE = QSize(180, 120)
 MEDIA_CORNER_RADIUS = 10
+
+
+def style_menu_button(button: QToolButton, color: str | None = None) -> None:
+    """Botao "mais acoes" (tres pontos): fantasma, com icone no lugar do
+    caractere, que nao existe na fonte do app."""
+    button.setObjectName("GhostButton")
+    icon = icon_provider.get_icon(AppIcons.CIRCLE_ELLIPSIS, 16, color or active_tokens()["muted"])
+    if icon is not None:
+        button.setIcon(icon)
+    else:
+        button.setText("⋮")
+    button.setToolTip("Mais ações")
+
+
+def _viewer_icon_color() -> str:
+    """Icones da barra do visualizador: ficam sobre o fundo do dialogo (claro ou
+    escuro conforme o tema), entao usam o texto do tema ativo."""
+    return active_tokens()["text"]
 
 # Fase 2 - galeria de imagens
 GALLERY_WIDTH = 280
@@ -378,6 +398,7 @@ class MediaViewerDialog(QDialog):
         self._closed = False
         self.setWindowTitle("Midia")
         self.resize(980, 700)
+        style_dialog_from_parent(self, parent)
         self._build()
         self._install_shortcuts()
         self.finished.connect(self._cleanup_resources)
@@ -390,10 +411,10 @@ class MediaViewerDialog(QDialog):
 
         header = QHBoxLayout()
         self.title_label = QLabel()
-        self.title_label.setStyleSheet("font-weight: 700; font-size: 13px;")
+        self.title_label.setObjectName("PanelTitle")
         header.addWidget(self.title_label, 1)
         self.counter_label = QLabel()
-        self.counter_label.setStyleSheet("font-size: 11px; color: #94a3b8;")
+        self.counter_label.setObjectName("ChatCaption")
         header.addWidget(self.counter_label)
         self.info_btn = QPushButton("Info")
         self.info_btn.setCheckable(True)
@@ -423,38 +444,39 @@ class MediaViewerDialog(QDialog):
         self.prev_btn.clicked.connect(self.previous_media)
         nav_row.addWidget(self.prev_btn)
         nav_row.addStretch()
-        self.next_btn = QPushButton("Proxima >")
+        self.next_btn = QPushButton("Próxima >")
         self.next_btn.clicked.connect(self.next_media)
         nav_row.addWidget(self.next_btn)
         canvas_col.addLayout(nav_row)
 
         self._stack = QStackedWidget()
         self._stack.setMinimumHeight(420)
-        self._stack.setStyleSheet("background: #111827;")
+        self._stack.setObjectName("MediaCanvas")
 
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
-        self.scroll.setStyleSheet("QScrollArea { background: #111827; border: none; }")
+        self.scroll.setObjectName("MediaCanvas")
         self.image_label = QLabel()
         self.image_label.setAlignment(Qt.AlignCenter)
-        self.image_label.setStyleSheet("background: #111827; color: #e5e7eb;")
+        self.image_label.setObjectName("MediaCanvasText")
         self.scroll.setWidget(self.image_label)
         self.scroll.viewport().installEventFilter(self)
         self._stack.addWidget(self.scroll)
 
         if QT_MULTIMEDIA_AVAILABLE:
             self._video_widget = QVideoWidget()
-            self._video_widget.setStyleSheet("background: #111827;")
+            self._video_widget.setObjectName("MediaCanvas")
             self._stack.addWidget(self._video_widget)
 
         self._status_page = QWidget()
-        self._status_page.setStyleSheet("background: #111827;")
+        self._status_page.setObjectName("MediaCanvas")
+        self._status_page.setAttribute(Qt.WA_StyledBackground, True)
         status_layout = QVBoxLayout(self._status_page)
         status_layout.setAlignment(Qt.AlignCenter)
         self._status_label = QLabel()
         self._status_label.setAlignment(Qt.AlignCenter)
         self._status_label.setWordWrap(True)
-        self._status_label.setStyleSheet("color: #e5e7eb; font-size: 13px;")
+        self._status_label.setObjectName("MediaCanvasText")
         status_layout.addWidget(self._status_label)
         self._retry_btn = QPushButton("Tentar novamente")
         self._retry_btn.clicked.connect(self._retry_current)
@@ -471,7 +493,7 @@ class MediaViewerDialog(QDialog):
             btn.clicked.connect(handler)
             zoom_row.addWidget(btn)
         self._zoom_label = QLabel("Ajustar")
-        self._zoom_label.setStyleSheet("font-size: 11px; color: #94a3b8;")
+        self._zoom_label.setObjectName("ChatCaption")
         zoom_row.addWidget(self._zoom_label)
         zoom_row.addStretch()
         canvas_col.addWidget(self._image_toolbar)
@@ -480,12 +502,13 @@ class MediaViewerDialog(QDialog):
         video_row = QHBoxLayout(self._video_toolbar)
         video_row.setContentsMargins(0, 0, 0, 0)
         self._playpause_btn = QToolButton()
-        self._playpause_btn.setIcon(make_icon("play", "#e5e7eb", 18))
+        self._playpause_btn.setObjectName("GhostButton")
+        self._playpause_btn.setIcon(make_icon("play", _viewer_icon_color(), 18))
         self._playpause_btn.setCursor(Qt.PointingHandCursor)
         self._playpause_btn.clicked.connect(self.toggle_play_pause)
         video_row.addWidget(self._playpause_btn)
         self._time_label = QLabel("00:00")
-        self._time_label.setStyleSheet("font-size: 10px; color: #94a3b8;")
+        self._time_label.setObjectName("ChatCaption")
         video_row.addWidget(self._time_label)
         self._seek_slider = QSlider(Qt.Horizontal)
         self._seek_slider.setRange(0, 0)
@@ -494,10 +517,11 @@ class MediaViewerDialog(QDialog):
         self._seek_slider.sliderReleased.connect(self._on_slider_released)
         video_row.addWidget(self._seek_slider, 1)
         self._duration_label = QLabel("00:00")
-        self._duration_label.setStyleSheet("font-size: 10px; color: #94a3b8;")
+        self._duration_label.setObjectName("ChatCaption")
         video_row.addWidget(self._duration_label)
         self._mute_btn = QToolButton()
-        self._mute_btn.setIcon(make_icon("volume", "#e5e7eb", 16))
+        self._mute_btn.setObjectName("GhostButton")
+        self._mute_btn.setIcon(make_icon("volume", _viewer_icon_color(), 16))
         self._mute_btn.setCursor(Qt.PointingHandCursor)
         self._mute_btn.clicked.connect(self.toggle_mute)
         video_row.addWidget(self._mute_btn)
@@ -518,11 +542,11 @@ class MediaViewerDialog(QDialog):
         self._info_labels: dict[str, QLabel] = {}
         for key, label_text in (("filename", "Nome"), ("type", "Tipo"), ("size", "Tamanho"), ("duration", "Duracao"), ("sender", "Remetente"), ("date", "Data")):
             title = QLabel(label_text)
-            title.setStyleSheet("font-size: 10px; font-weight: 700; color: #64748b; margin-top: 6px;")
+            title.setObjectName("MediaInfoKey")
             info_layout.addWidget(title)
             value = QLabel("-")
             value.setWordWrap(True)
-            value.setStyleSheet("font-size: 12px;")
+            value.setObjectName("MediaInfoValue")
             info_layout.addWidget(value)
             self._info_labels[key] = value
         body.addWidget(self._info_panel)
@@ -857,7 +881,7 @@ class MediaViewerDialog(QDialog):
         self._seek_slider.setRange(0, 0)
         self._time_label.setText("00:00")
         self._duration_label.setText("00:00")
-        self._playpause_btn.setIcon(make_icon("play", "#e5e7eb", 18))
+        self._playpause_btn.setIcon(make_icon("play", _viewer_icon_color(), 18))
         self._player.setSource(QUrl.fromLocalFile(str(path)))
         # Autoplay proibido (Fase 6): o video abre pausado ate acao explicita do usuario.
 
@@ -875,7 +899,7 @@ class MediaViewerDialog(QDialog):
             return
         muted = not self._audio_output.isMuted()
         self._audio_output.setMuted(muted)
-        self._mute_btn.setIcon(make_icon("mute" if muted else "volume", "#e5e7eb", 16))
+        self._mute_btn.setIcon(make_icon("mute" if muted else "volume", _viewer_icon_color(), 16))
 
     def pause(self) -> None:
         if self._player is not None:
@@ -906,9 +930,9 @@ class MediaViewerDialog(QDialog):
 
     def _on_playback_state_changed(self, state) -> None:
         if state == QMediaPlayer.PlayingState:
-            self._playpause_btn.setIcon(make_icon("pause", "#e5e7eb", 18))
+            self._playpause_btn.setIcon(make_icon("pause", _viewer_icon_color(), 18))
         else:
-            self._playpause_btn.setIcon(make_icon("play", "#e5e7eb", 18))
+            self._playpause_btn.setIcon(make_icon("play", _viewer_icon_color(), 18))
             MediaPlaybackCoordinator.notify_stopped(self)
 
     def _on_player_error(self, error, error_string) -> None:
@@ -961,9 +985,10 @@ class TransferProgressBar(QWidget):
         self._bar.setRange(0, 0)
         layout.addWidget(self._bar, 1)
         self._label = QLabel("")
-        self._label.setStyleSheet("font-size: 10px;")
+        self._label.setObjectName("TransferLabel")
         layout.addWidget(self._label)
         self._cancel_btn = QToolButton()
+        self._cancel_btn.setObjectName("GhostButton")
         self._cancel_btn.setText("×")
         self._cancel_btn.setToolTip("Cancelar")
         self._cancel_btn.setCursor(Qt.PointingHandCursor)
@@ -1013,10 +1038,6 @@ class FileCard(QFrame):
         self.setMinimumWidth(190)
         self.setMaximumWidth(300)
         self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
-        self.setStyleSheet(
-            f"QFrame#FileCard {{ background: {palette.get('surface', '#ffffff')}; "
-            f"border: 1px solid {palette.get('border', '#cbd5e1')}; border-radius: 8px; }}"
-        )
         self.setFocusPolicy(Qt.StrongFocus)
         self.setAccessibleName(f"{self._full_name}, {self.presentation['display_type']}")
         self._build()
@@ -1032,12 +1053,13 @@ class FileCard(QFrame):
             icon_label.setPixmap(make_icon("remove", self.palette.get("muted", "#64748b"), 16).pixmap(16, 16))
             row.addWidget(icon_label)
             text = QLabel("Anexo removido")
-            text.setStyleSheet(f"font-weight: 700; font-size: 11px; color: {self.palette.get('muted', '#64748b')};")
+            text.setObjectName("ChatCaption")
+            text.setProperty("strong", True)
             row.addWidget(text, 1)
             layout.addLayout(row)
             name = QLabel(self._full_name)
             name.setWordWrap(True)
-            name.setStyleSheet(f"font-size: 10px; color: {self.palette.get('muted', '#64748b')};")
+            name.setObjectName("ChatCaption")
             layout.addWidget(name)
             self.setAccessibleDescription("Anexo removido")
             return
@@ -1058,7 +1080,7 @@ class FileCard(QFrame):
         self._name_label.setMinimumWidth(0)
         self._name_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         self._name_label.setToolTip(self._full_name)
-        self._name_label.setStyleSheet("font-weight: 700; font-size: 11px;")
+        self._name_label.setObjectName("FileCardName")
         text_col.addWidget(self._name_label)
 
         size = attachment_size(self.attachment)
@@ -1068,7 +1090,6 @@ class FileCard(QFrame):
         self._base_meta = base_meta
         self._meta_label = QLabel(base_meta)
         self._meta_label.setObjectName("FileCardMeta")
-        self._meta_label.setStyleSheet(f"font-size: 9px; color: {self.palette.get('muted', '#64748b')};")
         self.setAccessibleDescription(base_meta)
         text_col.addWidget(self._meta_label)
 
@@ -1088,7 +1109,7 @@ class FileCard(QFrame):
         actions.addStretch()
         self._retry_button = QPushButton("Tentar novamente")
         self._retry_button.setVisible(False)
-        self._retry_button.setStyleSheet("font-size: 10px; padding: 2px 8px;")
+        self._retry_button.setObjectName("ChatSmallButton")
         self._retry_button.clicked.connect(self._on_open_clicked)
         actions.addWidget(self._retry_button)
         layout.addLayout(actions)
@@ -1253,7 +1274,6 @@ class VideoAttachment(QFrame):
         self._worker = None
         self._seeking = False
         self.setObjectName("VideoAttachment")
-        self.setStyleSheet("QFrame#VideoAttachment { background: transparent; border: none; }")
         self._build()
 
     def _build(self) -> None:
@@ -1264,10 +1284,6 @@ class VideoAttachment(QFrame):
         self._media_box = QFrame()
         self._media_box.setObjectName("VideoMediaBox")
         self._media_box.setFixedSize(self._size)
-        self._media_box.setStyleSheet(
-            f"QFrame#VideoMediaBox {{ background: {self.palette.get('surface_alt', '#e2e8f0')}; "
-            f"border: none; border-radius: {MEDIA_CORNER_RADIUS}px; }}"
-        )
         # QSS border-radius nao recorta o video renderizado dentro (QVideoWidget
         # pode desenhar por fora dos cantos) -- a mascara real garante o canto
         # arredondado tanto no poster quanto durante a reproducao.
@@ -1278,30 +1294,21 @@ class VideoAttachment(QFrame):
         self._poster_label = QLabel()
         self._poster_label.setObjectName("VideoPoster")
         self._poster_label.setAlignment(Qt.AlignCenter)
-        self._poster_label.setStyleSheet("background: transparent;")
         self._poster_label.setPixmap(make_icon("play", self.palette.get("muted", "#64748b"), 40).pixmap(40, 40))
         self._grid.addWidget(self._poster_label, 0, 0)
 
         self._play_button = QToolButton()
         self._play_button.setObjectName("VideoPlayButton")
-        self._play_button.setIcon(make_icon("play", "#ffffff", 22))
+        self._play_button.setIcon(make_icon("play", active_tokens()["on_overlay"], 22))
         self._play_button.setIconSize(QSize(22, 22))
         self._play_button.setFixedSize(48, 48)
         self._play_button.setCursor(Qt.PointingHandCursor)
-        self._play_button.setStyleSheet(
-            "QToolButton#VideoPlayButton { background: rgba(15, 23, 42, 150); border: none; border-radius: 24px; }"
-            "QToolButton#VideoPlayButton:hover { background: rgba(15, 23, 42, 200); }"
-        )
         self._play_button.clicked.connect(self._on_play_clicked)
         self._grid.addWidget(self._play_button, 0, 0, alignment=Qt.AlignCenter)
 
         duration_seconds = attachment_duration_seconds(self.attachment)
         self._duration_label = QLabel(format_media_time(duration_seconds) if duration_seconds else "")
         self._duration_label.setObjectName("VideoDurationBadge")
-        self._duration_label.setStyleSheet(
-            "QLabel#VideoDurationBadge { background: rgba(15, 23, 42, 160); color: #ffffff; font-size: 10px; "
-            "padding: 2px 6px; border-radius: 4px; margin: 6px; }"
-        )
         self._duration_label.setVisible(bool(duration_seconds))
         self._grid.addWidget(self._duration_label, 0, 0, alignment=Qt.AlignBottom | Qt.AlignRight)
 
@@ -1312,10 +1319,6 @@ class VideoAttachment(QFrame):
         self._expand_button.setToolTip("Abrir no visualizador")
         self._expand_button.setCursor(Qt.PointingHandCursor)
         self._expand_button.setFixedSize(24, 24)
-        self._expand_button.setStyleSheet(
-            "QToolButton#VideoExpandButton { background: rgba(15, 23, 42, 150); border: none; border-radius: 4px; color: #ffffff; }"
-            "QToolButton#VideoExpandButton:hover { background: rgba(15, 23, 42, 200); }"
-        )
         self._expand_button.clicked.connect(lambda: self.preview_requested.emit(self.attachment))
         self._grid.addWidget(self._expand_button, 0, 0, alignment=Qt.AlignTop | Qt.AlignRight)
 
@@ -1327,10 +1330,6 @@ class VideoAttachment(QFrame):
         self._overlay_label.setObjectName("VideoOverlayMessage")
         self._overlay_label.setAlignment(Qt.AlignCenter)
         self._overlay_label.setWordWrap(True)
-        self._overlay_label.setStyleSheet(
-            "QLabel#VideoOverlayMessage { background: rgba(15, 23, 42, 175); color: #ffffff; font-size: 11px; "
-            "padding: 8px 12px; border-radius: 8px; }"
-        )
         overlay_layout.addWidget(self._overlay_label)
         self._retry_button = QPushButton("Tentar novamente")
         self._retry_button.clicked.connect(self._on_play_clicked)
@@ -1346,12 +1345,13 @@ class VideoAttachment(QFrame):
         controls_layout.setContentsMargins(2, 0, 2, 0)
         controls_layout.setSpacing(6)
         self._playpause_btn = QToolButton()
+        self._playpause_btn.setObjectName("GhostButton")
         self._playpause_btn.setIcon(make_icon("pause", self.palette.get("text", "#0f172a"), 16))
         self._playpause_btn.setCursor(Qt.PointingHandCursor)
         self._playpause_btn.clicked.connect(self.toggle_play_pause)
         controls_layout.addWidget(self._playpause_btn)
         self._time_label = QLabel("00:00")
-        self._time_label.setStyleSheet(f"font-size: 10px; color: {self.palette.get('muted', '#64748b')};")
+        self._time_label.setObjectName("ChatCaption")
         controls_layout.addWidget(self._time_label)
         self._seek_slider = QSlider(Qt.Horizontal)
         self._seek_slider.setRange(0, 0)
@@ -1360,9 +1360,10 @@ class VideoAttachment(QFrame):
         self._seek_slider.sliderReleased.connect(self._on_slider_released)
         controls_layout.addWidget(self._seek_slider, 1)
         self._duration_time_label = QLabel("00:00")
-        self._duration_time_label.setStyleSheet(f"font-size: 10px; color: {self.palette.get('muted', '#64748b')};")
+        self._duration_time_label.setObjectName("ChatCaption")
         controls_layout.addWidget(self._duration_time_label)
         self._mute_btn = QToolButton()
+        self._mute_btn.setObjectName("GhostButton")
         self._mute_btn.setIcon(make_icon("volume", self.palette.get("text", "#0f172a"), 16))
         self._mute_btn.setCursor(Qt.PointingHandCursor)
         self._mute_btn.clicked.connect(self.toggle_mute)
@@ -1562,10 +1563,6 @@ class AudioAttachment(QFrame):
         self.setObjectName("AudioAttachment")
         self.setMinimumWidth(190)
         self.setMaximumWidth(280)
-        self.setStyleSheet(
-            f"QFrame#AudioAttachment {{ background: {palette.get('surface', '#ffffff')}; "
-            f"border: 1px solid {palette.get('border', '#cbd5e1')}; border-radius: 10px; }}"
-        )
         self._build()
 
     def _build(self) -> None:
@@ -1578,9 +1575,6 @@ class AudioAttachment(QFrame):
         self._playpause_btn.setIcon(make_icon("play", self.palette.get("accent", "#0078d4"), 15))
         self._playpause_btn.setFixedSize(26, 26)
         self._playpause_btn.setCursor(Qt.PointingHandCursor)
-        self._playpause_btn.setStyleSheet(
-            f"QToolButton#AudioPlayButton {{ background: {self.palette.get('surface_alt', '#e2e8f0')}; border: none; border-radius: 16px; }}"
-        )
         self._playpause_btn.clicked.connect(self._on_play_clicked)
         layout.addWidget(self._playpause_btn)
 
@@ -1589,7 +1583,7 @@ class AudioAttachment(QFrame):
         row = QHBoxLayout()
         row.setSpacing(6)
         self._current_label = QLabel("00:00")
-        self._current_label.setStyleSheet(f"font-size: 10px; color: {self.palette.get('muted', '#64748b')};")
+        self._current_label.setObjectName("ChatCaption")
         row.addWidget(self._current_label)
         self._seek_slider = QSlider(Qt.Horizontal)
         self._seek_slider.setRange(0, 0)
@@ -1599,13 +1593,13 @@ class AudioAttachment(QFrame):
         row.addWidget(self._seek_slider, 1)
         duration_seconds = attachment_duration_seconds(self.attachment)
         self._duration_label = QLabel(format_media_time(duration_seconds) if duration_seconds else "00:00")
-        self._duration_label.setStyleSheet(f"font-size: 10px; color: {self.palette.get('muted', '#64748b')};")
+        self._duration_label.setObjectName("ChatCaption")
         row.addWidget(self._duration_label)
         col.addLayout(row)
 
         self._status_label = QLabel()
         self._status_label.setWordWrap(True)
-        self._status_label.setStyleSheet(f"font-size: 10px; color: {self.palette.get('muted', '#64748b')};")
+        self._status_label.setObjectName("ChatCaption")
         self._status_label.setVisible(False)
         col.addWidget(self._status_label)
         layout.addLayout(col, 1)
@@ -1777,13 +1771,8 @@ class ChatAttachmentWidget(QFrame):
         self.category = attachment_display_category(attachment)
         self.setObjectName("ChatAttachment")
         self.setCursor(Qt.PointingHandCursor if self.category == "image" else Qt.ArrowCursor)
-        if self.category == "image":
-            self.setStyleSheet("QFrame#ChatAttachment { background: transparent; border: none; }")
-        else:
-            self.setStyleSheet(
-                f"QFrame#ChatAttachment {{ background: {palette.get('surface', '#ffffff')}; "
-                f"border: 1px solid {palette.get('border', '#cbd5e1')}; border-radius: 8px; }}"
-            )
+        # Imagem fica solta na bolha; os demais anexos ganham cartao.
+        self.setProperty("card", self.category != "image")
         self._build()
 
     def _build(self) -> None:
@@ -1796,12 +1785,13 @@ class ChatAttachmentWidget(QFrame):
             icon_label.setPixmap(make_icon("remove", self.palette.get("muted", "#64748b"), 18).pixmap(18, 18))
             row.addWidget(icon_label)
             text = QLabel("Anexo removido")
-            text.setStyleSheet(f"font-weight: 700; color: {self.palette.get('muted', '#64748b')};")
+            text.setObjectName("ChatCaption")
+            text.setProperty("strong", True)
             row.addWidget(text, 1)
             layout.addLayout(row)
             name = QLabel(attachment_filename(self.attachment))
             name.setWordWrap(True)
-            name.setStyleSheet(f"font-size: 11px; color: {self.palette.get('muted', '#64748b')};")
+            name.setObjectName("ChatCaption")
             layout.addWidget(name)
             return
 
@@ -1820,29 +1810,22 @@ class ChatAttachmentWidget(QFrame):
                 preview.setPixmap(rounded_pixmap(scaled_contained_pixmap(pixmap, size), MEDIA_CORNER_RADIUS))
             elif self.attachment.get("_download_error"):
                 preview.setFixedSize(IMAGE_LOADING_SIZE)
-                preview.setText("Nao foi possivel\ncarregar o arquivo")
+                preview.setText("Não foi possível\ncarregar o arquivo")
             else:
                 preview.setFixedSize(IMAGE_LOADING_SIZE)
                 preview.setText("Carregando...")
                 preview.setPixmap(make_icon("image", self.palette.get("accent", "#0078d4"), 24).pixmap(24, 24))
-            preview.setStyleSheet(
-                f"QLabel#AttachmentPreview {{ background: {self.palette.get('surface_alt', '#e2e8f0')}; "
-                f"border: none; border-radius: {MEDIA_CORNER_RADIUS}px; color: {self.palette.get('muted', '#64748b')}; }}"
-            )
             preview.mousePressEvent = lambda event: self._handle_image_preview_click(event)
             layout.addWidget(preview)
             return
 
         if self.category == "video":
-            preview = QLabel("Carregar visualizacao" if self.category == "image" else "Video")
+            preview = QLabel("Carregar visualização" if self.category == "image" else "Video")
             preview.setObjectName("AttachmentPreview")
             preview.setAlignment(Qt.AlignCenter)
             preview.setFixedSize(300 if not self.compact else 240, 170 if not self.compact else 136)
             preview.setPixmap(make_icon("play", self.palette.get("accent", "#0078d4"), 36).pixmap(36, 36))
-            preview.setStyleSheet(
-                f"QLabel#AttachmentPreview {{ background: {self.palette.get('surface_alt', '#e2e8f0')}; "
-                f"border: 1px solid {self.palette.get('border', '#cbd5e1')}; border-radius: 8px; color: {self.palette.get('muted', '#64748b')}; }}"
-            )
+            preview.setProperty("card", True)
             preview.mousePressEvent = lambda _event: self.preview_requested.emit(self.attachment)
             layout.addWidget(preview)
 
@@ -1860,19 +1843,19 @@ class ChatAttachmentWidget(QFrame):
         name_label.setWordWrap(False)
         name_label.setMinimumWidth(0)
         name_label.setToolTip(attachment_filename(self.attachment))
-        name_label.setStyleSheet("font-weight: 700; font-size: 12px;")
+        name_label.setObjectName("FileCardName")
         text_col.addWidget(name_label)
         size = attachment_size(self.attachment)
         meta = attachment_type_label(self.attachment)
         if size > 0:
             meta = f"{meta} - {format_file_size(size)}"
         meta_label = QLabel(meta)
-        meta_label.setStyleSheet(f"font-size: 10px; color: {self.palette.get('muted', '#64748b')};")
+        meta_label.setObjectName("FileCardMeta")
         text_col.addWidget(meta_label)
         row.addLayout(text_col, 1)
 
         self.menu_btn = QToolButton()
-        self.menu_btn.setText("⋮")
+        style_menu_button(self.menu_btn, self.palette.get("muted"))
         self.menu_btn.setFixedSize(24, 24)
         self.menu_btn.setPopupMode(QToolButton.InstantPopup)
         menu = QMenu(self.menu_btn)
@@ -1977,13 +1960,10 @@ class ImageTile(QFrame):
         self.setFixedSize(size)
         self.setCursor(Qt.PointingHandCursor)
         self.setContextMenuPolicy(Qt.CustomContextMenu)
-        self.setStyleSheet(
-            f"QFrame#AttachmentImageTile {{ background: #e2e8f0; border: none; border-radius: {radius}px; }}"
-        )
         self._image_label = QLabel(self)
+        self._image_label.setObjectName("AttachmentImageLabel")
         self._image_label.setGeometry(0, 0, size.width(), size.height())
         self._image_label.setAlignment(Qt.AlignCenter)
-        self._image_label.setStyleSheet("background: transparent; color: #64748b; font-size: 11px;")
         self.customContextMenuRequested.connect(
             lambda point: self.context_menu_requested.emit(self.attachment, self.mapToGlobal(point))
         )
@@ -2052,7 +2032,6 @@ class ImageGallery(QWidget):
         self.attachments = attachments
         self.compact = compact
         self.setObjectName("ImageGallery")
-        self.setStyleSheet("QWidget#ImageGallery { background: transparent; border: none; }")
         self._tiles: list[ImageTile] = []
         self._build()
 

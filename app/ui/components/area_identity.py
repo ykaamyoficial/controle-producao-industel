@@ -8,13 +8,13 @@ from app.ui.theme_tokens import with_alpha
 
 
 AREA_SUBTITLES = {
-    "CONTROLE GERAL": "Visao geral das propostas e liberacoes.",
-    "PRODUCAO": "Acompanhe fabricacao, parciais e pendencias.",
-    "GALVANIZACAO": "Controle cargas, retornos e propostas na galvanizacao.",
-    "EXPEDICAO": "Gerencie separacao, entregas e remanejamentos.",
-    "ALMOXARIFADO": "Acompanhe separacao de materiais complementares.",
-    "FISCAL": "Acompanhe emissoes, pendencias e retiradas fiscais.",
-    "PARCIAIS": "Acompanhe entregas parciais, saldos e pendencias.",
+    "CONTROLE GERAL": "Visão geral das propostas e liberações.",
+    "PRODUCAO": "Acompanhe fabricação, parciais e pendências.",
+    "GALVANIZACAO": "Controle cargas, retornos e propostas na galvanização.",
+    "EXPEDICAO": "Gerencie separação, entregas e remanejamentos.",
+    "ALMOXARIFADO": "Acompanhe separação de materiais complementares.",
+    "FISCAL": "Acompanhe emissões, pendências e retiradas fiscais.",
+    "PARCIAIS": "Acompanhe entregas parciais, saldos e pendências.",
 }
 
 
@@ -23,7 +23,7 @@ def normalize_area_key(area: str | None) -> str:
 
 
 def area_subtitle(area: str | None) -> str:
-    return AREA_SUBTITLES.get(normalize_area_key(area), "Acompanhe propostas e acoes operacionais.")
+    return AREA_SUBTITLES.get(normalize_area_key(area), "Acompanhe propostas e ações operacionais.")
 
 
 def apply_area_identity(widget: QWidget, area: str | None, palette: dict) -> QWidget:
@@ -37,7 +37,7 @@ def apply_area_identity(widget: QWidget, area: str | None, palette: dict) -> QWi
 def style_area_header(frame: QWidget, area: str | None, palette: dict) -> QWidget:
     color = area_color(area or "", palette)
     border = palette.get("border", "#cbd5e1")
-    background = palette.get("bg", "transparent")
+    background = palette.get("surface", palette.get("bg", "transparent"))
     apply_area_identity(frame, area, palette)
     frame.setStyleSheet(
         "QFrame#OperationalHeader {"

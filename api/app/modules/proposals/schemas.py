@@ -43,6 +43,16 @@ class ProposalItemDetail(ProposalItemSummary):
     legacy_updated_at: datetime | None = None
 
 
+class PartialBadge(BaseModel):
+    """Selo de uma parcial ativa na lista geral (ex.: P1 na Expedicao)."""
+
+    proposal_id: int
+    label: str
+    partial_number: int | None = None
+    current_area: str | None = None
+    current_status: str | None = None
+
+
 class ProposalListItem(BaseModel):
     id: int
     legacy_id: int | None = None
@@ -63,6 +73,9 @@ class ProposalListItem(BaseModel):
     synced_at: datetime
     version: int = 1
     active: bool = True
+    # So a lista geral preenche (consulta unica das maes da pagina); nos demais usos ficam vazios.
+    partials_count: int = 0
+    partials: list[PartialBadge] = Field(default_factory=list)
 
 
 class ProposalDetail(ProposalListItem):
@@ -185,6 +198,9 @@ class ProposalHistoryItem(BaseModel):
     actor_user_id: int | None = None
     actor_name: str | None = None
     observation: str | None = None
+    title: str | None = None
+    detail: str | None = None
+    count: int = 1
     request_id: str | None = None
     created_at: datetime
 
@@ -884,6 +900,8 @@ class ExpeditionProposalSummary(BaseModel):
     delivered_quantity: Decimal
     pending_quantity: Decimal
     origins: list[str] = Field(default_factory=list)
+    # Numeros das NFs registradas para a proposta (ordem de emissao).
+    invoice_numbers: list[str] = Field(default_factory=list)
     actions: list[ProductionAction] = Field(default_factory=list)
 
 
@@ -896,6 +914,100 @@ class PaginatedExpeditionResponse(BaseModel):
 
 class ExpeditionProposalDetail(ExpeditionProposalSummary):
     items: list[ExpeditionItemSummary] = Field(default_factory=list)
+
+
+class ExpeditionItemRow(BaseModel):
+    """Item da Expedicao com a proposta a que pertence (aba "Itens em expedicao").
+
+    So dados e a diferenca de saldo: nada que exija regra de negocio (peso,
+    status calculado), porque a mesma lista tambem e montada no Desktop a partir
+    da replica local (`app/replica/expedition_items_view.py`) e as duas
+    respostas precisam ser identicas."""
+
+    id: int
+    proposal_id: int
+    proposal_item_id: int
+    item_number: str
+    product_code: str | None = None
+    description: str
+    unit: str | None = None
+    available_quantity: Decimal
+    separated_quantity: Decimal
+    delivered_quantity: Decimal
+    remanaged_quantity: Decimal
+    pending_quantity: Decimal
+    origin: str
+    status: str
+    version: int
+    proposal_number: str
+    proposal_version: int
+    customer_name: str
+    project_name: str | None = None
+    lot: str | None = None
+
+
+class ItemStageRow(BaseModel):
+    """Pecas de um item por estagio (plano de logistica do remanejamento, Fase A)."""
+
+    item_id: int
+    proposal_id: int
+    proposal_number: str
+    product_code: str | None = None
+    unit: str | None = None
+    flow: str
+    requested: Decimal
+    to_produce: Decimal
+    awaiting_galvanization: Decimal
+    in_galvanization: Decimal
+    ready: Decimal
+    delivered: Decimal
+    given_away: Decimal
+    received_ready: Decimal
+    undefined_flow: Decimal
+    gap: Decimal
+
+
+class StageAnomalyRow(BaseModel):
+    code: str
+    severity: str
+    item_id: int
+    proposal_id: int
+    proposal_number: str
+    product_code: str | None = None
+    detail: str
+
+
+class StageLedgerResponse(BaseModel):
+    items: list[ItemStageRow]
+    anomalies: list[StageAnomalyRow]
+
+
+class RemanagementBadgeEntry(BaseModel):
+    """Um remanejamento que mantem a proposta marcada: o codigo, o que a proposta fez nele e com quem."""
+
+    code: str
+    direction: str  # CEDEU | RECEBEU
+    counterpart_proposal_number: str
+
+
+class RemanagementBadge(BaseModel):
+    """Selo de uma proposta nas listas: SUBSTITUIDA | PARCIALMENTE_SUBSTITUIDA | RECEBEU (some quando a proposta fica inteira)."""
+
+    proposal_id: int
+    proposal_number: str
+    status: str
+    entries: list[RemanagementBadgeEntry] = Field(default_factory=list)
+
+
+class RemanagementBadgesResponse(BaseModel):
+    items: list[RemanagementBadge]
+
+
+class PaginatedExpeditionItemResponse(BaseModel):
+    items: list[ExpeditionItemRow]
+    total: int
+    limit: int
+    offset: int
 
 
 class ExpeditionVersionRequest(BaseModel):
@@ -1144,6 +1256,14 @@ class RemanagementReviewRequest(BaseModel):
     reason: str = Field(default="", max_length=1000)
 
 
+class RemanagementStageTransferRow(BaseModel):
+    """Pecas em andamento do destino que passam para a origem, em um estagio
+    (IN_GALVANIZATION, AWAITING_GALVANIZATION ou TO_PRODUCE)."""
+
+    stage: str
+    quantity: Decimal
+
+
 class RemanagementReviewSource(BaseModel):
     source_proposal_id: int
     source_item_id: int
@@ -1151,6 +1271,8 @@ class RemanagementReviewSource(BaseModel):
     production_compensation: Decimal
     source_before: Decimal
     source_after_simulated: Decimal
+    # Quais pecas do destino vao para a origem em troca (estagio a estagio).
+    stage_transfers: list[RemanagementStageTransferRow] = Field(default_factory=list)
 
 
 class RemanagementReviewItem(BaseModel):
@@ -1175,6 +1297,18 @@ class RemanagementReviewSummary(BaseModel):
     invalid_items: int
 
 
+class RemanagementReviewPart(BaseModel):
+    """Como uma proposta fica depois do remanejamento por linhas: a propria proposta, uma parte (filha) ou a
+    referencia (mae) no Controle Geral. `place`: PRODUCAO | GALVANIZACAO | EXPEDICAO | REFERENCIA."""
+
+    proposal_number: str
+    role: str  # ORIGEM | DESTINO
+    place: str
+    item_numbers: list[str] = Field(default_factory=list)
+    quantity: Decimal = Decimal("0")
+    is_part: bool = False
+
+
 class RemanagementReviewResult(BaseModel):
     destination_proposal_id: int
     valid: bool
@@ -1182,6 +1316,10 @@ class RemanagementReviewResult(BaseModel):
     errors: list[CompensationPlanError]
     summary: RemanagementReviewSummary
     items: list[RemanagementReviewItem]
+    # TRANSFER (motor de transferencias) ou ROWS (por linhas, com parciais) e, neste caso, o que vai acontecer
+    # com cada proposta envolvida.
+    engine: str = "TRANSFER"
+    parts: list[RemanagementReviewPart] = Field(default_factory=list)
 
 
 class RemanagementConfirmRequest(BaseModel):
@@ -1310,6 +1448,8 @@ class FiscalRecordSummary(BaseModel):
     weight_complete: bool = False
     critical_pending: bool = False
     older_than_7_days: bool = False
+    # Numeros das NFs registradas (ativas), na ordem de emissao.
+    invoice_numbers: list[str] = Field(default_factory=list)
     actions: list[FiscalAction] = Field(default_factory=list)
 
 
@@ -1636,3 +1776,120 @@ class FiscalSyncBatch(BaseModel):
     batch_number: int = Field(default=1, ge=1)
     batch_total: int = Field(default=1, ge=1)
     records: list[FiscalRecordSyncPayload] = Field(default_factory=list, max_length=200)
+
+
+# --- Familia da proposta (mae + parciais) ---------------------------------------
+
+
+class FamilyStageQuantities(BaseModel):
+    """Onde estao as pecas: a fabricar, aguardando galvanizacao, na galvanizacao, pronta, entregue."""
+
+    to_produce: Decimal = Decimal("0")
+    awaiting_galvanization: Decimal = Decimal("0")
+    in_galvanization: Decimal = Decimal("0")
+    ready: Decimal = Decimal("0")
+    delivered: Decimal = Decimal("0")
+    undefined_flow: Decimal = Decimal("0")
+    given_away: Decimal = Decimal("0")
+
+
+class FamilyConsolidatedPart(BaseModel):
+    place: str
+    label: str
+    quantity: Decimal
+
+
+class FamilyConsolidated(BaseModel):
+    """Status unico da familia. kind: SINGLE (um lugar, uma linha), UNIFORM (varias linhas no mesmo lugar) ou MIXED."""
+
+    kind: str
+    area: str | None = None
+    status: str | None = None
+    label: str = ""
+    parts: list[FamilyConsolidatedPart] = Field(default_factory=list)
+
+
+class FamilyMember(BaseModel):
+    proposal_id: int
+    proposal_number: str
+    label: str
+    role: str
+    partial_number: int | None = None
+    is_reference: bool = False
+    is_requested: bool = False
+    current_area: str | None = None
+    current_status: str | None = None
+    deadline_date: date | None = None
+    item_count: int = 0
+    total_units: Decimal = Decimal("0")
+    quantities: FamilyStageQuantities
+    consolidated: FamilyConsolidated
+
+
+class FamilyItemRow(BaseModel):
+    item_id: int
+    proposal_id: int
+    proposal_number: str
+    partial_label: str
+    partial_number: int | None = None
+    item_number: str
+    product_code: str | None = None
+    description: str | None = None
+    unit: str | None = None
+    quantity: Decimal
+    unit_weight: Decimal | None = None
+    quantities: FamilyStageQuantities
+    place: str | None = None
+    places: list[str] = Field(default_factory=list)
+    # Chaves das parciais (`FamilyPartial.key`) em que o item tem pecas; vazio quando a proposta nao tem parciais.
+    partial_keys: list[str] = Field(default_factory=list)
+
+
+class FamilyPartial(BaseModel):
+    """Uma parcial da proposta, para o seletor do cabecalho do Detalhe.
+
+    kind PROPOSTA: proposta-filha (CP 05493-1); kind LOTE: pecas de uma mesma proposta que estao em lugares
+    diferentes (ex.: 10 un. na Expedicao e 1 un. na Galvanizacao), sem proposta propria."""
+
+    key: str
+    kind: str
+    label: str
+    proposal_id: int
+    proposal_number: str | None = None
+    place: str | None = None
+    current_area: str | None = None
+    current_status: str | None = None
+    item_count: int = 0
+    total_units: Decimal = Decimal("0")
+    quantities: FamilyStageQuantities
+
+
+class FamilyTotals(BaseModel):
+    total_units: Decimal
+    delivered_units: Decimal
+    pending_units: Decimal
+    progress_percent: int
+    known_weight: Decimal
+    delivered_weight: Decimal
+    pending_weight: Decimal
+    weight_known_items: int
+    weight_total_items: int
+    weight_complete: bool
+    fiscal_status: str | None = None
+
+
+class ProposalFamilyResponse(BaseModel):
+    proposal_id: int
+    root_id: int
+    root_proposal_number: str
+    customer_name: str
+    partial_count: int
+    has_partials: bool
+    deadline_date: date | None = None
+    consolidated: FamilyConsolidated
+    stages: FamilyStageQuantities
+    totals: FamilyTotals
+    members: list[FamilyMember]
+    items: list[FamilyItemRow]
+    # Parciais para o seletor (filhas ou lotes). Vazio = proposta sem parciais.
+    partials: list[FamilyPartial] = Field(default_factory=list)

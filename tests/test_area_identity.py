@@ -96,7 +96,10 @@ class AreaIdentityTests(unittest.TestCase):
 
         light_bg = light["bg"]
         dark_bg = dark["bg"]
-        self.assertIn(light_bg, header.styleSheet())
+        # A faixa de filtros fica sobre a superficie; as abas, sobre o fundo.
+        light_header = light["surface"]
+        dark_header = dark["surface"]
+        self.assertIn(light_header, header.styleSheet())
         self.assertIn(light_bg, tabs.tabBar().styleSheet())
 
         # Simulate MainWindow.apply_theme() toggling to dark without rebuilding
@@ -104,8 +107,8 @@ class AreaIdentityTests(unittest.TestCase):
         # stale light-theme colors baked into their stylesheet).
         refresh_area_theme(page, dark)
 
-        self.assertNotIn(light_bg, header.styleSheet())
-        self.assertIn(dark_bg, header.styleSheet())
+        self.assertNotIn(light_header, header.styleSheet())
+        self.assertIn(dark_header, header.styleSheet())
         self.assertNotIn(light_bg, tabs.tabBar().styleSheet())
         self.assertIn(dark_bg, tabs.tabBar().styleSheet())
         self.assertIn(area_color("GALVANIZACAO", dark), title.styleSheet())

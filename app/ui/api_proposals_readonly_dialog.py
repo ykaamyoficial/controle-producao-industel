@@ -5,7 +5,7 @@ from PySide6.QtWidgets import QDialog, QFrame, QGridLayout, QHBoxLayout, QLabel,
 
 from app.integrations.api.auth_client import AuthApiClient
 from app.integrations.api.client import DesktopApiClient
-from app.integrations.api.compatibility import REQUIRED_FEATURES, compatibility_report
+from app.integrations.api.compatibility import compatibility_report
 from app.integrations.api.config import DesktopApiConfigStore
 from app.integrations.api.exceptions import ApiClientError
 from app.integrations.api.proposals_client import ProposalsApiClient
@@ -13,6 +13,7 @@ from app.integrations.api.session import ExperimentalApiSession
 from app.integrations.api.system_client import SystemApiClient
 from app.integrations.api.token_store import ApiTokenStore
 from app.ui.background_worker import start_worker
+from app.ui.components.dialog_shell import dialog_header
 from app.ui.components.modern_button import ModernButton
 from app.ui.dialog_utils import style_dialog_from_parent
 
@@ -32,48 +33,44 @@ class ApiProposalsReadonlyDialog(QDialog):
 
     def _build(self):
         root = QVBoxLayout(self)
-        root.setContentsMargins(22, 20, 22, 18)
-        root.setSpacing(12)
+        root.setContentsMargins(16, 14, 16, 14)
+        root.setSpacing(10)
 
         title = QLabel("Consulta oficial pela API")
-        title.setStyleSheet("font-size: 20px; font-weight: 800;")
         subtitle = QLabel("Fonte oficial: API / PostgreSQL.")
-        subtitle.setObjectName("Caption")
-        subtitle.setWordWrap(True)
-        root.addWidget(title)
-        root.addWidget(subtitle)
 
         filters = QFrame()
-        filters.setObjectName("Panel")
+        filters.setObjectName("DetailPanel")
         grid = QGridLayout(filters)
-        grid.setContentsMargins(14, 12, 14, 12)
+        grid.setContentsMargins(16, 14, 16, 14)
         self.proposal = QLineEdit()
         self.customer = QLineEdit()
         self.project = QLineEdit()
         self.status = QLineEdit()
         for column, (label, widget) in enumerate((("Proposta", self.proposal), ("Cliente", self.customer), ("Site/Lote", self.project), ("Status", self.status))):
-            grid.addWidget(QLabel(label), 0, column)
+            field_label = QLabel(label)
+            field_label.setObjectName("KeyLabel")
+            grid.addWidget(field_label, 0, column)
             grid.addWidget(widget, 1, column)
-        root.addWidget(filters)
 
-        buttons = QHBoxLayout()
         self.search_btn = ModernButton("Pesquisar", "search", accent=True)
-        self.prev_btn = ModernButton("Anterior", "previous")
-        self.next_btn = ModernButton("Proximo", "next")
+        self.prev_btn = ModernButton("Anterior", "previous", variant="ghost")
+        self.next_btn = ModernButton("Próximo", "next", variant="ghost")
         self.detail_btn = ModernButton("Detalhes e itens", "search")
-        self.page_label = QLabel("Pagina 1")
-        buttons.addWidget(self.search_btn)
-        buttons.addWidget(self.prev_btn)
-        buttons.addWidget(self.next_btn)
-        buttons.addWidget(self.detail_btn)
-        buttons.addWidget(self.page_label)
-        buttons.addStretch()
-        close = ModernButton("Fechar", "close")
-        buttons.addWidget(close)
-        root.addLayout(buttons)
+        self.page_label = QLabel("Página 1")
+        self.page_label.setObjectName("KeyLabel")
+        close = ModernButton("Fechar", "close", variant="ghost")
+        root.addWidget(dialog_header(title, subtitle, actions=[self.detail_btn, self.search_btn, close]))
+        root.addWidget(filters)
+        pager = QHBoxLayout()
+        pager.addWidget(self.prev_btn)
+        pager.addWidget(self.page_label)
+        pager.addWidget(self.next_btn)
+        pager.addStretch()
+        root.addLayout(pager)
 
         self.table = QTableWidget(0, 8)
-        self.table.setHorizontalHeaderLabels(["ID legado", "Proposta", "Cliente", "Site", "Lote", "Area", "Status", "Sincronizado em"])
+        self.table.setHorizontalHeaderLabels(["ID legado", "Proposta", "Cliente", "Site", "Lote", "Área", "Status", "Sincronizado em"])
         self.table.verticalHeader().setVisible(False)
         self.table.setAlternatingRowColors(True)
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
@@ -81,11 +78,13 @@ class ApiProposalsReadonlyDialog(QDialog):
         root.addWidget(self.table, 1)
 
         self.detail = QTableWidget(0, 7)
-        self.detail.setHorizontalHeaderLabels(["Item", "Codigo", "Descricao", "Qtd.", "Peso unit.", "Peso total", "Fluxo"])
+        self.detail.setHorizontalHeaderLabels(["Item", "Código", "Descrição", "Qtd.", "Peso unit.", "Peso total", "Fluxo"])
         self.detail.verticalHeader().setVisible(False)
         self.detail.setWordWrap(True)
         self.detail.setEditTriggers(QTableWidget.NoEditTriggers)
-        root.addWidget(QLabel("Itens da proposta selecionada"))
+        items_title = QLabel("Itens da proposta selecionada")
+        items_title.setObjectName("PanelTitle")
+        root.addWidget(items_title)
         root.addWidget(self.detail, 1)
 
         self.search_btn.clicked.connect(self.search)
@@ -136,7 +135,7 @@ class ApiProposalsReadonlyDialog(QDialog):
             self._access_token = session.refresh_if_needed(force=True).access_token
         if not self._access_token:
             client.close()
-            raise ApiClientError("session_missing", "Faca login experimental no Diagnostico da API antes de consultar propostas.")
+            raise ApiClientError("session_missing", "Faça login experimental no Diagnóstico da API antes de consultar propostas.")
         return client, self._access_token
 
     def _load_page(self):
@@ -186,7 +185,7 @@ class ApiProposalsReadonlyDialog(QDialog):
         self.detail.resizeRowsToContents()
 
     def _show_error(self, exc):
-        message = exc.user_message if isinstance(exc, ApiClientError) else "Nao foi possivel consultar propostas pela API."
+        message = exc.user_message if isinstance(exc, ApiClientError) else "Não foi possível consultar propostas pela API."
         QMessageBox.warning(self, "Consulta API", message)
 
     def _run_background(self, operation, on_success, on_error):

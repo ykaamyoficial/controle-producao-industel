@@ -65,7 +65,7 @@ def relaunch_elevated(argv: list[str]) -> bool:
             params = " ".join(f'"{arg}"' for arg in ["-m", "app.updater", *argv])
 
         result = ctypes.windll.shell32.ShellExecuteW(  # type: ignore[attr-defined]
-            None, "runas", executable, params, None, 1,
+            None, "runas", executable, params, None, 0,
         )
         # ShellExecuteW retorna um valor > 32 em caso de sucesso.
         return int(result) > 32

@@ -36,7 +36,7 @@ from app.services.diagnostic_service import (
 )
 from app.ui.background_worker import start_worker
 from app.ui.components.modern_button import ModernButton
-from app.ui.dialog_utils import style_dialog_from_parent
+from app.ui.dialog_utils import apply_large_dialog_geometry, style_dialog_from_parent
 
 log = get_logger("api_diagnostic_dialog")
 
@@ -57,7 +57,7 @@ _OVERALL_LABELS = {
 class ApiDiagnosticDialog(QDialog):
     def __init__(self, parent=None, *, store: DesktopApiConfigStore | None = None, token_store: ApiTokenStore | None = None, diagnostic_client_factory=DesktopApiClient):
         super().__init__(parent)
-        self.setWindowTitle("Diagnostico da API")
+        self.setWindowTitle("Diagnóstico da API")
         self.store = store or DesktopApiConfigStore()
         self.token_store = token_store
         self.diagnostic_client_factory = diagnostic_client_factory
@@ -69,18 +69,18 @@ class ApiDiagnosticDialog(QDialog):
         self._closing = False
         self._build()
         self._load()
+        # Abre no tamanho da central de chats (94% x 94% da janela principal) e pode ser redimensionada.
+        apply_large_dialog_geometry(self, parent, width_ratio=0.94, height_ratio=0.94, minimum_width=780, minimum_height=560)
         style_dialog_from_parent(self, parent)
-        self.setMinimumSize(760, 620)
-        self.resize(860, 700)
 
     def _build(self):
         root = QVBoxLayout(self)
         root.setContentsMargins(22, 20, 22, 18)
         root.setSpacing(14)
 
-        title = QLabel("Diagnostico da API")
-        title.setStyleSheet("font-size: 20px; font-weight: 800;")
-        subtitle = QLabel("Validacao da API oficial usada pelo desktop.")
+        title = QLabel("Diagnóstico da API")
+        title.setObjectName("DetailTitle")
+        subtitle = QLabel("Validação da API oficial usada pelo desktop.")
         subtitle.setObjectName("Caption")
         subtitle.setWordWrap(True)
         root.addWidget(title)
@@ -92,24 +92,24 @@ class ApiDiagnosticDialog(QDialog):
         diag_layout.setContentsMargins(18, 16, 18, 16)
         diag_layout.setSpacing(8)
 
-        diag_title = QLabel("Diagnostico de conexao")
-        diag_title.setStyleSheet("font-size: 15px; font-weight: 800;")
+        diag_title = QLabel("Diagnóstico de conexão")
+        diag_title.setObjectName("PanelTitle")
         diag_layout.addWidget(diag_title)
 
-        self.diag_status_label = QLabel("Status geral: nao executado")
+        self.diag_status_label = QLabel("Status geral: não executado")
         diag_layout.addWidget(self.diag_status_label)
         self.diag_server_label = QLabel("Servidor configurado: -")
         self.diag_server_label.setObjectName("Caption")
         diag_layout.addWidget(self.diag_server_label)
-        self.diag_meta_label = QLabel("Ultimo teste: nunca")
+        self.diag_meta_label = QLabel("Último teste: nunca")
         self.diag_meta_label.setObjectName("Caption")
         diag_layout.addWidget(self.diag_meta_label)
 
         diag_actions = QHBoxLayout()
         diag_actions.setSpacing(10)
-        self.diag_run_button = ModernButton("Executar diagnostico", "refresh", accent=True)
+        self.diag_run_button = ModernButton("Executar diagnóstico", "refresh", accent=True)
         self.diag_run_button.clicked.connect(self.run_diagnostic)
-        self.diag_copy_button = ModernButton("Copiar relatorio", "save")
+        self.diag_copy_button = ModernButton("Copiar relatório", "save")
         self.diag_copy_button.clicked.connect(self.copy_diagnostic_report)
         self.diag_copy_button.setEnabled(False)
         diag_actions.addWidget(self.diag_run_button)
@@ -118,11 +118,10 @@ class ApiDiagnosticDialog(QDialog):
         diag_layout.addLayout(diag_actions)
 
         self.diag_checks_list = QListWidget()
-        self.diag_checks_list.setMinimumHeight(150)
-        self.diag_checks_list.setMaximumHeight(210)
-        diag_layout.addWidget(self.diag_checks_list)
+        self.diag_checks_list.setMinimumHeight(120)
+        diag_layout.addWidget(self.diag_checks_list, 1)
 
-        root.addWidget(diag_panel)
+        root.addWidget(diag_panel, 1)
 
         form = QFrame()
         form.setObjectName("Panel")
@@ -132,13 +131,13 @@ class ApiDiagnosticDialog(QDialog):
         grid.setVerticalSpacing(10)
         grid.setColumnStretch(1, 1)
 
-        self.enabled_check = QCheckBox("Ativar integracao oficial com a API")
+        self.enabled_check = QCheckBox("Ativar integração oficial com a API")
         grid.addWidget(self.enabled_check, 0, 0, 1, 2)
         grid.addWidget(QLabel("URL da API"), 1, 0)
         self.base_url = QLineEdit()
         self.base_url.setPlaceholderText("http://127.0.0.1:8000")
         grid.addWidget(self.base_url, 1, 1)
-        grid.addWidget(QLabel("Timeout conexao"), 2, 0)
+        grid.addWidget(QLabel("Timeout conexão"), 2, 0)
         self.connect_timeout = QLineEdit()
         grid.addWidget(self.connect_timeout, 2, 1)
         grid.addWidget(QLabel("Timeout leitura"), 3, 0)
@@ -159,7 +158,7 @@ class ApiDiagnosticDialog(QDialog):
         auth_grid.setHorizontalSpacing(12)
         auth_grid.setVerticalSpacing(10)
         auth_grid.setColumnStretch(1, 1)
-        auth_grid.addWidget(QLabel("Usuario API"), 0, 0)
+        auth_grid.addWidget(QLabel("Usuário API"), 0, 0)
         self.username = QLineEdit()
         auth_grid.addWidget(self.username, 0, 1)
         auth_grid.addWidget(QLabel("Senha API"), 1, 0)
@@ -175,17 +174,17 @@ class ApiDiagnosticDialog(QDialog):
 
         actions = QHBoxLayout()
         self.save_btn = ModernButton("Salvar", "save", accent=True)
-        self.health_btn = ModernButton("Testar conexao", "refresh")
+        self.health_btn = ModernButton("Testar conexão", "refresh")
         self.compat_btn = ModernButton("Testar compatibilidade", "settings")
-        self.login_btn = ModernButton("Testar autenticacao", "users", accent=True)
-        self.refresh_btn = ModernButton("Renovar sessao", "refresh")
-        self.logout_btn = ModernButton("Encerrar sessao", "close")
+        self.login_btn = ModernButton("Testar autenticação", "users", accent=True)
+        self.refresh_btn = ModernButton("Renovar sessão", "refresh")
+        self.logout_btn = ModernButton("Encerrar sessão", "close")
         self.logout_all_btn = ModernButton("Encerrar todas", "delete")
         self.clear_btn = ModernButton("Limpar local", "delete")
         for button in (self.save_btn, self.health_btn, self.compat_btn, self.login_btn, self.refresh_btn, self.logout_btn, self.logout_all_btn, self.clear_btn):
             actions.addWidget(button)
         actions.addStretch()
-        close = ModernButton("Fechar", "close")
+        close = ModernButton("Fechar", "close", variant="ghost")
         actions.addWidget(close)
         root.addLayout(actions)
 
@@ -235,7 +234,7 @@ class ApiDiagnosticDialog(QDialog):
 
         self.diag_status_label.setText(f"Status geral: {_OVERALL_LABELS[result.overall_status]}")
         when = result.started_at.astimezone().strftime("%d/%m/%Y %H:%M:%S")
-        self.diag_meta_label.setText(f"Ultimo teste: {when} | Tempo total: {result.duration_ms} ms")
+        self.diag_meta_label.setText(f"Último teste: {when} | Tempo total: {result.duration_ms} ms")
 
         self.diag_checks_list.clear()
         for check in result.checks:
@@ -253,7 +252,7 @@ class ApiDiagnosticDialog(QDialog):
             return
         self._diagnostic_running = False
         self.diag_run_button.setEnabled(True)
-        self.diag_status_label.setText("Status geral: falha ao executar diagnostico")
+        self.diag_status_label.setText("Status geral: falha ao executar diagnóstico")
         log.exception("Falha inesperada ao executar o diagnostico completo")
 
     def copy_diagnostic_report(self):
@@ -265,7 +264,7 @@ class ApiDiagnosticDialog(QDialog):
 
     def _refresh_status(self):
         if not self.settings.last_tested_at:
-            self.status_label.setText("Integracao desabilitada por padrao. Nenhum teste executado.")
+            self.status_label.setText("Integração desabilitada por padrão. Nenhum teste executado.")
             return
         when = self.settings.last_tested_at.strftime("%d/%m/%Y %H:%M:%S")
         self.status_label.setText(f"{when} | {self.settings.last_test_status or '-'} | {self.settings.last_test_message or '-'}")
@@ -279,7 +278,7 @@ class ApiDiagnosticDialog(QDialog):
                 read_timeout=float(self.read_timeout.text().replace(",", ".")),
             )
         except (ValueError, DesktopApiConfigError) as exc:
-            QMessageBox.warning(self, "Diagnostico da API", str(exc))
+            QMessageBox.warning(self, "Diagnóstico da API", str(exc))
             return
         self._append("Configuracao salva. Integracao habilitada: %s" % ("sim" if self.settings.enabled else "nao"))
         self._refresh_status()
@@ -292,7 +291,7 @@ class ApiDiagnosticDialog(QDialog):
 
     def test_login(self):
         if not self.username.text().strip() or not self.password.text():
-            QMessageBox.warning(self, "Diagnostico da API", "Informe usuario e senha da API para o teste experimental.")
+            QMessageBox.warning(self, "Diagnóstico da API", "Informe usuário e senha da API para o teste experimental.")
             return
         self._run_api_task("Testar autenticacao", lambda: self._test_login(self.username.text(), self.password.text()))
 
@@ -399,10 +398,10 @@ class ApiDiagnosticDialog(QDialog):
         if isinstance(exc, ApiClientError):
             suffix = f" | Codigo de diagnostico: {exc.request_id}" if exc.request_id else ""
             self._append(f"Falha: {exc.user_message}{suffix}")
-            QMessageBox.warning(self, "Diagnostico da API", f"{exc.user_message}{suffix}")
+            QMessageBox.warning(self, "Diagnóstico da API", f"{exc.user_message}{suffix}")
             return
         self._append("Falha: resposta nao pode ser validada.")
-        QMessageBox.warning(self, "Diagnostico da API", "Nao foi possivel concluir o teste agora.")
+        QMessageBox.warning(self, "Diagnóstico da API", "Não foi possível concluir o teste agora.")
 
     def _set_buttons_enabled(self, enabled: bool):
         for button in (self.health_btn, self.compat_btn, self.login_btn, self.refresh_btn, self.logout_btn, self.logout_all_btn):

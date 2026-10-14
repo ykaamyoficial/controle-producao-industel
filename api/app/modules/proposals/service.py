@@ -8,7 +8,7 @@ from decimal import Decimal, InvalidOperation
 from sqlalchemy import Select, and_, case, exists, func, or_, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import lazyload, selectinload
+from sqlalchemy.orm import aliased, lazyload, selectinload
 
 from api.app.core import error_codes
 from api.app.core.exceptions import ApiError
@@ -28,8 +28,11 @@ from api.app.modules.proposals.admin_correction import (
 )
 from api.app.modules.proposals.compensation import Allocation, CompensationError, CompensationPlan, ItemSnapshot, RequestedItem, build_compensation_plan
 from api.app.modules.proposals.domain import ProductionStateMachine, ProposalStateMachine
-from api.app.modules.proposals.models import ExpeditionEvent, ExpeditionItem, FiscalEvent, FiscalInvoice, FiscalInvoiceItem, FiscalRecord, FiscalItem, GalvanizationLoad, GalvanizationLoadEvent, GalvanizationLoadItem, ProductionAllocationTransfer, Proposal, ProposalEvent, ProposalItem, ProposalRemanagement, ProposalRemanagementItem, SyncRun
+from api.app.modules.proposals.models import ExpeditionEvent, ExpeditionItem, FiscalEvent, FiscalInvoice, FiscalInvoiceItem, FiscalRecord, FiscalItem, GalvanizationLoad, GalvanizationLoadEvent, GalvanizationLoadItem, ProductionAllocationTransfer, Proposal, ProposalEvent, ProposalItem, ProposalRemanagement, ProposalRemanagementItem, RemanagementStageTransfer, SyncRun
+from api.app.modules.proposals import remanagement as remanagement_rules
 from api.app.modules.proposals.remanagement import calculate_item_balance, items_are_compatible, max_remanageable, quantity
+from api.app.modules.proposals.stage_ledger import load_pipeline_quantities
+from api.app.modules.proposals.stage_swap import OBLIGATION_STAGES, STAGE_AWAITING_GALVANIZATION, STAGE_IN_GALVANIZATION, STAGE_TO_PRODUCE, STAGE_UNDEFINED_FLOW, verify_swap_conservation
 from api.app.modules.proposals.weights import calculate_known_weight, calculate_weight_coverage, normalize_known_weight
 from api.app.shared.formatting import format_quantity
 from api.app.modules.proposals.schemas import (
@@ -37,6 +40,7 @@ from api.app.modules.proposals.schemas import (
     CompensationProductPlan,
     CompensationTransfer,
     ExpeditionItemsRequest,
+    ExpeditionItemRow,
     ExpeditionItemSummary,
     ExpeditionProposalDetail,
     ExpeditionProposalSummary,
@@ -66,6 +70,13 @@ from api.app.modules.proposals.schemas import (
     GalvanizationLoadVersionRequest,
     GalvanizationReturnRequest,
     GalvanizationSyncBatch,
+    ItemStageRow,
+    StageAnomalyRow,
+    RemanagementBadge,
+    RemanagementBadgeEntry,
+    RemanagementBadgesResponse,
+    StageLedgerResponse,
+    PaginatedExpeditionItemResponse,
     PaginatedExpeditionResponse,
     PaginatedFiscalResponse,
     PaginatedProposalResponse,
@@ -116,8 +127,10 @@ from api.app.modules.proposals.schemas import (
     RemanagementPreview,
     RemanagementReviewItem,
     RemanagementReviewRequest,
+    RemanagementReviewPart,
     RemanagementReviewResult,
     RemanagementReviewSource,
+    RemanagementStageTransferRow,
     RemanagementReviewSummary,
     RemanagementSourceCandidate,
     RemanagementSummary,
@@ -366,7 +379,17 @@ async def list_proposals(
     sort_column = SORT_FIELDS.get(sort_by, Proposal.synced_at)
     order = sort_column.desc() if sort_dir == "desc" else sort_column.asc()
     rows = (await session.execute(stmt.order_by(order, Proposal.id.asc()).limit(limit).offset(offset))).scalars().all()
-    return PaginatedProposalResponse(items=[proposal_list_item(row) for row in rows], total=total, limit=limit, offset=offset)
+    from api.app.modules.proposals.family import partials_overview
+
+    overview = await partials_overview(session, [int(row.id) for row in rows])
+    items = []
+    for row in rows:
+        entry = proposal_list_item(row)
+        badges = overview.get(int(row.id), [])
+        entry["partials_count"] = len(badges)
+        entry["partials"] = badges
+        items.append(entry)
+    return PaginatedProposalResponse(items=items, total=total, limit=limit, offset=offset)
 
 
 async def list_production_proposals(
@@ -618,12 +641,14 @@ async def list_galvanization_candidates(session: AsyncSession, *, search: str | 
     eligible = [(proposal, item) for proposal in proposals for item in _eligible_galvanization_items(proposal)]
     # Saldos de todos os itens em UMA consulta agrupada, em vez de duas por item.
     quantities = await _galvanization_quantities(session, [int(item.id) for _proposal, item in eligible])
+    # Quanto cada item leva pela galvanizacao (igual ao pedido, salvo troca por remanejamento).
+    pipelines = await load_pipeline_quantities(session, [item for _proposal, item in eligible])
     rows = []
     needle = (search or "").strip().lower()
     situation_filter = (situation or "").strip().upper() or None
     for proposal, item in eligible:
         sent_total, pending_total = quantities.get(int(item.id), (Decimal("0"), Decimal("0")))
-        available = max(Decimal("0"), (item.quantity - sent_total)).quantize(Decimal("0.0001"))
+        available = max(Decimal("0"), (pipelines[int(item.id)] - sent_total)).quantize(Decimal("0.0001"))
         # Item ja enviado para uma carga nao pode ser candidato novamente.
         # O saldo zero era exposto como diagnostico e o desktop o projetava
         # junto com a linha real da carga, duplicando a filha.
@@ -873,8 +898,12 @@ async def close_galvanization_load(session: AsyncSession, load_id: int, payload:
     return await get_galvanization_load_detail(session, load_id)
 
 
-def _proposal_search_clause(search: str | None):
-    """Equivalente SQL de `needle in " ".join([numero, cliente, projeto or "", lote or ""]).lower()`."""
+def _proposal_search_clause(search: str | None, *, include_invoices: bool = False):
+    """Equivalente SQL de `needle in " ".join([numero, cliente, projeto or "", lote or ""]).lower()`.
+
+    Com `include_invoices` (listas de Fiscal e Expedicao, que mostram a coluna
+    "Nº da NF") a proposta tambem casa quando alguma NF ativa dela contem o
+    texto. O marcador "REGISTRO-..." (NF sem numero informado) nao conta."""
     needle = (search or "").strip().lower()
     if not needle:
         return None
@@ -882,7 +911,16 @@ def _proposal_search_clause(search: str | None):
         Proposal.proposal_number, " ", Proposal.customer_name, " ",
         func.coalesce(Proposal.project_name, ""), " ", func.coalesce(Proposal.lot, ""),
     ))
-    return func.strpos(haystack, needle) > 0  # strpos: sem curingas, igual ao `in` do Python
+    clause = func.strpos(haystack, needle) > 0  # strpos: sem curingas, igual ao `in` do Python
+    if include_invoices:
+        invoice_match = exists().where(
+            FiscalInvoice.proposal_id == Proposal.id,
+            FiscalInvoice.active.is_(True),
+            FiscalInvoice.invoice_number.not_like("REGISTRO-%"),
+            func.strpos(func.lower(FiscalInvoice.invoice_number), needle) > 0,
+        )
+        clause = or_(clause, invoice_match)
+    return clause
 
 
 _EXPEDITION_SORT_ORDER = {
@@ -919,13 +957,17 @@ def _expedition_sort_key_sql():
     return case(_EXPEDITION_SORT_ORDER, value=status, else_=99)
 
 
-def _expedition_listable_clause():
-    """Espelho SQL de `_active_expedition_items` + saldo pendente (ao menos um item)."""
+def _expedition_listable_clause(item=ExpeditionItem):
+    """Espelho SQL de `_active_expedition_items` + saldo pendente (ao menos um item).
+
+    `item` e a entidade usada DENTRO do EXISTS: uma consulta que ja tem
+    `ExpeditionItem` no FROM (lista de itens) passa um `aliased(ExpeditionItem)`,
+    senao o auto-correlate tira a tabela do subselect."""
     return exists().where(
-        ExpeditionItem.proposal_id == Proposal.id,
-        ExpeditionItem.active.is_(True),
-        ExpeditionItem.status != "ENTREGUE",
-        ExpeditionItem.available_quantity > ExpeditionItem.delivered_quantity + ExpeditionItem.remanaged_quantity,
+        item.proposal_id == Proposal.id,
+        item.active.is_(True),
+        item.status != "ENTREGUE",
+        item.available_quantity > item.delivered_quantity + item.remanaged_quantity,
     )
 
 
@@ -934,7 +976,7 @@ async def list_expedition_proposals(session: AsyncSession, *, search: str | None
     # (derived_sync). Filtro, ordenacao e paginacao rodam no SQL; relacoes so
     # sao carregadas para a pagina devolvida.
     conditions = [Proposal.active.is_(True), _proposal_operational_clause(), _expedition_listable_clause()]
-    search_clause = _proposal_search_clause(search)
+    search_clause = _proposal_search_clause(search, include_invoices=True)
     if search_clause is not None:
         conditions.append(search_clause)
     total = (await session.execute(select(func.count()).select_from(Proposal).where(*conditions))).scalar_one()
@@ -953,12 +995,267 @@ async def list_expedition_proposals(session: AsyncSession, *, search: str | None
             .where(Proposal.id.in_(page_ids))
         )).scalars().unique().all()
         rows_by_id = {int(row.id): row for row in rows}
-    return PaginatedExpeditionResponse(items=[_expedition_summary(rows_by_id[int(pid)]) for pid in page_ids], total=total, limit=limit, offset=offset)
+    invoice_numbers = await _invoice_numbers_by_proposal(session, [int(pid) for pid in page_ids])
+    return PaginatedExpeditionResponse(
+        items=[_expedition_summary(rows_by_id[int(pid)], invoice_numbers.get(int(pid), [])) for pid in page_ids],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
+
+
+async def list_expedition_items(
+    session: AsyncSession, *, search: str | None, status: str | None, pending_only: bool, limit: int, offset: int,
+) -> PaginatedExpeditionItemResponse:
+    """Itens (nao propostas) em Expedicao, uma linha por `ExpeditionItem`.
+
+    Com `pending_only` (padrao) sao os que ainda tem saldo a entregar e nao
+    foram entregues - o mesmo criterio de `_active_expedition_items`. Sem ele
+    entram tambem os ja entregues, mas so das propostas que continuam na lista
+    de Expedicao (com ao menos um item pendente), para a consulta nao varrer o
+    historico inteiro. Filtro, ordenacao e paginacao rodam no SQL.
+
+    A lista tambem e montada no Desktop, a partir da replica local
+    (`app/replica/expedition_items_view.py`); `api/tests/test_replica_views_parity.py`
+    exige respostas identicas. Por isso a regra aqui fica em filtro e ordem.
+    """
+    conditions = [
+        Proposal.active.is_(True),
+        _proposal_operational_clause(),
+        ExpeditionItem.active.is_(True),
+        ProposalItem.active.is_(True),
+    ]
+    if pending_only:
+        conditions += [
+            ExpeditionItem.status != "ENTREGUE",
+            ExpeditionItem.available_quantity > ExpeditionItem.delivered_quantity + ExpeditionItem.remanaged_quantity,
+        ]
+    else:
+        conditions.append(_expedition_listable_clause(aliased(ExpeditionItem)))
+    if status:
+        conditions.append(ExpeditionItem.status == status.strip().upper())
+    needle = (search or "").strip().lower()
+    if needle:
+        item_text = func.lower(func.concat(func.coalesce(ProposalItem.product_code, ""), " ", ProposalItem.description))
+        conditions.append(or_(
+            _proposal_search_clause(search, include_invoices=True),
+            func.strpos(item_text, needle) > 0,
+        ))
+    source = (
+        select(ExpeditionItem, Proposal, ProposalItem)
+        .join(Proposal, ExpeditionItem.proposal_id == Proposal.id)
+        .join(ProposalItem, ExpeditionItem.proposal_item_id == ProposalItem.id)
+        .where(*conditions)
+    )
+    total = (await session.execute(select(func.count()).select_from(source.subquery()))).scalar_one()
+    rows = (await session.execute(
+        source
+        # Ordem so por situacao e ids (nada de texto): o Desktop reproduz a mesma
+        # ordem na replica local, e a collation do PostgreSQL ele nao reproduz.
+        .order_by(
+            case(_EXPEDITION_SORT_ORDER, value=ExpeditionItem.status, else_=99),
+            Proposal.id,
+            ProposalItem.id,
+            ExpeditionItem.id,
+        )
+        .limit(limit)
+        .offset(offset)
+    )).all()
+    return PaginatedExpeditionItemResponse(
+        items=[_expedition_item_row(item, proposal, proposal_item) for item, proposal, proposal_item in rows],
+        total=int(total),
+        limit=limit,
+        offset=offset,
+    )
+
+
+async def get_stage_ledger(session: AsyncSession, proposal_id: int) -> StageLedgerResponse:
+    """Pecas por estagio dos itens de uma proposta e as contas que nao fecham.
+    Somente leitura (Fase A do plano de logistica do remanejamento)."""
+    from api.app.modules.proposals.stage_ledger import load_stage_ledger
+
+    proposal = await get_proposal(session, proposal_id)
+    ledger = await load_stage_ledger(session, proposal_ids=[int(proposal.id)])
+    return StageLedgerResponse(
+        items=[
+            ItemStageRow(
+                item_id=item.item_id, proposal_id=item.proposal_id, proposal_number=item.proposal_number, product_code=item.product_code,
+                unit=item.unit, flow=item.flow, requested=item.requested, to_produce=item.to_produce,
+                awaiting_galvanization=item.awaiting_galvanization, in_galvanization=item.in_galvanization, ready=item.ready,
+                delivered=item.delivered, given_away=item.given_away, received_ready=item.received_ready,
+                undefined_flow=item.undefined_flow, gap=item.gap,
+            )
+            for item in ledger.items
+        ],
+        anomalies=[
+            StageAnomalyRow(
+                code=a.code, severity=a.severity, item_id=a.item_id, proposal_id=a.proposal_id, proposal_number=a.proposal_number,
+                product_code=a.product_code, detail=a.detail,
+            )
+            for a in ledger.anomalies
+        ],
+    )
+
+
+async def list_remanagement_badges(session: AsyncSession) -> RemanagementBadgesResponse:
+    """Selos de remanejamento das listas de Producao, Galvanizacao e Expedicao (Fase D do plano).
+
+    So as propostas que ainda estao "fora do lugar" por causa de um remanejamento aparecem; quando todas
+    as pecas voltam a estar prontas ou entregues a proposta fica inteira e some daqui (regra em
+    `remanagement_badges.py`). Le so as propostas envolvidas em remanejamentos, nunca a base inteira.
+    Somente leitura."""
+    from api.app.modules.proposals import remanagement_badges as rules
+    from api.app.modules.proposals.stage_ledger import compute_item_stages, load_item_facts
+
+    source_proposal = aliased(Proposal)
+    destination_proposal = aliased(Proposal)
+    link_rows = (await session.execute(
+        select(
+            ProposalRemanagementItem.source_item_id, ProposalRemanagementItem.destination_item_id, ProposalRemanagement.code,
+            source_proposal.proposal_number, destination_proposal.proposal_number,
+        )
+        .join(ProposalRemanagement, ProposalRemanagement.id == ProposalRemanagementItem.remanagement_id)
+        .join(source_proposal, source_proposal.id == ProposalRemanagement.source_proposal_id)
+        .join(destination_proposal, destination_proposal.id == ProposalRemanagement.destination_proposal_id)
+        .where(ProposalRemanagement.status == "APPLIED", ProposalRemanagementItem.mode == "TRANSFER")
+        .order_by(ProposalRemanagement.id, ProposalRemanagementItem.id)
+    )).all()
+    row_badges = await _rows_remanagement_badges(session)
+    if not link_rows:
+        return RemanagementBadgesResponse(items=row_badges)
+
+    involved_item_ids = sorted({int(item_id) for row in link_rows for item_id in (row[0], row[1])})
+    # Dono ATUAL de cada item (uma parcial pode ter levado o item para uma filha).
+    owner_of = {int(item_id): int(proposal_id) for item_id, proposal_id in (await session.execute(
+        select(ProposalItem.id, ProposalItem.proposal_id).where(ProposalItem.id.in_(involved_item_ids))
+    )).all()}
+    stages_by_proposal: dict[int, list] = {}
+    for facts in await load_item_facts(session, proposal_ids=sorted(set(owner_of.values()))):
+        stages_by_proposal.setdefault(facts.proposal_id, []).append(compute_item_stages(facts))
+
+    status_by_proposal: dict[int, str] = {}
+    open_gave: dict[int, set[int]] = {}
+    open_received: dict[int, set[int]] = {}
+    proposal_numbers: dict[int, str] = {}
+    for proposal_id, item_stages in stages_by_proposal.items():
+        status = rules.proposal_badge_status(item_stages)
+        if status is None:
+            continue
+        status_by_proposal[proposal_id] = status
+        proposal_numbers[proposal_id] = item_stages[0].proposal_number
+        open_gave[proposal_id] = {item.item_id for item in item_stages if rules.item_gave_open(item)}
+        open_received[proposal_id] = {item.item_id for item in item_stages if rules.item_received_open(item)}
+
+    entries: dict[int, dict[tuple[str, str, str], None]] = {proposal_id: {} for proposal_id in status_by_proposal}
+    for source_item_id, destination_item_id, code, source_number, destination_number in link_rows:
+        source_owner = owner_of.get(int(source_item_id))
+        if source_owner in status_by_proposal and int(source_item_id) in open_gave[source_owner]:
+            entries[source_owner][(code or "", rules.DIRECTION_GAVE, destination_number)] = None
+        destination_owner = owner_of.get(int(destination_item_id))
+        if destination_owner in status_by_proposal and int(destination_item_id) in open_received[destination_owner]:
+            entries[destination_owner][(code or "", rules.DIRECTION_RECEIVED, source_number)] = None
+
+    transfer_badges = [
+        RemanagementBadge(
+            proposal_id=proposal_id, proposal_number=proposal_numbers[proposal_id], status=status,
+            entries=[RemanagementBadgeEntry(code=code, direction=direction, counterpart_proposal_number=counterpart) for code, direction, counterpart in entries[proposal_id]],
+        )
+        for proposal_id, status in sorted(status_by_proposal.items())
+    ]
+    known = {badge.proposal_id for badge in transfer_badges}
+    return RemanagementBadgesResponse(items=sorted([*transfer_badges, *(b for b in row_badges if b.proposal_id not in known)], key=lambda b: b.proposal_id))
+
+
+async def _rows_remanagement_badges(session: AsyncSession) -> list[RemanagementBadge]:
+    """Marca das propostas de remanejamentos por linhas: enquanto a familia esta dividida (tem parte ativa).
+
+    * familia da ORIGEM: a parte que ainda espera pecas (producao, galvanizacao) esta "Substituida"; a parte que
+      continua pronta na Expedicao esta "Parcialmente substituida";
+    * familia do DESTINO: a mae (com o resto) e as partes estao "Recebeu remanejamento".
+    Quando a familia se junta de novo ninguem tem mais parte ativa e a marca some."""
+    from api.app.modules.proposals import remanagement_badges as rules
+    from api.app.modules.proposals.remanagement_rows import G_READY, _groups_of  # noqa: PLC2701
+
+    source_proposal = aliased(Proposal)
+    destination_proposal = aliased(Proposal)
+    headers = (await session.execute(
+        select(
+            ProposalRemanagement.code, ProposalRemanagement.source_proposal_id, ProposalRemanagement.destination_proposal_id,
+            source_proposal.proposal_number, destination_proposal.proposal_number,
+            func.coalesce(source_proposal.parent_proposal_id, source_proposal.id), func.coalesce(destination_proposal.parent_proposal_id, destination_proposal.id),
+        )
+        .join(source_proposal, source_proposal.id == ProposalRemanagement.source_proposal_id)
+        .join(destination_proposal, destination_proposal.id == ProposalRemanagement.destination_proposal_id)
+        .where(ProposalRemanagement.status == "APPLIED")
+        .where(exists().where(ProposalRemanagementItem.remanagement_id == ProposalRemanagement.id, ProposalRemanagementItem.mode == "ROWS"))
+        .order_by(ProposalRemanagement.id)
+    )).all()
+    if not headers:
+        return []
+    roots = sorted({int(row[5]) for row in headers} | {int(row[6]) for row in headers})
+    members = list((await session.execute(
+        select(Proposal).options(lazyload("*"), selectinload(Proposal.items))
+        .where(Proposal.active.is_(True), or_(Proposal.id.in_(roots), Proposal.parent_proposal_id.in_(roots)))
+    )).scalars().unique())
+    children_of: dict[int, list[Proposal]] = {}
+    for proposal in members:
+        if proposal.parent_proposal_id is not None:
+            children_of.setdefault(int(proposal.parent_proposal_id), []).append(proposal)
+    by_root: dict[int, list[Proposal]] = {root: [p for p in members if p.id == root or p.parent_proposal_id == root] for root in roots}
+
+    entries: dict[int, dict[tuple[str, str, str], None]] = {}
+    status: dict[int, str] = {}
+    numbers: dict[int, str] = {}
+    whole: dict[int, Proposal] = {}  # propostas que nao se dividiram: a marca depende das linhas que ainda nao estao prontas
+    for code, _source_id, _destination_id, source_number, destination_number, source_root, destination_root in headers:
+        source_root, destination_root = int(source_root), int(destination_root)
+        for root, direction, counterpart in ((source_root, rules.DIRECTION_GAVE, destination_number), (destination_root, rules.DIRECTION_RECEIVED, source_number)):
+            if children_of.get(root):
+                for proposal in by_root[root]:
+                    if proposal.id == root and not [i for i in proposal.items if i.active]:
+                        continue  # a mae-referencia nao aparece nas listas
+                    entries.setdefault(proposal.id, {})[(code or "", direction, counterpart)] = None
+                    numbers[proposal.id] = proposal.proposal_number
+                    status.setdefault(proposal.id, rules.PARTIALLY_SUBSTITUTED if direction == rules.DIRECTION_GAVE else rules.RECEIVED)
+            else:
+                proposal = next((p for p in by_root[root] if p.id == root), None)
+                if proposal is not None:
+                    whole.setdefault(proposal.id, proposal)
+                    entries.setdefault(proposal.id, {})[(code or "", direction, counterpart)] = None
+                    numbers[proposal.id] = proposal.proposal_number
+    # Parte da origem que ainda espera pecas (nao esta pronta) = Substituida.
+    waiting_rows = [p for p in members if status.get(p.id) == rules.PARTIALLY_SUBSTITUTED and p.parent_proposal_id is not None]
+    all_rows = [item for p in [*waiting_rows, *whole.values()] for item in p.items if item.active]
+    groups = await _groups_of(session, all_rows) if all_rows else {}
+    for proposal in waiting_rows:
+        if any(groups.get(item.id, (G_READY, ()))[0] != G_READY for item in proposal.items if item.active):
+            status[proposal.id] = rules.SUBSTITUTED
+    # Proposta inteira: quem cedeu tudo fica "Substituida" ate as pecas de troca ficarem prontas; quem recebeu e ainda tem
+    # linhas em andamento fica "Recebeu". Com tudo pronto a marca some.
+    for proposal in whole.values():
+        ready = [groups.get(item.id, (G_READY, ()))[0] == G_READY for item in proposal.items if item.active]
+        directions = {direction for _code, direction, _counterpart in entries[proposal.id]}
+        if all(ready):
+            entries.pop(proposal.id)
+        elif rules.DIRECTION_GAVE in directions:
+            status[proposal.id] = rules.PARTIALLY_SUBSTITUTED if any(ready) else rules.SUBSTITUTED
+        elif any(ready):
+            status[proposal.id] = rules.RECEIVED
+        else:
+            entries.pop(proposal.id)
+    return [
+        RemanagementBadge(
+            proposal_id=proposal_id, proposal_number=numbers[proposal_id], status=status[proposal_id],
+            entries=[RemanagementBadgeEntry(code=code, direction=direction, counterpart_proposal_number=counterpart) for code, direction, counterpart in entries[proposal_id]],
+        )
+        for proposal_id in sorted(entries)
+    ]
 
 
 async def get_expedition_detail(session: AsyncSession, proposal_id: int) -> ExpeditionProposalDetail:
     proposal = await _get_expedition_proposal(session, proposal_id)
-    return _expedition_detail(proposal)
+    invoice_numbers = await _invoice_numbers_by_proposal(session, [int(proposal.id)])
+    return _expedition_detail(proposal, invoice_numbers.get(int(proposal.id), []))
 
 
 async def start_expedition_separation(session: AsyncSession, proposal_id: int, payload: ExpeditionVersionRequest, actor: User, *, request_id: str | None) -> ExpeditionProposalDetail:
@@ -1491,7 +1788,33 @@ async def confirm_remanagement_batch(session: AsyncSession, payload: Remanagemen
         if not plan.lines:
             raise ApiError(error_codes.EXPEDITION_REMANAGEMENT_INVALID, "Nenhuma linha de compensacao valida para confirmar.", status_code=409)
 
+        # Remanejamento por linhas (lotes fisicos + parciais): so quando a chave esta ligada e todas as linhas
+        # envolvidas estao limpas; senao segue o motor de transferencias abaixo.
+        from api.app.modules.proposals import remanagement_rows
+
+        if await remanagement_rows.rows_engine_applicable(session, list(items_by_id.values())):
+            await remanagement_rows.apply_rows_engine(
+                session, payload=payload, actor=actor, request_id=request_id, preloaded=preloaded, destination=destination,
+                plan=plan, items_by_id=items_by_id,
+            )
+            await auth_repository.create_security_event(
+                session, "COMPENSATED_REMANAGEMENT_APPLIED", actor_user_id=actor.id, request_id=request_id,
+                details={"operation_id": payload.operation_id, "destination_proposal_id": destination.id, "source_proposal_ids": source_proposal_ids, "engine": "ROWS"},
+            )
+            await session.commit()
+            return _confirm_result_from_rows(payload.operation_id, await _get_remanagement_batch_by_operation_id(session, payload.operation_id))
+
         fresh_balances = await _batch_item_allocation_balances(session, list(items_by_id.values()))
+
+        # Plano de logistica (Fase B): quais pecas em andamento do destino passam para as
+        # origens, e a leitura de estagios de ANTES, para conferir a conservacao no fim.
+        stages_before, stage_swaps, stage_swap_errors = await _stage_swaps_for_plan(session, plan)
+        if stage_swap_errors:
+            first_item_id, message = next(iter(stage_swap_errors.items()))
+            raise ApiError(
+                error_codes.EXPEDITION_REMANAGEMENT_INVALID, message, status_code=409,
+                details={"code": "DESTINATION_IN_FLIGHT_INSUFFICIENT", "destination_item_id": first_item_id},
+            )
 
         lines_by_source: dict[int, list] = {}
         for line in plan.lines:
@@ -1505,6 +1828,9 @@ async def confirm_remanagement_batch(session: AsyncSession, payload: Remanagemen
 
         created_rows: list[ProposalRemanagement] = []
         transferred_by_destination_item: dict[int, Decimal] = {}
+        swaps_by_line = {(swap.destination_item_id, swap.source_item_id): swap for swap in stage_swaps}
+        productive_pending_by_source: dict[int, Decimal] = {}
+        fabricated_received_sources: set[int] = set()
 
         for source_id in source_proposal_ids:
             source_lines = lines_by_source.get(source_id)
@@ -1554,7 +1880,21 @@ async def confirm_remanagement_batch(session: AsyncSession, payload: Remanagemen
                 )
                 session.add(item_row)
                 await session.flush()
-                session.add(ProductionAllocationTransfer(remanagement_item_id=item_row.id, from_item=destination_item, to_item=source_item, quantity=qty, created_by=actor.id))
+                swap = swaps_by_line.get((destination_item.id, source_item.id))
+                transfers = list(swap.transfers) if swap is not None else []
+                to_produce_quantity = sum((transfer.quantity for transfer in transfers if transfer.stage in OBLIGATION_STAGES), Decimal("0"))
+                if swap is None:
+                    to_produce_quantity = qty
+                if to_produce_quantity > 0:
+                    session.add(ProductionAllocationTransfer(remanagement_item_id=item_row.id, from_item=destination_item, to_item=source_item, quantity=to_produce_quantity, created_by=actor.id))
+                    productive_pending_by_source[source_id] = productive_pending_by_source.get(source_id, Decimal("0")) + to_produce_quantity
+                for transfer in transfers:
+                    if transfer.stage in (STAGE_AWAITING_GALVANIZATION, STAGE_IN_GALVANIZATION):
+                        await _apply_fabricated_transfer(
+                            session, item_row=item_row, transfer=transfer, source_item=source_item, destination_item=destination_item,
+                            actor=actor, request_id=request_id,
+                        )
+                        fabricated_received_sources.add(source_id)
 
                 source_expedition = source_item.expedition_item
                 if source_expedition is None:
@@ -1605,10 +1945,18 @@ async def confirm_remanagement_batch(session: AsyncSession, payload: Remanagemen
                 await _record_expedition_event(session, source_proposal, "COMPENSATED_REMANAGEMENT_READY_SENT", actor, expedition_item=source_expedition, request_id=request_id, from_status=previous_source_status, to_status=source_expedition.status, metadata=event_metadata)
                 await _record_expedition_event(session, destination, "COMPENSATED_REMANAGEMENT_READY_RECEIVED", actor, expedition_item=destination_expedition, request_id=request_id, to_status=destination_expedition.status, metadata=event_metadata)
 
-            source_proposal.has_production_pending = True
-            source_proposal.production_status = "ITEM_PENDENTE_FABRICACAO"
+            if productive_pending_by_source.get(source_id, Decimal("0")) > 0:
+                source_proposal.has_production_pending = True
+                source_proposal.production_status = "ITEM_PENDENTE_FABRICACAO"
             source_proposal.flow_situation = "PENDENTE_POR_REMANEJAMENTO"
             _touch(source_proposal, actor)
+            if source_id in fabricated_received_sources:
+                # A origem recebeu pecas que ja estao fabricadas (aguardando ou dentro de carga):
+                # o estado dela passa a seguir a galvanizacao (parcial) enquanto elas nao voltam.
+                await session.flush()
+                await _recalculate_galvanization_proposal_state(
+                    session, source_proposal, actor, request_id=request_id, load_id=0, observation="Pecas recebidas por remanejamento",
+                )
 
         # Destino e recalculado UMA vez, com o total transferido somado de
         # TODAS as origens - nunca uma vez por origem (evitaria contar so a
@@ -1621,8 +1969,23 @@ async def confirm_remanagement_batch(session: AsyncSession, payload: Remanagemen
             mapped_destination_pending.get(int(item.id), _loaded_item_balance(item).production_pending) > 0
             for item in _internal_items(destination)
         )
+        # Pecas do destino que continuam sem fluxo definido depois da troca (o que saiu dele em
+        # "sem fluxo definido" foi para a origem, que segue o fluxo dela).
+        undefined_handed_over: dict[int, Decimal] = {}
+        for swap in stage_swaps:
+            for transfer in swap.transfers:
+                if transfer.stage == STAGE_UNDEFINED_FLOW:
+                    undefined_handed_over[swap.destination_item_id] = undefined_handed_over.get(swap.destination_item_id, Decimal("0")) + transfer.quantity
+        destination_undefined_left = sum(
+            (max(Decimal("0"), stage.undefined_flow - undefined_handed_over.get(item_id, Decimal("0"))) for item_id, stage in stages_before.items() if stage.proposal_id == destination.id),
+            Decimal("0"),
+        )
         destination.shipping_status = "EM_SEPARACAO"
-        if not destination_has_production_pending:
+        if destination_undefined_left > 0 and not destination_has_production_pending:
+            # Ainda ha pecas deste destino sem fluxo definido: ele continua exatamente como estava
+            # (na mesma area, com o fluxo indefinido); so recebeu as pecas prontas em troca.
+            destination.flow_situation = "PARCIAL_COM_PENDENCIA"
+        elif not destination_has_production_pending:
             destination.production_status = "FINALIZADO"
             destination.has_production_pending = False
             destination.current_area = "EXPEDICAO"
@@ -1655,6 +2018,18 @@ async def confirm_remanagement_batch(session: AsyncSession, payload: Remanagemen
             session, "COMPENSATED_REMANAGEMENT_APPLIED", actor_user_id=actor.id, request_id=request_id,
             details={"operation_id": payload.operation_id, "destination_proposal_id": destination.id, "source_proposal_ids": source_proposal_ids, "remanagement_ids": [row.id for row in created_rows]},
         )
+        # Conservacao (Fase B): a gravacao so pode ter trocado o dono das pecas. Relê os
+        # estagios do banco e confere contra o plano; qualquer diferenca desfaz tudo.
+        await session.flush()
+        stages_after, _swaps_after, _errors_after = await _stage_swaps_for_plan(session, plan, refresh=True)
+        conservation_problems = verify_swap_conservation(stages_before, stages_after, stage_swaps)
+        if conservation_problems:
+            raise ApiError(
+                error_codes.REMANAGEMENT_CONSERVATION_VIOLATION,
+                "O remanejamento nao foi gravado: a conferencia de pecas por estagio nao fechou.",
+                status_code=409,
+                details={"problems": conservation_problems[:10]},
+            )
         await session.commit()
     except IntegrityError:
         await session.rollback()
@@ -1833,7 +2208,7 @@ async def find_remanagement_sources(session: AsyncSession, payload: Remanagement
         # Mesma exclusao ja aplicada por `compatible_remanagement_items`: item
         # pendente de galvanizacao nao pode ser origem ate essa etapa ficar
         # rastreavel quantitativamente.
-        if item.requires_galvanization == "SIM":
+        if remanagement_rules.galvanized_remanagement_blocked(item.requires_galvanization):
             continue
         balance = balances.get(item.id)
         if balance is None or balance.ready_available <= 0:
@@ -1845,7 +2220,7 @@ async def find_remanagement_sources(session: AsyncSession, payload: Remanagement
         code = _normalized_product_code(destination_item.product_code)
         matches = [
             candidate_item for candidate_item in candidates_by_code.get(code, [])
-            if items_are_compatible(candidate_item, destination_item)[0]
+            if items_are_compatible(candidate_item, destination_item, strict_flow=False)[0]
         ]
         matches.sort(key=lambda candidate_item: balances[candidate_item.id].ready_available, reverse=True)
         candidates = [
@@ -2049,14 +2424,14 @@ async def build_remanagement_compensation_plan(session: AsyncSession, payload: R
     return _compensation_plan_response(plan)
 
 
-async def simulate_remanagement_review(session: AsyncSession, payload: RemanagementReviewRequest) -> RemanagementReviewResult:
+async def simulate_remanagement_review(session: AsyncSession, payload: RemanagementReviewRequest, actor: User | None = None) -> RemanagementReviewResult:
     """Fase 6 do novo fluxo de Remanejamento: revisao/simulacao final antes da
     confirmacao. Reusa a MESMA leitura de saldo da Fase 5
     (`_load_compensation_snapshots`, que ja consulta o saldo *atual* de cada
     origem/destino - isso e a revalidacao pedida na secao 16) e o MESMO motor
     de compensacao (`build_compensation_plan`); esta funcao apenas adiciona o
     comparativo antes/depois e a validacao do motivo. Nenhuma escrita."""
-    destination, requested_items, allocations, item_snapshots, _items_by_id = await _load_compensation_snapshots(
+    destination, requested_items, allocations, item_snapshots, items_by_id = await _load_compensation_snapshots(
         session,
         RemanagementCompensationRequest(destination_proposal_id=payload.destination_proposal_id, items=payload.items, allocations=payload.allocations),
     )
@@ -2072,6 +2447,26 @@ async def simulate_remanagement_review(session: AsyncSession, payload: Remanagem
     if not reason:
         errors.append(CompensationError(code="REASON_REQUIRED", message="Informe o motivo do remanejamento."))
 
+    # Quais pecas em andamento do destino passam para cada origem (estagio a estagio).
+    from api.app.modules.proposals import remanagement_rows
+
+    use_rows = bool(plan.products) and not plan.errors and await remanagement_rows.rows_engine_applicable(session, list(items_by_id.values()))
+    swap_by_line: dict[tuple[int, int], list[RemanagementStageTransferRow]] = {}
+    if plan.products:
+        if use_rows:
+            swaps, swap_errors = await remanagement_rows.rows_stage_swaps(session, plan)
+        else:
+            _stages, swaps, swap_errors = await _stage_swaps_for_plan(session, plan)
+        for swap in swaps:
+            swap_by_line[(swap.destination_item_id, swap.source_item_id)] = [
+                RemanagementStageTransferRow(stage=transfer.stage, quantity=transfer.quantity) for transfer in swap.transfers
+            ]
+        for destination_item_id, message in swap_errors.items():
+            errors.append(CompensationError(code="DESTINATION_IN_FLIGHT_INSUFFICIENT", message=message, destination_item_id=destination_item_id))
+        plan_errors_by_item = {error.destination_item_id for error in plan.errors} | set(swap_errors)
+    else:
+        plan_errors_by_item = {error.destination_item_id for error in plan.errors}
+
     products_by_item = {product.destination_item_id: product for product in plan.products}
     review_items = []
     complete = partial = not_allocated = invalid = 0
@@ -2084,7 +2479,7 @@ async def simulate_remanagement_review(session: AsyncSession, payload: Remanagem
         product = products_by_item.get(requested.destination_item_id)
         allocated = product.allocated_quantity if product else Decimal("0")
         remaining = max(requested.requested_quantity - allocated, Decimal("0"))
-        has_error = any(error.destination_item_id == requested.destination_item_id for error in plan.errors)
+        has_error = requested.destination_item_id in plan_errors_by_item
         if has_error:
             status = "INVALIDO"
             invalid += 1
@@ -2112,6 +2507,7 @@ async def simulate_remanagement_review(session: AsyncSession, payload: Remanagem
                 production_compensation=line.obligation_quantity_to_source,
                 source_before=before,
                 source_after_simulated=after,
+                stage_transfers=swap_by_line.get((requested.destination_item_id, line.source_item_id), []),
             ))
 
         destination_snapshot = item_snapshots.get(requested.destination_item_id)
@@ -2141,15 +2537,181 @@ async def simulate_remanagement_review(session: AsyncSession, payload: Remanagem
         not_allocated_items=not_allocated,
         invalid_items=invalid,
     )
+    parts: list[RemanagementReviewPart] = []
+    destination_id = int(destination.id)  # o rollback da previa expira os objetos da sessao
+    if use_rows and not errors and complete + partial > 0 and actor is not None:
+        # Roda o motor so para descobrir as partes que nascem (e descarta a transacao): o usuario ve, antes de
+        # confirmar, o que acontece com cada proposta.
+        try:
+            for part in await remanagement_rows.preview_parts(session, reason=reason, actor=actor, destination=destination, plan=plan, items_by_id=items_by_id):
+                parts.append(RemanagementReviewPart(**part))
+        except ApiError as exc:
+            detail = exc.details if isinstance(exc.details, dict) else {}
+            errors.append(CompensationError(code=str(detail.get("code") or exc.code), message=exc.message))
+        finally:
+            await session.rollback()
     valid = not errors and complete + partial > 0
     return RemanagementReviewResult(
-        destination_proposal_id=destination.id,
+        destination_proposal_id=destination_id,
         valid=valid,
         warnings=list(plan.warnings),
         errors=[CompensationPlanError(code=error.code, message=error.message, destination_item_id=error.destination_item_id, source_item_id=error.source_item_id) for error in errors],
         summary=summary,
         items=review_items,
+        engine="ROWS" if use_rows else "TRANSFER",
+        parts=parts,
     )
+
+
+async def _apply_fabricated_transfer(
+    session: AsyncSession, *, item_row: ProposalRemanagementItem, transfer, source_item: ProposalItem, destination_item: ProposalItem,
+    actor: User, request_id: str | None,
+) -> None:
+    """Troca de dono de pecas JA FABRICADAS do item destino para o item origem (plano de logistica).
+
+    `AWAITING_GALVANIZATION`: so registra (as pecas ainda nao estao em carga).
+    `IN_GALVANIZATION`: tira as pecas pendentes das linhas de carga do destino (da carga mais antiga
+    para a mais nova) e poe na MESMA carga em nome da origem; a carga continua a mesma, o retorno vale
+    para a origem e tudo fica no historico da carga. Linha do destino que zera e desativada, nunca apagada."""
+    now = datetime.now(UTC)
+    if transfer.stage == STAGE_AWAITING_GALVANIZATION:
+        session.add(RemanagementStageTransfer(
+            remanagement_item_id=item_row.id, stage=STAGE_AWAITING_GALVANIZATION, quantity=transfer.quantity,
+            from_item_id=destination_item.id, to_item_id=source_item.id, created_by=actor.id,
+        ))
+        source_item.galvanized = False
+        _touch(source_item, actor)
+        return
+    remaining = transfer.quantity
+    rows = (await session.execute(
+        select(GalvanizationLoadItem)
+        .join(GalvanizationLoad, GalvanizationLoad.id == GalvanizationLoadItem.load_id)
+        .where(GalvanizationLoadItem.proposal_item_id == destination_item.id)
+        .where(GalvanizationLoadItem.active.is_(True))
+        .where(GalvanizationLoad.status != "CANCELADA")
+        .where(GalvanizationLoadItem.sent_quantity > GalvanizationLoadItem.returned_quantity)
+        .order_by(GalvanizationLoadItem.load_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )).scalars().all()
+    for row in rows:
+        if remaining <= 0:
+            break
+        take = min(quantity(row.sent_quantity - row.returned_quantity), remaining)
+        target = (await session.execute(
+            select(GalvanizationLoadItem)
+            .where(GalvanizationLoadItem.load_id == row.load_id, GalvanizationLoadItem.proposal_item_id == source_item.id)
+            .with_for_update()
+        )).scalars().first()
+        unit_weight = normalize_known_weight(source_item.unit_weight)
+        previous_row_status = row.status
+        if take >= quantity(row.sent_quantity) and quantity(row.returned_quantity) <= 0:
+            # Todas as pecas da linha mudaram de dono: a linha sai de cena (continua gravada, inativa).
+            row.active = False
+        else:
+            row.sent_quantity = quantity(row.sent_quantity - take)
+            row.sent_weight = calculate_known_weight(row.sent_quantity, row.unit_weight)
+            row.status = "RETORNADO" if row.returned_quantity >= row.sent_quantity else ("RETORNO_PARCIAL" if row.returned_quantity > 0 else "AGUARDANDO_RETORNO")
+        _touch(row, actor)
+        if target is None:
+            target = GalvanizationLoadItem(
+                load_id=row.load_id, proposal_id=source_item.proposal_id, proposal_item_id=source_item.id, sent_quantity=take,
+                unit_weight=unit_weight, sent_weight=calculate_known_weight(take, unit_weight),
+                returned_weight=None if unit_weight is None else Decimal("0"), created_by=actor.id, updated_by=actor.id,
+            )
+            session.add(target)
+        elif not target.active:
+            # Linha antiga e inativa (ja foi retirada da carga): recomeca do zero com as pecas recebidas.
+            target.active = True
+            target.sent_quantity = take
+            target.returned_quantity = Decimal("0")
+            target.unit_weight = unit_weight
+            target.sent_weight = calculate_known_weight(take, unit_weight)
+            target.returned_weight = None if unit_weight is None else Decimal("0")
+            target.status = "AGUARDANDO_RETORNO"
+            target.returned_at = None
+            _touch(target, actor)
+        else:
+            target.sent_quantity = quantity(target.sent_quantity + take)
+            target.sent_weight = calculate_known_weight(target.sent_quantity, target.unit_weight if target.unit_weight is not None else unit_weight)
+            target.status = "RETORNADO" if target.returned_quantity >= target.sent_quantity else ("RETORNO_PARCIAL" if target.returned_quantity > 0 else "AGUARDANDO_RETORNO")
+            target.returned_at = None
+            _touch(target, actor)
+        await session.flush()
+        # Relê a carga ja com a linha nova, para o peso total e o historico.
+        load = await session.get(GalvanizationLoad, row.load_id, options=[selectinload(GalvanizationLoad.items)], populate_existing=True)
+        session.add(RemanagementStageTransfer(
+            remanagement_item_id=item_row.id, stage=STAGE_IN_GALVANIZATION, quantity=take, from_item_id=destination_item.id,
+            to_item_id=source_item.id, load_id=row.load_id, from_load_item_id=row.id, to_load_item_id=target.id, created_by=actor.id,
+        ))
+        load.total_weight = calculate_weight_coverage(item.sent_weight for item in load.items if item.active).known_weight
+        _touch(load, actor)
+        metadata = {
+            "remanagement_item_id": item_row.id, "quantity": str(take), "from_proposal_item_id": destination_item.id,
+            "to_proposal_item_id": source_item.id, "from_load_item_id": row.id, "to_load_item_id": target.id,
+        }
+        await _record_load_event(session, load, "GALVANIZATION_ITEM_OWNER_CHANGED", actor, load_item=row, request_id=request_id, from_status=previous_row_status, to_status=row.status, metadata={**metadata, "direction": "OUT"})
+        await _record_load_event(session, load, "GALVANIZATION_ITEM_OWNER_CHANGED", actor, load_item=target, request_id=request_id, metadata={**metadata, "direction": "IN"})
+        remaining -= take
+    if remaining > 0:
+        raise ApiError(
+            error_codes.EXPEDITION_REMANAGEMENT_INVALID,
+            "As pecas do destino que estao em carga de galvanizacao mudaram desde a revisao. Revalide o remanejamento.",
+            status_code=409,
+        )
+    source_item.galvanized = False
+    _touch(source_item, actor)
+
+
+async def _stage_swaps_for_plan(session: AsyncSession, plan, *, refresh: bool = False):
+    """Estagios (antes) dos itens envolvidos no plano e a troca por estagio de cada linha.
+
+    Devolve (estagios por item, trocas, erros por item destino). Um destino sem pecas em
+    andamento suficientes para ceder em troca vira erro desse item, nunca excecao."""
+    from api.app.modules.proposals.stage_ledger import compute_item_stages, load_item_facts
+    from api.app.modules.proposals.stage_swap import StageSwapError, plan_stage_swaps
+
+    proposal_ids = sorted({plan.destination_proposal_id, *(line.source_proposal_id for line in plan.lines)})
+    stages = {facts.item_id: compute_item_stages(facts) for facts in await load_item_facts(session, proposal_ids=proposal_ids, refresh=refresh)}
+    swaps = []
+    errors: dict[int, str] = {}
+    for product in plan.products:
+        destination_stages = stages.get(product.destination_item_id)
+        if destination_stages is None:
+            errors[product.destination_item_id] = "Item destino sem leitura de estágios."
+            continue
+        # Origem que nao galvaniza nao sabe receber pecas ja fabricadas (aguardando galvanizacao ou em carga).
+        hosts_fabricated = {
+            line.source_item_id: (stages.get(line.source_item_id) is None or stages[line.source_item_id].flow == "GALVANIZADO")
+            for line in product.transfers
+        }
+        try:
+            swaps.extend(plan_stage_swaps(destination_stages, [(line.source_item_id, line.ready_quantity_to_destination) for line in product.transfers], hosts_fabricated))
+        except StageSwapError as exc:
+            errors[product.destination_item_id] = str(exc)
+
+    # Troca de pecas JA FABRICADAS (aguardando galvanizacao / dentro de carga) ainda nao
+    # sabe lidar com propostas mae/filhas (parciais): ate la, e recusada com mensagem clara.
+    fabricated_destinations = {
+        swap.destination_item_id for swap in swaps if any(transfer.stage in (STAGE_AWAITING_GALVANIZATION, STAGE_IN_GALVANIZATION) for transfer in swap.transfers)
+    }
+    if fabricated_destinations:
+        involved = set(proposal_ids)
+        partial_ids = set((await session.execute(
+            select(Proposal.id).where(
+                or_(
+                    and_(Proposal.id.in_(involved), Proposal.parent_proposal_id.is_not(None)),
+                    Proposal.parent_proposal_id.in_(involved),
+                )
+            )
+        )).scalars())
+        if partial_ids:
+            for destination_item_id in fabricated_destinations:
+                errors[destination_item_id] = (
+                    "Remanejar peças que já estão fabricadas (aguardando galvanização ou em carga) ainda não funciona "
+                    "com propostas que têm parciais. Conclua ou una as parciais antes."
+                )
+    return stages, swaps, errors
 
 
 async def list_remanagements(session: AsyncSession, *, proposal_id: int | None, limit: int, offset: int) -> PaginatedRemanagementResponse:
@@ -2204,7 +2766,7 @@ async def list_fiscal_records(session: AsyncSession, *, search: str | None, stat
         conditions.append(FiscalRecord.status_fiscal == status)
     if situation:
         conditions.append(_fiscal_situation_sql() == situation)
-    search_clause = _proposal_search_clause(search)
+    search_clause = _proposal_search_clause(search, include_invoices=True)
     if search_clause is not None:
         conditions.append(search_clause)
     total = (await session.execute(select(func.count()).select_from(FiscalRecord).join(FiscalRecord.proposal).where(*conditions))).scalar_one()
@@ -2732,6 +3294,31 @@ def _fiscal_pending_weight(record: FiscalRecord) -> Decimal:
     ).quantize(Decimal("0.0001"))
 
 
+def _invoice_numbers(invoices) -> list[str]:
+    """Numeros das NFs ativas, na ordem de emissao e sem repetir. O numero
+    "REGISTRO-..." e um marcador gerado quando o usuario nao informou a NF, nao
+    um numero de nota: nao aparece."""
+    numbers: list[str] = []
+    for invoice in sorted((row for row in invoices if row.active), key=lambda row: (row.issued_at, row.id)):
+        number = str(invoice.invoice_number or "").strip()
+        if number and not number.startswith("REGISTRO-") and number not in numbers:
+            numbers.append(number)
+    return numbers
+
+
+async def _invoice_numbers_by_proposal(session: AsyncSession, proposal_ids: list[int]) -> dict[int, list[str]]:
+    """NFs das propostas de uma pagina, numa unica consulta (sem N+1)."""
+    if not proposal_ids:
+        return {}
+    rows = (await session.execute(
+        select(FiscalInvoice).where(FiscalInvoice.proposal_id.in_(proposal_ids), FiscalInvoice.active.is_(True))
+    )).scalars().all()
+    grouped: dict[int, list[FiscalInvoice]] = {}
+    for row in rows:
+        grouped.setdefault(int(row.proposal_id), []).append(row)
+    return {proposal_id: _invoice_numbers(invoices) for proposal_id, invoices in grouped.items()}
+
+
 def _fiscal_record_summary(record: FiscalRecord) -> FiscalRecordSummary:
     active_items = [item for item in record.items if item.active]
     pending = [item for item in active_items if item.status != "FATURADO"]
@@ -2770,6 +3357,7 @@ def _fiscal_record_summary(record: FiscalRecord) -> FiscalRecordSummary:
         weight_complete=coverage.complete,
         critical_pending=situation == "PENDENCIA_FISCAL_CRITICA",
         older_than_7_days=_fiscal_older_than_7_days(record),
+        invoice_numbers=_invoice_numbers(record.invoices),
         actions=_fiscal_actions(record),
     )
 
@@ -2930,6 +3518,10 @@ async def _merge_equal_status_partial_children(
     groups: dict[tuple, list[Proposal]] = {}
     for child in children:
         load_ids = tuple(sorted({int(row.load_id) for row in child.galvanization_load_items if row.active}))
+        if child.current_area == "EXPEDICAO" and child.source == "PARTIAL_REMANAGEMENT":
+            # Parte de remanejamento ja pronta na Expedicao: de qual carga as pecas vieram nao importa mais,
+            # as partes prontas se juntam (as de producao seguem a regra de sempre).
+            load_ids = ()
         key = (child.current_area, child.current_status, load_ids)
         groups.setdefault(key, []).append(child)
     for key, members in groups.items():
@@ -2938,15 +3530,10 @@ async def _merge_equal_status_partial_children(
         survivor = members[0]
         merged_ids: list[int] = []
         for merged in members[1:]:
-            for item in list(merged.items):
-                item.proposal = survivor
-                item.proposal_id = survivor.id
-                for load_item in item.galvanization_load_items:
-                    load_item.proposal = survivor
-                    load_item.proposal_id = survivor.id
-                if item.expedition_item is not None:
-                    item.expedition_item.proposal = survivor
-                    item.expedition_item.proposal_id = survivor.id
+            # Linhas do mesmo numero de item se juntam (remanejamento por linhas); se alguma nao puder se
+            # juntar, as duas partes continuam separadas.
+            if not await _absorb_rows(session, survivor, merged, actor, request_id=request_id):
+                continue
             merged.active = False
             merged_ids.append(int(merged.id))
             _touch(merged, actor)
@@ -2985,6 +3572,35 @@ async def _merge_equal_status_partial_children(
         )
 
 
+async def _absorb_rows(session: AsyncSession, survivor: Proposal, merged: Proposal, actor: User, *, request_id: str | None) -> bool:
+    """Passa as linhas de `merged` para `survivor`. Linha do mesmo numero de item que ja esta la se junta
+    (precisa ter o mesmo fluxo); se alguma nao puder se juntar nada e feito e devolve False."""
+    from api.app.modules.proposals.item_lots import rejoin_rows, rows_are_mergeable
+
+    resident = {row.item_number: row for row in survivor.items if row.active}
+    pairs = []
+    for item in merged.items:
+        if not item.active:
+            continue
+        match = resident.get(item.item_number)
+        if match is not None:
+            if not rows_are_mergeable(match, item):
+                return False
+            pairs.append((match, item))
+    for keep, other in pairs:
+        await rejoin_rows(session, keep, other, actor, request_id)
+    for item in list(merged.items):
+        item.proposal = survivor
+        item.proposal_id = survivor.id
+        for load_item in item.galvanization_load_items:
+            load_item.proposal = survivor
+            load_item.proposal_id = survivor.id
+        if item.expedition_item is not None:
+            item.expedition_item.proposal = survivor
+            item.expedition_item.proposal_id = survivor.id
+    return True
+
+
 async def _reborn_parent_when_children_converge(
     session: AsyncSession,
     child: Proposal,
@@ -3014,13 +3630,24 @@ async def _reborn_parent_when_children_converge(
     statuses = {row.current_status for row in active_children}
     if len(statuses) != 1:
         return None
+    # Mae que ainda tem linhas proprias (ex.: o resto do destino de um remanejamento, ainda na producao) esta
+    # operacional, nao "morta": nao renasce enquanto isso.
+    if any(item.active for item in parent.items):
+        return None
+    from api.app.modules.proposals.item_lots import rows_are_mergeable
+
+    seen: dict[str, ProposalItem] = {}
     for row in active_children:
-        for item in list(row.items):
-            item.proposal = parent
-            item.proposal_id = parent.id
-            if item.expedition_item is not None:
-                item.expedition_item.proposal = parent
-                item.expedition_item.proposal_id = parent.id
+        for item in row.items:
+            if not item.active:
+                continue
+            other = seen.get(item.item_number)
+            if other is not None and not rows_are_mergeable(other, item):
+                return None
+            seen.setdefault(item.item_number, item)
+    for row in active_children:
+        if not await _absorb_rows(session, parent, row, actor, request_id=request_id):
+            return None
         row.active = False
         _touch(row, actor)
         await _record_event(
@@ -3127,8 +3754,29 @@ async def _ensure_expedition_items_for_proposal(session: AsyncSession, proposal:
 
 
 async def _expedition_available_source(session: AsyncSession, item: ProposalItem) -> tuple[Decimal, str]:
-    if not item.active or item.delivered or not item.flow_defined:
+    available, origin = await _expedition_available_source_base(session, item)
+    if available > 0 and origin == "PRODUCAO":
+        # Linha que nasceu de um remanejamento por linhas (lote de pecas prontas recebido): a origem do
+        # material na Expedicao e o remanejamento, nao a producao.
+        is_lot = (await session.execute(
+            select(ProposalRemanagementItem.id).where(ProposalRemanagementItem.received_lot_item_id == item.id).limit(1)
+        )).first() is not None
+        if is_lot:
+            return available, "REMANEJAMENTO"
+    return available, origin
+
+
+async def _expedition_available_source_base(session: AsyncSession, item: ProposalItem) -> tuple[Decimal, str]:
+    if not item.active or item.delivered:
         return Decimal("0"), "PRODUCAO"
+    if not item.flow_defined:
+        # Sem fluxo definido o item nao fabrica nada, mas pode ter recebido pecas prontas de outro
+        # remanejamento (o destino continua com fluxo indefinido, so troca as pecas).
+        received = Decimal(str((await session.execute(
+            select(func.coalesce(func.sum(ProposalRemanagementItem.quantity), 0))
+            .where(ProposalRemanagementItem.destination_item_id == item.id, ProposalRemanagementItem.mode == "TRANSFER")
+        )).scalar_one() or "0")).quantize(Decimal("0.0001"))
+        return received, ("REMANEJAMENTO" if received > 0 else "PRODUCAO")
     production_out = Decimal(str((await session.execute(
         select(func.coalesce(func.sum(ProductionAllocationTransfer.quantity), 0))
         .where(ProductionAllocationTransfer.from_item_id == item.id)
@@ -3139,7 +3787,7 @@ async def _expedition_available_source(session: AsyncSession, item: ProposalItem
     )).scalar_one() or "0"))
     ready_received_by_remanagement = Decimal(str((await session.execute(
         select(func.coalesce(func.sum(ProposalRemanagementItem.quantity), 0))
-        .where(ProposalRemanagementItem.destination_item_id == item.id)
+        .where(ProposalRemanagementItem.destination_item_id == item.id, ProposalRemanagementItem.mode == "TRANSFER")
     )).scalar_one() or "0"))
     if not item.produced and production_in_completed <= 0 and ready_received_by_remanagement <= 0:
         return Decimal("0"), "PRODUCAO"
@@ -3151,14 +3799,18 @@ async def _expedition_available_source(session: AsyncSession, item: ProposalItem
             .where(GalvanizationLoadItem.active.is_(True))
             .where(GalvanizationLoad.status != "CANCELADA")
         )).scalar_one() or "0")).quantize(Decimal("0.0001"))
-        return returned, "GALVANIZACAO"
+        # + pronto recebido de outro remanejamento (o item galvanizado que recebe material pronto
+        # nao pode perder esse pronto quando a propria galvanizacao voltar).
+        origin = "MISTO" if ready_received_by_remanagement > 0 and returned > 0 else ("REMANEJAMENTO" if ready_received_by_remanagement > 0 else "GALVANIZACAO")
+        return (returned + ready_received_by_remanagement).quantize(Decimal("0.0001")), origin
     if item.requires_galvanization == "NAO":
         native_available = max(Decimal("0"), item.quantity - production_out) if item.produced else Decimal("0")
         available = (native_available + production_in_completed + ready_received_by_remanagement).quantize(Decimal("0.0001"))
         has_reallocation = production_in_completed > 0 or ready_received_by_remanagement > 0
         origin = "REMANEJAMENTO" if native_available <= 0 and has_reallocation else ("MISTO" if has_reallocation else "PRODUCAO")
         return available, origin
-    return Decimal("0"), "PRODUCAO"
+    # Fluxo de galvanizacao ainda indefinido: so conta o pronto recebido de remanejamento.
+    return ready_received_by_remanagement.quantize(Decimal("0.0001")), ("REMANEJAMENTO" if ready_received_by_remanagement > 0 else "PRODUCAO")
 
 
 def _active_expedition_items(proposal: Proposal) -> list[ExpeditionItem]:
@@ -3185,7 +3837,7 @@ def _expedition_sort_key(proposal: Proposal) -> int:
     return order.get(status, 99)
 
 
-def _expedition_summary(proposal: Proposal) -> ExpeditionProposalSummary:
+def _expedition_summary(proposal: Proposal, invoice_numbers: list[str] | None = None) -> ExpeditionProposalSummary:
     items = _all_expedition_items(proposal)
     active_items = [item for item in items if item.available_quantity > item.delivered_quantity + item.remanaged_quantity]
     available = sum((item.available_quantity for item in active_items), Decimal("0")).quantize(Decimal("0.0001"))
@@ -3209,12 +3861,13 @@ def _expedition_summary(proposal: Proposal) -> ExpeditionProposalSummary:
         delivered_quantity=delivered,
         pending_quantity=pending,
         origins=sorted({item.origin for item in active_items}),
+        invoice_numbers=list(invoice_numbers or []),
         actions=_expedition_actions(proposal),
     )
 
 
-def _expedition_detail(proposal: Proposal) -> ExpeditionProposalDetail:
-    summary = _expedition_summary(proposal).model_dump()
+def _expedition_detail(proposal: Proposal, invoice_numbers: list[str] | None = None) -> ExpeditionProposalDetail:
+    summary = _expedition_summary(proposal, invoice_numbers).model_dump()
     items = [_expedition_item_summary(item) for item in sorted(_all_expedition_items(proposal), key=lambda row: (row.proposal_item.item_number, row.id))]
     return ExpeditionProposalDetail(**summary, items=items)
 
@@ -3238,6 +3891,32 @@ def _expedition_item_summary(item: ExpeditionItem) -> ExpeditionItemSummary:
         origin=item.origin,
         status=item.status,
         version=item.version,
+    )
+
+
+def _expedition_item_row(item: ExpeditionItem, proposal: Proposal, proposal_item: ProposalItem) -> ExpeditionItemRow:
+    pending = (item.available_quantity - item.delivered_quantity - item.remanaged_quantity).quantize(Decimal("0.0001"))
+    return ExpeditionItemRow(
+        id=item.id,
+        proposal_id=item.proposal_id,
+        proposal_item_id=item.proposal_item_id,
+        item_number=proposal_item.item_number,
+        product_code=proposal_item.product_code,
+        description=proposal_item.description,
+        unit=proposal_item.unit,
+        available_quantity=item.available_quantity,
+        separated_quantity=item.separated_quantity,
+        delivered_quantity=item.delivered_quantity,
+        remanaged_quantity=item.remanaged_quantity,
+        pending_quantity=max(Decimal("0.0000"), pending),
+        origin=item.origin,
+        status=item.status,
+        version=item.version,
+        proposal_number=proposal.proposal_number,
+        proposal_version=proposal.version,
+        customer_name=proposal.customer_name,
+        project_name=proposal.project_name,
+        lot=proposal.lot,
     )
 
 
@@ -3571,7 +4250,7 @@ async def list_proposal_history(
         rows.append(_proposal_history_item("fiscal", event, event_proposal_id, proposals_by_id, users_by_id, area="FISCAL"))
 
     rows.sort(key=lambda item: (item.created_at, item.source, item.id), reverse=True)
-    return rows[offset:offset + limit]
+    return _group_history_rows(rows)[offset:offset + limit]
 
 
 def _proposal_history_item(
@@ -3598,6 +4277,11 @@ def _proposal_history_item(
         actor_user_id=event.actor_user_id,
         actor_name=actor.display_name if actor else None,
         observation=_history_observation(metadata),
+        title=_activity_headline(
+            event.event_type, actor.display_name if actor else None, metadata,
+            getattr(event, "from_status", None), getattr(event, "to_status", None),
+        ),
+        detail=_history_detail(metadata),
         request_id=event.request_id,
         created_at=event.created_at,
     )
@@ -3620,6 +4304,11 @@ def _actor_label(actor_name: str | None) -> str:
 def _reason_suffix(metadata: dict) -> str:
     reason = metadata.get("reason")
     return f" ({reason})" if reason else ""
+
+
+def _code_suffix(metadata: dict) -> str:
+    code = metadata.get("code")
+    return f" ({code})" if code else ""
 
 
 ACTIVITY_TEMPLATES = {
@@ -3678,7 +4367,91 @@ ACTIVITY_TEMPLATES = {
     "FISCAL_BATCH_CONFIRMED": lambda who, md: f"{who} confirmou o lote de emissoes fiscais.",
     "FISCAL_INVOICE_ITEM_CANCELLED": lambda who, md: f"{who} cancelou um item da nota fiscal{_reason_suffix(md)}.",
     "FISCAL_INVOICE_WITHDRAWN": lambda who, md: f"{who} registrou a retirada da nota fiscal.",
+    "PROPOSAL_ITEM_CREATED": lambda who, md: (
+        f"{who} incluiu o item {md['item_number']} na proposta." if md.get("item_number") else f"{who} incluiu um item na proposta."
+    ),
+    "PROPOSAL_ITEM_DELETED": lambda who, md: (
+        f"{who} excluiu o item {md['item_number']} da proposta." if md.get("item_number") else f"{who} excluiu um item da proposta."
+    ),
+    "EXPEDITION_ITEM_RETURNED_TO_PRODUCTION": lambda who, md: (
+        f"{who} devolveu {format_quantity(md.get('quantity'))} unidade(s) da expedicao para a producao{_reason_suffix(md)}."
+    ),
+    "COMPENSATED_REMANAGEMENT_READY_SENT": lambda who, md: (
+        f"{who} cedeu {format_quantity(md.get('quantity'))} unidade(s) prontas para outra proposta (remanejamento)."
+    ),
+    "COMPENSATED_REMANAGEMENT_READY_RECEIVED": lambda who, md: (
+        f"{who} recebeu {format_quantity(md.get('quantity'))} unidade(s) prontas de outra proposta (remanejamento)."
+    ),
+    "GALVANIZATION_ITEM_OWNER_CHANGED": lambda who, md: (
+        f"{who} {'passou' if md.get('direction') == 'OUT' else 'recebeu'} {format_quantity(md.get('quantity'))} unidade(s) "
+        f"{'para outra proposta' if md.get('direction') == 'OUT' else 'de outra proposta'} na carga de galvanizacao (remanejamento)."
+    ),
+    "COMPENSATED_REMANAGEMENT_APPLIED": lambda who, md: (
+        f"{who} remanejou itens desta proposta para outra{_code_suffix(md)}{_reason_suffix(md)}."
+    ),
+    "COMPENSATED_REMANAGEMENT_RECEIVED": lambda who, md: (
+        f"{who} recebeu itens remanejados de outra proposta{_code_suffix(md)}{_reason_suffix(md)}."
+    ),
+    "EXPEDITION_RETURN_TO_PRODUCTION": lambda who, md: f"{who} devolveu itens da expedicao para a producao{_reason_suffix(md)}.",
+    "REALLOCATED_PRODUCTION_COMPLETED": lambda who, md: (
+        f"{who} concluiu a producao de {format_quantity(md.get('quantity'))} unidade(s) remanejadas."
+    ),
+    "GALVANIZATION_PROPOSAL_RETURN_RECALCULATED": lambda who, md: f"{who} recalculou o retorno da galvanizacao da proposta.",
+    "GALVANIZATION_RETURN_RECORDED_AFTER_CANCELLATION": lambda who, md: f"{who} registrou o retorno da galvanizacao apos o cancelamento.",
 }
+
+# Frase para varios eventos iguais (mesmo autor e mesma requisicao) numa linha so.
+# Tipos fora desta tabela usam a frase singular com o total no fim.
+ACTIVITY_GROUP_TEMPLATES = {
+    "PRODUCTION_ITEM_FLOW_UPDATED": lambda who, n: f"{who} definiu o fluxo de producao de {n} itens.",
+    "PRODUCTION_ITEM_COMPLETED": lambda who, n: f"{who} concluiu a producao de {n} itens.",
+    "PRODUCTION_ITEM_WEIGHT_UPDATED": lambda who, n: f"{who} atualizou o peso de {n} itens.",
+    "PROPOSAL_ITEM_CREATED": lambda who, n: f"{who} incluiu {n} itens na proposta.",
+    "PROPOSAL_ITEM_DELETED": lambda who, n: f"{who} excluiu {n} itens da proposta.",
+    "PROPOSAL_ITEM_UPDATED": lambda who, n: f"{who} editou {n} itens da proposta.",
+    "GALVANIZATION_ITEM_SENT": lambda who, n: f"{who} enviou {n} itens para galvanizacao.",
+    "GALVANIZATION_ITEM_RETURNED": lambda who, n: f"{who} registrou o retorno de {n} itens da galvanizacao.",
+    "EXPEDITION_ITEM_SEPARATED": lambda who, n: f"{who} separou {n} itens para entrega.",
+    "EXPEDITION_ITEM_DELIVERED": lambda who, n: f"{who} registrou a entrega de {n} itens.",
+}
+
+
+def _history_detail(metadata: dict) -> str | None:
+    """Complemento legivel do evento: so campos conhecidos e em texto simples,
+    nunca o dict de metadata (diferente de _history_observation)."""
+    for key in ("observation", "reason"):
+        value = metadata.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _group_headline(event_type: str, actor_name: str | None, count: int, single_headline: str) -> str:
+    template = ACTIVITY_GROUP_TEMPLATES.get(event_type)
+    if template is not None:
+        return template(_actor_label(actor_name), count)
+    return f"{single_headline.rstrip('.')} ({count} registros)."
+
+
+def _group_history_rows(rows: list[ProposalHistoryItem]) -> list[ProposalHistoryItem]:
+    """Funde linhas seguidas do mesmo evento, autor, proposta e requisicao (ou,
+    sem requisicao, do mesmo segundo) - um lote de itens vira uma linha."""
+    heads: dict[tuple, ProposalHistoryItem] = {}
+    singles: dict[tuple, str] = {}
+    for row in rows:
+        key = (
+            row.proposal_id, row.source, row.event_type, row.actor_user_id, row.to_status,
+            row.request_id or row.created_at.replace(microsecond=0).isoformat(),
+        )
+        head = heads.get(key)
+        if head is None:
+            heads[key] = row
+            singles[key] = row.title or ""
+            continue
+        head.count += 1
+        head.detail = None
+        head.title = _group_headline(head.event_type, head.actor_name, head.count, singles[key])
+    return list(heads.values())
 
 
 def _activity_headline(event_type: str, actor_name: str | None, metadata: dict, from_status: str | None, to_status: str | None) -> str:
@@ -4381,6 +5154,13 @@ async def complete_production_items(session: AsyncSession, proposal_id: int, pay
             transfer.completed_by = actor.id
             transfer.completed_at = datetime.now(UTC)
             transfer.version += 1
+            if item.requires_galvanization == "SIM":
+                # Reposicao de item galvanizado: as pecas recem-fabricadas seguem para a galvanizacao
+                # (entram na esteira do item) e so ficam prontas na Expedicao quando voltarem.
+                item.galvanized = False
+                _touch(item, actor)
+                await _record_event(session, proposal, "REALLOCATED_PRODUCTION_COMPLETED", actor, item_id=item.id, request_id=request_id, metadata={"transfer_id": transfer.id, "quantity": str(transfer_pending), "from_item_id": transfer.from_item_id, "to_item_id": transfer.to_item_id, "next_stage": "GALVANIZACAO"})
+                continue
             exp_item = item.expedition_item
             if exp_item is None:
                 exp_item = ExpeditionItem(
@@ -4569,6 +5349,12 @@ async def complete_production_items(session: AsyncSession, proposal_id: int, pay
     )
     if partial_child is not None:
         await _merge_equal_status_partial_children(session, proposal.id, actor, request_id=request_id)
+    if proposal.parent_proposal_id is not None:
+        # Uma parte (filha) que acabou de fabricar e chegou na Expedicao pode ja se juntar as outras partes
+        # e fazer a mae renascer (parte de remanejamento que nao passa pela galvanizacao).
+        await session.flush()
+        await _merge_equal_status_partial_children(session, int(proposal.parent_proposal_id), actor, request_id=request_id)
+        await _reborn_parent_when_children_converge(session, proposal, actor, request_id=request_id)
     await session.commit()
     return _production_detail(await get_proposal(session, proposal.id))
 
@@ -5368,7 +6154,8 @@ async def _galvanization_available_quantity(session: AsyncSession, item: Proposa
     if exclude_load_id is not None:
         stmt = stmt.where(GalvanizationLoadItem.load_id != exclude_load_id)
     sent = Decimal(str((await session.execute(stmt)).scalar_one() or "0"))
-    return max(Decimal("0"), (item.quantity - sent)).quantize(Decimal("0.0001"))
+    pipeline = (await load_pipeline_quantities(session, [item]))[int(item.id)]
+    return max(Decimal("0"), (pipeline - sent)).quantize(Decimal("0.0001"))
 
 
 async def _galvanization_quantities(session: AsyncSession, item_ids: list[int]) -> dict[int, tuple[Decimal, Decimal]]:
@@ -5442,6 +6229,7 @@ def _selected_return_items(load: GalvanizationLoad, payload: GalvanizationReturn
 async def _recalculate_galvanization_proposal_state(session: AsyncSession, proposal: Proposal, actor: User, *, request_id: str | None, load_id: int, observation: str | None) -> None:
     _ensure_proposal_not_cancelled(proposal)
     galv_items = [item for item in _active_items(proposal) if item.requires_galvanization == "SIM"]
+    pipelines = await load_pipeline_quantities(session, galv_items)
     returned = []
     partial = False
     for item in galv_items:
@@ -5452,7 +6240,7 @@ async def _recalculate_galvanization_proposal_state(session: AsyncSession, propo
             .where(GalvanizationLoadItem.active.is_(True))
             .where(GalvanizationLoad.status != "CANCELADA")
         )).scalar_one() or "0"))
-        if total_returned >= item.quantity:
+        if total_returned >= pipelines[int(item.id)]:
             item.galvanized = True
             _touch(item, actor)
             returned.append(item)
@@ -5689,8 +6477,19 @@ def _loaded_item_balance(item: ProposalItem):
     )
 
 
+def _hosts_reallocated_production(item: ProposalItem) -> bool:
+    """Item que NAO produz internamente (ex.: so galvaniza), mas ficou devendo pecas a fabricar por
+    causa de um remanejamento (fluxos diferentes): enquanto elas nao forem feitas, a producao delas
+    acontece nele, como em qualquer item de producao interna."""
+    return (
+        item.produce_internally != "SIM"
+        and item.flow_defined
+        and _loaded_item_balance(item).production_reallocated_in_pending > 0
+    )
+
+
 def _internal_items(proposal: Proposal) -> list[ProposalItem]:
-    return [item for item in _active_items(proposal) if item.produce_internally == "SIM"]
+    return [item for item in _active_items(proposal) if item.produce_internally == "SIM" or _hosts_reallocated_production(item)]
 
 
 def _items_by_id(proposal: Proposal) -> dict[int, ProposalItem]:
@@ -5719,6 +6518,7 @@ def _production_queue_items(proposal: Proposal) -> list[ProposalItem]:
     return [
         item for item in _active_items(proposal)
         if item.produce_internally == "SIM"
+        or _hosts_reallocated_production(item)
         or not item.flow_defined
         or item.produce_internally == "INDEFINIDO"
         or item.requires_galvanization == "INDEFINIDO"

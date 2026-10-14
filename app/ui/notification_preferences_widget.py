@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
@@ -24,7 +25,7 @@ _SEVERITY_LABEL = {"info": "Info", "normal": "Normal", "alta": "Alta", "critica"
 
 class NotificationPreferencesWidget(QWidget):
     """Preferencias de notificacao do usuario (Fase 10): canal por categoria,
-    severidade minima de e-mail e horario de silencio. Fala com
+    severidade minima de e-mail e horario de silêncio. Fala com
     /api/v1/notifications/preferences e /settings via o backend adapter."""
 
     def __init__(self, service, parent=None, *, auto_load: bool = True):
@@ -53,12 +54,36 @@ class NotificationPreferencesWidget(QWidget):
         self.grid.setVerticalSpacing(6)
         for col, text in enumerate(["Categoria", "No app", "Bandeja", "E-mail", "E-mail a partir de"]):
             header = QLabel(text)
-            header.setStyleSheet("font-weight: 700; font-size: 11px;")
+            header.setObjectName("ColumnHeader")
             self.grid.addWidget(header, 0, col)
         layout.addLayout(self.grid)
 
-        quiet_title = QLabel("Horario de silencio")
-        quiet_title.setStyleSheet("font-weight: 800; font-size: 13px; margin-top: 8px;")
+        layout.addSpacing(8)
+        report_title = QLabel("Relatório diário por e-mail")
+        report_title.setObjectName("PanelTitle")
+        layout.addWidget(report_title)
+        report_row = QHBoxLayout()
+        report_row.setSpacing(8)
+        self.report_enabled = QCheckBox("Receber o resumo do dia nos dias úteis")
+        self.report_enabled.setChecked(True)
+        self.report_hour = QSpinBox()
+        self.report_hour.setRange(0, 23)
+        self.report_hour.setValue(7)
+        self.report_hour.setSuffix(" h")
+        self.report_hour.setMaximumWidth(80)
+        self.report_enabled.toggled.connect(self.report_hour.setEnabled)
+        report_row.addWidget(self.report_enabled)
+        report_row.addWidget(QLabel("a partir das"))
+        report_row.addWidget(self.report_hour)
+        report_row.addStretch()
+        layout.addLayout(report_row)
+        report_hint = QLabel("Resume produção, galvanização, expedição e pendências. Dias sem movimento não geram e-mail.")
+        report_hint.setObjectName("Caption")
+        layout.addWidget(report_hint)
+
+        layout.addSpacing(8)
+        quiet_title = QLabel("Horário de silêncio")
+        quiet_title.setObjectName("PanelTitle")
         layout.addWidget(quiet_title)
         quiet_row = QHBoxLayout()
         quiet_row.setSpacing(8)
@@ -79,14 +104,14 @@ class NotificationPreferencesWidget(QWidget):
         quiet_row.addStretch()
         layout.addLayout(quiet_row)
 
-        hint = QLabel("Notificacoes criticas sempre furam o horario de silencio.")
+        hint = QLabel("Notificações críticas sempre furam o horário de silêncio.")
         hint.setObjectName("Caption")
         layout.addWidget(hint)
 
         actions = QHBoxLayout()
         self.reload_btn = ModernButton("Recarregar", "refresh")
         self.reload_btn.clicked.connect(self.load)
-        self.save_btn = ModernButton("Salvar preferencias", "save", accent=True)
+        self.save_btn = ModernButton("Salvar preferências", "save", accent=True)
         self.save_btn.clicked.connect(self.save)
         actions.addWidget(self.reload_btn)
         actions.addStretch()
@@ -157,13 +182,18 @@ class NotificationPreferencesWidget(QWidget):
         channels = set((settings or {}).get("quiet_channels") or [])
         self.quiet_tray.setChecked("tray" in channels)
         self.quiet_email.setChecked("email" in channels)
+        enabled = (settings or {}).get("daily_report_enabled")
+        self.report_enabled.setChecked(True if enabled is None else bool(enabled))
+        hour = (settings or {}).get("daily_report_hour")
+        if hour is not None:
+            self.report_hour.setValue(int(hour))
         self._loaded = True
         self.status_label.setText("")
         self.save_btn.setEnabled(True)
 
     def _on_error(self, exc) -> None:
         log.warning("Falha ao carregar preferencias de notificacao | %s", exc)
-        self.status_label.setText("Nao foi possivel carregar. Tente recarregar.")
+        self.status_label.setText("Não foi possível carregar. Tente recarregar.")
         self.save_btn.setEnabled(True)
 
     def save(self) -> None:
@@ -188,6 +218,8 @@ class NotificationPreferencesWidget(QWidget):
             "quiet_start": self.quiet_start.text().strip() or None,
             "quiet_end": self.quiet_end.text().strip() or None,
             "quiet_channels": quiet_channels,
+            "daily_report_enabled": self.report_enabled.isChecked(),
+            "daily_report_hour": self.report_hour.value(),
         }
         self.status_label.setText("Salvando...")
         self.save_btn.setEnabled(False)
@@ -200,7 +232,7 @@ class NotificationPreferencesWidget(QWidget):
         self._run(_work, lambda _r: self._after_save(), self._on_error)
 
     def _after_save(self) -> None:
-        self.status_label.setText("Preferencias salvas.")
+        self.status_label.setText("Preferências salvas.")
         self.save_btn.setEnabled(True)
 
     def _run(self, work, on_success, on_error) -> None:

@@ -120,7 +120,7 @@ class MaintenanceModeDialogTests(unittest.TestCase):
     def test_missing_maintenance_info_falls_back_to_generic_message(self):
         result = CompatibilityCheckResult(CompatibilityStatus.MAINTENANCE, "3.0.0", dto=None)
         dialog = MaintenanceModeDialog(lambda: result, result, auto_start_timer=False)
-        self.assertIn("manutencao", dialog.message_label.text().lower())
+        self.assertIn("manutenção", dialog.message_label.text().lower())
 
 
 if __name__ == "__main__":

@@ -19,8 +19,8 @@ from app.ui.components.modern_button import ModernButton
 from app.ui.background_worker import start_worker
 from app.ui.dialog_utils import apply_large_dialog_geometry, style_dialog_from_parent
 from app.ui.icons import IconSize, status_icon
-from app.ui.item_selection_dialog import ItemSelectionDialog
-from app.ui.production_registration_dialog import ProductionRegistrationDialog
+from app.ui.delivery_wizard import DeliveryWizardDialog
+from app.ui.production_wizard import ProductionWizardDialog
 
 
 class BatchStatusDialog(QDialog):
@@ -46,7 +46,7 @@ class BatchStatusDialog(QDialog):
         self.strict_preselection = strict_preselection
         self.invalid_preselected_ids: list[int] = []
         self.default_area = area
-        self.setWindowTitle("Acoes em lote")
+        self.setWindowTitle("Ações em lote")
         apply_large_dialog_geometry(self, parent)
         style_dialog_from_parent(self, parent)
         self._build()
@@ -86,11 +86,11 @@ class BatchStatusDialog(QDialog):
         self.area_combo.setCurrentIndex(max(0, idx))
         self.status_filter = QComboBox()
         self.status_filter.setMinimumWidth(220)
-        search_btn = ModernButton("Pesquisar", "search", accent=True)
+        search_btn = ModernButton("Pesquisar", "search")
         search_btn.clicked.connect(self.load_candidates)
         top.addWidget(QLabel("Buscar"))
         top.addWidget(self.search, 1)
-        top.addWidget(QLabel("Area"))
+        top.addWidget(QLabel("Área"))
         top.addWidget(self.area_combo)
         top.addWidget(QLabel("Status"))
         top.addWidget(self.status_filter)
@@ -109,7 +109,7 @@ class BatchStatusDialog(QDialog):
 
         actions = QVBoxLayout()
         actions.addSpacing(58)
-        self.add_btn = ModernButton("Adicionar", "new", accent=True)
+        self.add_btn = ModernButton("Adicionar", "new")
         self.remove_btn = ModernButton("Remover", "remove")
         self.add_btn.clicked.connect(self.add_candidates)
         self.remove_btn.clicked.connect(self.remove_selected)
@@ -125,10 +125,10 @@ class BatchStatusDialog(QDialog):
         self.status_combo = QComboBox()
         self.status_combo.setMinimumWidth(260)
         self.observation = QLineEdit()
-        self.observation.setPlaceholderText("Observacao para o lote")
-        bottom.addWidget(QLabel("Acao"))
+        self.observation.setPlaceholderText("Observação para o lote")
+        bottom.addWidget(QLabel("Ação"))
         bottom.addWidget(self.status_combo)
-        bottom.addWidget(QLabel("Observacao"))
+        bottom.addWidget(QLabel("Observação"))
         bottom.addWidget(self.observation, 1)
         root.addLayout(bottom)
 
@@ -141,7 +141,7 @@ class BatchStatusDialog(QDialog):
         self.progress_bar.setTextVisible(False)
         self.progress_bar.setMaximumWidth(150)
         self.progress_bar.setVisible(False)
-        self.cancel_button = ModernButton("Cancelar", "clear")
+        self.cancel_button = ModernButton("Cancelar", "clear", variant="ghost")
         self.apply_button = ModernButton("Aplicar lote", "batch", accent=True)
         self.cancel_button.clicked.connect(self.reject)
         self.apply_button.clicked.connect(self.apply_batch)
@@ -234,7 +234,7 @@ class BatchStatusDialog(QDialog):
     def add_candidates(self):
         ids = self._table_ids(self.candidates)
         if not ids:
-            QMessageBox.warning(self, "Acoes em lote", "Selecione uma ou mais propostas encontradas.")
+            QMessageBox.warning(self, "Ações em lote", "Selecione uma ou mais propostas encontradas.")
             return
         for process_id in ids:
             self._add_process(process_id)
@@ -298,11 +298,11 @@ class BatchStatusDialog(QDialog):
             )
             return
         if not self.selected_ids:
-            QMessageBox.warning(self, "Acoes em lote", "Adicione pelo menos uma proposta na lista.")
+            QMessageBox.warning(self, "Ações em lote", "Adicione pelo menos uma proposta na lista.")
             return
         status = self.status_combo.currentData()
         if not status:
-            QMessageBox.warning(self, "Acoes em lote", "Nao existe uma acao comum para as propostas selecionadas.")
+            QMessageBox.warning(self, "Ações em lote", "Não existe uma ação comum para as propostas selecionadas.")
             return
         area = self.current_area()
         if self.strict_preselection and not self._revalidate_before_apply(area, status):
@@ -317,28 +317,27 @@ class BatchStatusDialog(QDialog):
         produced_weights = {}
         if status in ("__REGISTER_PRODUCTION__", "__REGISTER_DELIVERY__"):
             if status == "__REGISTER_PRODUCTION__":
-                dialog = ProductionRegistrationDialog(self.service, list(self.selected_ids), self, observation=self.observation.text().strip())
-                if dialog.exec():
+                parent = self.parentWidget() or self
+                observation = self.observation.text().strip()
+                self.hide()
+                wizard = ProductionWizardDialog(self.service, list(self.selected_ids), parent, observation=observation)
+                wizard.exec()
+                if wizard.registered:
                     self.accept()
+                else:
+                    self.reject()
                 return
-            for process_id in self.selected_ids:
-                process = self.service.get_process_dict(process_id)
-                available = self.service.proposal_items(process_id, pending_delivery=True)
-                if not available:
-                    target_statuses[process_id] = "ENTREGUE"
-                    continue
-                selector = ItemSelectionDialog(
-                    self.service,
-                    process_id,
-                    "delivery",
-                    self,
-                    allow_full_selection=True,
-                )
-                selector.setWindowTitle(f"Retirada | {process.get('proposta') or process_id}")
-                if not selector.exec():
-                    return
-                item_selections[process_id] = selector.selected_ids
-                target_statuses[process_id] = "ENTREGUE" if len(selector.selected_ids) == len(available) else "ENTREGUE_PARCIAL"
+            # Retirada: assistente em uma janela so (itens, revisao e conclusao); este dialogo sai da tela.
+            parent = self.parentWidget() or self
+            observation = self.observation.text().strip()
+            self.hide()
+            wizard = DeliveryWizardDialog(self.service, list(self.selected_ids), parent, observation=observation)
+            wizard.exec()
+            if wizard.registered:
+                self.accept()
+            else:
+                self.reject()
+            return
         if QMessageBox.question(
             self,
             "Acoes em lote",
@@ -374,13 +373,13 @@ class BatchStatusDialog(QDialog):
             if failures:
                 QMessageBox.warning(
                     self, "Acoes em lote",
-                    f"{changed} proposta(s) alterada(s).\n\nNao alteradas:\n" + "\n".join(failures[:12]),
+                    f"{changed} proposta(s) alterada(s).\n\nNão alteradas:\n" + "\n".join(failures[:12]),
                 )
             self.accept()
 
         def error(exc):
             self._set_busy(False)
-            QMessageBox.warning(self, "Acoes em lote", str(exc))
+            QMessageBox.warning(self, "Ações em lote", str(exc))
 
         self._worker = start_worker(
             self, operation, success, error, operation_name="batch_status.apply_batch"

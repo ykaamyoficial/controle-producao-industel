@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,13 +24,15 @@ from app.integrations.api.client import DesktopApiClient
 from app.integrations.api.config import DesktopApiConfigStore, normalize_api_base_url
 from app.integrations.api.exceptions import ApiClientError
 from app.services.app_logging import get_logger
-from app.services.app_paths import is_packaged
+from app.services.app_paths import get_install_root, get_launcher_path, is_packaged
 from app.updater.manifest_gate import ManifestGateError, build_update_request, download_and_verify_artifact, fetch_and_validate_manifest
 from app.updater.manifest import ManifestValidationError
 from app.updater.manifest_provider import HttpManifestProvider, ManifestFetchError
 from app.updater.manifest_store import LastKnownGoodManifestStore
 from app.updater.paths import download_dir, manifest_dir, quarantine_dir
+from app.updater import versions
 from app.updater.process_control import launch_detached_process
+from app.updater.status import PHASE_STAGED, UpdateStatus, read_status
 from app.version import APP_VERSION
 
 log = get_logger("update_coordinator")
@@ -56,6 +59,12 @@ class UpdateCoordinator:
         current_pid_provider=None,
         install_dir: str | None = None,
         executable_path: str | None = None,
+        versioned_layout: bool | None = None,
+        status_reader=read_status,
+        sleep=time.sleep,
+        clock=time.monotonic,
+        status_start_timeout_seconds: float = 120.0,
+        status_stall_timeout_seconds: float = 180.0,
     ):
         self._config_store_factory = config_store_factory
         self._client_factory = client_factory
@@ -65,6 +74,26 @@ class UpdateCoordinator:
         self._current_pid_provider = current_pid_provider or os.getpid
         self._install_dir = install_dir
         self._executable_path = executable_path
+        self._versioned_layout = versioned_layout
+        self._status_reader = status_reader
+        self._sleep = sleep
+        self._clock = clock
+        self._status_start_timeout = status_start_timeout_seconds
+        self._status_stall_timeout = status_stall_timeout_seconds
+        self._progress_callback = None
+
+    def set_progress_callback(self, callback) -> None:
+        """callback(texto, percentual 0-100), chamado da thread que executa a atualizacao."""
+        self._progress_callback = callback
+
+    def _progress(self, text: str, percent: int) -> None:
+        if self._progress_callback is not None:
+            self._progress_callback(text, max(0, min(100, int(percent))))
+
+    def _is_versioned(self) -> bool:
+        if self._versioned_layout is not None:
+            return self._versioned_layout
+        return is_packaged() and versions.is_versioned_layout(get_install_root())
 
     def start_required_update(self, *, expected_version: str | None = None) -> UpdateLaunchResult:
         """Ponto de entrada usado pela UI (Secao 17/18): nao recebe URLs --
@@ -129,6 +158,13 @@ class UpdateCoordinator:
             return UpdateLaunchResult(False, request_id, None, error_message=str(exc))
 
         download_kwargs = {} if self._downloader is None else {"downloader": self._downloader}
+        if self._progress_callback is not None:
+            def _download_progress(received: int, total: int | None) -> None:
+                if total:
+                    self._progress("Baixando a atualizacao", 5 + int(25 * received / total))
+
+            download_kwargs["progress"] = _download_progress
+        self._progress("Baixando a atualizacao", 5)
         try:
             artifact_path = download_and_verify_artifact(
                 manifest, download_dir(request_id), quarantine_dir(), source=absolute_package_url, **download_kwargs,
@@ -147,6 +183,8 @@ class UpdateCoordinator:
         request.save(request_path)
 
         updater_executable, updater_args = self._updater_launch_command(request_path)
+        if self._is_versioned():
+            return self._stage_then_activate(request, manifest.release_version, updater_executable, updater_args)
         try:
             pid = self._process_launcher(updater_executable, updater_args)
         except OSError as exc:
@@ -159,9 +197,63 @@ class UpdateCoordinator:
         )
         return UpdateLaunchResult(True, request_id, pid, target_version=manifest.release_version)
 
+    def _stage_then_activate(self, request, target_version: str, updater_executable: Path, updater_args: list[str]) -> UpdateLaunchResult:
+        """Layout versionado: o Updater prepara a versao nova ENQUANTO este
+        Desktop segue aberto (progresso e erros aparecem no dialogo); so depois
+        de preparada e validada e que a ativacao fecha o programa."""
+        request_id = request.request_id
+        try:
+            self._process_launcher(updater_executable, [*updater_args, "--stage"])
+        except OSError as exc:
+            log.error("update_coordinator_launch_failed | fase=stage | erro=%s", exc)
+            return UpdateLaunchResult(False, request_id, None, target_version=target_version, error_message=f"Falha ao iniciar o Updater: {exc}")
+
+        status = self._wait_for_staging(request_id)
+        if status is None:
+            return UpdateLaunchResult(
+                False, request_id, None, target_version=target_version,
+                error_message="O Updater nao respondeu. Se aparecer um pedido de permissao do Windows, aceite e tente novamente.",
+            )
+        if status.phase != PHASE_STAGED:
+            detail = status.error or status.message
+            log.error("update_coordinator_stage_failed | request_id=%s | phase=%s | erro=%s", request_id, status.phase, detail)
+            message = f"{status.message} ({status.error})" if status.error else status.message
+            return UpdateLaunchResult(False, request_id, None, target_version=target_version, error_message=message)
+
+        self._progress("Reiniciando para concluir a atualizacao", 95)
+        try:
+            pid = self._process_launcher(updater_executable, [*updater_args, "--activate"])
+        except OSError as exc:
+            log.error("update_coordinator_launch_failed | fase=activate | erro=%s", exc)
+            return UpdateLaunchResult(False, request_id, None, target_version=target_version, error_message=f"Falha ao iniciar o Updater: {exc}")
+        log.info("update_coordinator_launched | request_id=%s | updater_pid=%s | target_version=%s | layout=versioned", request_id, pid, target_version)
+        return UpdateLaunchResult(True, request_id, pid, target_version=target_version)
+
+    def _wait_for_staging(self, request_id: str) -> UpdateStatus | None:
+        started = self._clock()
+        last_change = started
+        last_seen: tuple[str, int] | None = None
+        while True:
+            status = self._status_reader(request_id)
+            now = self._clock()
+            if status is not None:
+                key = (status.phase, status.percent)
+                if key != last_seen:
+                    last_seen, last_change = key, now
+                    self._progress(status.message, 30 + int(status.percent * 0.6))
+                if status.is_terminal:
+                    return status
+                if now - last_change > self._status_stall_timeout:
+                    return None
+            elif now - started > self._status_start_timeout:
+                return None
+            self._sleep(0.5)
+
     def _resolve_install_paths(self) -> tuple[str, str]:
         if self._install_dir is not None and self._executable_path is not None:
             return self._install_dir, self._executable_path
+        if self._is_versioned():
+            return str(get_install_root()), str(get_launcher_path())
         exe_path = Path(sys.executable).resolve()
         return str(exe_path.parent), str(exe_path)
 

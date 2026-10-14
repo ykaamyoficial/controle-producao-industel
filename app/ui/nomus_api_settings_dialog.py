@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
 
 from app.services.nomus_api_config import NomusApiConfigError, NomusApiConfigStore
 from app.ui.background_worker import start_worker
+from app.ui.components.dialog_shell import dialog_footer, dialog_header
 from app.ui.components.modern_button import ModernButton
 from app.ui.dialog_utils import style_dialog_from_parent
 
@@ -51,16 +52,12 @@ class NomusIntegrationSettingsWidget(QWidget):
         root.setSpacing(14)
 
         if show_header:
-            title = QLabel("Integracao Nomus")
-            title.setStyleSheet("font-size: 20px; font-weight: 800;")
+            title = QLabel("Integração Nomus")
             subtitle = QLabel(
                 "Configure a chave REST e valide tecnicamente o acesso. "
-                "Nenhuma proposta sera importada nesta etapa."
+                "Nenhuma proposta será importada nesta etapa."
             )
-            subtitle.setObjectName("Caption")
-            subtitle.setWordWrap(True)
-            root.addWidget(title)
-            root.addWidget(subtitle)
+            root.addWidget(dialog_header(title, subtitle))
 
         form = QFrame()
         form.setObjectName("Panel")
@@ -70,7 +67,7 @@ class NomusIntegrationSettingsWidget(QWidget):
         grid.setVerticalSpacing(12)
         grid.setColumnStretch(1, 1)
 
-        self.enabled_check = QCheckBox("Ativar integracao com o Nomus")
+        self.enabled_check = QCheckBox("Ativar integração com o Nomus")
         grid.addWidget(self.enabled_check, 0, 0, 1, 2)
 
         grid.addWidget(QLabel("URL base da API"), 1, 0)
@@ -104,8 +101,8 @@ class NomusIntegrationSettingsWidget(QWidget):
         status_layout = QVBoxLayout(status)
         status_layout.setContentsMargins(18, 14, 18, 14)
         status_layout.setSpacing(8)
-        status_title = QLabel("Ultimo teste")
-        status_title.setStyleSheet("font-weight: 800;")
+        status_title = QLabel("Último teste")
+        status_title.setObjectName("ValueLabel")
         self.last_test = QLabel("Nenhum teste executado.")
         self.last_test.setWordWrap(True)
         status_layout.addWidget(status_title)
@@ -113,19 +110,17 @@ class NomusIntegrationSettingsWidget(QWidget):
         root.addWidget(status)
         root.addStretch()
 
-        footer = QHBoxLayout()
-        self.test_btn = ModernButton("Testar conexao", "refresh")
+        self.test_btn = ModernButton("Testar conexão", "refresh")
         self.test_btn.clicked.connect(self.test_connection)
-        footer.addWidget(self.test_btn)
-        footer.addStretch()
+        footer_buttons = []
         if show_cancel:
-            cancel = ModernButton("Cancelar", "close")
+            cancel = ModernButton("Cancelar", "close", variant="ghost")
             cancel.clicked.connect(self.cancel_requested)
-            footer.addWidget(cancel)
+            footer_buttons.append(cancel)
         self.save_btn = ModernButton("Salvar", "save", accent=True)
         self.save_btn.clicked.connect(self.save)
-        footer.addWidget(self.save_btn)
-        root.addLayout(footer)
+        footer_buttons.append(self.save_btn)
+        root.addWidget(dialog_footer(left=[self.test_btn], right=footer_buttons))
 
     def _get_store(self) -> NomusApiConfigStore:
         if self.store is None:
@@ -149,7 +144,7 @@ class NomusIntegrationSettingsWidget(QWidget):
 
     def _refresh_key_status(self):
         if self._key_removed:
-            self.key_status.setText("Chave marcada para remocao ao salvar.")
+            self.key_status.setText("Chave marcada para remoção ao salvar.")
             self.remove_key_btn.setEnabled(False)
             return
         if self.settings.api_key_configured:
@@ -199,9 +194,9 @@ class NomusIntegrationSettingsWidget(QWidget):
                 base_url=self.base_url.text(),
             )
         except Exception as exc:
-            QMessageBox.warning(self, "Integracao Nomus", str(exc))
+            QMessageBox.warning(self, "Integração Nomus", str(exc))
             return
-        QMessageBox.information(self, "Integracao Nomus", "Configuracao salva com seguranca.")
+        QMessageBox.information(self, "Integração Nomus", "Configuração salva com segurança.")
         self.api_key.clear()
         self._key_changed = False
         self._key_removed = False
@@ -219,7 +214,7 @@ class NomusIntegrationSettingsWidget(QWidget):
             elif not self.settings.api_key_configured and not self._key_removed:
                 raise NomusApiConfigError("Informe e salve uma chave da API antes de testar a integracao.")
         except NomusApiConfigError as exc:
-            QMessageBox.warning(self, "Integracao Nomus", str(exc))
+            QMessageBox.warning(self, "Integração Nomus", str(exc))
             return
         self.test_btn.setEnabled(False)
         self.test_btn.setText("Testando...")
@@ -234,18 +229,18 @@ class NomusIntegrationSettingsWidget(QWidget):
 
     def _show_test_result(self, result):
         self.test_btn.setEnabled(True)
-        self.test_btn.setText("Testar conexao")
+        self.test_btn.setText("Testar conexão")
         self.settings = self._get_store().load_settings()
         self._refresh_last_test()
         if result.success:
-            QMessageBox.information(self, "Integracao Nomus", result.user_message)
+            QMessageBox.information(self, "Integração Nomus", result.user_message)
         else:
-            QMessageBox.warning(self, "Integracao Nomus", result.user_message)
+            QMessageBox.warning(self, "Integração Nomus", result.user_message)
 
     def _show_test_error(self, exc):
         self.test_btn.setEnabled(True)
-        self.test_btn.setText("Testar conexao")
-        QMessageBox.warning(self, "Integracao Nomus", f"Nao foi possivel testar a conexao agora.\n{exc}")
+        self.test_btn.setText("Testar conexão")
+        QMessageBox.warning(self, "Integração Nomus", f"Não foi possível testar a conexão agora.\n{exc}")
 
     def _run_background(self, operation, on_success, on_error):
         thread = start_worker(self, operation, on_success, on_error)
@@ -262,9 +257,9 @@ class NomusApiSettingsDialog(QDialog):
 
     def __init__(self, parent=None, *, store: NomusApiConfigStore | None = None):
         super().__init__(parent)
-        self.setWindowTitle("Integracao Nomus")
+        self.setWindowTitle("Integração Nomus")
         root = QVBoxLayout(self)
-        root.setContentsMargins(22, 20, 22, 18)
+        root.setContentsMargins(16, 14, 16, 14)
         self.content = NomusIntegrationSettingsWidget(
             self,
             store=store,

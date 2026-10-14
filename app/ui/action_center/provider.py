@@ -26,26 +26,26 @@ ICON_OVERRIDES = {
 # Curated, desktop-only copy for the action cards. Actions without an entry here simply show
 # icon + title, which the card component already supports.
 ACTION_DESCRIPTIONS = {
-    "DEFINE_ITEM_FLOW": "Escolha quais itens serao produzidos e galvanizados.",
+    "DEFINE_ITEM_FLOW": "Escolha quais itens serão produzidos e galvanizados.",
     "REGISTER_PRODUCTION": "Informe as quantidades produzidas de cada item.",
     "EDIT_ITEM_WEIGHTS": "Cadastre ou atualize os pesos dos itens.",
     "REGISTER_DELIVERY": "Registre os itens efetivamente retirados pelo cliente.",
     "MANAGE_LOAD_EXISTING": "Escolha uma carga aberta e adicione as propostas selecionadas a ela.",
-    "MANAGE_LOAD_NEW": "Cria uma carga nova ja com as propostas selecionadas.",
+    "MANAGE_LOAD_NEW": "Cria uma carga nova já com as propostas selecionadas.",
     "REGISTER_RETURN": "Resolve a carga certa e registra o retorno das propostas selecionadas.",
-    ("STATUS", "PARADO"): "Suspende temporariamente a producao desta proposta.",
-    ("STATUS", "INICIADO"): "Inicia ou retoma a fabricacao dos itens liberados.",
+    ("STATUS", "PARADO"): "Suspende temporariamente a produção desta proposta.",
+    ("STATUS", "INICIADO"): "Inicia ou retoma a fabricação dos itens liberados.",
     ("STATUS", "LIBERADO_PRODUCAO"): "Envia a proposta para o processo produtivo.",
     ("STATUS", "CANCELADA"): "Cancela esta proposta conforme as regras atuais do sistema.",
     ("STATUS", "EM_SEPARACAO"): "Indica que esta proposta precisa de itens do almoxarifado.",
-    ("STATUS", "SEM_PARAFUSOS"): "Indica que esta proposta nao precisa de itens do almoxarifado.",
-    ("STATUS", "SEPARADO"): "Confirma que a separacao dos itens do almoxarifado foi concluida.",
+    ("STATUS", "SEM_PARAFUSOS"): "Indica que esta proposta não precisa de itens do almoxarifado.",
+    ("STATUS", "SEPARADO"): "Confirma que a separação dos itens do almoxarifado foi concluída.",
     ("STATUS", "ALMOXARIFADO_ENTREGUE"): "Confirma a entrega completa dos itens do almoxarifado.",
     ("STATUS", "ALMOXARIFADO_ENTREGUE_PARCIAL"): "Registra a entrega parcial dos itens do almoxarifado.",
-    ("STATUS", "SEPARACAO_INICIADA"): "Inicia a separacao dos itens desta proposta na expedicao.",
+    ("STATUS", "SEPARACAO_INICIADA"): "Inicia a separação dos itens desta proposta na expedição.",
     # "SEPARADO" is ambiguous between areas (see comment on ICON_OVERRIDES) - scoped to Expedicao
     # so it never shadows Almoxarifado's ("STATUS", "SEPARADO") entry above.
-    ("STATUS", "SEPARADO", "EXPEDICAO"): "Registre os itens desta proposta que ja foram separados.",
+    ("STATUS", "SEPARADO", "EXPEDICAO"): "Registre os itens desta proposta que já foram separados.",
 }
 # Actions that represent moving the proposal's main operation forward - the first (id, status,
 # area) triple present becomes the "primary" card (status/area=None matches anything). If none

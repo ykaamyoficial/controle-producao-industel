@@ -6,7 +6,7 @@ from PySide6.QtWidgets import QApplication, QFrame, QHBoxLayout, QLabel, QMainWi
 
 from app.services.backend_adapter import BackendService
 from app.services.session_sync_service import SessionSyncService
-from app.ui.animations import animate_width, fade_in
+from app.ui.animations import animate_width, crossfade, fade_in, painted_pixmap, set_reduced_motion
 from app.ui.app_icon import app_icon
 from app.ui.background_worker import start_worker
 from app.ui.chat_center_page import ChatCenterDialog
@@ -31,11 +31,12 @@ from app.ui.operational_reports_page import OperationalReportsPage
 from app.ui.process_page import ProcessPage
 from app.ui.production_items_page import ProductionAreaPage
 from app.ui.galvanization_items_page import GalvanizationAreaPage
+from app.ui.expedition_items_page import ExpeditionAreaPage
 from app.ui.settings_dialog import SettingsDialog
-from app.ui.sidebar import Sidebar
+from app.ui.sidebar import NAV_LABELS, Sidebar
 from app.ui.icons import icon_cache
 from app.ui.styles import app_stylesheet, chrome_bg_color
-from app.version import APP_NAME, APP_VERSION
+from app.version import APP_DISPLAY_NAME, APP_VERSION
 from app.services.update_distribution_client import check_for_updates
 from app.services.app_logging import get_logger
 from app.ui.update_dialog import UpdateDialog
@@ -94,7 +95,8 @@ class SimplePage(QWidget):
         box = QVBoxLayout(panel)
         box.setContentsMargins(28, 28, 28, 28)
         label = QLabel(title)
-        label.setStyleSheet("font-size: 22px; font-weight: 800;")
+        label.setObjectName("FilterTitle")
+        label.setProperty("tone", "accent")
         caption = QLabel(subtitle)
         caption.setObjectName("Caption")
         caption.setWordWrap(True)
@@ -131,10 +133,11 @@ class MainWindow(FramelessHitTestMixin, QMainWindow):
         self._update_available_notice = update_available_notice
         self._update_available_notice_shown = False
         self.pages: dict[str, QWidget] = {}
-        self.setWindowTitle(f"{APP_NAME} {APP_VERSION}")
+        self.setWindowTitle(f"{APP_DISPLAY_NAME} {APP_VERSION}")
         self.setWindowIcon(app_icon())
         self.resize(1380, 820)
         self.setMinimumSize(1120, 680)
+        set_reduced_motion(bool((getattr(self.service, "config", None) or {}).get("reduce_motion", False)))
         self.setStyleSheet(app_stylesheet(self.service.palette))
 
     def start(self) -> bool:
@@ -188,11 +191,15 @@ class MainWindow(FramelessHitTestMixin, QMainWindow):
 
     def _ensure_notifier_startup_registration(self) -> None:
         try:
-            from app.services.notifier_agent import ensure_startup_registration
+            from app.services.notifier_agent import ensure_notifier_running, ensure_startup_registration
 
             ensure_startup_registration()
+            ensure_notifier_running()
+            ensure = getattr(self.service, "ensure_notifier_registration", None)
+            if callable(ensure):
+                ensure()
         except Exception:
-            log.exception("Falha inesperada ao registrar notificador na pasta Startup")
+            log.exception("Falha inesperada ao registrar notificador na inicializacao do Windows")
 
     def _build(self):
         root = QWidget()
@@ -423,12 +430,14 @@ class MainWindow(FramelessHitTestMixin, QMainWindow):
                 self.pages[area] = ProductionAreaPage(self.service)
             elif area == "GALVANIZACAO":
                 self.pages[area] = GalvanizationAreaPage(self.service)
+            elif area == "EXPEDICAO":
+                self.pages[area] = ExpeditionAreaPage(self.service)
             else:
-                self.pages[area] = ProcessPage(self.service, area, area.title())
+                self.pages[area] = ProcessPage(self.service, area, NAV_LABELS.get(area, area.title()))
             self.stack.addWidget(self.pages[area])
 
         if self._can_view("partials", "PARCIAIS"):
-            self.pages["PARCIAIS"] = ProcessPage(self.service, "PARCIAIS", "Parciais e pendencias")
+            self.pages["PARCIAIS"] = ProcessPage(self.service, "PARCIAIS", "Parciais e pendências")
             self.stack.addWidget(self.pages["PARCIAIS"])
 
         if self._can_view("fiscal", "FISCAL"):
@@ -441,11 +450,11 @@ class MainWindow(FramelessHitTestMixin, QMainWindow):
 
         if self._can_view("history", "HISTORICO"):
             self.pages["HISTORICO"] = DataPage(
-                "Historico",
+                "Histórico",
                 [
-                    ("proposta", "Proposta"), ("area", "Area"), ("status_anterior", "Anterior"),
-                    ("status_novo", "Novo"), ("data_hora", "Quando"), ("usuario", "Usuario"),
-                    ("computador", "Computador"), ("observacao", "Observacao"),
+                    ("proposta", "Proposta"), ("area", "Área"), ("status_anterior", "Anterior"),
+                    ("status_novo", "Novo"), ("data_hora", "Quando"), ("usuario", "Usuário"),
+                    ("computador", "Computador"), ("observacao", "Observação"),
                 ],
                 self.service.history_rows,
             )
@@ -455,16 +464,16 @@ class MainWindow(FramelessHitTestMixin, QMainWindow):
             self.pages["AUDITORIA"] = DataPage(
                 "Auditoria",
                 [
-                    ("acao", "Acao"), ("entidade", "Entidade"), ("entidade_id", "ID"),
+                    ("acao", "Ação"), ("entidade", "Entidade"), ("entidade_id", "ID"),
                     ("campo", "Campo"), ("valor_anterior", "Anterior"), ("valor_novo", "Novo"),
-                    ("data_hora", "Quando"), ("usuario", "Usuario"),
+                    ("data_hora", "Quando"), ("usuario", "Usuário"),
                 ],
                 self.service.audit_rows,
             )
             self.stack.addWidget(self.pages["AUDITORIA"])
 
         self.pages["RELATORIOS"] = DataPage(
-            "Relatorios salvos",
+            "Relatórios salvos",
             [("name", "Nome"), ("source", "Base"), ("fields", "Campos")],
             lambda: [
                 {
@@ -491,11 +500,14 @@ class MainWindow(FramelessHitTestMixin, QMainWindow):
         previous = self.stack.currentWidget()
         if previous is not page and hasattr(previous, "deactivate_transient_modes"):
             previous.deactivate_transient_modes()
+        # Foto da pagina que sai, tirada antes da troca: a nova aparece por cima
+        # dela (transicao cruzada) em vez de piscar o fundo.
+        leaving = painted_pixmap(self.stack) if previous is not None and previous is not page and self.isVisible() else None
         self.stack.setCurrentWidget(page)
         self.sidebar.set_active(key)
         if hasattr(page, "refresh"):
             page.refresh()
-        self._page_animation = fade_in(page)
+        self._page_animation = crossfade(self.stack, page, leaving)
 
     def open_chat_center(self, *, proposal_id=None, conversation_id=None, message_id=None):
         if not self._can_view("chats", "CHATS"):

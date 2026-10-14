@@ -119,10 +119,6 @@ class PendingAttachmentWidget(QFrame):
         self.attachment = attachment
         self.palette = palette
         self.setObjectName("PendingAttachment")
-        self.setStyleSheet(
-            f"QFrame#PendingAttachment {{ background: {palette.get('surface_alt', '#e2e8f0')}; "
-            f"border: 1px solid {palette.get('border', '#cbd5e1')}; border-radius: 6px; }}"
-        )
         self.setFixedWidth(self.WIDTH_IMAGE if attachment.category == "image" else self.WIDTH_OTHER)
         self._build()
         self.refresh()
@@ -136,10 +132,6 @@ class PendingAttachmentWidget(QFrame):
         self.preview_label.setObjectName("PendingAttachmentPreview")
         self.preview_label.setAlignment(Qt.AlignCenter)
         self.preview_label.setFixedSize(74, 58)
-        self.preview_label.setStyleSheet(
-            f"QLabel#PendingAttachmentPreview {{ background: {self.palette.get('surface', '#ffffff')}; "
-            f"border: 1px solid {self.palette.get('border', '#cbd5e1')}; border-radius: 8px; }}"
-        )
 
         self.image_remove_btn = QPushButton("x")
         self.image_remove_btn.setObjectName("GhostButton")

@@ -115,6 +115,9 @@ class AppIconButton(QPushButton):
 
     def paintEvent(self, event) -> None:  # noqa: N802 (Qt override)
         super().paintEvent(event)
+        self._paint_badge()
+
+    def _paint_badge(self) -> None:
         text = format_count_badge(self._badge_count)
         if not text:
             return
