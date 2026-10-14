@@ -43,27 +43,45 @@ def report_window_for(today: date, *, last_sent: date | None = None, tzinfo=None
 
 
 @dataclass(frozen=True)
-class ProposalLine:
+class ProposalRow:
+    """Uma proposta no relatorio. Pecas sao so apoio: `pieces_moved` do dia e
+    `pieces_total` da proposta ("12 de 30 pecas")."""
+
     proposal_number: str
     customer_name: str
-    quantity: Decimal = Decimal("0")
-    weight: Decimal | None = None
+    current_status: str | None = None  # "Expedicao - Em separacao"
+    from_state: str | None = None
+    to_state: str | None = None
+    pieces_moved: Decimal | None = None
+    pieces_total: Decimal | None = None
     note: str | None = None
 
 
 @dataclass(frozen=True)
-class LoadLine:
-    code: str
-    driver_name: str | None
-    status: str
-    happened: str  # "liberada", "retornou", ...
+class StageSummary:
+    """Propostas abertas hoje em uma etapa (Producao, Galvanizacao, ...)."""
+
+    label: str
+    total: int
+    statuses: list[tuple[str, int]] = field(default_factory=list)
+    note: str | None = None
 
 
 @dataclass(frozen=True)
-class TransitionLine:
-    from_status: str | None
-    to_status: str | None
-    count: int
+class MovementGroup:
+    """Propostas que mudaram de status no periodo, agrupadas pelo estado final."""
+
+    key: str
+    title: str
+    total: int
+    proposals: list[ProposalRow] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class AttentionList:
+    title: str
+    total: int
+    rows: list[ProposalRow] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -83,56 +101,28 @@ class DailyReport:
     scope_label: str  # "Fábrica inteira" | "Suas propostas"
     is_global: bool
 
-    # Producao
-    produced_pieces: Decimal = Decimal("0")
-    produced_weight: Decimal = Decimal("0")
-    produced_lines: list[ProposalLine] = field(default_factory=list)
-    production_started: int = 0
-    production_completed: int = 0
-
-    # Galvanizacao
-    galv_sent_pieces: Decimal = Decimal("0")
-    galv_returned_pieces: Decimal = Decimal("0")
-    galv_returned_lines: list[ProposalLine] = field(default_factory=list)
-    galv_loads: list[LoadLine] = field(default_factory=list)
-
-    # Expedicao
-    separated_pieces: Decimal = Decimal("0")
-    delivered_pieces: Decimal = Decimal("0")
-    delivered_weight: Decimal = Decimal("0")
-    delivered_lines: list[ProposalLine] = field(default_factory=list)
-
-    # Propostas
+    # Resumo
+    open_total: int = 0
+    changed_total: int = 0  # propostas que mudaram de status no periodo
+    delivered_total: int = 0  # propostas entregues no periodo
     proposals_created: int = 0
     proposals_cancelled: int = 0
-    transitions: list[TransitionLine] = field(default_factory=list)
+
+    # Panorama atual por etapa e movimentos do periodo
+    stages: list[StageSummary] = field(default_factory=list)
+    movements: list[MovementGroup] = field(default_factory=list)
 
     # Atencao
-    overdue_total: int = 0
-    overdue: list[ProposalLine] = field(default_factory=list)
-    due_soon_total: int = 0
-    loads_waiting_return: int = 0
+    overdue: AttentionList = field(default_factory=lambda: AttentionList("Atrasadas", 0))
+    due_soon: AttentionList = field(default_factory=lambda: AttentionList("Vencem em até 3 dias", 0))
+    stale: AttentionList = field(default_factory=lambda: AttentionList("Paradas há muito tempo", 0))
+    pending_partials: AttentionList = field(default_factory=lambda: AttentionList("Parciais pendentes", 0))
 
-    # Sistema
+    # Sistema (so visao global)
     syncs: list[SyncLine] = field(default_factory=list)
 
     @property
     def has_activity(self) -> bool:
-        """Dia 'vazio' (decisao do produto): nao envia. Pendencias sozinhas
-        nao contam como movimento."""
-        return any(
-            (
-                self.produced_pieces,
-                self.production_started,
-                self.production_completed,
-                self.galv_sent_pieces,
-                self.galv_returned_pieces,
-                self.galv_loads,
-                self.separated_pieces,
-                self.delivered_pieces,
-                self.proposals_created,
-                self.proposals_cancelled,
-                self.transitions,
-                self.syncs,
-            )
-        )
+        """Dia 'vazio' (decisao do produto): nao envia. Pendencias e atrasos
+        sozinhos nao contam como movimento."""
+        return bool(self.movements or self.syncs or self.proposals_created or self.proposals_cancelled)
