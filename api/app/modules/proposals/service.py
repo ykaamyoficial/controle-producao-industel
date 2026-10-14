@@ -379,7 +379,17 @@ async def list_proposals(
     sort_column = SORT_FIELDS.get(sort_by, Proposal.synced_at)
     order = sort_column.desc() if sort_dir == "desc" else sort_column.asc()
     rows = (await session.execute(stmt.order_by(order, Proposal.id.asc()).limit(limit).offset(offset))).scalars().all()
-    return PaginatedProposalResponse(items=[proposal_list_item(row) for row in rows], total=total, limit=limit, offset=offset)
+    from api.app.modules.proposals.family import partials_overview
+
+    overview = await partials_overview(session, [int(row.id) for row in rows])
+    items = []
+    for row in rows:
+        entry = proposal_list_item(row)
+        badges = overview.get(int(row.id), [])
+        entry["partials_count"] = len(badges)
+        entry["partials"] = badges
+        items.append(entry)
+    return PaginatedProposalResponse(items=items, total=total, limit=limit, offset=offset)
 
 
 async def list_production_proposals(

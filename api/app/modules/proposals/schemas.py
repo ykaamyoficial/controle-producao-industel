@@ -43,6 +43,16 @@ class ProposalItemDetail(ProposalItemSummary):
     legacy_updated_at: datetime | None = None
 
 
+class PartialBadge(BaseModel):
+    """Selo de uma parcial ativa na lista geral (ex.: P1 na Expedicao)."""
+
+    proposal_id: int
+    label: str
+    partial_number: int | None = None
+    current_area: str | None = None
+    current_status: str | None = None
+
+
 class ProposalListItem(BaseModel):
     id: int
     legacy_id: int | None = None
@@ -63,6 +73,9 @@ class ProposalListItem(BaseModel):
     synced_at: datetime
     version: int = 1
     active: bool = True
+    # So a lista geral preenche (consulta unica das maes da pagina); nos demais usos ficam vazios.
+    partials_count: int = 0
+    partials: list[PartialBadge] = Field(default_factory=list)
 
 
 class ProposalDetail(ProposalListItem):
@@ -1763,3 +1776,120 @@ class FiscalSyncBatch(BaseModel):
     batch_number: int = Field(default=1, ge=1)
     batch_total: int = Field(default=1, ge=1)
     records: list[FiscalRecordSyncPayload] = Field(default_factory=list, max_length=200)
+
+
+# --- Familia da proposta (mae + parciais) ---------------------------------------
+
+
+class FamilyStageQuantities(BaseModel):
+    """Onde estao as pecas: a fabricar, aguardando galvanizacao, na galvanizacao, pronta, entregue."""
+
+    to_produce: Decimal = Decimal("0")
+    awaiting_galvanization: Decimal = Decimal("0")
+    in_galvanization: Decimal = Decimal("0")
+    ready: Decimal = Decimal("0")
+    delivered: Decimal = Decimal("0")
+    undefined_flow: Decimal = Decimal("0")
+    given_away: Decimal = Decimal("0")
+
+
+class FamilyConsolidatedPart(BaseModel):
+    place: str
+    label: str
+    quantity: Decimal
+
+
+class FamilyConsolidated(BaseModel):
+    """Status unico da familia. kind: SINGLE (um lugar, uma linha), UNIFORM (varias linhas no mesmo lugar) ou MIXED."""
+
+    kind: str
+    area: str | None = None
+    status: str | None = None
+    label: str = ""
+    parts: list[FamilyConsolidatedPart] = Field(default_factory=list)
+
+
+class FamilyMember(BaseModel):
+    proposal_id: int
+    proposal_number: str
+    label: str
+    role: str
+    partial_number: int | None = None
+    is_reference: bool = False
+    is_requested: bool = False
+    current_area: str | None = None
+    current_status: str | None = None
+    deadline_date: date | None = None
+    item_count: int = 0
+    total_units: Decimal = Decimal("0")
+    quantities: FamilyStageQuantities
+    consolidated: FamilyConsolidated
+
+
+class FamilyItemRow(BaseModel):
+    item_id: int
+    proposal_id: int
+    proposal_number: str
+    partial_label: str
+    partial_number: int | None = None
+    item_number: str
+    product_code: str | None = None
+    description: str | None = None
+    unit: str | None = None
+    quantity: Decimal
+    unit_weight: Decimal | None = None
+    quantities: FamilyStageQuantities
+    place: str | None = None
+    places: list[str] = Field(default_factory=list)
+    # Chaves das parciais (`FamilyPartial.key`) em que o item tem pecas; vazio quando a proposta nao tem parciais.
+    partial_keys: list[str] = Field(default_factory=list)
+
+
+class FamilyPartial(BaseModel):
+    """Uma parcial da proposta, para o seletor do cabecalho do Detalhe.
+
+    kind PROPOSTA: proposta-filha (CP 05493-1); kind LOTE: pecas de uma mesma proposta que estao em lugares
+    diferentes (ex.: 10 un. na Expedicao e 1 un. na Galvanizacao), sem proposta propria."""
+
+    key: str
+    kind: str
+    label: str
+    proposal_id: int
+    proposal_number: str | None = None
+    place: str | None = None
+    current_area: str | None = None
+    current_status: str | None = None
+    item_count: int = 0
+    total_units: Decimal = Decimal("0")
+    quantities: FamilyStageQuantities
+
+
+class FamilyTotals(BaseModel):
+    total_units: Decimal
+    delivered_units: Decimal
+    pending_units: Decimal
+    progress_percent: int
+    known_weight: Decimal
+    delivered_weight: Decimal
+    pending_weight: Decimal
+    weight_known_items: int
+    weight_total_items: int
+    weight_complete: bool
+    fiscal_status: str | None = None
+
+
+class ProposalFamilyResponse(BaseModel):
+    proposal_id: int
+    root_id: int
+    root_proposal_number: str
+    customer_name: str
+    partial_count: int
+    has_partials: bool
+    deadline_date: date | None = None
+    consolidated: FamilyConsolidated
+    stages: FamilyStageQuantities
+    totals: FamilyTotals
+    members: list[FamilyMember]
+    items: list[FamilyItemRow]
+    # Parciais para o seletor (filhas ou lotes). Vazio = proposta sem parciais.
+    partials: list[FamilyPartial] = Field(default_factory=list)

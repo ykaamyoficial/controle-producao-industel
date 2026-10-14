@@ -30,7 +30,7 @@ from api.app.modules.auth.permissions import (
     PRODUCTION_UPDATE,
     PRODUCTION_VIEW,
 )
-from api.app.modules.proposals import service
+from api.app.modules.proposals import family, service
 from api.app.modules.proposals.schemas import (
     ExpeditionItemsRequest,
     ExpeditionProposalDetail,
@@ -55,6 +55,7 @@ from api.app.modules.proposals.schemas import (
     PaginatedGalvanizationCandidateResponse,
     PaginatedGalvanizationLoadResponse,
     PaginatedPartialProposalResponse,
+    ProposalFamilyResponse,
     PaginatedExpeditionItemResponse,
     PaginatedExpeditionResponse,
     RemanagementBadgesResponse,
@@ -148,6 +149,15 @@ async def list_proposals(
         limit=limit,
         offset=offset,
     )
+
+
+@router.get("/proposals/{proposal_id}/family", response_model=ProposalFamilyResponse)
+async def get_proposal_family(
+    proposal_id: int,
+    session: AsyncSession = Depends(get_db_session),
+    _actor: User = Depends(require_permission(PROPOSALS_VIEW)),
+):
+    return await family.get_proposal_family(session, proposal_id)
 
 
 @router.post("/proposals", response_model=ProposalDetail, status_code=status.HTTP_201_CREATED)
