@@ -239,14 +239,19 @@ async def process_once() -> tuple[int, int]:
     factory = get_sessionmaker()
     if factory is None:
         return (0, 0)
-    async with factory() as session:
-        immediate = await _process_immediate(session, max_attempts=settings.notifications_email_max_attempts)
+    redirect_to = settings.notifications_daily_report_redirect_to.strip()
+    immediate = 0
+    # Modo de teste (REDIRECT_TO): nenhum e-mail imediato sai, para nao mandar
+    # notificacoes pendentes aos enderecos reais dos usuarios.
+    if not (settings.notifications_daily_report_enabled and redirect_to):
+        async with factory() as session:
+            immediate = await _process_immediate(session, max_attempts=settings.notifications_email_max_attempts)
     async with factory() as session:
         if settings.notifications_daily_report_enabled:
             digest = await _process_daily_report(
                 session,
                 digest_hour=settings.notifications_digest_hour,
-                redirect_to=settings.notifications_daily_report_redirect_to.strip(),
+                redirect_to=redirect_to,
             )
         else:
             digest = await _process_digest(session, digest_hour=settings.notifications_digest_hour)

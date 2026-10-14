@@ -69,10 +69,11 @@ só aparece quando existe.
 6. Com `NOTIFICATIONS_DAILY_REPORT_ENABLED` desligado (padrão) o comportamento anterior —
    e-mail por evento + digest em texto — é preservado byte a byte.
 7. Com `REDIRECT_TO` preenchido nenhum usuário recebe nada além do relatório global para o
-   endereço configurado.
+   endereço configurado: o envio imediato (`_process_immediate`) também fica desligado, para
+   notificações pendentes não irem aos e-mails reais dos usuários.
 8. Desktop antigo + API nova continuam compatíveis: os campos novos de configuração são
    opcionais e não zeram a preferência existente.
-9. Nenhuma execução desta fase tocou a API oficial (8000) nem aplicou a migration na dev.
+9. Nenhuma execução desta fase tocou a API oficial (8000).
 
 ## Validação
 
@@ -92,9 +93,11 @@ só aparece quando existe.
 
 ## Pendência encontrada
 
-- **Envio automático não exercitado:** `_process_daily_report` contra PostgreSQL real e com
-  SMTP real não foi executado — a dev não tem SMTP e a migration `0038` não foi aplicada nela.
-  Antes de ligar a chave: migrar a dev, subir a API nova e rodar com `REDIRECT_TO`.
+- **Dev:** a migration `0038` foi aplicada na dev (com backup antes) e a API de dev foi
+  recriada com `NOTIFICATIONS_DAILY_REPORT_ENABLED=true` e `REDIRECT_TO` para o almoxarifado
+  (SMTP só no ambiente do processo, nada gravado em arquivo). O ciclo automático rodou:
+  `emails=0 digests=1`, idempotente no mesmo dia, sem tocar nas entregas pendentes.
+  Falta apenas conferir a chegada do e-mail automático e decidir a liberação na oficial.
 - **Papel "gestão" = `is_superuser`:** os papéis do sistema são "Permissões de <pessoa>", sem
   um papel de gestão nomeado. Se for necessário um grupo intermediário, falta criar uma
   permissão própria (ex.: `reports.daily_global`).
