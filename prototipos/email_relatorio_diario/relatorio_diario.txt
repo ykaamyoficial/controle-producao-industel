@@ -1,0 +1,32 @@
+Assunto: Resumo de 13/10 — 971 peças produzidas · 401 entregues · 60 propostas atrasadas
+
+Resumo do dia — terça, 13/10/2026 (Fábrica inteira)
+Olá, Administrador.
+
+Peças produzidas: 971 (—)
+Retornaram da galvanização: 9
+Entregues ao cliente: 401 (—)
+Propostas atrasadas: 60
+
+  Produção — CP 05579 EQUATORIAL GOIAS DIST. DE ENERGIA S/A: 720 pç
+  Produção — CP 05610 EQUATORIAL MARANHAO DISTRIBUIDORA DE ENERGIA S.A: 135 pç
+  Produção — CP 05637 EQUATORIAL PARÁ DISTRIBUIDORA DE ENERGIA S.A.: 30 pç
+  Produção — CP 05593 MNS ENGENHARIA: 26 pç
+  Produção — CP 05602 EQUATORIAL PIAUI DISTRIBUIDORA DE ENERGIA S.A: 21 pç
+  Produção — CP 05591 MNS ENGENHARIA: 11 pç
+  Produção — CP 05590 MNS ENGENHARIA: 11 pç
+  Produção — CP 05592 MNS ENGENHARIA: 11 pç
+  Entrega — CP 05483 MNS ENGENHARIA: 335 pç
+  Entrega — CP05412 MNS ENGENHARIA ENGº LEONARDO M. N. SOUZA: 11 pç
+  Entrega — CP05413 MNS ENGENHARIA ENGº LEONARDO M. N. SOUZA: 11 pç
+  Entrega — CP05377 MNS ENGENHARIA ENGº LEONARDO M. N. SOUZA: 11 pç
+  Entrega — CP 05495 MNS ENGENHARIA: 11 pç
+  Entrega — CP 05508 MNS ENGENHARIA: 11 pç
+  Entrega — CP05414 MNS ENGENHARIA ENGº LEONARDO M. N. SOUZA: 11 pç
+  Atrasada — CP05236 ENERGY SYSTEN CONSTRUÇÕES E: prazo 22/07 (84 d de atraso)
+  Atrasada — CP05349 EQUATORIAL PIAUI DISTRIBUIDORA DE ENERGIA S.A: prazo 25/08 (50 d de atraso)
+  Atrasada — CP05432 EQUATORIAL ENERGIA - CEEE JOSÉ RAIMUNDO R. MARQUES: prazo 28/08 (47 d de atraso)
+  Atrasada — CP05434 EQUATORIAL GOIAS DIST. DE JOSÉ RAIMUNDO R. MARQUES: prazo 28/08 (47 d de atraso)
+  Atrasada — CP05446 EQUATORIAL ALAGOAS CONTRATO TRIENAL: prazo 31/08 (44 d de atraso)
+
+Abra o programa para ver os detalhes.
