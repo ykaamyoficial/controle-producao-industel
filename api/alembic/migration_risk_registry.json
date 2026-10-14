@@ -188,5 +188,10 @@
     "classification": "ADDITIVE",
     "summary": "Cria notification_devices (credencial propria do agente de avisos do Windows, uma por instalacao + usuario do Windows, sempre do ultimo login).",
     "justification": "Apenas CREATE TABLE de uma tabela nova com tres indices e uma FK para users (ON DELETE CASCADE). Nenhuma tabela, coluna ou constraint existente e alterada e nenhum dado e migrado. O codigo antigo nao conhece a tabela; o agente antigo continua usando /notifications/catch-up com o refresh token da sessao, entao Desktop antigo + API nova continuam compativeis. O downgrade remove so a tabela nova (as credenciais de aviso se perdem e sao recriadas no proximo login)."
+  },
+  "20261014_0038": {
+    "classification": "ADDITIVE",
+    "summary": "Adiciona notification_user_settings.daily_report_enabled (default true) e daily_report_hour (nullable) para o relatorio diario por e-mail.",
+    "justification": "Duas ADD COLUMN em tabela pequena: daily_report_enabled com server_default true (todo usuario existente continua recebendo, comportamento igual ao anterior) e daily_report_hour nullable (NULL = horario padrao do servidor), mais um CHECK que so aceita 0-23. Nenhuma coluna, linha ou constraint existente e alterada e o codigo antigo ignora as colunas novas. Desktop antigo + API nova continuam compativeis (campos opcionais no PUT /notifications/settings). O downgrade remove o CHECK e as duas colunas, perdendo apenas a preferencia escolhida."
   }
 }

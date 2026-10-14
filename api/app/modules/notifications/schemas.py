@@ -65,12 +65,18 @@ class NotificationUserSettingsOut(BaseModel):
     quiet_start: str | None = None
     quiet_end: str | None = None
     quiet_channels: list[str] = []
+    daily_report_enabled: bool = True
+    daily_report_hour: int | None = None
 
 
 class NotificationSettingsPayload(BaseModel):
     quiet_start: str | None = None
     quiet_end: str | None = None
     quiet_channels: list[str] = []
+    # Opcionais: um Desktop antigo que nao envia estes campos nao altera o que
+    # o usuario ja escolheu (ver put_settings, usa model_fields_set).
+    daily_report_enabled: bool | None = None
+    daily_report_hour: int | None = Field(default=None, ge=0, le=23)
 
 
 class NotifierDeviceRegisterPayload(BaseModel):

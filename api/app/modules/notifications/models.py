@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, time
 
-from sqlalchemy import BigInteger, Boolean, Date, DateTime, ForeignKey, Identity, Index, Integer, String, Text, Time, UniqueConstraint, func, text
+from sqlalchemy import BigInteger, Boolean, Date, DateTime, ForeignKey, Identity, Index, Integer, SmallInteger, String, Text, Time, UniqueConstraint, func, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -105,6 +105,10 @@ class NotificationUserSettings(Base):
     # canais afetados pelo silencio, ex.: ["tray", "email"]. `critica` sempre fura.
     quiet_channels: Mapped[list] = mapped_column(JSONB, nullable=False, server_default=text("'[]'::jsonb"))
     last_digest_date: Mapped[date | None] = mapped_column(Date(), nullable=True)
+    # Relatorio diario por e-mail: liga/desliga e horario proprio (None = o
+    # padrao do servidor, NOTIFICATIONS_DIGEST_HOUR).
+    daily_report_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
+    daily_report_hour: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

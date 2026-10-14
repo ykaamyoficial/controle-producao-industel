@@ -412,6 +412,8 @@ def _settings_out(row: NotificationUserSettings | None) -> NotificationUserSetti
     if row is None:
         return NotificationUserSettingsOut(quiet_start=None, quiet_end=None, quiet_channels=["tray", "email"])
     return NotificationUserSettingsOut(
+        daily_report_enabled=row.daily_report_enabled,
+        daily_report_hour=row.daily_report_hour,
         quiet_start=row.quiet_start.strftime("%H:%M") if row.quiet_start else None,
         quiet_end=row.quiet_end.strftime("%H:%M") if row.quiet_end else None,
         quiet_channels=list(row.quiet_channels or []),
@@ -434,24 +436,20 @@ async def put_settings(session: AsyncSession, actor: User, payload: Notification
     quiet_start = _parse(payload.quiet_start)
     quiet_end = _parse(payload.quiet_end)
     channels = [c for c in dict.fromkeys(payload.quiet_channels) if c in _QUIET_CHANNELS]
+    values = {
+        "quiet_start": quiet_start,
+        "quiet_end": quiet_end,
+        "quiet_channels": channels,
+    }
+    provided = payload.model_fields_set
+    if "daily_report_enabled" in provided and payload.daily_report_enabled is not None:
+        values["daily_report_enabled"] = payload.daily_report_enabled
+    if "daily_report_hour" in provided:  # None = voltar ao horario padrao
+        values["daily_report_hour"] = payload.daily_report_hour
     await session.execute(
         pg_insert(NotificationUserSettings)
-        .values(
-            user_id=actor.id,
-            quiet_start=quiet_start,
-            quiet_end=quiet_end,
-            quiet_channels=channels,
-            updated_at=func.now(),
-        )
-        .on_conflict_do_update(
-            index_elements=["user_id"],
-            set_={
-                "quiet_start": quiet_start,
-                "quiet_end": quiet_end,
-                "quiet_channels": channels,
-                "updated_at": func.now(),
-            },
-        )
+        .values(user_id=actor.id, updated_at=func.now(), **values)
+        .on_conflict_do_update(index_elements=["user_id"], set_={**values, "updated_at": func.now()})
     )
     await session.commit()
     return await get_settings(session, actor)
