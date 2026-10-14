@@ -2,17 +2,18 @@
 
 ## Objetivo
 
-Tirar o e-mail do papel de "aviso solto por evento" e dar a ele o papel de **relatório do
-dia**: o que foi produzido, galvanizado, entregue, o que mudou nas propostas e o que está
-atrasado, em HTML legível e uma vez por dia útil. O sino e a bandeja continuam sendo o canal de
+Tirar o e-mail do papel de "aviso solto por evento" e dar a ele o papel de **relatório das
+propostas**: onde elas estão agora, o que mudou de status no período e o que exige atenção
+(prazo), em HTML legível e uma vez por dia útil. O foco é a **proposta e o seu status**; peças
+aparecem só como apoio por proposta ("12 de 30 peças"). O sino e a bandeja continuam sendo o canal de
 aviso imediato; o e-mail imediato fica restrito a severidade `alta`/`critica` (já o padrão da
 Fase 11).
 
 Decisões de produto fechadas com o usuário: escopo por papel (superusuário vê a fábrica
 inteira, os demais só as propostas que criaram); dias úteis às 07:00; segunda-feira cobre
-sexta a domingo; dia sem movimento não envia; seções produção, galvanização, expedição,
-propostas, atenção e sistema; propostas atrasadas limitadas às 5 mais antigas + contagem; peso
-só aparece quando existe.
+sexta a domingo; dia sem movimento não envia; seções panorama por etapa, o que mudou (por tipo
+de movimento, lista completa), atenção (atrasadas, vencem em 3 dias, paradas, parciais
+pendentes — 5 por lista + "e mais N") e sistema (importações Nomus).
 
 ## Implementação
 
@@ -21,14 +22,18 @@ só aparece quando existe.
 - `schemas.py`: `DailyReport` (dados puros, sem HTML), `ReportWindow` e
   `report_window_for()` — janela [00:00, 00:00) desde o último dia processado (ou do último dia
   útil). `DailyReport.has_activity` ignora pendências: atraso sozinho não é "movimento".
-- `collector.py`: `collect_daily_report()` — somente leitura, agregando direto de
-  `proposal_events`, `galvanization_load_events`, `expedition_events`, `proposals`,
-  `galvanization_loads` e `sync_runs`. Não depende da tabela `notifications` (por usuário e
-  filtrada por preferência). Escopo `scope_user_id=None` = fábrica; com id, filtra
+- `collector.py`: `collect_daily_report()` — somente leitura, centrado em propostas. Panorama
+  (`proposals` abertas por `current_area`/`current_status`), movimentos (primeiro "de" e último
+  "para" de cada proposta em `proposal_events` no período, classificados por
+  `classify_movement()` pelo estado final), atenção (atrasadas, vencem em 3 dias, paradas há
+  `STALE_DAYS`=7 sem evento, mães com parciais abertas) e importações (`sync_runs`). Peças só
+  como apoio por proposta, vindas dos eventos de produção, galvanização e expedição. Não
+  depende da tabela `notifications`. Escopo `scope_user_id=None` = fábrica; com id, filtra
   `proposals.created_by`.
 - `renderer.py`: `render_daily_report()` — HTML em tabelas com CSS inline (compatível com
-  Outlook), largura 100% do painel, seções vazias omitidas, coluna de peso só quando há peso;
-  versão em texto puro e assunto. Todo valor de usuário passa por `html.escape`.
+  Outlook), largura 100% do painel, seções vazias omitidas; versão em texto puro e assunto.
+  Todo valor de usuário passa por `html.escape`. Status sem acento no banco são acentuados por
+  um mapa de palavras conhecidas (`humanize`).
 
 ### API — envio, worker e preferências
 
@@ -62,8 +67,8 @@ só aparece quando existe.
 1. O relatório nunca é enviado em sábado/domingo nem antes da hora configurada do usuário.
 2. Um usuário recebe no máximo um relatório por dia (`last_digest_date`); falha de envio não
    consome o dia.
-3. Dia sem movimento (produção, galvanização, expedição, propostas, importações) não gera
-   e-mail, mesmo havendo propostas atrasadas.
+3. Dia sem movimento (nenhuma proposta mudou de status, nenhuma criada/cancelada, nenhuma
+   importação) não gera e-mail, mesmo havendo propostas atrasadas ou paradas.
 4. Usuário que não é superusuário nunca vê dados de propostas criadas por outras pessoas.
 5. Valores vindos do banco são escapados no HTML; o texto puro acompanha toda mensagem HTML.
 6. Com `NOTIFICATIONS_DAILY_REPORT_ENABLED` desligado (padrão) o comportamento anterior —
@@ -87,9 +92,10 @@ só aparece quando existe.
   → **8 passed**.
 - `python scripts/check_migration_checksums.py` e `python scripts/check_migration_safety.py`
   → **OK** (revision `20261014_0038` ADDITIVE).
-- Visual: o HTML gerado com dados reais da dev (13/10/2026: 971 peças produzidas, 401
-  entregues, 60 propostas atrasadas) foi enviado manualmente ao almoxarifado e conferido no
-  Outlook pelo usuário, que aprovou o layout.
+- Visual: o HTML gerado com dados reais da dev (13/10/2026: 112 propostas abertas, 26 mudaram
+  de status, 8 entregues, 60 atrasadas; ~40 KB) foi conferido pelo usuário, que aprovou o
+  layout centrado em propostas. A versão anterior, por peças, foi enviada e conferida no
+  Outlook do almoxarifado.
 
 ## Pendência encontrada
 
@@ -101,6 +107,9 @@ só aparece quando existe.
 - **Papel "gestão" = `is_superuser`:** os papéis do sistema são "Permissões de <pessoa>", sem
   um papel de gestão nomeado. Se for necessário um grupo intermediário, falta criar uma
   permissão própria (ex.: `reports.daily_global`).
-- **Peso:** na dev só 715 de 1217 itens têm `unit_weight`; nenhum item produzido em 13/10 tem
-  peso, então o peso total fica oculto até a sincronização Nomus preencher.
+- **"Paradas há muito tempo":** critério de 7 dias sem evento marca 87 de 112 propostas abertas
+  na dev (muitas são "Em separação" na expedição, aguardando retirada). Calibrar com dados
+  reais — subir o prazo ou excluir essa situação — antes de liberar na oficial.
+- **Tamanho:** o HTML completo do dia 13/10 chega a ~40 KB com as listas de atenção limitadas;
+  sem o limite passou de 120 KB e o Gmail corta acima de ~102 KB.
 - **Liberação na oficial** depende de autorização explícita e do checklist `release-checklist`.
