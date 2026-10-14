@@ -30,8 +30,11 @@ class _Case(unittest.TestCase):
         self.addCleanup(self._tmp.cleanup)
         self.db = ReplicaDatabase(Path(self._tmp.name) / "replica.db")
 
-    def _load(self, proposals):
-        self.db.replace_all(tables={"proposals": list(proposals)}, meta={META_CURSOR: 1, META_ENTITIES: "proposals"})
+    def _load(self, proposals, items=()):
+        self.db.replace_all(
+            tables={"proposals": list(proposals), "proposal_items": list(items)},
+            meta={META_CURSOR: 1, META_ENTITIES: "proposals,proposal_items"},
+        )
 
 
 class ProposalsViewTests(_Case):
@@ -49,9 +52,37 @@ class ProposalsViewTests(_Case):
                     "current_area": "PRODUCAO", "current_status": "EM_PRODUCAO", "is_partial": False, "parent_proposal_id": None,
                     "is_cancelled": False, "is_completed": False, "legacy_updated_at": "2026-07-21T08:00:00.500000Z",
                     "synced_at": "2026-07-20T10:00:00Z", "version": 2, "active": True,
+                    "partials_count": 0, "partials": [],
                 }],
                 "total": 1, "limit": 50, "offset": 0,
             },
+        )
+
+    def test_partials_follow_the_api_rule_and_order(self):
+        def item(item_id, proposal_id, **extra):
+            return {"id": item_id, "proposal_id": proposal_id, "active": True, **extra}
+
+        self._load(
+            [
+                _proposal(1, "MAE"),
+                _proposal(2, "MAE-P2", parent_proposal_id=1, partial_number=2, current_area="EXPEDICAO", current_status="SEPARADO"),
+                _proposal(3, "MAE-P1", parent_proposal_id=1, partial_number=1, current_area="PRODUCAO", current_status="INICIADO"),
+                _proposal(4, "SEM-ITEM", parent_proposal_id=1, partial_number=3),
+                _proposal(5, "CANCELADA", parent_proposal_id=1, partial_number=4, is_cancelled=True),
+                _proposal(6, "ITEM-INATIVO", parent_proposal_id=1, partial_number=5),
+                _proposal(7, "SEM-NUMERO", parent_proposal_id=1, current_area="GALVANIZACAO", current_status="AGUARDANDO_ENVIO"),
+            ],
+            [item(10, 2), item(11, 3), item(12, 5), item(13, 6, active=False), item(14, 7)],
+        )
+        row = proposals_view.list_proposals(self.db)["items"][0]
+        self.assertEqual(row["partials_count"], 3)
+        self.assertEqual(
+            row["partials"],
+            [
+                {"proposal_id": 3, "label": "P1", "partial_number": 1, "current_area": "PRODUCAO", "current_status": "INICIADO"},
+                {"proposal_id": 2, "label": "P2", "partial_number": 2, "current_area": "EXPEDICAO", "current_status": "SEPARADO"},
+                {"proposal_id": 7, "label": "SEM-NUMERO", "partial_number": None, "current_area": "GALVANIZACAO", "current_status": "AGUARDANDO_ENVIO"},
+            ],
         )
 
     def test_only_parent_proposals_are_listed(self):

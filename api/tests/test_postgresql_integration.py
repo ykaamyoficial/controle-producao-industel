@@ -227,6 +227,7 @@ class PostgreSQLIntegrationTests(unittest.TestCase):
                         "galvanization_load_items",
                         "galvanization_loads",
                         "notification_deliveries",
+                        "notification_devices",
                         "notification_preferences",
                         "notification_user_settings",
                         "notifications",
