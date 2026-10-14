@@ -180,6 +180,98 @@ class ChatCenterPageTargetTests(unittest.TestCase):
         page = self._build_page(service)
         self.assertIsNone(page.panel)
 
+    def _timeline(self, count: int) -> list[dict]:
+        return [
+            {
+                "id": index,
+                "entry_kind": "MENSAGEM",
+                "body": f"mensagem {index}",
+                "author_user_id": 2,
+                "author_name": "Outro",
+                "created_at": f"2026-10-14T10:{index:02d}:00Z",
+            }
+            for index in range(1, count + 1)
+        ]
+
+    def _open_dialog(self, service) -> ChatCenterDialog:
+        dialog = ChatCenterDialog(service, None, proposal_id=42)
+        dialog.resize(1000, 600)
+        dialog.show()
+        self._pump(dialog.page, cycles=80)
+        return dialog
+
+    def test_empty_state_has_a_close_button_inside_a_dialog(self):
+        # Sem conversa selecionada nao ha cabecalho de conversa: o X da tela
+        # vazia e a unica saida com o mouse.
+        service = FakeService()
+        dialog = ChatCenterDialog(service, None)
+        dialog.show()
+        self._pump(dialog.page, cycles=3)
+        self.assertIsNone(dialog.page.panel)
+        self.assertFalse(dialog.page.close_button.isHidden())
+        dialog.page.close_button.click()
+        self.assertFalse(dialog.isVisible())
+        dialog.deleteLater()
+
+    def test_reading_history_is_not_pulled_back_to_the_bottom_by_a_refresh(self):
+        service = FakeService()
+        service.conversations = [_conversation(1, 42)]
+        service.timeline_items = self._timeline(40)
+        dialog = self._open_dialog(service)
+        panel = dialog.page.panel
+        bar = panel.scroll.verticalScrollBar()
+        self.assertGreater(bar.maximum(), 0)
+        bar.setValue(bar.maximum() // 3)
+        self._pump(dialog.page, cycles=5)
+        position = bar.value()
+        for _ in range(3):
+            panel.refresh()
+            self._pump(dialog.page, cycles=40)
+        self.assertEqual(bar.value(), position)
+        dialog.accept()
+        dialog.deleteLater()
+
+    def test_sending_a_message_goes_to_the_bottom_and_ends_visible(self):
+        service = FakeService()
+        service.conversations = [_conversation(1, 42)]
+        service.timeline_items = self._timeline(40)
+        dialog = self._open_dialog(service)
+        panel = dialog.page.panel
+        bar = panel.scroll.verticalScrollBar()
+        bar.setValue(0)
+        self._pump(dialog.page, cycles=5)
+        panel._append_sent_message(
+            {
+                "id": 9001,
+                "body": "minha mensagem",
+                "author_user_id": 1,
+                "author_name": "Eu",
+                "created_at": "2026-10-14T12:00:00Z",
+                "message_type": "MENSAGEM",
+            }
+        )
+        self._pump(dialog.page, cycles=120)
+        self.assertEqual(bar.value(), bar.maximum())
+        self.assertEqual(panel._send_running, {})
+        self.assertNotIn(9001, panel._send_pending)
+        _row, content = panel._entry_widgets[("chat", 9001)]
+        self.assertFalse(content.isHidden())
+        dialog.accept()
+        dialog.deleteLater()
+
+    def test_bottom_mask_follows_the_message_area_when_it_resizes(self):
+        service = FakeService()
+        service.conversations = [_conversation(1, 42)]
+        service.timeline_items = self._timeline(10)
+        dialog = self._open_dialog(service)
+        panel = dialog.page.panel
+        dialog.resize(1000, 760)
+        self._pump(dialog.page, cycles=40)
+        host = panel._feed_stack_host
+        self.assertEqual(panel._bottom_fade.geometry().bottom() + 1, host.height())
+        dialog.accept()
+        dialog.deleteLater()
+
 
 if __name__ == "__main__":
     unittest.main()

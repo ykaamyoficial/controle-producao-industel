@@ -3,13 +3,20 @@ from __future__ import annotations
 import html
 from datetime import datetime
 
-from PySide6.QtCore import QSize, Qt, Signal
-from PySide6.QtGui import QFont, QTextDocument
+from PySide6.QtCore import QRectF, QSize, Qt, Signal
+from PySide6.QtGui import QColor, QFont, QPainter, QTextDocument
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QMenu, QSizePolicy, QToolButton, QVBoxLayout, QWidget
 
 from app.ui.components.avatar import make_avatar_label
 from app.ui.components.chat_message_attachments import ChatAttachmentsView
 from app.ui.components.modern_button import ModernButton
+from app.ui.components.raised_paint import (
+    BUBBLE_MIN_HEIGHT,
+    BUBBLE_MIN_WIDTH,
+    BUBBLE_TAIL,
+    RaisedCardMixin,
+    paint_bubble,
+)
 from app.ui.components.status_badge import StatusBadge, area_badge
 from app.ui.styles import _contrast_text
 from app.ui.icons import AppIcons, icon_provider, make_icon
@@ -303,6 +310,22 @@ class CurrentUserMessageWidget(MessageBubble):
 
         self._status_indicator = self._add_footer(layout, color=text_color, tone="own", align_right=True, show_status=True)
 
+        # Bolha em relevo, estilo WhatsApp: pintada a mao (rabinho a direita,
+        # sombra, degrade). O fundo do QSS e anulado so nesta instancia.
+        self.setProperty("raised", True)  # QSS: QFrame#BubbleOwn[raised="true"] tira o fundo
+        margins = layout.contentsMargins()
+        layout.setContentsMargins(margins.left() + 2, margins.top() + 2, margins.right() + BUBBLE_TAIL + 2, margins.bottom() + 5)
+        self.setMinimumSize(BUBBLE_MIN_WIDTH, BUBBLE_MIN_HEIGHT)
+
+    def paintEvent(self, _event):  # noqa: N802 (Qt override)
+        accent = QColor(self.service.palette.get("accent", "#0078d4"))
+        body = QRectF(self.rect()).adjusted(1, 1, -(BUBBLE_TAIL + 1), -4)
+        painter = QPainter(self)
+        paint_bubble(
+            painter, body, fill_top=accent.lighter(118), fill_bottom=accent.darker(104),
+            border=None, tail_on_right=True, with_tail=not self.grouped,
+        )
+
     def update_entry(self, entry, grouped=False):
         super().update_entry(entry, grouped)
         text_color = self.service.palette.get("accent_text", "#ffffff")
@@ -376,12 +399,37 @@ class OtherUserMessageWidget(MessageBubble):
         self._add_attachments(content_col, compact=True)
         self._footer = self._add_footer(content_col, color=palette.get("muted", "#94a3b8"), tone="other", align_right=False, show_status=False)
 
+        # Bolha em relevo: a linha (self) pinta a bolha atras do QFrame, que
+        # fica transparente; rabinho a esquerda, como no WhatsApp.
+        self._bubble_frame = bubble
+        bubble.setProperty("raised", True)  # QSS: QFrame#BubbleOther[raised="true"] tira o fundo
+        margins = content_col.contentsMargins()
+        content_col.setContentsMargins(margins.left() + BUBBLE_TAIL, margins.top() + 1, margins.right() + 2, margins.bottom() + 5)
+        bubble.setMinimumSize(BUBBLE_MIN_WIDTH + BUBBLE_TAIL, BUBBLE_MIN_HEIGHT)
 
-class InternalNoteWidget(TimelineEntryWidget):
+    def paintEvent(self, _event):  # noqa: N802 (Qt override)
+        palette = self.service.palette
+        base = QColor(palette.get("surface", "#ffffff"))
+        edge = QColor(palette.get("border", "#cbd5e1"))
+        body = QRectF(self._bubble_frame.geometry()).adjusted(BUBBLE_TAIL, 1, -1, -4)
+        painter = QPainter(self)
+        path = paint_bubble(
+            painter, body, fill_top=base.lighter(104), fill_bottom=base.darker(103),
+            border=edge, tail_on_right=False, with_tail=not self.grouped,
+        )
+        if self._bubble_frame.property("mentionsMe"):
+            painter.setClipPath(path)
+            painter.fillRect(QRectF(body.left(), body.top(), 3, body.height()), QColor(palette.get("accent", "#0078d4")))
+
+
+class InternalNoteWidget(RaisedCardMixin, TimelineEntryWidget):
     """Nota interna manual (message_type=NOTA_INTERNA): visualmente distinta
     de uma mensagem comum — nunca alinhada como bolha de conversa, sempre com
     rotulo "NOTA INTERNA" e a area de origem em destaque, pra ninguem confundir
     com comunicacao entre pessoas."""
+
+    accent_key = "warning"
+    dashed = True
 
     def _build(self):
         palette = self.service.palette
@@ -427,6 +475,7 @@ class InternalNoteWidget(TimelineEntryWidget):
         footer_label = QLabel(footer_text)
         footer_label.setObjectName("ChatCaption")
         layout.addWidget(footer_label)
+        self.raise_card()
 
 
 _QUESTION_STATUS_LABELS = {
@@ -437,11 +486,13 @@ _QUESTION_STATUS_LABELS = {
 }
 
 
-class DirectedQuestionWidget(TimelineEntryWidget):
+class DirectedQuestionWidget(RaisedCardMixin, TimelineEntryWidget):
     """Card de "Resposta solicitada" — nunca uma bolha comum. O status
     exibido (self.entry["question_status"]) ja vem calculado pelo backend
     (_effective_question_status): pode ser ATRASADA sem que isso esteja
     gravado, entao esse widget nunca precisa saber calcular atraso sozinho."""
+
+    accent_key = "secondary"
 
     answer_requested = Signal(int)
     cancel_requested = Signal(int)
@@ -526,6 +577,7 @@ class DirectedQuestionWidget(TimelineEntryWidget):
         badge_row.addWidget(self._answer_btn)
         layout.addLayout(badge_row)
         self._apply_status()
+        self.raise_card()
 
     def _apply_status(self):
         palette = self.service.palette
