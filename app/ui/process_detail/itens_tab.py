@@ -4,7 +4,8 @@ from decimal import Decimal
 from typing import Any
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QAbstractItemView, QHBoxLayout, QHeaderView, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget
+from PySide6.QtGui import QBrush, QColor, QFont
+from PySide6.QtWidgets import QAbstractItemView, QHBoxLayout, QHeaderView, QLabel, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget
 
 from app.ui.components.badge_delegate import BadgeColumnDelegate, set_status_badge
 from app.ui.components.detail_widgets import clear_panel, make_panel, stat_block
@@ -13,6 +14,26 @@ from app.ui.numeric_utils import format_decimal, parse_decimal
 from app.ui.table_utils import configure_wrapping_table, item_product_code, resize_rows_to_contents
 
 _STAGE_COLUMN = 5
+_COLUMNS = 6
+
+# Modo "familia" (proposta com parciais): onde as pecas estao.
+_PLACE_ORDER = ("EXPEDICAO", "GALVANIZACAO", "PRODUCAO", "SEM_FLUXO", "ENTREGUE")
+_PLACE_TITLE = {
+    "EXPEDICAO": "Expedição",
+    "GALVANIZACAO": "Galvanização",
+    "PRODUCAO": "Produção",
+    "SEM_FLUXO": "Fluxo não definido",
+    "ENTREGUE": "Entregue",
+}
+# (campo da API, grupo, rotulo, status cuja cor o selo usa)
+_FAMILY_STAGES = (
+    ("ready", "EXPEDICAO", "Pronto - na Expedição", "EM_EXPEDICAO"),
+    ("in_galvanization", "GALVANIZACAO", "Na galvanização", "EM_GALVANIZACAO"),
+    ("awaiting_galvanization", "GALVANIZACAO", "Aguardando galvanização", "EM_GALVANIZACAO"),
+    ("to_produce", "PRODUCAO", "Em produção", "EM_PRODUCAO"),
+    ("undefined_flow", "SEM_FLUXO", "Fluxo não definido", ""),
+    ("delivered", "ENTREGUE", "Entregue", "ENTREGUE"),
+)
 # Estagio do item -> status cuja cor o selo usa (so apresentacao).
 _STAGE_STATUS = {
     "Entregue": "ENTREGUE",
@@ -43,6 +64,14 @@ class ItensTab(QWidget):
 
         self.summary_panel, _ = make_panel()
         layout.addWidget(self.summary_panel)
+        # Aviso do filtro por parcial (aparece so quando o usuario clica numa ficha do cabecalho).
+        self.filter_note = QLabel("")
+        self.filter_note.setObjectName("FilterSubtitle")
+        self.filter_note.setVisible(False)
+        layout.addWidget(self.filter_note)
+        self._family_rows: list[dict[str, Any]] = []
+        self._partial_filter: str | None = None
+        self._partial_names: dict[str, str] = {}
 
         self.table = QTableWidget(0, 6)
         self.table.setHorizontalHeaderLabels(["Item", "Código", "Descrição", "Qtd.", "Peso unit.", "Situação"])
@@ -62,7 +91,14 @@ class ItensTab(QWidget):
         self.table.verticalHeader().setMinimumSectionSize(40)
         layout.addWidget(self.table, 1)
 
-    def load(self, process_ids: list[int], processes: list[dict[str, Any]] | None = None):
+    def load(self, process_ids: list[int], processes: list[dict[str, Any]] | None = None, family: dict[str, Any] | None = None):
+        if family and family.get("items"):
+            return self._load_family(family)
+        self._family_rows = []
+        self._partial_filter = None
+        self.filter_note.setVisible(False)
+        self.table.clearSpans()
+        self.table.setRowCount(0)
         items: list[dict[str, Any]] = []
         seen_item_ids: set[int] = set()
         for process_id in process_ids:
@@ -111,6 +147,145 @@ class ItensTab(QWidget):
                 self.table.setItem(row, col, cell)
         resize_rows_to_contents(self.table)
         return len(items)
+
+    # ---- proposta com parciais: itens agrupados por onde as pecas estao ------------------------------
+    def _load_family(self, family: dict[str, Any]) -> int:
+        """Itens de toda a familia (mae + parciais). Cada item aparece uma vez por lugar onde tem pecas
+        (ex.: 3 un. na Expedicao e 2 un. em Producao), agrupado por lugar. So apresenta o que a API devolve."""
+        entries: dict[str, list[dict[str, Any]]] = {place: [] for place in _PLACE_ORDER}
+        totals: dict[str, Decimal] = {place: Decimal("0") for place in _PLACE_ORDER}
+        items = family.get("items") or []
+        for item in items:
+            quantities = item.get("quantities") or {}
+            placed = False
+            for field, place, label, status in _FAMILY_STAGES:
+                qty = parse_decimal(quantities.get(field), "0")
+                if qty <= 0:
+                    continue
+                placed = True
+                totals[place] += qty
+                entries[place].append({"item": item, "qty": qty, "label": label, "status": status})
+            if not placed:
+                qty = parse_decimal(item.get("quantity"), "0")
+                totals["SEM_FLUXO"] += qty
+                entries["SEM_FLUXO"].append({"item": item, "qty": qty, "label": "Fluxo não definido", "status": ""})
+
+        self._partial_names = {
+            str(p.get("key")): (f"{p.get('label')} · {p.get('proposal_number')}" if p.get("proposal_number") else str(p.get("label") or ""))
+            for p in family.get("partials") or []
+        }
+        self._partial_names.update({f"P:{m.get('proposal_id')}": str(m.get("proposal_number") or "") for m in family.get("members") or []})
+        weighted = [item for item in items if parse_decimal(item.get("unit_weight"), "0") > 0]
+        total_units = sum((parse_decimal(item.get("quantity"), "0") for item in items), Decimal("0"))
+        known_weight = sum(
+            (parse_decimal(item.get("quantity"), "0") * parse_decimal(item.get("unit_weight"), "0") for item in weighted), Decimal("0")
+        )
+        self._load_family_summary(len(items), total_units, totals, known_weight, len(weighted))
+
+        self.table.clearSpans()
+        self.table.setRowCount(0)
+        self._family_rows = []
+        group_font = QFont(self.table.font())
+        group_font.setBold(True)
+        group_brush = QBrush(QColor(self.service.palette.get("surface_alt", "#e8f1ff")))
+        for place in _PLACE_ORDER:
+            rows = entries[place]
+            if not rows:
+                continue
+            header_row = self.table.rowCount()
+            self.table.insertRow(header_row)
+            self.table.setSpan(header_row, 0, 1, _COLUMNS)
+            header = QTableWidgetItem(f"{_PLACE_TITLE[place]} · {format_decimal(totals[place])} un.")
+            header.setFont(group_font)
+            header.setBackground(group_brush)
+            header.setFlags(Qt.ItemIsEnabled)
+            self.table.setItem(header_row, 0, header)
+            self._family_rows.append({"kind": "group", "row": header_row, "partials": []})
+            for entry in rows:
+                item = entry["item"]
+                row = self.table.rowCount()
+                self.table.insertRow(row)
+                partial_text = str(item.get("partial_label") or "")
+                values = [
+                    item.get("item_number"),
+                    item.get("product_code"),
+                    item.get("description"),
+                    format_decimal(entry["qty"]),
+                    format_weight_or_missing(item.get("unit_weight")),
+                    f"{partial_text} | {entry['label']}" if partial_text else entry["label"],
+                ]
+                for col, value in enumerate(values):
+                    cell = QTableWidgetItem(str(value or ""))
+                    if col == 2:
+                        cell.setTextAlignment(Qt.AlignVCenter | Qt.AlignLeft)
+                    elif col in (3, 4):
+                        cell.setTextAlignment(Qt.AlignVCenter | Qt.AlignRight)
+                    else:
+                        cell.setTextAlignment(Qt.AlignCenter if col == 0 else Qt.AlignVCenter | Qt.AlignLeft)
+                    if col == _STAGE_COLUMN:
+                        set_status_badge(cell, entry["status"], self.service.palette)
+                    self.table.setItem(row, col, cell)
+                keys = list(item.get("partial_keys") or [])
+                if not keys and item.get("proposal_id"):
+                    keys = [f"P:{item.get('proposal_id')}"]  # API anterior as `partials`
+                self._family_rows.append({"kind": "item", "row": row, "partials": keys})
+        resize_rows_to_contents(self.table)
+        self._partial_filter = None
+        self.filter_note.setVisible(False)
+        return len(items)
+
+    def _load_family_summary(self, lines: int, units: Decimal, totals: dict[str, Decimal], weight: Decimal, weighted: int) -> None:
+        clear_panel(self.summary_panel, keep=0)
+        row = QHBoxLayout()
+        row.setSpacing(44)
+        row.addLayout(stat_block(str(lines), "linha" if lines == 1 else "linhas"))
+        row.addLayout(stat_block(format_decimal(units), "unidades"))
+        for place in _PLACE_ORDER:
+            if totals[place] > 0:
+                row.addLayout(stat_block(format_decimal(totals[place]), _PLACE_TITLE[place].lower()))
+        row.addLayout(stat_block(f"{format_decimal(weight)} kg" if weighted else "—", "peso conhecido"))
+        row.addStretch(1)
+        self.summary_panel.layout().addLayout(row)
+
+    def set_partial_filter(self, key: str | None) -> None:
+        """Mostra so os itens de uma parcial (clicar de novo na mesma ficha limpa o filtro)."""
+        self.show_partial(None if key == self._partial_filter else key)
+
+    def visible_item_count(self) -> int:
+        """Quantidade de itens (linhas de item, sem os titulos de grupo) visiveis com o filtro atual."""
+        if not self._family_rows:
+            return self.table.rowCount()
+        distinct = set()
+        for meta in self._family_rows:
+            if meta["kind"] == "item" and not self.table.isRowHidden(meta["row"]):
+                item = self.table.item(meta["row"], 0)
+                distinct.add(item.text() if item is not None else meta["row"])
+        return len(distinct)
+
+    def show_partial(self, key: str | None) -> None:
+        """Filtra a tabela pela parcial `key` (None mostra tudo)."""
+        if not self._family_rows:
+            return
+        self._partial_filter = key or None
+        visible_groups: dict[int, bool] = {}
+        current_group = None
+        for meta in self._family_rows:
+            if meta["kind"] == "group":
+                current_group = meta["row"]
+                visible_groups[current_group] = False
+                continue
+            show = self._partial_filter is None or self._partial_filter in meta["partials"]
+            self.table.setRowHidden(meta["row"], not show)
+            if show and current_group is not None:
+                visible_groups[current_group] = True
+        for group_row, visible in visible_groups.items():
+            self.table.setRowHidden(group_row, not visible)
+        if self._partial_filter is None:
+            self.filter_note.setVisible(False)
+        else:
+            name = self._partial_names.get(self._partial_filter, "")
+            self.filter_note.setText(f"Mostrando só os itens de {name}. Escolha a proposta principal para ver todos.")
+            self.filter_note.setVisible(True)
 
     def _load_summary(self, lines: int, units: Decimal, weight: Decimal, weighted: int) -> None:
         clear_panel(self.summary_panel, keep=0)

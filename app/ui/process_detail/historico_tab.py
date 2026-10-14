@@ -109,7 +109,11 @@ class HistoricoTab(QWidget):
         history: list[dict[str, Any]] = []
         for process_id in process_ids:
             history.extend(self.service.process_history_rows(process_id))
-        history.sort(key=lambda item: str(item.get("data_hora") or ""), reverse=True)
+        return self.show(history)
+
+    def show(self, history: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Mostra um historico ja buscado (a selecao de parcial do Detalhe busca em segundo plano)."""
+        history = sorted(history, key=lambda item: str(item.get("data_hora") or ""), reverse=True)
         self._history = history
         self._refresh_area_filter()
         self._render()

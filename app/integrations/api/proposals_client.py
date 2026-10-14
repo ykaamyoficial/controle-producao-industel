@@ -74,6 +74,9 @@ class ProposalsApiClient:
     def get_item(self, access_token: str, item_id: int) -> dict[str, Any]:
         return self.client.get(f"/api/v1/proposal-items/{item_id}", access_token=access_token).data
 
+    def get_family(self, access_token: str, proposal_id: int) -> dict[str, Any]:
+        return self.client.get(f"/api/v1/proposals/{int(proposal_id)}/family", access_token=access_token).data
+
     def list_partial_proposals(self, access_token: str, **filters) -> dict[str, Any]:
         params = urlencode({key: value for key, value in filters.items() if value not in (None, "")})
         path = "/api/v1/partials/proposals" + (f"?{params}" if params else "")

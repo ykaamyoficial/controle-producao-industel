@@ -351,6 +351,13 @@ class OfficialProposalApiStorage:
         finally:
             client.close()
 
+    def proposal_family(self, proposal_id: int) -> dict[str, Any]:
+        client, proposals, token = self._client()
+        try:
+            return proposals.get_family(token, int(proposal_id))
+        finally:
+            client.close()
+
     def process_partials(self, proposal_id: int) -> list[dict[str, Any]]:
         client, proposals, token = self._client()
         try:
@@ -2014,6 +2021,9 @@ def _api_proposal_to_process(row: dict[str, Any]) -> dict[str, Any]:
         "parent_legacy_id": row.get("parent_legacy_id"),
         "partial_number": row.get("partial_number"),
         "is_partial": bool(row.get("is_partial")),
+        # Parciais ativas da proposta mae (so a lista geral da API preenche; some em API anterior/replica).
+        "partials_count": int(row.get("partials_count") or 0),
+        "partials": list(row.get("partials") or []),
         "proposta": row.get("proposal_number") or "",
         "cliente": row.get("customer_name") or "",
         "obra_site": row.get("project_name") or "",

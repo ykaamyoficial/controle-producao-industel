@@ -64,6 +64,34 @@ AREA_COLUMNS = {
 }
 
 
+_AREA_SHORT = {
+    "EXPEDICAO": "Exp",
+    "GALVANIZACAO": "Galv",
+    "PRODUCAO": "Prod",
+    "CONTROLE_GERAL": "Geral",
+    "ALMOXARIFADO": "Almox",
+}
+
+
+def partials_text(row: dict[str, Any]) -> str:
+    """"P1 Exp · P2 Prod" -- onde cada parcial ativa da proposta mae esta. Vazio sem parciais."""
+    parts = []
+    for partial in row.get("partials") or []:
+        area = str(partial.get("current_area") or "")
+        parts.append(f"{partial.get('label') or 'P'} {_AREA_SHORT.get(area, area.title())}".strip())
+    return " · ".join(parts)
+
+
+def partials_tooltip(row: dict[str, Any], service) -> str:
+    lines = []
+    for partial in row.get("partials") or []:
+        area = str(partial.get("current_area") or "").replace("_", " ")
+        status = str(partial.get("current_status") or "")
+        status_text = service.area_status_label(area, status) if status else ""
+        lines.append(" · ".join(part for part in (str(partial.get("label") or ""), area.title(), status_text) if part))
+    return "\n".join(lines)
+
+
 class ProcessTableModel(QAbstractTableModel):
     def __init__(self, service, area: str | None = None, rows: list[dict[str, Any]] | None = None):
         super().__init__()
@@ -154,6 +182,12 @@ class ProcessTableModel(QAbstractTableModel):
             if key == "chat_icon":
                 unread = row.get("_chat_unread", 0)
                 return f"{unread} mensagem(ns) nao lida(s)" if unread else "Abrir chat da proposta"
+            if key == "proposta" and row.get("partials"):
+                # Proposta mae com parciais ativas: o balao lista onde cada uma esta (sem coluna nova).
+                tip = partials_tooltip(row, self.service)
+                if row.get(REMANAGEMENT_SITUATION_KEY):
+                    tip = "\n".join(part for part in (tip, row.get(REMANAGEMENT_TIP_KEY, "")) if part)
+                return f"Parciais:\n{tip}"
             if key == "proposta" and row.get(REMANAGEMENT_SITUATION_KEY):
                 # Proposta marcada por remanejamento (listas de Producao, Galvanizacao e Expedicao).
                 tip = row.get(REMANAGEMENT_TIP_KEY, "")

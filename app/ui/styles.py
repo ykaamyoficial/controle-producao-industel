@@ -481,6 +481,25 @@ def _build_stylesheet(palette: dict) -> str:
         border: 1px solid {highlight_border};
         {radius(14)}
     }}
+    QFrame#PartialCard {{
+        background: {surface};
+        border: 1px solid {border};
+        {radius(12)}
+    }}
+    QFrame#PartialCard:hover {{
+        border-color: {highlight_border};
+    }}
+    QFrame#PartialCard[selected="true"] {{
+        background: {surface_alt};
+        border: 2px solid {accent};
+    }}
+    QFrame#PartialCard QLabel {{
+        background: transparent;
+    }}
+    QLabel#PartialCardTitle {{
+        font-size: 13px;
+        font-weight: 800;
+    }}
     QFrame#NoteBox {{
         background: {surface_alt};
         border: 0;
@@ -622,6 +641,23 @@ def _build_stylesheet(palette: dict) -> str:
         border-radius: 6px;
     }}
     QFrame#ReplyConnector {{ background: {accent}; border: 0; }}
+    /* Bolhas e cartoes em relevo: o fundo e a borda sao pintados a mao
+       (app/ui/components/raised_paint.py), entao o QSS so os deixa lisos. */
+    QFrame#BubbleOwn[raised="true"], QFrame#BubbleOther[raised="true"],
+    QFrame#InternalNoteCard[raised="true"], QFrame#QuestionCard[raised="true"] {{
+        background: transparent;
+        border: 0;
+        border-radius: 0;
+    }}
+    QFrame#ChatCenterColumn[framed="true"] {{
+        background: {surface};
+        border: 1px solid {border};
+        {radius(14)}
+    }}
+    QFrame#ChatCenterColumn[framed="true"] QFrame#ChatHeaderCard {{
+        border-top-left-radius: 13px;
+        border-top-right-radius: 13px;
+    }}
     QFrame#InternalNoteCard QLabel, QFrame#QuestionCard QLabel, QFrame#AnswerCard QLabel,
     QFrame#QuotePreview QLabel, QFrame#FileCard QLabel, QFrame#AudioAttachment QLabel,
     QFrame#SharedDocumentRow QLabel, QFrame#SharedLinkRow QLabel, QFrame#ActivityRow QLabel {{

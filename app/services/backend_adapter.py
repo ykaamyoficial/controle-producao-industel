@@ -3,13 +3,14 @@ import json
 import threading
 import time
 from dataclasses import dataclass, field
+from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any
 from urllib.parse import urlparse, urlunparse
 from app.integrations.api.exceptions import ApiBusinessError
 from app.services.api_proposal_storage import OfficialProposalApiStorage, api_permission_level, user_message_for_api_error
 from app.services.api_reports import ApiExecutiveDashboardService, ApiOperationalReportsService
-from app.services.remanagement_badges import decorate_rows as decorate_remanagement_rows, index_badges as index_remanagement_badges
+from app.services.remanagement_badges import decorate_rows as decorate_remanagement_rows, index_badges as index_remanagement_badges, situation_label
 from app.services.status_sorting import sort_fiscal_rows, sort_process_rows
 from app.services.app_paths import ensure_app_data_dirs, get_config_example_path, get_config_path
 from app.services.app_logging import get_logger
@@ -468,6 +469,56 @@ class BackendService:
             ttl=15.0,
         )
 
+    def _dashboard_withdrawn_proposal_ids(self) -> set[Any]:
+        """Propostas cuja NF foi retirada pelo cliente: ficam fora da distribuicao por status."""
+        def load() -> list[dict[str, Any]]:
+            return self.official_proposal_storage.fiscal_rows(
+                {'situacao_fiscal': 'NF_RETIRADA_CLIENTE', 'limit': 200, 'offset': 0}
+            )
+        try:
+            rows = self._cached_read('dashboard_withdrawn_fiscal', load, ttl=15.0)
+        except Exception:
+            return set()
+        return {row.get('processo_id') for row in rows if row.get('processo_id') is not None}
+
+    @staticmethod
+    def _parse_deadline(value: Any) -> date | None:
+        text = str(value or '').strip()[:10]
+        for pattern in ('%d/%m/%Y', '%Y-%m-%d'):
+            try:
+                return datetime.strptime(text, pattern).date()
+            except ValueError:
+                continue
+        return None
+
+    def _dashboard_deadline_buckets(self) -> dict[str, list[dict[str, Any]]]:
+        """Agrupa as propostas por situacao do prazo de entrega (retiradas ficam de fora)."""
+        today = date.today()
+        next_week = today + timedelta(days=7)
+        withdrawn = self._dashboard_withdrawn_proposal_ids()
+        buckets: dict[str, list[dict[str, Any]]] = {'Vencidos': [], 'Hoje': [], 'Prox. 7 dias': [], 'No prazo': [], 'Entregues': []}
+        for row in self._dashboard_proposals_full():
+            if row.get('id') in withdrawn:
+                continue
+            status = row.get('status_geral') or row.get('current_status')
+            if status == 'ENTREGUE':
+                buckets['Entregues'].append(row)
+                continue
+            if status in {'CANCELADA', 'FINALIZADO'}:
+                continue
+            due = self._parse_deadline(row.get('prazo_entrega'))
+            if due is None:
+                continue
+            if due < today:
+                buckets['Vencidos'].append(row)
+            elif due == today:
+                buckets['Hoje'].append(row)
+            elif due <= next_week:
+                buckets['Prox. 7 dias'].append(row)
+            else:
+                buckets['No prazo'].append(row)
+        return buckets
+
     def dashboard(self) -> dict[str, Any]:
         rows = self._dashboard_proposals_full()
         production = len(self._dashboard_production_full())
@@ -475,26 +526,75 @@ class BackendService:
         fiscal = self._dashboard_fiscal_indicators()
         galvanization = len(self._dashboard_galvanization_candidates())
         delivered = sum((1 for row in rows if row.get('status_geral') == 'ENTREGUE' or row.get('current_status') == 'ENTREGUE'))
-        active = sum((1 for row in rows if row.get('status_geral') not in {'ENTREGUE', 'CANCELADA'} and row.get('current_status') not in {'ENTREGUE', 'CANCELADA'}))
-        return {'Ativas': active, 'Vencidos': 0, 'Prox. 7 dias': 0, 'Producao': production, 'Galvanizacao': galvanization, 'Expedicao': expedition, 'Pend. remanej.': 0, 'Entregues': delivered, 'Fiscal': fiscal.get('falta_emitir', 0) + fiscal.get('nf_parcial', 0)}
+        withdrawn = self._dashboard_withdrawn_proposal_ids()
+        active = sum((1 for row in rows if row.get('id') not in withdrawn and row.get('status_geral') not in {'ENTREGUE', 'CANCELADA'} and row.get('current_status') not in {'ENTREGUE', 'CANCELADA'}))
+        buckets = self._dashboard_deadline_buckets()
+        return {'Ativas': active, 'Vencidos': len(buckets['Vencidos']), 'Prox. 7 dias': len(buckets['Prox. 7 dias']), 'Producao': production, 'Galvanizacao': galvanization, 'Expedicao': expedition, 'Pend. remanej.': 0, 'Entregues': delivered, 'Fiscal': fiscal.get('falta_emitir', 0) + fiscal.get('nf_parcial', 0)}
 
     def dashboard_charts(self) -> dict[str, Any]:
         data = self.dashboard()
         areas = [{'label': 'Producao', 'total': data.get('Producao', 0)}, {'label': 'Galvanizacao', 'total': data.get('Galvanizacao', 0)}, {'label': 'Expedicao', 'total': data.get('Expedicao', 0)}, {'label': 'Fiscal', 'total': data.get('Fiscal', 0)}]
+        withdrawn_ids = self._dashboard_withdrawn_proposal_ids()
         status_counts: dict[str, int] = {}
         for row in self._dashboard_proposals_full():
+            if row.get('id') in withdrawn_ids:
+                continue
             status = row.get('status_geral') or row.get('current_status') or '-'
+            if str(status).upper() == 'ENTREGUE':
+                continue
             status_counts[status] = status_counts.get(status, 0) + 1
-        return {'areas': areas, 'status': [{'label': key, 'total': value} for key, value in status_counts.items()], 'prazos': []}
+        return {'areas': areas, 'status': [{'label': key, 'total': value} for key, value in status_counts.items()], 'prazos': [{'label': key, 'total': len(rows)} for key, rows in self._dashboard_deadline_buckets().items()]}
 
     def focus_text(self) -> str:
         return 'Operacao oficial conectada ao PostgreSQL via API.'
 
+    def _dashboard_fiscal_pending_rows(self) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        for indicator in ('falta_emitir', 'nf_parcial'):
+            rows.extend(self.official_proposal_storage.fiscal_indicator_rows(indicator))
+        return rows
+
+    def _dashboard_sorted(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return sorted(rows, key=lambda row: (str(row.get('cliente') or ''), str(row.get('proposta') or '')))
+
+    def _dashboard_rows_for(self, key: str) -> list[dict[str, Any]]:
+        """Linhas por tras de cada numero do dashboard, pela mesma fonte que gerou o numero."""
+        key = 'Prox. 7 dias' if key == '7 dias' else key
+        if key == 'Producao':
+            return list(self._dashboard_production_full())
+        if key == 'Expedicao':
+            return list(self._dashboard_expedition_full())
+        if key == 'Galvanizacao':
+            return list(self._dashboard_galvanization_candidates())
+        if key == 'Fiscal':
+            return self._dashboard_fiscal_pending_rows()
+        if key == 'Pend. remanej.':
+            return []
+        if key in {'Vencidos', 'Hoje', 'Prox. 7 dias', 'No prazo', 'Entregues'}:
+            return list(self._dashboard_deadline_buckets().get(key, []))
+        withdrawn = self._dashboard_withdrawn_proposal_ids()
+        rows = [row for row in self._dashboard_proposals_full() if row.get('id') not in withdrawn]
+        if key == 'Ativas':
+            closed = {'ENTREGUE', 'CANCELADA'}
+            return [
+                row for row in rows
+                if row.get('status_geral') not in closed and row.get('current_status') not in closed
+            ]
+        return rows
+
     def dashboard_metric_rows(self, metric: str) -> list[dict[str, Any]]:
-        return self.process_rows('CONTROLE GERAL', {})
+        return self._dashboard_sorted(self._dashboard_rows_for(metric))
 
     def dashboard_chart_rows(self, chart_key: str, label: str) -> list[dict[str, Any]]:
-        return self.process_rows('CONTROLE GERAL', {'text': label if chart_key == 'status' else ''})
+        if chart_key == 'status':
+            withdrawn = self._dashboard_withdrawn_proposal_ids()
+            rows = [
+                row for row in self._dashboard_proposals_full()
+                if row.get('id') not in withdrawn
+                and (row.get('status_geral') or row.get('current_status') or '-') == label
+            ]
+            return self._dashboard_sorted(rows)
+        return self._dashboard_sorted(self._dashboard_rows_for(label))
 
     def operational_report(self, area: str, filters: dict[str, Any] | None=None) -> dict[str, Any]:
         try:
@@ -1707,6 +1807,36 @@ class BackendService:
             return self.official_proposal_storage.process_partials(process_id)
         except Exception as exc:
             raise self._api_app_error(exc) from exc
+
+    def proposal_family(self, process_id: int) -> dict[str, Any]:
+        """Mae + parciais ativas com a localizacao dos itens (`GET /proposals/{id}/family`).
+
+        So enriquece o Detalhe: se a API for anterior ao endpoint ou falhar, devolve `{}` e a tela segue
+        como sempre (cabecalho e itens da propria proposta)."""
+        try:
+            family = self.official_proposal_storage.proposal_family(process_id)
+        except Exception:
+            log.debug('Familia da proposta indisponivel; Detalhe segue sem parciais', exc_info=True)
+            return {}
+        if not isinstance(family, dict) or not isinstance(family.get('members'), list):
+            return {}
+        try:
+            badges = self._cached_read(
+                'remanagement_badges',
+                lambda: index_remanagement_badges(self.official_proposal_storage.remanagement_badges()),
+                ttl=2.0,
+            )
+        except Exception:
+            badges = {}
+        member_ids = {int(member.get('proposal_id') or 0) for member in family['members']}
+        situations: list[str] = []
+        for proposal_id, badge in (badges or {}).items():
+            if int(proposal_id) in member_ids:
+                label = situation_label(badge.get('status'))
+                if label and label not in situations:
+                    situations.append(label)
+        family['remanagement_labels'] = situations
+        return family
 
     def process_loads(self, process_id: int) -> list[dict[str, Any]]:
         try:

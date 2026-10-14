@@ -16,6 +16,7 @@ from app.ui.components.status_badge import StatusBadge
 from app.ui.dialog_utils import apply_large_dialog_geometry, style_dialog_from_parent
 from app.ui.format_utils import format_empty, format_proposal_header
 from app.ui.process_detail.cargas_tab import CargasTab
+from app.ui.process_detail.family_header import FamilyStrip, consolidated_badge, has_partials
 from app.ui.process_detail.fiscal_entrega_tab import FiscalEntregaTab
 from app.ui.process_detail.fluxo_tab import FluxoTab
 from app.ui.process_detail.historico_tab import HistoricoTab
@@ -57,6 +58,11 @@ class ProcessDetailDialog(QDialog):
         self.changed = False
         self.process: dict = {}
         self._load_thread = None
+        # Carga completa mais recente (visao "Principal") e parcial escolhida nos cartoes do cabecalho.
+        self._payload: dict | None = None
+        self._scope_key = None
+        self._scope_request = 0
+        self._scope_thread = None
         self.setWindowTitle("Detalhes da proposta")
         apply_large_dialog_geometry(self, parent)
         style_dialog_from_parent(self, parent)
@@ -71,9 +77,12 @@ class ProcessDetailDialog(QDialog):
 
         header_panel = QFrame()
         header_panel.setObjectName("DetailPanel")
-        header = QHBoxLayout(header_panel)
-        header.setContentsMargins(18, 12, 14, 12)
+        panel_layout = QVBoxLayout(header_panel)
+        panel_layout.setContentsMargins(18, 12, 14, 12)
+        panel_layout.setSpacing(8)
+        header = QHBoxLayout()
         header.setSpacing(8)
+        panel_layout.addLayout(header)
 
         title_box = QVBoxLayout()
         title_box.setSpacing(3)
@@ -97,6 +106,12 @@ class ProcessDetailDialog(QDialog):
         title_box.addWidget(self.subtitle)
         title_box.addSpacing(3)
         title_box.addLayout(status_row)
+        # Parciais (numero, onde esta, status, pecas) + entrega/fiscal/peso, na largura toda do cartao;
+        # so aparece quando ha parciais.
+        self.family_strip = FamilyStrip(self.service)
+        self.family_strip.partial_requested.connect(self._show_partial_items)
+        self.family_strip.selection_changed.connect(self._on_partial_selected)
+        panel_layout.addWidget(self.family_strip)
 
         # Acoes a direita: secundaria, UMA primaria e "Fechar" sempre por ultimo.
         self.edit_button = ModernButton("Editar", "edit")
@@ -111,6 +126,13 @@ class ProcessDetailDialog(QDialog):
         header.addWidget(self.actions_button, 0, Qt.AlignVCenter)
         header.addWidget(close, 0, Qt.AlignVCenter)
         root.addWidget(header_panel)
+
+        # Aviso do que as abas estao mostrando quando uma parcial esta escolhida nos cartoes.
+        self.scope_note = QLabel("")
+        self.scope_note.setObjectName("FilterSubtitle")
+        self.scope_note.setWordWrap(True)
+        self.scope_note.setVisible(False)
+        root.addWidget(self.scope_note)
 
         self.tabs = CountTabWidget()
         self.resumo_tab = ResumoTab(self.service)
@@ -156,7 +178,11 @@ class ProcessDetailDialog(QDialog):
         process = next((item for item in processes if item), None)
         partials = self.service.process_partials(self.process_id) if process else []
         loads = self.service.process_loads(self.process_id) if process else []
-        return {"processes": processes, "process": process, "partials": partials, "loads": loads}
+        # Familia (mae + parciais com a localizacao dos itens): enriquecimento opcional. Servico sem o metodo
+        # ou API anterior ao endpoint devolve vazio e a tela segue como antes.
+        fetch_family = getattr(self.service, "proposal_family", None)
+        family = (fetch_family(self.process_id) if (process and callable(fetch_family)) else None) or {}
+        return {"processes": processes, "process": process, "partials": partials, "loads": loads, "family": family}
 
     def load(self):
         self.tabs.setEnabled(False)
@@ -208,7 +234,13 @@ class ProcessDetailDialog(QDialog):
 
         area, area_label, status = self.service.current_location(p)
         palette = self.service.palette
-        if status:
+        family = payload.get("family") or {}
+        family_badge = consolidated_badge(family, palette)
+        if family_badge:
+            # A linha aberta pode ser so a referencia (mae sem itens): o selo mostra onde as pecas estao.
+            self.status_badge.setText(family_badge[0])
+            self.status_badge.set_colors(*family_badge[1])
+        elif status:
             area_text = NAV_LABELS.get(area, area_label)
             self.status_badge.setText(f"{area_text.upper()} · {self.service.area_status_label(area, status)}")
             self.status_badge.set_colors(*status_color(status, palette, area))
@@ -231,8 +263,9 @@ class ProcessDetailDialog(QDialog):
         loads = payload["loads"]
         partial_row = next((row for row in partials if int(row.get("id") or 0) == int(self.process_id)), partials[0] if partials else {})
 
-        self.resumo_tab.load(p, self.process_ids, partials, loads)
-        item_count = self.itens_tab.load(self.process_ids, processes)
+        self.resumo_tab.load(p, self.process_ids, partials, loads, family if has_partials(family) else None)
+        self.family_strip.load(family)
+        item_count = self.itens_tab.load(self.process_ids, processes, family if has_partials(family) else None)
         history = self.historico_tab.load(self.process_ids)
         self.fluxo_tab.load(p, partial_row, history)
         self.cargas_tab.load(loads)
@@ -240,10 +273,106 @@ class ProcessDetailDialog(QDialog):
         self.tabs.set_tab_count(ITEMS_TAB, item_count)
         self.tabs.set_tab_count(LOADS_TAB, len(loads))
         self.tabs.set_tab_count(HISTORY_TAB, len(history))
+        payload["history"] = history
+        self._payload = payload
+        self._scope_key = None
+        self._scope_request += 1
+        self.scope_note.setVisible(False)
 
         self.body_stack.setCurrentWidget(self.tabs)
         if first_load and self.isVisible():
             self._body_fade = fade_in(self.tabs, duration=220)
+
+    def _show_partial_items(self, proposal_id) -> None:
+        self.itens_tab.set_partial_filter(f"P:{proposal_id}")
+        self.tabs.setCurrentIndex(ITEMS_TAB)
+
+    def _on_partial_selected(self, key) -> None:
+        """Cartao do cabecalho escolhido (None = principal): todas as abas passam a mostrar so essa parcial."""
+        self.itens_tab.show_partial(key)
+        self._apply_scope(key)
+
+    def _apply_scope(self, key) -> None:
+        payload = self._payload
+        if not payload:
+            return
+        self._scope_key = key
+        self._scope_request += 1
+        request = self._scope_request
+        family = payload.get("family") or {}
+        partial = next((p for p in family.get("partials") or [] if p.get("key") == key), None) if key else None
+        self._show_scope_note(partial)
+        if partial is None or partial.get("kind") != "PROPOSTA" or not partial.get("proposal_id"):
+            # Principal ou lote fisico: mesma proposta, os dados carregados continuam valendo.
+            self.tabs.setEnabled(True)
+            principal_family = family if has_partials(family) else None
+            self._fill_scoped(payload["process"], self.process_ids, payload["partials"], payload["loads"], payload["history"], principal_family)
+            self.tabs.set_tab_count(ITEMS_TAB, self.itens_tab.visible_item_count())
+            return
+        proposal_id = int(partial["proposal_id"])
+        self.tabs.setEnabled(False)
+        self._scope_thread = start_worker(
+            self,
+            lambda: self._fetch_scope(proposal_id),
+            lambda data: self._scope_loaded(request, proposal_id, data),
+            lambda exc: self._scope_failed(request, exc),
+        )
+
+    def _fetch_scope(self, proposal_id: int) -> dict:
+        """Dados da proposta-filha escolhida (thread de fundo; so chamadas de servico)."""
+        process = self.service.get_process_dict(proposal_id)
+        partials = self.service.process_partials(proposal_id) if process else []
+        loads = self.service.process_loads(proposal_id) if process else []
+        history = self.service.process_history_rows(proposal_id) if process else []
+        return {"process": process, "partials": partials, "loads": loads, "history": history}
+
+    def _scope_loaded(self, request: int, proposal_id: int, data: dict) -> None:
+        if request != self._scope_request:
+            return  # o usuario ja escolheu outro cartao
+        self.tabs.setEnabled(True)
+        if not data.get("process"):
+            self._scope_failed(request, None)
+            return
+        self._fill_scoped(data["process"], [proposal_id], data["partials"], data["loads"], data["history"])
+        self.tabs.set_tab_count(ITEMS_TAB, self.itens_tab.visible_item_count())
+
+    def _scope_failed(self, request: int, exc) -> None:
+        if request != self._scope_request:
+            return
+        if exc is not None:
+            log.exception("Falha ao carregar a parcial escolhida | key=%r", self._scope_key, exc_info=exc)
+        self.tabs.setEnabled(True)
+        self.scope_note.setText("Não foi possível carregar os dados desta parcial. Os itens acima são os dela; as outras abas seguem da proposta principal.")
+        self.scope_note.setVisible(True)
+
+    def _fill_scoped(
+        self, process: dict, process_ids: list[int], partials: list[dict], loads: list[dict], history: list[dict], family: dict | None = None
+    ) -> None:
+        """Preenche Resumo, Fluxo, Cargas, Fiscal/Entrega e Historico com os dados de uma proposta."""
+        partial_row = next((row for row in partials if int(row.get("id") or 0) == int(process_ids[0])), partials[0] if partials else {})
+        self.resumo_tab.load(process, process_ids, partials, loads, family)
+        self.historico_tab.show(history)
+        self.fluxo_tab.load(process, partial_row, history)
+        self.cargas_tab.load(loads)
+        self.fiscal_entrega_tab.load(process, process_ids, history)
+        self.tabs.set_tab_count(LOADS_TAB, len(loads))
+        self.tabs.set_tab_count(HISTORY_TAB, len(history))
+
+    def _show_scope_note(self, partial: dict | None) -> None:
+        if not partial:
+            self.scope_note.setVisible(False)
+            return
+        label = str(partial.get("label") or "")
+        if partial.get("kind") == "PROPOSTA":
+            name = f"{label} · {partial.get('proposal_number')}" if partial.get("proposal_number") else label
+            text = f"Mostrando só a parcial {name}. Escolha a proposta principal para ver tudo."
+        else:
+            text = (
+                f"Mostrando só o lote {label}: os itens e as quantidades são deste lote. "
+                "Fluxo, fiscal e histórico são da proposta inteira, porque o lote não é uma proposta própria."
+            )
+        self.scope_note.setText(text)
+        self.scope_note.setVisible(True)
 
     def edit_process(self):
         dialog = ProcessFormDialog(self.service, self.process_id, self)

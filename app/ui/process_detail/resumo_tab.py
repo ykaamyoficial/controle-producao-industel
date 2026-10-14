@@ -117,11 +117,18 @@ class ResumoTab(QWidget):
         scroll.setWidget(content)
         outer.addWidget(scroll)
 
-    def load(self, process: dict[str, Any], process_ids: list[int], partials: list[dict], loads: list[dict]):
+    def load(
+        self,
+        process: dict[str, Any],
+        process_ids: list[int],
+        partials: list[dict],
+        loads: list[dict],
+        family: dict[str, Any] | None = None,
+    ):
         self._load_flow(process)
         self._load_data(process)
         self._load_situation(process, len(process_ids) > 1)
-        self._load_links(partials, loads)
+        self._load_links(partials, loads, family)
 
     def _load_flow(self, process: dict[str, Any]):
         current_area = self.service.current_location(process)[0]
@@ -197,9 +204,12 @@ class ResumoTab(QWidget):
         self.situation_panel.layout().addLayout(kv_grid(rows))
         self.situation_panel.layout().addStretch(1)
 
-    def _load_links(self, partials: list[dict], loads: list[dict]):
+    def _load_links(self, partials: list[dict], loads: list[dict], family: dict[str, Any] | None = None):
         clear_panel(self.links_panel)
-        extra_partials = max(0, len(partials) - 1)
+        # Com a familia da API (proposta-filha ou lote) o numero e o mesmo dos cartoes do cabecalho;
+        # sem ela vale a regra antiga (linhas da lista de parciais menos a propria).
+        family_partials = (family or {}).get("partials")
+        extra_partials = len(family_partials) if family_partials else max(0, len(partials) - 1)
         row = QHBoxLayout()
         row.setSpacing(28)
         row.addLayout(stat_block(str(extra_partials), "Parcial vinculada" if extra_partials == 1 else "Parciais vinculadas"))
