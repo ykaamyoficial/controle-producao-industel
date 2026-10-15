@@ -5,8 +5,8 @@ APP_NAME = "Controle de Producao Industel"
 # APP_NAME fica sem acento de proposito: entra nos arquivos de release
 # (scripts/create_release_files.py) e precisa bater com o instalador.
 APP_DISPLAY_NAME = "Controle de Produção Industel"
-APP_VERSION = "2.8.0"
-APP_BUILD = "2026.10.07"
+APP_VERSION = "2.9.0"
+APP_BUILD = "2026.10.14"
 APP_PUBLISHER = "Industel"
 APP_CHANNEL = "stable"
 APP_EXECUTABLE_NAME = "ControleProducao.exe"
@@ -22,4 +22,4 @@ APP_API_CONTRACT_VERSION = "v1"
 # contrato "v1", mas nao tem uma correcao/campo do qual este build depende.
 # So sobe quando o Desktop passa a depender de verdade de um comportamento
 # novo da API -- nunca acompanha APP_VERSION automaticamente.
-MINIMUM_API_VERSION = "0.8.1"
+MINIMUM_API_VERSION = "0.11.0"

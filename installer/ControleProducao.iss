@@ -1,5 +1,5 @@
 #define MyAppName "Controle de Producao Industel"
-#define MyAppVersion "2.8.0"
+#define MyAppVersion "2.9.0"
 #define MyAppPublisher "Industel"
 ; ControleProducao.exe na raiz e o LAUNCHER (dist\Launcher): le current.json e
 ; abre versions\<versao>\ControleProducaoApp.exe. Atalhos e Startup apontam
@@ -17,7 +17,7 @@ DefaultDirName={autopf}\{#MyAppDir}
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 OutputDir=..\release
-OutputBaseFilename=ControleProducaoSetup-2.8.0
+OutputBaseFilename=ControleProducaoSetup-2.9.0
 SetupIconFile=..\app\assets\images\Logo_Industel_Icone.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 Compression=lzma
