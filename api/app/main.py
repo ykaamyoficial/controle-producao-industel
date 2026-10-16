@@ -17,6 +17,9 @@ from api.app.database.session import dispose_engine
 from api.app.health.checks.database import run_database_and_schema_checks
 from api.app.maintenance.middleware import MaintenanceMiddleware
 from api.app.maintenance.service import build_default_service as build_default_maintenance_service
+from api.app.modules.almox_integration import tracker as almox_tracker
+from api.app.modules.almox_integration.dispatcher import AlmoxDispatcher
+from api.app.modules.almox_integration.router import router as almox_router
 from api.app.modules.auth.router import router as auth_router
 from api.app.modules.channels.router import router as channels_router
 from api.app.modules.chat.router import router as chat_router
@@ -194,6 +197,11 @@ def create_app() -> FastAPI:
     application.add_middleware(AccessLogMiddleware)
     application.add_middleware(RequestIdMiddleware)
     install_exception_handlers(application)
+
+    # Avisa o Almox+ quando uma proposta e liberada, retirada ou concluida (so com URL e segredo).
+    almox_dispatcher = AlmoxDispatcher(settings.almox_webhook_url, settings.almox_integration_secret)
+    if almox_dispatcher.ativo:
+        almox_tracker.instalar(almox_dispatcher)
     application.include_router(system_router, prefix="/api/v1")
     application.include_router(health_router, prefix="/api/v1")
     application.include_router(maintenance_admin_router, prefix="/api/v1")
@@ -209,6 +217,7 @@ def create_app() -> FastAPI:
     application.include_router(sync_router, prefix="/api/v1")
     application.include_router(proposal_import_router, prefix="/api/v1")
     application.include_router(nomus_integration_router, prefix="/api/v1")
+    application.include_router(almox_router, prefix="/api/v1")
     application.include_router(provisioning_router, prefix="/api/v1")
     application.include_router(updates_router, prefix="/api/v1")
     application.include_router(update_audit_router, prefix="/api/v1")

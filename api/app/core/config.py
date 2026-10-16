@@ -71,6 +71,11 @@ class Settings(BaseSettings):
 
     nomus_encryption_key: str = Field(default="", alias="NOMUS_ENCRYPTION_KEY")
 
+    # Integracao com o Almox+ (estoque) -- ver docs/architecture/ALMOX_INTEGRATION.md. Default
+    # desligado: sem segredo a conciliacao responde 503; sem URL nenhum webhook e enviado.
+    almox_integration_secret: str = Field(default="", alias="ALMOX_INTEGRATION_SECRET")
+    almox_webhook_url: str = Field(default="", alias="ALMOX_WEBHOOK_URL")
+
     # Backup pre-deployment (Fase 05) -- ver api/app/backup/ e docs/architecture/BACKUP_PRE_DEPLOYMENT.md
     backup_dir: str = Field(default="backups/predeployment", alias="BACKUP_DIR")
     pg_dump_path: str = Field(default="pg_dump", alias="PG_DUMP_PATH")

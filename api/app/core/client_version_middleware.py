@@ -43,6 +43,8 @@ EXEMPT_PREFIXES: tuple[str, ...] = (
     "/api/v1/system/version",
     "/api/v1/system/compatibility",
     "/api/v1/system/maintenance",
+    # Chamado pelo servidor do Almox+, que nao e um cliente Desktop e nao envia X-Client-Version.
+    "/api/v1/integrations/almox",
 )
 
 
