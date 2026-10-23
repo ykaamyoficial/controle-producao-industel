@@ -16,6 +16,10 @@ from api.app.modules.almox_integration.signing import sign
 
 log = logging.getLogger("api.almox")
 
+#: A Cloudflare (túnel de api.ykora.com.br e almox.ykora.com.br) bloqueia o User-Agent padrão do
+#: urllib com o erro 1010; sem este cabeçalho o webhook seria recusado no caminho público.
+USER_AGENT = "Industel-Integracao/1.0 (controle-producao)"
+
 
 class AlmoxDispatcher:
     def __init__(
@@ -66,6 +70,7 @@ class AlmoxDispatcher:
             method="POST",
             headers={
                 "Content-Type": "application/json",
+                "User-Agent": USER_AGENT,
                 "X-Timestamp": str(agora),
                 "X-Signature": sign(self.secret, agora, corpo),
             },

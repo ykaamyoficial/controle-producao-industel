@@ -297,6 +297,8 @@ async def test_webhook_envia_evento_assinado_com_os_campos_do_contrato():
     assert verify(
         SECRET, headers["x-timestamp"], headers["x-signature"], recebido["corpo"]
     )
+    # A Cloudflare bloqueia o User-Agent padrão do urllib (erro 1010) no caminho público.
+    assert headers["user-agent"].startswith("Industel-Integracao/")
 
 
 @pytest.mark.asyncio
