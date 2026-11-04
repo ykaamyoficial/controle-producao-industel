@@ -1,0 +1,14 @@
+# Servico do tunel Cloudflare para o SERVIDOR. Usado junto do docker-compose.prod.yml:
+#   docker compose -f docker-compose.prod.yml -f docker-compose.servidor.yml ...
+services:
+  cloudflared:
+    image: cloudflare/cloudflared:2026.9.3
+    container_name: controle_producao_cloudflared
+    restart: unless-stopped
+    profiles: ["tunel"]
+    depends_on:
+      api:
+        condition: service_healthy
+    command: tunnel --no-autoupdate --config /etc/cloudflared/config.yml run
+    volumes:
+      - ./cloudflared:/etc/cloudflared:ro
