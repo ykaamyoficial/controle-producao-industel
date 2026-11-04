@@ -211,6 +211,18 @@ Escrever e conferir estes comandos na Tarefa 5 (sem executar o rollback de verda
 
 ---
 
+## Registro da execução (2026-11-04)
+
+Tarefas 0 a 7 feitas. Ajustes em relação ao plano original, descobertos no ensaio:
+
+- **`docker pull` falha por SSH** no SERVIDOR (cofre de credenciais do Docker Desktop sem sessão). As imagens `postgres:16` e `cloudflared` foram levadas por `docker save`/`docker load` a partir deste PC, com IDs conferidos.
+- **Volume `update_repository_data` (1,3 GB) precisa ir por `tar -xpf`**, preservando o dono (uid 100). Um volume novo nasce como root e a API cai com `PermissionError` em `/var/lib/controle-producao/updates/staging`. Na virada, esse passo vem **antes** de subir a API.
+- **Docker Desktop não inicia pelo item de Run do Windows** no logon do console. Foi criada a tarefa agendada `IniciarDockerDesktop` (ao fazer logon, atraso de 15 s). Com o Autologon, o reinício até API e banco saudáveis levou **92 s** (meta: 5 min).
+- **Autologon** se desativa sozinho (`AutoAdminLogon=0`) se a senha digitada estiver errada. Conferir `AutoAdminLogon=1` depois de cada ajuste.
+- **Backup:** `backup_db.ps1` agendado às 02:00 (`ControleProducaoBackup`), só com cópia local. A cópia externa (`\\Srv\geral\BKP CONTROLE DE PRODUÇÃO`) está **pendente**: o `celio` foi recusado pelo Windows. O script já aceita a credencial criptografada `C:\ControleProducao\cred_backup.xml` (`Get-Credential | Export-Clixml`) e o launcher `backup_externo.ps1`; falta só o usuário/senha corretos.
+- **Túnel antigo** = tarefa agendada `CloudflaredTunnel` neste PC. Na virada: `Stop-ScheduledTask` + `Disable-ScheduledTask`. Rollback: `Enable-ScheduledTask` + `Start-ScheduledTask`.
+- Contagem de linhas das 43 tabelas idêntica entre origem e destino; `alembic_version` `20261014_0038`; `/health/ready` 200.
+
 ## Foco de revisão (cinco falhas que a especificação implica e nenhum teste cobre)
 
 1. **Dump corrompido por redirecionamento do PowerShell:** só o `sha256` e o `pg_restore` com contagem acusam. Por isso a regra "gerar dentro do container + `docker cp`".

@@ -5,6 +5,7 @@
 param(
     [string]$Destino = '',
     [int]$RetencaoDias = 14,
+    [string]$CredencialXml = 'C:\ControleProducao\cred_backup.xml',
     [string]$Pasta = 'C:\ControleProducao\backups',
     [string]$Container = 'controle_producao_postgres'
 )
@@ -36,10 +37,19 @@ Get-ChildItem $Pasta -Filter 'cp_*.dump' | Where-Object LastWriteTime -lt (Get-D
 
 if ($Destino) {
     try {
-        Copy-Item $local (Join-Path $Destino $nome) -Force
+        # Credencial criptografada (DPAPI, so o mesmo usuario e PC leem). Criar com:
+        #   Get-Credential Srv\usuario | Export-Clixml C:\ControleProducao\cred_backup.xml
+        if (Test-Path $CredencialXml) {
+            $cred = Import-Clixml $CredencialXml
+            $raiz = ($Destino -split '\\' | Where-Object { $_ })[0..1] -join '\'
+            New-PSDrive -Name BKPEXT -PSProvider FileSystem -Root "\\$raiz" -Credential $cred -ErrorAction Stop | Out-Null
+        }
+        Copy-Item -LiteralPath $local -Destination (Join-Path $Destino $nome) -Force -ErrorAction Stop
         Log "OK copia externa em $Destino"
     } catch {
         Log "ERRO copia externa para ${Destino}: $($_.Exception.Message) (dump local mantido)"
         exit 2
+    } finally {
+        Remove-PSDrive -Name BKPEXT -ErrorAction SilentlyContinue
     }
 }
