@@ -36,7 +36,7 @@ PERMISSION_LEVEL_EDIT = 'EDIT'
 PERMISSION_LEVELS = (PERMISSION_LEVEL_NONE, PERMISSION_LEVEL_VIEW, PERMISSION_LEVEL_EDIT)
 PERMISSION_LEVEL_LABELS = {PERMISSION_LEVEL_NONE: 'Sem acesso', PERMISSION_LEVEL_VIEW: 'Visualizar', PERMISSION_LEVEL_EDIT: 'Visualizar e alterar'}
 OFFICIAL_AREAS = {'CONTROLE GERAL': {'column': 'status_geral'}, 'PRODUCAO': {'column': 'status_producao'}, 'GALVANIZACAO': {'column': 'status_galvanizacao'}, 'EXPEDICAO': {'column': 'status_expedicao'}, 'ALMOXARIFADO': {'column': 'status_almoxarifado'}}
-PERMISSION_AREAS = [('dashboard', 'Painel Geral', 'PAINEL GERAL'), ('executive_dashboard', 'Dashboard Executivo', 'DASHBOARD EXECUTIVO'), ('control_general', 'Controle Geral', 'CONTROLE GERAL'), ('production', 'Produção', 'PRODUCAO'), ('galvanization', 'Galvanização', 'GALVANIZACAO'), ('expedition', 'Expedição', 'EXPEDICAO'), ('fiscal', 'Fiscal', 'FISCAL'), ('partials', 'Parciais', 'PARCIAIS'), ('warehouse', 'Almoxarifado', 'ALMOXARIFADO'), ('operational_reports', 'Relatórios Operacionais', 'RELATORIOS OPERACIONAIS'), ('history', 'Histórico', 'HISTORICO'), ('settings', 'Configurações', 'CONFIGURACOES'), ('users_permissions', 'Usuários e Permissões', 'USUARIOS_PERMISSOES'), ('chats', 'Chats', 'CHATS')]
+PERMISSION_AREAS = [('dashboard', 'Painel Geral', 'PAINEL GERAL'), ('executive_dashboard', 'Dashboard Executivo', 'DASHBOARD EXECUTIVO'), ('control_general', 'Controle Geral', 'CONTROLE GERAL'), ('production', 'Produção', 'PRODUCAO'), ('galvanization', 'Galvanização', 'GALVANIZACAO'), ('expedition', 'Expedição', 'EXPEDICAO'), ('fiscal', 'Fiscal', 'FISCAL'), ('partials', 'Parciais', 'PARCIAIS'), ('warehouse', 'Almoxarifado', 'ALMOXARIFADO'), ('operational_reports', 'Relatórios Operacionais', 'RELATORIOS OPERACIONAIS'), ('history', 'Histórico', 'HISTORICO'), ('inspection', 'Inspeção', 'INSPECAO'), ('logistics', 'Logística', 'LOGISTICA'), ('settings', 'Configurações', 'CONFIGURACOES'), ('users_permissions', 'Usuários e Permissões', 'USUARIOS_PERMISSOES'), ('chats', 'Chats', 'CHATS')]
 NAV_PERMISSION_KEYS = {nav: key for key, _label, nav in PERMISSION_AREAS}
 LEGACY_AREA_PERMISSION_KEYS = {'CONTROLE GERAL': 'control_general', 'PRODUCAO': 'production', 'GALVANIZACAO': 'galvanization', 'EXPEDICAO': 'expedition', 'ALMOXARIFADO': 'warehouse'}
 PERMISSION_LEGACY_AREAS = {value: key for key, value in LEGACY_AREA_PERMISSION_KEYS.items()}
@@ -59,10 +59,11 @@ class AppError(Exception):
     em vez de caírem sempre numa mensagem generica. Ver `_api_app_error`.
     """
 
-    def __init__(self, message: str, *, error_code: str | None = None, technical_message: str | None = None):
+    def __init__(self, message: str, *, error_code: str | None = None, technical_message: str | None = None, details: object | None = None):
         super().__init__(message)
         self.error_code = error_code
         self.technical_message = technical_message
+        self.details = details
 
 class VersionConflictError(AppError):
     """Raised when the API rejects a write because its optimistic-locking `version` is stale."""
@@ -431,7 +432,22 @@ class BackendService:
             user_message_for_api_error(exc),
             error_code=getattr(exc, "error_code", None),
             technical_message=getattr(exc, "technical_message", None),
+            details=getattr(exc, "details", None),
         )
+
+    def inspection_service(self):
+        from app.services.inspection_service import InspectionService
+
+        if getattr(self, '_inspection_service', None) is None:
+            self._inspection_service = InspectionService(self.official_proposal_storage, self._api_app_error)
+        return self._inspection_service
+
+    def logistics_service(self):
+        from app.services.logistics_service import LogisticsService
+
+        if getattr(self, '_logistics_service', None) is None:
+            self._logistics_service = LogisticsService(self.official_proposal_storage, self._api_app_error)
+        return self._logistics_service
 
     def can_admin(self) -> bool:
         return bool(self.user and self.user.get('api_superuser'))
@@ -2131,6 +2147,8 @@ class BackendService:
             if status == 'AGUARDANDO_LIBERACAO':
                 actions.append({'id': 'STATUS', 'label': 'Liberar para producao', 'icon': 'production', 'status': 'LIBERADO_PRODUCAO', 'area': 'CONTROLE GERAL'})
             completed = bool(process.get('is_completed')) or status == 'ENTREGUE' or (process.get('status_expedicao') or '') == 'ENTREGUE'
+            if not completed and self.can_edit('inspection'):
+                actions.append({'id': 'ADD_TO_INSPECTION', 'label': 'Adicionar à inspeção', 'icon': 'inspection', 'status': '', 'area': 'CONTROLE GERAL'})
             if not completed:
                 actions.append({'id': 'STATUS', 'label': 'Cancelar proposta', 'icon': 'delete', 'status': 'CANCELADA', 'area': 'CONTROLE GERAL'})
             return actions

@@ -74,9 +74,10 @@ class ApiValidationError(ApiClientError):
 
 
 class ApiBusinessError(ApiClientError):
-    def __init__(self, error_code: str, message: str, *, status_code: int | None = None, request_id: str | None = None):
+    def __init__(self, error_code: str, message: str, *, status_code: int | None = None, request_id: str | None = None, details: object | None = None):
         super().__init__("business_error", message, technical_message=error_code, status_code=status_code, request_id=request_id)
         self.error_code = error_code
+        self.details = details
 
 
 class ApiUnexpectedResponseError(ApiClientError):

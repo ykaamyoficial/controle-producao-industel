@@ -21,6 +21,8 @@ from app.integrations.api.exceptions import (
     ApiValidationError,
 )
 from app.integrations.api.chat_client import ChatApiClient
+from app.integrations.api.inspections_client import InspectionsApiClient
+from app.integrations.api.logistics_client import LogisticsApiClient
 from app.integrations.api.notifications_client import NotificationsApiClient
 from app.integrations.api.proposals_client import ProposalsApiClient
 from app.integrations.api.session import ExperimentalApiSession
@@ -44,6 +46,10 @@ from api.app.modules.auth.permissions import (
     FISCAL_VIEW,
     GALVANIZATION_UPDATE,
     GALVANIZATION_VIEW,
+    INSPECTION_EDIT,
+    INSPECTION_VIEW,
+    LOGISTICS_EDIT,
+    LOGISTICS_VIEW,
     PERMISSIONS_VIEW,
     PRODUCTION_UPDATE,
     PRODUCTION_VIEW,
@@ -80,6 +86,8 @@ AREA_VIEW_PERMISSIONS = {
     "warehouse": {PROPOSALS_VIEW, PROPOSAL_ITEMS_VIEW},
     "operational_reports": {PROPOSALS_VIEW, PROPOSAL_ITEMS_VIEW, FISCAL_VIEW},
     "history": {AUDIT_VIEW},
+    "inspection": {INSPECTION_VIEW},
+    "logistics": {LOGISTICS_VIEW},
     "settings": set(),
     "users_permissions": {USERS_VIEW},
     "chats": {CHAT_VIEW},
@@ -105,6 +113,8 @@ AREA_EDIT_PERMISSIONS = {
     "warehouse": {PROPOSALS_CHANGE_STATUS},
     "operational_reports": set(),
     "history": set(),
+    "inspection": {INSPECTION_EDIT},
+    "logistics": {LOGISTICS_EDIT},
     "settings": {SYSTEM_ADMIN},
     "users_permissions": {USERS_CREATE, USERS_UPDATE, USERS_DISABLE, USERS_MANAGE_PERMISSIONS, ROLES_VIEW, PERMISSIONS_VIEW},
     "chats": {CHAT_SEND},
@@ -130,6 +140,10 @@ API_PERMISSION_TO_AREA = {
     FISCAL_REGISTER_EMISSION: ("fiscal", "EDIT"),
     FISCAL_CANCEL_LINK: ("fiscal", "EDIT"),
     AUDIT_VIEW: ("history", "VIEW"),
+    INSPECTION_VIEW: ("inspection", "VIEW"),
+    INSPECTION_EDIT: ("inspection", "EDIT"),
+    LOGISTICS_VIEW: ("logistics", "VIEW"),
+    LOGISTICS_EDIT: ("logistics", "EDIT"),
     SYSTEM_ADMIN: ("settings", "EDIT"),
     USERS_VIEW: ("users_permissions", "VIEW"),
     USERS_CREATE: ("users_permissions", "EDIT"),
@@ -1617,6 +1631,20 @@ class OfficialProposalApiStorage:
         borrowed = _BorrowedApiClient(self, client)
         return borrowed, ChatApiClient(borrowed), token
 
+    def inspections_api(self) -> tuple[DesktopApiClient, InspectionsApiClient, str]:
+        settings = self._load_enabled_settings()
+        client = self._ensure_client(settings)
+        token = self.current_access_token()
+        borrowed = _BorrowedApiClient(self, client)
+        return borrowed, InspectionsApiClient(borrowed), token
+
+    def logistics_api(self) -> tuple[DesktopApiClient, LogisticsApiClient, str]:
+        settings = self._load_enabled_settings()
+        client = self._ensure_client(settings)
+        token = self.current_access_token()
+        borrowed = _BorrowedApiClient(self, client)
+        return borrowed, LogisticsApiClient(borrowed), token
+
     def _notifications_client(self) -> tuple[DesktopApiClient, NotificationsApiClient, str]:
         settings = self._load_enabled_settings()
         client = self._ensure_client(settings)
@@ -1937,6 +1965,8 @@ def user_message_for_api_error(exc: Exception) -> str:
     if isinstance(exc, ApiBusinessError):
         if exc.error_code == "PROPOSAL_VERSION_CONFLICT":
             return "Esta proposta foi alterada por outro usuario. Recarregue os dados mais recentes antes de salvar novamente."
+        if exc.error_code == "INSPECTION_UNMARK_BLOCKED":
+            return "Não é possível desmarcar \"Precisa de inspeção\": já existe inspeção para o PD desta proposta."
         if exc.error_code == "PROPOSAL_NUMBER_ALREADY_EXISTS":
             return "Ja existe uma proposta com este numero no servidor."
         return exc.user_message
@@ -1959,6 +1989,7 @@ def _proposal_create_payload(data: dict[str, Any], import_metadata: dict[str, An
         "customer_name": str(data.get("cliente") or "").strip(),
         "project_name": _optional(data.get("obra_site")),
         "purchase_order": _optional(data.get("pedido_compra")),
+        "requires_inspection": bool(data.get("precisa_inspecao")),
         "batch_reference": _optional(data.get("lote")),
         "proposal_date": _date_iso(data.get("data_entrada")),
         "deadline_date": _date_iso(data.get("prazo_entrega")),
@@ -1979,6 +2010,7 @@ def _proposal_update_payload(data: dict[str, Any], current: dict[str, Any]) -> d
         "customer_name": str(data.get("cliente") or "").strip(),
         "project_name": _optional(data.get("obra_site")),
         "purchase_order": _optional(data.get("pedido_compra")),
+        "requires_inspection": bool(data.get("precisa_inspecao")),
         "batch_reference": _optional(data.get("lote")),
         "proposal_date": _date_iso(data.get("data_entrada")),
         "deadline_date": _date_iso(data.get("prazo_entrega")),
@@ -2028,6 +2060,7 @@ def _api_proposal_to_process(row: dict[str, Any]) -> dict[str, Any]:
         "cliente": row.get("customer_name") or "",
         "obra_site": row.get("project_name") or "",
         "pedido_compra": row.get("order_reference") or "",
+        "precisa_inspecao": bool(row.get("requires_inspection")),
         "lote": row.get("lot") or "",
         "data_entrada": _date_br(row.get("proposal_date")),
         "prazo_entrega": _date_br(row.get("deadline_date")),
@@ -2624,6 +2657,8 @@ def _api_permissions_to_legacy(codes: list[str], is_admin: bool) -> dict[str, st
         "warehouse",
         "operational_reports",
         "history",
+        "inspection",
+        "logistics",
         "settings",
         "users_permissions",
     ]

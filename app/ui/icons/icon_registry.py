@@ -26,6 +26,8 @@ ICON_REGISTRY: dict[AppIcons, str] = {
     AppIcons.PARTIAL: "package-open",
     AppIcons.HISTORY: "file-clock",  # "history" foi removido da lib atual
     AppIcons.AUDIT: "shield-check",
+    AppIcons.INSPECTION: "shield-check",
+    AppIcons.LOGISTICS: "clipboard-check",
     AppIcons.REPORTS: "chart-column",  # renomeado de "bar-chart-3"
 
     AppIcons.SETTINGS: "settings",

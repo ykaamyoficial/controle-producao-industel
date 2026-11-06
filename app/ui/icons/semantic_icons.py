@@ -24,6 +24,8 @@ class AppIcons(str, Enum):
     HISTORY = "history"
     AUDIT = "audit"
     REPORTS = "reports"
+    INSPECTION = "inspection"
+    LOGISTICS = "logistics"
 
     # Admin / sistema
     SETTINGS = "settings"

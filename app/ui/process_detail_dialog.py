@@ -20,6 +20,7 @@ from app.ui.process_detail.family_header import FamilyStrip, consolidated_badge,
 from app.ui.process_detail.fiscal_entrega_tab import FiscalEntregaTab
 from app.ui.process_detail.fluxo_tab import FluxoTab
 from app.ui.process_detail.historico_tab import HistoricoTab
+from app.ui.process_detail.inspecao_logistica_tab import InspecaoLogisticaTab
 from app.ui.process_detail.itens_tab import ItensTab
 from app.ui.process_detail.resumo_tab import ResumoTab
 from app.ui.process_form_dialog import ProcessFormDialog
@@ -147,6 +148,14 @@ class ProcessDetailDialog(QDialog):
         self.tabs.addTab(self.cargas_tab, "Cargas")
         self.tabs.addTab(self.fiscal_entrega_tab, "Fiscal/Entrega")
         self.tabs.addTab(self.historico_tab, "Histórico")
+        # Aba so de leitura; cada secao exige a permissao de ver a area (sem nenhuma, a aba nao existe).
+        can_view = getattr(self.service, "can_view", None)
+        see_inspection = bool(callable(can_view) and can_view("inspection"))
+        see_logistics = bool(callable(can_view) and can_view("logistics"))
+        self.inspecao_logistica_tab = None
+        if see_inspection or see_logistics:
+            self.inspecao_logistica_tab = InspecaoLogisticaTab(self.service, inspection=see_inspection, logistics=see_logistics)
+            self.tabs.addTab(self.inspecao_logistica_tab, "Inspeção e Logística")
         self.resumo_tab.tab_requested.connect(self.tabs.setCurrentIndex)
 
         # Corpo: esqueleto na primeira carga, abas depois, erro com "tentar de novo".
@@ -278,6 +287,8 @@ class ProcessDetailDialog(QDialog):
         self._scope_key = None
         self._scope_request += 1
         self.scope_note.setVisible(False)
+        if self.inspecao_logistica_tab is not None:
+            self.inspecao_logistica_tab.load([row.get("proposta") for row in processes if row])
 
         self.body_stack.setCurrentWidget(self.tabs)
         if first_load and self.isVisible():

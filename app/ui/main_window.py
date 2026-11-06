@@ -26,7 +26,9 @@ from app.ui.data_page import DataPage
 from app.ui.dashboard_page import DashboardPage
 from app.ui.executive_dashboard_page import ExecutiveDashboardPage
 from app.ui.fiscal_page import FiscalPage
+from app.ui.inspection_page import InspectionPage
 from app.ui.login_dialog import LoginDialog
+from app.ui.logistics_page import LogisticsPage
 from app.ui.operational_reports_page import OperationalReportsPage
 from app.ui.process_page import ProcessPage
 from app.ui.production_items_page import ProductionAreaPage
@@ -444,6 +446,14 @@ class MainWindow(FramelessHitTestMixin, QMainWindow):
         if self._can_view("fiscal", "FISCAL"):
             self.pages["FISCAL"] = FiscalPage(self.service)
             self.stack.addWidget(self.pages["FISCAL"])
+
+        if self._can_view("inspection", "INSPECAO"):
+            self.pages["INSPECAO"] = InspectionPage(self.service)
+            self.stack.addWidget(self.pages["INSPECAO"])
+
+        if self._can_view("logistics", "LOGISTICA"):
+            self.pages["LOGISTICA"] = LogisticsPage(self.service)
+            self.stack.addWidget(self.pages["LOGISTICA"])
 
         if self._can_view("operational_reports", "RELATORIOS OPERACIONAIS"):
             self.pages["RELATORIOS OPERACIONAIS"] = OperationalReportsPage(self.service)

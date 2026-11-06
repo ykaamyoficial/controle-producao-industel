@@ -6,7 +6,7 @@ import re
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QAbstractItemView, QComboBox, QDialog, QFileDialog, QFrame, QGridLayout, QHBoxLayout,
+    QAbstractItemView, QCheckBox, QComboBox, QDialog, QFileDialog, QFrame, QGridLayout, QHBoxLayout,
     QApplication, QHeaderView, QLineEdit, QLabel, QMessageBox, QScrollArea, QSpinBox,
     QStyledItemDelegate, QTableWidget, QTableWidgetItem, QTextEdit, QVBoxLayout, QWidget,
 )
@@ -150,6 +150,9 @@ class ProcessFormDialog(QDialog):
         stock_layout.addWidget(stock_label)
         stock_layout.addWidget(stockroom)
         grid.addWidget(stock_box, 4, 0, 1, 2)
+        self.requires_inspection = QCheckBox("Precisa de inspeção")
+        self.requires_inspection.setToolTip("Marcada, a proposta aparece na aba Inspeção como \"A solicitar\".")
+        grid.addWidget(self.requires_inspection, 5, 0, 1, 2)
         general.layout().addLayout(grid)
         body.addWidget(general)
 
@@ -656,6 +659,7 @@ class ProcessFormDialog(QDialog):
                 field.setCurrentIndex(max(0, idx))
             else:
                 field.setText(value)
+        self.requires_inspection.setChecked(bool(row.get("precisa_inspecao")))
         self.items_table.setRowCount(0)
         process_id = row.get("id") or self.process_id
         if process_id:
@@ -722,6 +726,7 @@ class ProcessFormDialog(QDialog):
                     "observacao_fluxo_item": flow_note.text().strip() if isinstance(flow_note, QLineEdit) else "",
                 })
             data["itens"] = items
+        data["precisa_inspecao"] = self.requires_inspection.isChecked()
         data["_import_source"] = self.import_source
         try:
             if self._saving:

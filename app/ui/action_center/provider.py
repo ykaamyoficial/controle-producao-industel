@@ -29,6 +29,7 @@ ACTION_DESCRIPTIONS = {
     "DEFINE_ITEM_FLOW": "Escolha quais itens serão produzidos e galvanizados.",
     "REGISTER_PRODUCTION": "Informe as quantidades produzidas de cada item.",
     "EDIT_ITEM_WEIGHTS": "Cadastre ou atualize os pesos dos itens.",
+    "ADD_TO_INSPECTION": "Confirma o PD e leva esta proposta para a aba Inspeção.",
     "REGISTER_DELIVERY": "Registre os itens efetivamente retirados pelo cliente.",
     "MANAGE_LOAD_EXISTING": "Escolha uma carga aberta e adicione as propostas selecionadas a ela.",
     "MANAGE_LOAD_NEW": "Cria uma carga nova já com as propostas selecionadas.",

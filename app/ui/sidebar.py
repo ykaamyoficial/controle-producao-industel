@@ -30,6 +30,8 @@ NAV_GROUPS = [
             ("FISCAL", "Fiscal", AppIcons.FISCAL),
             ("PARCIAIS", "Parciais", AppIcons.PARTIAL),
             ("ALMOXARIFADO", "Almoxarifado", AppIcons.STOCK),
+            ("INSPECAO", "Inspeção", AppIcons.INSPECTION),
+            ("LOGISTICA", "Logística", AppIcons.LOGISTICS),
         ],
     ),
     (

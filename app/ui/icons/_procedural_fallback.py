@@ -20,6 +20,8 @@ ICON_SYMBOLS = {
     "partial": "split",
     "history": "clock",
     "audit": "doc",
+    "inspection": "doc",
+    "logistics": "doc",
     "reports": "chart",
     "settings": "sliders",
     "search": "search",

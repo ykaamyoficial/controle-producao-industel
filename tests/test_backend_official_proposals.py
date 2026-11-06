@@ -426,7 +426,10 @@ class BackendOfficialProposalTests(unittest.TestCase):
         self.assertEqual(service.common_next_statuses("CONTROLE GERAL", [10]), ["LIBERADO_PRODUCAO", "CANCELADA"])
 
         actions = service.process_actions(10, "CONTROLE GERAL")
-        self.assertEqual([action["status"] for action in actions], ["LIBERADO_PRODUCAO", "CANCELADA"])
+        self.assertEqual(
+            [action["id"] if action["id"] != "STATUS" else action["status"] for action in actions],
+            ["LIBERADO_PRODUCAO", "ADD_TO_INSPECTION", "CANCELADA"],
+        )
 
         service.update_status(10, "CONTROLE GERAL", "LIBERADO_PRODUCAO")
         self.assertIn(("release_to_production", 10, 3), storage.calls)
@@ -449,7 +452,10 @@ class BackendOfficialProposalTests(unittest.TestCase):
             "is_completed": False,
         }
         self.assertEqual(service.next_status_options("CONTROLE GERAL", 10), ["CANCELADA"])
+        self.assertEqual([action["status"] for action in service.process_actions(10, "CONTROLE GERAL")], ["", "CANCELADA"])
+        service.can_edit = lambda area: area != "inspection"
         self.assertEqual([action["status"] for action in service.process_actions(10, "CONTROLE GERAL")], ["CANCELADA"])
+        service.can_edit = lambda _area: True
 
         service._official_control_process = lambda _process_id: {"id": 10, "status_geral": "ENTREGUE", "is_completed": True}
         self.assertEqual(service.next_status_options("CONTROLE GERAL", 10), [])

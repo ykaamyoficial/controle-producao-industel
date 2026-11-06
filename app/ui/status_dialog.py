@@ -7,6 +7,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.ui.action_center.handlers.control_general import ControlGeneralStatusHandler
+from app.ui.action_center.handlers.inspection import AddToInspectionHandler
 from app.ui.action_center.handlers.expedition import ExpeditionStatusHandler, RegisterDeliveryHandler
 from app.ui.action_center.handlers.galvanization import (
     ManageGalvanizationLoadExistingHandler, ManageGalvanizationLoadNewHandler, OpenRelatedGalvanizationLoadHandler,
@@ -72,6 +73,7 @@ class StatusDialog(ProposalActionCenter):
         registry.register("EDIT_ITEM_WEIGHTS", EditItemWeightsHandler())
         registry.register("STATUS", ProductionStatusHandler(), area="PRODUCAO")
         registry.register("STATUS", ControlGeneralStatusHandler(), area="CONTROLE GERAL")
+        registry.register("ADD_TO_INSPECTION", AddToInspectionHandler(), area="CONTROLE GERAL")
         registry.register("STATUS", WarehouseStatusHandler(), area="ALMOXARIFADO")
         registry.register("STATUS", ExpeditionStatusHandler(), area="EXPEDICAO")
         registry.register("REGISTER_DELIVERY", RegisterDeliveryHandler())

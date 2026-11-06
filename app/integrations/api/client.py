@@ -280,7 +280,7 @@ class DesktopApiClient:
         if response.status_code == 503:
             raise ApiUnavailableError(message or "service unavailable", status_code=503, request_id=request_id)
         if response.status_code in {404, 409}:
-            raise ApiBusinessError(code or f"HTTP_{response.status_code}", message or "Operacao nao permitida pela API.", status_code=response.status_code, request_id=request_id)
+            raise ApiBusinessError(code or f"HTTP_{response.status_code}", message or "Operacao nao permitida pela API.", status_code=response.status_code, request_id=request_id, details=error.get("details"))
         self._log_parse_failure(method=method, path=path, response=response, request_id=request_id, reason=f"status HTTP nao mapeado (code={code or 'desconhecido'})")
         raise ApiUnexpectedResponseError(f"HTTP {response.status_code} {code}", status_code=response.status_code, request_id=request_id)
 
