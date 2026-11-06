@@ -17,31 +17,47 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from app.models.fiscal_table_model import format_number, format_weight
+from app.models.fiscal_table_model import format_weight
 from app.services.app_logging import get_logger
 from app.ui.components.dialog_shell import dialog_footer, dialog_header
 from app.ui.components.modern_button import ModernButton
 from app.ui.background_worker import start_worker
 from app.ui.dialog_utils import apply_large_dialog_geometry, style_dialog_from_parent
-from app.ui.numeric_utils import parse_decimal, parse_whole_quantity
+from app.ui.numeric_utils import format_decimal, parse_whole_quantity
 from app.ui.table_utils import configure_wrapping_table, item_product_code, resize_rows_to_contents
 
 log = get_logger("fiscal_emission_dialog")
 
 
 class FiscalEmissionDialog(QDialog):
+    WINDOW_TITLE = "Registrar emissão fiscal"
+    CONFIRM_TEXT = "Registrar emissão fiscal"
+
     def __init__(self, service, fiscal_row: dict, parent=None):
         super().__init__(parent)
         self.service = service
         self.fiscal_row = fiscal_row
-        self.items = service.fiscal_items(int(fiscal_row["fiscal_processo_id"]))
+        self.items = self._load_items()
         self.item_balances: dict[int, tuple[int, float]] = {}
         self.selection_items: dict[int, QTableWidgetItem] = {}
         self.quantity_inputs: dict[int, QSpinBox] = {}
-        self.setWindowTitle("Registrar emissão fiscal")
+        # Linhas que o dialogo nao edita (ex.: quantidade fracionada) e reenvia como estao.
+        self.preserved_emissions: dict[int, dict] = {}
+        self.setWindowTitle(self.WINDOW_TITLE)
         apply_large_dialog_geometry(self, parent)
         style_dialog_from_parent(self, parent)
         self._build()
+
+    def _load_items(self) -> list[dict]:
+        return self.service.fiscal_items(int(self.fiscal_row["fiscal_processo_id"]))
+
+    def _caption_text(self) -> str:
+        if not self.items:
+            return (
+                "Esta proposta não possui itens cadastrados. A emissão fiscal será registrada na proposta, "
+                "sem itens vinculados. Este sistema não emite nota fiscal real."
+            )
+        return "Registre manualmente a emissão fiscal por item. Este sistema não emite nota fiscal real."
 
     def _build(self):
         root = QVBoxLayout(self)
@@ -49,18 +65,13 @@ class FiscalEmissionDialog(QDialog):
         root.setSpacing(10)
 
         title = QLabel(f"{self.fiscal_row.get('proposta', '')} | {self.fiscal_row.get('cliente', '')}")
-        caption_text = "Registre manualmente a emissão fiscal por item. Este sistema não emite nota fiscal real."
-        if not self.items:
-            caption_text = (
-                "Esta proposta não possui itens cadastrados. A emissão fiscal será registrada na proposta, "
-                "sem itens vinculados. Este sistema não emite nota fiscal real."
-            )
-        caption = QLabel(caption_text)
+        caption = QLabel(self._caption_text())
         root.addWidget(dialog_header(title, caption))
 
         fields = QFrame()
         fields.setObjectName("DetailPanel")
         field_layout = QGridLayout(fields)
+        self.field_layout = field_layout
         field_layout.setContentsMargins(16, 14, 16, 14)
         field_layout.setHorizontalSpacing(12)
         field_layout.setVerticalSpacing(6)
@@ -115,7 +126,7 @@ class FiscalEmissionDialog(QDialog):
         self.clear_button.setEnabled(bool(self.items))
         self.cancel_button = ModernButton("Cancelar", "clear", variant="ghost")
         self.cancel_button.clicked.connect(self.reject)
-        self.confirm_button = ModernButton("Registrar emissão fiscal", "status", accent=True)
+        self.confirm_button = ModernButton(self.CONFIRM_TEXT, "status", accent=True)
         self.confirm_button.clicked.connect(self.confirm)
         root.addWidget(
             dialog_footer(
@@ -142,7 +153,8 @@ class FiscalEmissionDialog(QDialog):
             try:
                 quantity_balance = parse_whole_quantity(item.get("quantidade_pendente"), default=0)
             except ValueError:
-                quantity_balance = int(parse_decimal(item.get("quantidade_pendente"), "0"))
+                # Saldo fracionado: nao truncar para um inteiro menor; bloqueia a emissao do item.
+                quantity_balance = 0
                 log.warning(
                     "Saldo de quantidade fracionado no item fiscal: fiscal_item_id=%r quantidade_pendente=%r",
                     fiscal_item_id, item.get("quantidade_pendente"),
@@ -157,9 +169,9 @@ class FiscalEmissionDialog(QDialog):
                 item.get("numero_item") or "",
                 item_product_code(item),
                 item.get("descricao") or "",
-                format_number(item.get("quantidade_total")),
+                format_decimal(item.get("quantidade_total")),
                 None,
-                format_number(quantity_balance),
+                format_decimal(item.get("quantidade_pendente")),
                 format_weight(item.get("peso_total")) if item.get("peso_total") not in (None, "") else "Nao informado",
                 format_weight(item.get("peso_faturado")),
                 format_weight(weight_balance) if weight_balance is not None else "Nao informado",
@@ -229,6 +241,9 @@ class FiscalEmissionDialog(QDialog):
             fiscal_item_id = int(item["id"])
             selection_item = self.selection_items.get(fiscal_item_id)
             if not selection_item or selection_item.checkState() != Qt.Checked:
+                continue
+            if fiscal_item_id in self.preserved_emissions:
+                emissions.append(dict(self.preserved_emissions[fiscal_item_id]))
                 continue
             label = item.get("numero_item") or fiscal_item_id
             quantity_balance, weight_balance = self.item_balances.get(fiscal_item_id, (0, 0.0))
@@ -311,7 +326,7 @@ class FiscalEmissionDialog(QDialog):
         if busy:
             self.confirm_button.setText("Registrando...")
         else:
-            self.confirm_button.setText("Registrar emissão fiscal")
+            self.confirm_button.setText(self.CONFIRM_TEXT)
 
     def closeEvent(self, event):
         if getattr(self, "_busy", False):

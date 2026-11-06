@@ -425,6 +425,13 @@ class ModernTable(QTableView):
             "item_descricao": 220,
             "peso_remanejado": 130,
             "proposta_reposicao": 145,
+            "numero_controle": 110,
+            "serie": 70,
+            "data_emissao": 150,
+            "itens_resumo": 200,
+            "motivo_cancelamento": 280,
+            "cancelado_por": 140,
+            "cancelado_em": 150,
         }
         has_long_description = any(key in {"descricao", "item_descricao", "observacao"} for key, _label in columns)
         self.verticalHeader().setSectionResizeMode(

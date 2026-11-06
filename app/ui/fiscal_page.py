@@ -26,9 +26,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.models.fiscal_cancellations_table_model import FiscalCancellationsTableModel
 from app.models.fiscal_items_table_model import FiscalItemsTableModel
 from app.models.fiscal_report_table_model import FiscalReportTableModel
 from app.models.fiscal_table_model import format_weight
+from app.ui.numeric_utils import format_decimal
 from app.models.fiscal_table_model import FiscalProcessTableModel
 from app.ui.background_worker import start_worker
 from app.ui.refresh_coordinator import RefreshCoordinator
@@ -50,6 +52,9 @@ from app.ui.components.operational_header import configure_operational_header
 from app.ui.components.top_tabs import configure_operational_tabs
 from app.ui.dialog_utils import apply_large_dialog_geometry, style_dialog_from_parent
 from app.ui.fiscal_emission_dialog import FiscalEmissionDialog
+from app.ui.fiscal_invoice_cancel_dialog import FiscalInvoiceCancelDialog
+from app.ui.fiscal_invoice_common import fiscal_error_message, items_summary
+from app.ui.fiscal_invoice_correction_dialog import FiscalInvoiceCorrectionDialog
 from app.ui.fiscal_item_selection_dialog import FiscalItemSelectionDialog
 from app.ui.fiscal_emission_draft_dialog import FiscalEmissionDraftDialog
 from app.ui.fiscal_emission_review_dialog import FiscalEmissionReviewDialog
@@ -65,6 +70,9 @@ class FiscalProposalDetailDialog(QDialog):
         self.fiscal_id = int(fiscal_row.get("fiscal_processo_id") or 0)
         self.items = self.service.fiscal_items(self.fiscal_id)
         self.emissions = self.service.fiscal_emissions(self.fiscal_id)
+        self.cancelled_invoices = [
+            {**row, "itens_resumo": items_summary(row)} for row in self.service.fiscal_cancelled_invoices(self.fiscal_id)
+        ]
         self.movements = self.service.fiscal_movements(self.fiscal_id)
         self.setWindowTitle("Detalhes da Proposta")
         apply_large_dialog_geometry(self, parent)
@@ -90,6 +98,8 @@ class FiscalProposalDetailDialog(QDialog):
         tabs.addTab(self._summary_tab(), "Resumo")
         tabs.addTab(self._items_tab(), "Itens")
         tabs.addTab(self._emissions_tab(), "Emissões")
+        if self.cancelled_invoices:
+            tabs.addTab(self._cancellation_tab(), f"Cancelamento ({len(self.cancelled_invoices)})")
         tabs.addTab(self._history_tab(), "Histórico Fiscal")
         tabs.addTab(self._alerts_tab(), "Alertas")
         root.addWidget(tabs, 1)
@@ -191,6 +201,32 @@ class FiscalProposalDetailDialog(QDialog):
         layout.addWidget(self._table(self.emissions, columns, description_key="observacao"), 1)
         return tab
 
+    def _cancellation_tab(self) -> QWidget:
+        tab = QWidget()
+        tab.setObjectName("FiscalTabPage")
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(0, 12, 0, 0)
+        total = len(self.cancelled_invoices)
+        summary = QLabel(
+            f"{total} nota(s) cancelada(s) nesta proposta. Notas canceladas não contam como faturadas "
+            "e o número delas pode ser usado de novo."
+        )
+        summary.setObjectName("Caption")
+        summary.setWordWrap(True)
+        layout.addWidget(summary)
+        columns = [
+            ("numero_controle", "Número da NF"),
+            ("serie", "Série"),
+            ("data_emissao", "Emissão"),
+            ("itens_resumo", "Itens (item: qtd.)"),
+            ("peso_emitido", "Peso"),
+            ("motivo_cancelamento", "Motivo"),
+            ("cancelado_por", "Cancelada por"),
+            ("cancelado_em", "Cancelada em"),
+        ]
+        layout.addWidget(self._table(self.cancelled_invoices, columns, description_key="motivo_cancelamento"), 1)
+        return tab
+
     def _history_tab(self) -> QWidget:
         tab = QWidget()
         tab.setObjectName("FiscalTabPage")
@@ -282,7 +318,7 @@ class FiscalProposalDetailDialog(QDialog):
             for c, (key, _label) in enumerate(columns):
                 value = self._display_value(key, item.get(key))
                 cell = QTableWidgetItem(str(value or "-"))
-                alignment = Qt.AlignTop | Qt.AlignLeft if key in {"descricao", "observacao"} else Qt.AlignCenter
+                alignment = Qt.AlignTop | Qt.AlignLeft if key in {"descricao", "observacao", "motivo_cancelamento"} else Qt.AlignCenter
                 cell.setTextAlignment(alignment)
                 table.setItem(r, c, cell)
         resize_rows_to_contents(table)
@@ -293,6 +329,8 @@ class FiscalProposalDetailDialog(QDialog):
             return self.service.fiscal_status_label(value or "")
         if key.startswith("peso_"):
             return format_weight(value)
+        if key.startswith("quantidade_"):
+            return format_decimal(value)
         return value
 
     def _latest_nf_number(self):
@@ -358,6 +396,10 @@ class FiscalPage(QWidget):
         self.withdrawn_proxy.setFilterCaseSensitivity(Qt.CaseInsensitive)
         self.items_model = FiscalItemsTableModel()
         self.report_model = FiscalReportTableModel()
+        self.cancellations_model = FiscalCancellationsTableModel()
+        self._cancel_offset = 0
+        self._cancel_total = 0
+        self._cancel_loading = False
         self._refresh_thread = None
         self._refreshing = False
         self._refresh_coordinator = RefreshCoordinator(self)
@@ -505,7 +547,9 @@ class FiscalPage(QWidget):
             signal.connect(lambda *_args: self._sync_batch_header())
         tabs.addTab(tracking, "Acompanhamento fiscal")
         tabs.addTab(self._build_withdrawn_tab(), "Notas fiscais retiradas")
+        tabs.addTab(self._build_cancellations_tab(), "Cancelamentos")
         tabs.addTab(self._build_report_tab(), "Relatórios fiscais")
+        tabs.currentChanged.connect(self._on_tab_changed)
 
     def _build_withdrawn_tab(self) -> QWidget:
         tab = QWidget()
@@ -546,6 +590,143 @@ class FiscalPage(QWidget):
         hint.setObjectName("HintLabel")
         root.addWidget(hint)
         return tab
+
+    CANCELLATIONS_PAGE_SIZE = 50
+
+    def _build_cancellations_tab(self) -> QWidget:
+        tab = QWidget()
+        tab.setObjectName("FiscalTabPage")
+        self.cancellations_tab = tab
+        root = QVBoxLayout(tab)
+        root.setContentsMargins(0, 12, 0, 0)
+        root.setSpacing(OPERATIONAL_SECTION_SPACING)
+
+        header = QFrame()
+        layout = QVBoxLayout(header)
+        configure_operational_header(
+            header,
+            layout,
+            margins=(16, 12, 16, 10),
+            spacing=8,
+            area="FISCAL",
+            palette=self.service.palette,
+        )
+        title = QLabel("Cancelamentos")
+        title.setObjectName("FilterTitle")
+        style_area_title(title, "FISCAL", self.service.palette)
+        caption = QLabel("Notas fiscais canceladas, com motivo e responsável. Correções de nota não aparecem aqui. Somente leitura.")
+        caption.setObjectName("Caption")
+        caption.setWordWrap(True)
+        layout.addWidget(title)
+        layout.addWidget(caption)
+
+        self.cancellations_search = QLineEdit()
+        self.cancellations_search.setPlaceholderText("Pesquisar proposta, cliente, obra/site ou número da NF")
+        self.cancellations_search.setMaxLength(180)
+        self.cancellations_search.setAccessibleName("Busca de cancelamentos")
+        self.cancellations_search.setMinimumHeight(34)
+        self.cancellations_search.returnPressed.connect(self.search_cancellations)
+        search_btn = ModernButton("Aplicar", "search")
+        clear_btn = ModernButton("Limpar", "clear", variant="ghost")
+        search_btn.clicked.connect(self.search_cancellations)
+        clear_btn.clicked.connect(self.clear_cancellations_search)
+        row = QHBoxLayout()
+        row.setSpacing(OPERATIONAL_ACTION_SPACING)
+        row.addWidget(self.cancellations_search, 1)
+        row.addWidget(search_btn)
+        row.addWidget(clear_btn)
+        layout.addLayout(row)
+        root.addWidget(header)
+
+        self.cancellations_table = ModernTable(self.service)
+        self.cancellations_table.status_shortcut_enabled = False
+        self.cancellations_table.setModel(self.cancellations_model)
+        self.cancellations_table.apply_column_layout()
+        root.addWidget(self.cancellations_table, 1)
+
+        footer = QHBoxLayout()
+        footer.setSpacing(OPERATIONAL_ACTION_SPACING)
+        self.cancellations_status = QLabel("")
+        self.cancellations_status.setObjectName("Caption")
+        self.cancellations_prev_btn = ModernButton("Anterior", "previous", variant="ghost")
+        self.cancellations_next_btn = ModernButton("Próxima", "next", variant="ghost")
+        self.cancellations_prev_btn.clicked.connect(lambda: self.change_cancellations_page(-1))
+        self.cancellations_next_btn.clicked.connect(lambda: self.change_cancellations_page(1))
+        footer.addWidget(self.cancellations_status, 1)
+        footer.addWidget(self.cancellations_prev_btn)
+        footer.addWidget(self.cancellations_next_btn)
+        root.addLayout(footer)
+        self._sync_cancellations_pager()
+        return tab
+
+    def _on_tab_changed(self, index: int):
+        if self.tabs.widget(index) is self.cancellations_tab:
+            self.refresh_cancellations()
+
+    def search_cancellations(self):
+        self._cancel_offset = 0
+        self.refresh_cancellations()
+
+    def clear_cancellations_search(self):
+        self.cancellations_search.clear()
+        self.search_cancellations()
+
+    def change_cancellations_page(self, step: int):
+        size = self.CANCELLATIONS_PAGE_SIZE
+        offset = max(0, self._cancel_offset + step * size)
+        if step > 0 and offset >= self._cancel_total:
+            return
+        self._cancel_offset = offset
+        self.refresh_cancellations()
+
+    def refresh_cancellations(self):
+        if self._cancel_loading:
+            return
+        search = self.cancellations_search.text().strip()
+        offset = self._cancel_offset
+        limit = self.CANCELLATIONS_PAGE_SIZE
+        self._cancel_loading = True
+        self._sync_cancellations_pager()
+
+        def operation():
+            return self.service.fiscal_cancellations(search, limit, offset)
+
+        self._cancel_worker = start_worker(
+            self, operation, self._cancellations_loaded, self._cancellations_failed,
+            operation_name="fiscal_page.cancellations",
+        )
+
+    def _cancellations_loaded(self, payload):
+        self._cancel_loading = False
+        rows = [{**row, "itens_resumo": items_summary(row)} for row in (payload or {}).get("items", [])]
+        self._cancel_total = int((payload or {}).get("total") or 0)
+        if not rows and self._cancel_offset > 0 and self._cancel_total > 0:
+            # Pagina ficou vazia (ex.: a lista encolheu): volta para a ultima valida.
+            self._cancel_offset = ((self._cancel_total - 1) // self.CANCELLATIONS_PAGE_SIZE) * self.CANCELLATIONS_PAGE_SIZE
+            self.refresh_cancellations()
+            return
+        self.cancellations_model.set_rows(rows)
+        self.cancellations_table.apply_column_layout()
+        self._sync_cancellations_pager()
+
+    def _cancellations_failed(self, exc):
+        self._cancel_loading = False
+        self._sync_cancellations_pager()
+        show_operation_error(self, exc, self.refresh_cancellations, title="Cancelamentos fiscais")
+
+    def _sync_cancellations_pager(self):
+        size = self.CANCELLATIONS_PAGE_SIZE
+        total = self._cancel_total
+        page = self._cancel_offset // size + 1
+        pages = max(1, -(-total // size))
+        if self._cancel_loading:
+            self.cancellations_status.setText("Carregando...")
+        elif total:
+            self.cancellations_status.setText(f"Página {page} de {pages} - {total} nota(s) cancelada(s)")
+        else:
+            self.cancellations_status.setText("Nenhuma nota cancelada encontrada.")
+        self.cancellations_prev_btn.setEnabled(not self._cancel_loading and self._cancel_offset > 0)
+        self.cancellations_next_btn.setEnabled(not self._cancel_loading and self._cancel_offset + size < total)
 
     def _add_filter_field(self, layout, row, column, name, widget):
         # Sem rotulo ao lado do campo: o placeholder e as opcoes explicam o filtro.
@@ -746,16 +927,7 @@ class FiscalPage(QWidget):
 
     @staticmethod
     def _fiscal_error_message(exc: Exception) -> str:
-        code = str(getattr(exc, "error_code", "") or getattr(exc, "technical_message", "") or "").upper()
-        messages = {
-            "FISCAL_QUANTITY_EXCEEDED": "O saldo fiscal deste item foi alterado. Atualize os dados e revise a emissão.",
-            "FISCAL_ITEM_INVALID": "Um item fiscal ficou indisponível ou inválido. Atualize os dados e revise a emissão.",
-            "FISCAL_INVOICE_DUPLICATED": "A NF informada já está registrada conforme a regra de unicidade atual.",
-            "FISCAL_VERSION_CONFLICT": "Os dados fiscais foram alterados por outra operação. Atualize e tente novamente.",
-            "FISCAL_INVALID_STATE": "Esta proposta fiscal já está concluída (NF emitida). Atualize a lista e revise a seleção.",
-            "PERMISSION_DENIED": "Seu usuário não possui permissão para registrar esta emissão.",
-        }
-        return messages.get(code, str(exc) or "Não foi possível concluir a emissão fiscal.")
+        return fiscal_error_message(exc, "Não foi possível concluir a emissão fiscal.")
 
     def clear(self):
         self.search.clear()
@@ -861,7 +1033,8 @@ class FiscalPage(QWidget):
         handlers = {
             "OPEN_FISCAL_DETAILS": lambda: self.show_fiscal_details(row),
             "REGISTER_FISCAL_EMISSION": lambda: self.register_emission(row),
-            "CANCEL_FISCAL_EMISSION": lambda: self.cancel_latest_emission(row),
+            "CORRECT_FISCAL_EMISSION": lambda: self.correct_emission(row),
+            "CANCEL_FISCAL_EMISSION": lambda: self.cancel_emission(row),
         }
         FiscalActionCenter(self.service, row, handlers, self).exec()
 
@@ -871,8 +1044,12 @@ class FiscalPage(QWidget):
         status = str(row.get("status_fiscal") or "").strip().upper()
         if self.service.can_register_fiscal_emission() and status not in {"NOTA_FISCAL_EMITIDA", "FISCAL_CANCELADO"}:
             menu.addAction(QAction("Registrar emissão fiscal", self, triggered=self.register_emission))
-        if getattr(self.service, "can_cancel_fiscal_emission", lambda: False)() and self.service.fiscal_emissions(int(row["fiscal_processo_id"])):
-            menu.addAction(QAction("Cancelar última emissão interna", self, triggered=lambda: self.cancel_latest_emission(row)))
+        if self.service.fiscal_emissions(int(row["fiscal_processo_id"])):
+            withdrawn = str(row.get("situacao_fiscal") or "").strip().upper() == "NF_RETIRADA_CLIENTE"
+            if self.service.can_register_fiscal_emission() and not withdrawn:
+                menu.addAction(QAction("Corrigir emissão fiscal", self, triggered=lambda: self.correct_emission(row)))
+            if getattr(self.service, "can_cancel_fiscal_emission", lambda: False)():
+                menu.addAction(QAction("Cancelar emissão fiscal", self, triggered=lambda: self.cancel_emission(row)))
         return menu
 
     def show_fiscal_details(self, row: dict) -> bool:
@@ -952,30 +1129,48 @@ class FiscalPage(QWidget):
             return True
         return False
 
-    def cancel_latest_emission(self, row: dict) -> bool:
+    def _active_invoices(self, row: dict, title: str) -> list[dict] | None:
+        """Notas ativas da proposta; None (com aviso) se a consulta falhar."""
+        try:
+            return self.service.fiscal_emissions(int(row["fiscal_processo_id"]))
+        except Exception as exc:
+            QMessageBox.warning(self, title, self._fiscal_error_message(exc))
+            return None
+
+    def cancel_emission(self, row: dict) -> bool:
         if not getattr(self.service, "can_cancel_fiscal_emission", lambda: False)():
             QMessageBox.warning(self, "Fiscal", "Seu usuário não tem permissão para cancelar emissão fiscal.")
             return False
-        answer = QMessageBox.question(
-            self,
-            "Cancelar emissão fiscal",
-            "Cancelar a última emissão fiscal interna desta proposta?",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
-        )
-        if answer != QMessageBox.Yes:
+        invoices = self._active_invoices(row, "Cancelar emissão fiscal")
+        if invoices is None:
             return False
-        try:
-            cancelled = self.service.cancel_latest_fiscal_emission(
-                int(row["fiscal_processo_id"]),
-                "Cancelamento interno pelo Desktop",
-            )
-            self.refresh()
-            QMessageBox.information(self, "Fiscal", f"{cancelled} vínculo(s) fiscal(is) cancelado(s).")
-            return True
-        except Exception as exc:
-            QMessageBox.warning(self, "Fiscal", str(exc))
+        if not invoices:
+            QMessageBox.information(self, "Fiscal", "Esta proposta não tem nota fiscal ativa para cancelar.")
             return False
+        dialog = FiscalInvoiceCancelDialog(self.service, row, invoices, self)
+        if not dialog.exec():
+            return False
+        self.refresh()
+        self.refresh_cancellations()
+        QMessageBox.information(self, "Fiscal", "Nota fiscal cancelada. O número foi liberado para nova emissão.")
+        return True
+
+    def correct_emission(self, row: dict) -> bool:
+        if not self.service.can_register_fiscal_emission():
+            QMessageBox.warning(self, "Fiscal", "Seu usuário não tem permissão para corrigir emissão fiscal.")
+            return False
+        invoices = self._active_invoices(row, "Corrigir emissão fiscal")
+        if invoices is None:
+            return False
+        if not invoices:
+            QMessageBox.information(self, "Fiscal", "Esta proposta não tem nota fiscal ativa para corrigir.")
+            return False
+        dialog = FiscalInvoiceCorrectionDialog(self.service, row, invoices, self)
+        if not dialog.exec():
+            return False
+        self.refresh()
+        QMessageBox.information(self, "Fiscal", "Emissão fiscal corrigida com sucesso.")
+        return True
 
     def _build_report_tab(self) -> QWidget:
         tab = QWidget()

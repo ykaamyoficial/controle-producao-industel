@@ -114,11 +114,19 @@ class FiscalActionCenter(QDialog):
                 AppIcons.STATUS, ActionCategory.PRIMARY, "FISCAL",
             ))
         has_emissions = bool(self.service.fiscal_emissions(int(row["fiscal_processo_id"])))
+        withdrawn = str(row.get("situacao_fiscal") or "").strip().upper() == "NF_RETIRADA_CLIENTE"
+        # A API recusa corrigir NF ja retirada pelo cliente (FISCAL_INVOICE_WITHDRAWN): nao oferece.
+        if self.service.can_register_fiscal_emission() and has_emissions and not withdrawn:
+            actions.append(ActionDescriptor(
+                "CORRECT_FISCAL_EMISSION", "Corrigir emissão fiscal",
+                "Altere número, série, data, observação e itens de uma nota já registrada.",
+                AppIcons.EDIT, ActionCategory.ATTENTION, "FISCAL",
+            ))
         if getattr(self.service, "can_cancel_fiscal_emission", lambda: False)() and has_emissions:
             actions.append(ActionDescriptor(
-                "CANCEL_FISCAL_EMISSION", "Cancelar ultima emissao interna",
-                "Desfaça o ultimo vinculo fiscal interno desta proposta.",
-                AppIcons.REMOVE, ActionCategory.ATTENTION, "FISCAL",
+                "CANCEL_FISCAL_EMISSION", "Cancelar emissão fiscal",
+                "Escolha a nota e informe o motivo. A nota inteira é cancelada e o número fica livre.",
+                AppIcons.REMOVE, ActionCategory.DESTRUCTIVE, "FISCAL",
             ))
         return actions
 

@@ -1439,19 +1439,7 @@ class OfficialProposalApiStorage:
         try:
             detail = proposals.get_fiscal_record(token, fiscal_record_id)
             invoice_number = (numero_controle or "").strip() or f"REGISTRO-{fiscal_record_id}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
-            items = []
-            for row in emissions or []:
-                fiscal_item_id = int(row.get("fiscal_item_id") or row.get("item_id") or 0)
-                if not fiscal_item_id:
-                    continue
-                item_payload: dict[str, Any] = {"fiscal_item_id": fiscal_item_id}
-                quantity_value = row.get("quantidade_emitida") if row.get("quantidade_emitida") is not None else row.get("quantity")
-                if quantity_value is not None and _decimal(quantity_value, default="0") > 0:
-                    item_payload["quantity"] = _decimal_text(quantity_value)
-                weight_value = row.get("peso_emitido") if row.get("peso_emitido") is not None else row.get("weight")
-                if weight_value is not None:
-                    item_payload["weight"] = _decimal_text(weight_value) or "0"
-                items.append(item_payload)
+            items = _fiscal_emission_item_payloads(emissions)
             payload = {"version": int(detail["version"]), "invoice_number": invoice_number, "observation": observacao or None, "items": items or None}
             try:
                 updated = proposals.register_fiscal_invoice(token, fiscal_record_id, payload)
@@ -1517,6 +1505,7 @@ class OfficialProposalApiStorage:
             client.close()
 
     def cancel_latest_fiscal_emission(self, fiscal_record_id: int, reason: str = "") -> int:
+        """Compat: cancela a primeira nota ativa inteira (endpoint atomico por nota)."""
         client, proposals, token = self._client()
         try:
             detail = proposals.get_fiscal_record(token, fiscal_record_id)
@@ -1530,20 +1519,57 @@ class OfficialProposalApiStorage:
             )
             if not invoice:
                 raise OfficialProposalStorageError("Nao existe emissao fiscal interna ativa para cancelar.", code="FISCAL_EMISSION_NOT_FOUND")
-            cancelled = 0
-            for item in list(invoice.get("items") or []):
-                if not item.get("active", True):
-                    continue
-                detail = proposals.cancel_fiscal_invoice_item(
-                    token,
-                    int(item["id"]),
-                    {
-                        "version": int(detail["version"]),
-                        "reason": reason or "Cancelamento interno pelo Desktop",
-                    },
-                )
-                cancelled += 1
-            return cancelled
+            proposals.cancel_invoice(token, int(invoice["id"]), int(detail["version"]), (reason or "").strip() or "Cancelamento interno pelo Desktop")
+            return sum(1 for item in (invoice.get("items") or []) if item.get("active", True))
+        finally:
+            client.close()
+
+    def cancel_fiscal_invoice(self, fiscal_record_id: int, invoice_id: int, reason: str) -> dict[str, Any]:
+        """Cancela a nota inteira escolhida; devolve a nota ja cancelada (legado)."""
+        client, proposals, token = self._client()
+        try:
+            detail = proposals.get_fiscal_record(token, fiscal_record_id)
+            updated = proposals.cancel_invoice(token, int(invoice_id), int(detail["version"]), reason)
+            cancelled = next((row for row in (updated.get("cancelled_invoices") or []) if int(row.get("id") or 0) == int(invoice_id)), None)
+            return _api_fiscal_invoice_to_legacy(cancelled) if cancelled else {"id": int(invoice_id)}
+        finally:
+            client.close()
+
+    def correct_fiscal_invoice(self, fiscal_record_id: int, invoice_id: int, data: dict[str, Any]) -> dict[str, Any]:
+        """Corrige numero/serie/data/observacao/itens mantendo o mesmo invoice id.
+
+        `data`: numero_controle, serie, data_emissao (ISO ou None = manter), observacao,
+        emissions (mesmo formato de `register_fiscal_emission`)."""
+        client, proposals, token = self._client()
+        try:
+            detail = proposals.get_fiscal_record(token, fiscal_record_id)
+            payload = {
+                "version": int(detail["version"]),
+                "invoice_number": str(data.get("numero_controle") or "").strip(),
+                "series": str(data.get("serie") or "").strip() or None,
+                "issued_at": data.get("data_emissao") or None,
+                "observation": str(data.get("observacao") or "").strip() or None,
+                "items": _fiscal_emission_item_payloads(data.get("emissions")),
+            }
+            updated = proposals.correct_invoice(token, int(invoice_id), payload)
+            corrected = next((row for row in (updated.get("invoices") or []) if int(row.get("id") or 0) == int(invoice_id)), None)
+            return _api_fiscal_invoice_to_legacy(corrected) if corrected else {"id": int(invoice_id)}
+        finally:
+            client.close()
+
+    def fiscal_cancelled_invoices(self, fiscal_record_id: int) -> list[dict[str, Any]]:
+        client, proposals, token = self._client()
+        try:
+            detail = proposals.get_fiscal_record(token, fiscal_record_id)
+            return [_api_fiscal_invoice_to_legacy(row) for row in detail.get("cancelled_invoices", [])]
+        finally:
+            client.close()
+
+    def fiscal_cancellations(self, search: str | None = None, limit: int = 50, offset: int = 0) -> dict[str, Any]:
+        client, proposals, token = self._client()
+        try:
+            payload = proposals.list_cancellations(token, search=(search or "").strip() or None, limit=limit, offset=offset)
+            return {"items": [_api_fiscal_cancellation_to_legacy(row) for row in payload.get("items", [])], "total": payload.get("total", 0)}
         finally:
             client.close()
 
@@ -2020,7 +2046,10 @@ def _proposal_update_payload(data: dict[str, Any], current: dict[str, Any]) -> d
 
 
 def _item_create_payload(item: dict[str, Any]) -> dict[str, Any]:
-    quantity = _decimal(item.get("quantidade"), default="1")
+    try:
+        quantity = Decimal(str(item.get("quantidade") or "1").replace(",", ".")).quantize(Decimal("0.0001"))
+    except InvalidOperation as exc:
+        raise OfficialProposalStorageError(f"Quantidade invalida no item {item.get('numero_item') or '?'}.") from exc
     weight_text = _optional_known_decimal(item.get("peso"))
     weight = Decimal(weight_text) if weight_text is not None else None
     return {
@@ -2498,7 +2527,53 @@ def _api_fiscal_invoice_to_legacy(row: dict[str, Any]) -> dict[str, Any]:
         "quantidade_emitida": row.get("quantity"),
         "peso_emitido": row.get("weight"),
         "itens": row.get("items") or [],
+        "data_emissao_iso": row.get("issued_at") or "",
+        "status": row.get("status") or "",
+        "cancelado_em": _datetime_br(row.get("cancelled_at")),
+        "cancelado_por": row.get("cancelled_by_name") or "",
+        "motivo_cancelamento": row.get("cancel_reason") or "",
     }
+
+
+def _api_fiscal_cancellation_to_legacy(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": row.get("invoice_id"),
+        "fiscal_processo_id": row.get("fiscal_record_id"),
+        "processo_id": row.get("proposal_id"),
+        "proposta": row.get("proposal_number") or "",
+        "cliente": row.get("customer_name") or "",
+        "obra_site": row.get("project_name") or "",
+        "lote": row.get("lot") or "",
+        "numero_controle": row.get("invoice_number") or "",
+        "serie": row.get("series") or "",
+        "tipo_emissao": row.get("emission_type") or "",
+        "data_emissao": _datetime_br(row.get("issued_at")),
+        "observacao": row.get("observation") or "",
+        "quantidade_itens": row.get("item_count", 0),
+        "quantidade_emitida": row.get("quantity"),
+        "peso_emitido": row.get("weight"),
+        "itens": row.get("items") or [],
+        "cancelado_em": _datetime_br(row.get("cancelled_at")),
+        "cancelado_por": row.get("cancelled_by_name") or "",
+        "motivo_cancelamento": row.get("cancel_reason") or "",
+    }
+
+
+def _fiscal_emission_item_payloads(emissions: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    items = []
+    for row in emissions or []:
+        fiscal_item_id = int(row.get("fiscal_item_id") or row.get("item_id") or 0)
+        if not fiscal_item_id:
+            continue
+        item_payload: dict[str, Any] = {"fiscal_item_id": fiscal_item_id}
+        quantity_value = row.get("quantidade_emitida") if row.get("quantidade_emitida") is not None else row.get("quantity")
+        if quantity_value is not None and _decimal(quantity_value, default="0") > 0:
+            item_payload["quantity"] = _decimal_text(quantity_value)
+        weight_value = row.get("peso_emitido") if row.get("peso_emitido") is not None else row.get("weight")
+        if weight_value is not None:
+            item_payload["weight"] = _decimal_text(weight_value) or "0"
+        items.append(item_payload)
+    return items
 
 
 def _api_fiscal_event_to_legacy(row: dict[str, Any]) -> dict[str, Any]:

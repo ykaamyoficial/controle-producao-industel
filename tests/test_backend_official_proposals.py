@@ -272,6 +272,22 @@ class FakeOfficialProposalStorage:
         self.calls.append(("cancel_latest_fiscal_emission", fiscal_record_id, reason))
         return 1
 
+    def cancel_fiscal_invoice(self, fiscal_record_id, invoice_id, reason):
+        self.calls.append(("cancel_fiscal_invoice", fiscal_record_id, invoice_id, reason))
+        return {"id": invoice_id, "status": "CANCELADA", "motivo_cancelamento": reason}
+
+    def correct_fiscal_invoice(self, fiscal_record_id, invoice_id, data):
+        self.calls.append(("correct_fiscal_invoice", fiscal_record_id, invoice_id, data))
+        return {"id": invoice_id}
+
+    def fiscal_cancelled_invoices(self, fiscal_record_id):
+        self.calls.append(("fiscal_cancelled_invoices", fiscal_record_id))
+        return []
+
+    def fiscal_cancellations(self, search=None, limit=50, offset=0):
+        self.calls.append(("fiscal_cancellations", search, limit, offset))
+        return {"items": [], "total": 0}
+
     def list_proposals(self, **kwargs):
         self.calls.append(("list_proposals", kwargs))
         return [
@@ -619,6 +635,49 @@ class BackendOfficialProposalTests(unittest.TestCase):
         self.assertIn(("register_fiscal_emission", 60, [{"fiscal_item_id": 6001}], "NF-1", "obs"), storage.calls)
         self.assertIn(("mark_fiscal_invoice_withdrawn", 60, "retirada"), storage.calls)
         self.assertIn(("cancel_latest_fiscal_emission", 60, "correcao"), storage.calls)
+
+    def test_fiscal_invoice_cancel_and_correct_go_through_storage_and_drop_cached_reads(self):
+        from app.services.short_cache import ShortLivedCache
+
+        service, storage = official_service()
+        service._read_cache = ShortLivedCache(default_ttl=60.0)
+
+        loads = []
+
+        def cached():
+            return service._cached_read("fiscal_indicators", lambda: loads.append(1) or len(loads), ttl=60.0)
+
+        cached()
+        cached()
+        self.assertEqual(len(loads), 1)
+        service.cancel_fiscal_invoice(60, 6101, "  NF errada  ")
+        cached()
+        self.assertEqual(len(loads), 2)
+        self.assertIn(("cancel_fiscal_invoice", 60, 6101, "NF errada"), storage.calls)
+
+        service.correct_fiscal_invoice(60, 6101, {"numero_controle": "NF-2"})
+        cached()
+        self.assertEqual(len(loads), 3)
+        self.assertIn(("correct_fiscal_invoice", 60, 6101, {"numero_controle": "NF-2"}), storage.calls)
+
+        service.cancel_latest_fiscal_emission(60, "x")
+        cached()
+        self.assertEqual(len(loads), 4)
+
+        self.assertEqual(service.fiscal_cancellations("CP", 10, 20), {"items": [], "total": 0})
+        self.assertIn(("fiscal_cancellations", "CP", 10, 20), storage.calls)
+        self.assertEqual(service.fiscal_cancelled_invoices(60), [])
+
+    def test_fiscal_invoice_cancel_requires_reason_and_permission(self):
+        service, storage = official_service()
+        with self.assertRaises(AppError):
+            service.cancel_fiscal_invoice(60, 6101, "   ")
+        service.can_edit = lambda _area: False
+        with self.assertRaises(AppError):
+            service.cancel_fiscal_invoice(60, 6101, "motivo")
+        with self.assertRaises(AppError):
+            service.correct_fiscal_invoice(60, 6101, {})
+        self.assertFalse([call for call in storage.calls if call[0] in {"cancel_fiscal_invoice", "correct_fiscal_invoice"}])
 
     def test_fiscal_partial_group_never_hides_mother_row(self):
         service = BackendService.__new__(BackendService)

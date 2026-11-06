@@ -1664,6 +1664,46 @@ class BackendService:
             return self.official_proposal_storage.cancel_latest_fiscal_emission(fiscal_processo_id, reason)
         except Exception as exc:
             raise self._api_app_error(exc) from exc
+        finally:
+            self._invalidate_operational_cache()
+
+    def fiscal_cancelled_invoices(self, fiscal_processo_id: int) -> list[dict[str, Any]]:
+        try:
+            return self.official_proposal_storage.fiscal_cancelled_invoices(fiscal_processo_id)
+        except Exception as exc:
+            raise self._api_app_error(exc) from exc
+
+    def fiscal_cancellations(self, search: str='', limit: int=50, offset: int=0) -> dict[str, Any]:
+        try:
+            return self.official_proposal_storage.fiscal_cancellations(search, limit, offset)
+        except Exception as exc:
+            raise self._api_app_error(exc) from exc
+
+    def cancel_fiscal_invoice(self, fiscal_processo_id: int, invoice_id: int, reason: str) -> dict[str, Any]:
+        if not self.user:
+            raise legacy.AppError('Usuario nao autenticado.')
+        if not self.can_cancel_fiscal_emission():
+            raise legacy.AppError('Seu usuario nao tem permissao para cancelar emissao fiscal.')
+        if not (reason or '').strip():
+            raise legacy.AppError('Informe o motivo do cancelamento.')
+        try:
+            return self.official_proposal_storage.cancel_fiscal_invoice(fiscal_processo_id, invoice_id, reason.strip())
+        except Exception as exc:
+            raise self._api_app_error(exc) from exc
+        finally:
+            self._invalidate_operational_cache()
+
+    def correct_fiscal_invoice(self, fiscal_processo_id: int, invoice_id: int, data: dict[str, Any]) -> dict[str, Any]:
+        if not self.user:
+            raise legacy.AppError('Usuario nao autenticado.')
+        if not self.can_register_fiscal_emission():
+            raise legacy.AppError('Seu usuario nao tem permissao para corrigir emissao fiscal.')
+        try:
+            return self.official_proposal_storage.correct_fiscal_invoice(fiscal_processo_id, invoice_id, data)
+        except Exception as exc:
+            raise self._api_app_error(exc) from exc
+        finally:
+            self._invalidate_operational_cache()
 
     def fiscal_status_label(self, status: str) -> str:
         labels = {'FALTA_EMITIR_NOTA_FISCAL': 'Falta emitir NF', 'AGUARDANDO_NF': 'CP em processamento', 'CP_EM_PROCESSAMENTO': 'CP em processamento', 'NF_EM_PROCESSAMENTO': 'NF em processamento', 'DISPONIVEL_PARA_EMISSAO': 'Disponivel para emitir NF', 'PENDENCIA_FISCAL_CRITICA': 'Pendencia fiscal critica', 'NOTA_FISCAL_PARCIAL': 'NF parcial', 'NF_PARCIAL': 'NF parcial', 'NOTA_FISCAL_EMITIDA': 'NF emitida', 'NF_EMITIDA': 'NF emitida', 'NF_RETIRADA_CLIENTE': 'NF retirada pelo cliente', 'FISCAL_CANCELADO': 'Fiscal cancelado', 'PENDENTE': 'Pendente', 'PARCIAL': 'Parcial', 'FATURADO': 'Faturado', 'CANCELADO': 'Cancelado'}

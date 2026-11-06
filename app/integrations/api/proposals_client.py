@@ -222,6 +222,18 @@ class ProposalsApiClient:
     def cancel_fiscal_invoice_item(self, access_token: str, invoice_item_id: int, payload: dict[str, Any]) -> dict[str, Any]:
         return self.client.post(f"/api/v1/fiscal/invoice-items/{invoice_item_id}/cancel", json_payload=payload, access_token=access_token).data
 
+    def cancel_invoice(self, access_token: str, invoice_id: int, version: int, reason: str) -> dict[str, Any]:
+        """Cancela a nota inteira; `version` e a do FiscalRecord."""
+        payload = {"version": int(version), "reason": reason}
+        return self.client.post(f"/api/v1/fiscal/invoices/{invoice_id}/cancel", json_payload=payload, access_token=access_token).data
+
+    def correct_invoice(self, access_token: str, invoice_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+        return self.client.post(f"/api/v1/fiscal/invoices/{invoice_id}/correct", json_payload=payload, access_token=access_token).data
+
+    def list_cancellations(self, access_token: str, search: str | None = None, limit: int = 50, offset: int = 0) -> dict[str, Any]:
+        params = urlencode({"search": search or "", "limit": int(limit), "offset": int(offset)})
+        return self.client.get(f"/api/v1/fiscal/cancellations?{params}", access_token=access_token).data
+
     def mark_fiscal_invoice_withdrawn(self, access_token: str, fiscal_record_id: int, payload: dict[str, Any]) -> dict[str, Any]:
         return self.client.post(f"/api/v1/fiscal/records/{fiscal_record_id}/withdrawal", json_payload=payload, access_token=access_token).data
 
