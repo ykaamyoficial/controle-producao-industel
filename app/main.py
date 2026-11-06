@@ -5,6 +5,7 @@ import traceback
 
 from PySide6.QtWidgets import QApplication, QMessageBox
 
+from app import edition
 from app.ui.app_icon import app_icon, configure_windows_taskbar_icon
 from app.services.app_logging import configure_logging, get_logger
 from app.services.update_distribution_client import check_for_updates
@@ -241,6 +242,8 @@ def confirm_post_update_handshake(argv: list[str]) -> None:
 def main():
     configure_logging()
     log.info("desktop_started version=%s", get_desktop_version())
+    if edition.is_test():
+        log.info("edicao=teste | api_padrao=%s (editavel) | atualizacao_automatica=desligada", edition.TEST_API_BASE_URL)
     confirm_post_update_handshake(sys.argv[1:])
 
     if "--notifier" in sys.argv[1:]:
@@ -272,7 +275,7 @@ def main():
     acquire_main_app_mutex()
 
     app = QApplication(sys.argv)
-    app.setApplicationName("Controle de Producao Industel")
+    app.setApplicationName(edition.app_name())
     app.setWindowIcon(app_icon())
 
     from app.ui.components.floating_chrome import install_floating_chrome

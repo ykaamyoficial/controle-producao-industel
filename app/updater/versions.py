@@ -15,6 +15,8 @@ Este modulo e usado tambem pelo launcher, entao depende SO da stdlib.
 
 from __future__ import annotations
 
+from app import edition
+
 import json
 import os
 import re
@@ -25,8 +27,8 @@ from pathlib import Path
 
 POINTER_FILE_NAME = "current.json"
 VERSIONS_DIR_NAME = "versions"
-APP_EXECUTABLE_NAME = "ControleProducaoApp.exe"
-LAUNCHER_EXECUTABLE_NAME = "ControleProducao.exe"
+APP_EXECUTABLE_NAME = edition.app_exe_name()
+LAUNCHER_EXECUTABLE_NAME = edition.launcher_exe_name()
 POINTER_SCHEMA = 1
 
 _SEMVER = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")

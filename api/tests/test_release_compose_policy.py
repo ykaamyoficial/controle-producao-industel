@@ -83,7 +83,7 @@ class ProductionComposeHttpsReverseProxyTests(unittest.TestCase):
             self.assertRegex(self.text, re.escape(f"${{{var}:?"), f"{var} deveria falhar explicitamente se nao definida")
 
     def test_no_private_key_file_is_versioned_in_the_repo(self):
-        ignored_dirs = {".git", "node_modules", ".venv", "venv", "dist", "build", "release"}
+        ignored_dirs = {".git", "node_modules", ".venv", "venv", "dist", "build", "release", "dist_teste", "build_teste"}
         for pattern in ("*.key", "*.pem"):
             for path in ROOT.rglob(pattern):
                 if any(part in ignored_dirs for part in path.parts):

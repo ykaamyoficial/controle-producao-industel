@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app import edition
+
 import json
 import os
 import time
@@ -30,7 +32,7 @@ def credential_dir() -> Path:
         return Path(override)
     local_app_data = os.environ.get("LOCALAPPDATA")
     if local_app_data:
-        return Path(local_app_data) / "ControleProducao" / "notifier"
+        return Path(local_app_data) / edition.data_dir_name() / "notifier"
     return get_app_data_dir() / "notifier"
 
 

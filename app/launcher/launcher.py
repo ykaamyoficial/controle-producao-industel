@@ -6,9 +6,10 @@ import subprocess
 import sys
 from pathlib import Path
 
+from app import edition
 from app.updater.versions import APP_EXECUTABLE_NAME, resolve_active_version, version_dir
 
-_ERROR_TITLE = "Controle de Producao Industel"
+_ERROR_TITLE = edition.app_name()
 
 
 def _show_error(message: str) -> None:

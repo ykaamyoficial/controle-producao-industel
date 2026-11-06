@@ -4,6 +4,7 @@ from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtGui import QIcon, QPainter, QPainterPath, QPixmap
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QWidget
 
+from app import edition
 from app.ui.animations import fade_in
 from app.ui.app_icon import app_icon
 from app.ui.components.app_icon_button import AppIconButton
@@ -61,9 +62,17 @@ class TitleBar(QFrame):
         icon_label.setPixmap(app_icon().pixmap(18, 18))
         layout.addWidget(icon_label)
 
-        title_label = QLabel(APP_DISPLAY_NAME)
+        title_label = QLabel(edition.display_name())
         title_label.setObjectName("TitleBarAppName")
         layout.addWidget(title_label)
+
+        if edition.is_test():
+            from app.integrations.api.config import DesktopApiConfigStore
+
+            test_badge = QLabel(edition.test_banner_text(DesktopApiConfigStore().load_settings().base_url))
+            test_badge.setObjectName("TestEditionBadge")
+            layout.addSpacing(8)
+            layout.addWidget(test_badge)
 
         layout.addStretch(1)
 

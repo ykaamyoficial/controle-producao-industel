@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app import edition
+
 import json
 import re
 from dataclasses import dataclass
@@ -82,6 +84,9 @@ def check_for_updates(
     fetch_json: Callable[[str, int], dict[str, Any]] | None = None,
     timeout: int = 10,
 ) -> dict[str, Any]:
+    if not edition.updates_enabled():
+        return {"update_available": False, "current_version": current_version, "latest_version": current_version,
+                "published_at": None, "release_notes": "", "assets": []}
     fetch = fetch_json or _default_fetch_json
     try:
         payload = fetch(url, timeout)

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from app import edition
 from app.integrations.api.client import DesktopApiClient
 from app.integrations.api.config import DesktopApiConfigStore, normalize_api_base_url
 from app.integrations.api.exceptions import ApiClientError
@@ -60,6 +61,9 @@ def check_for_updates(
     releases so-piloto, PRODUCTION nunca. Falha ao resolver a identidade
     local nunca bloqueia a checagem (cai para descoberta sem canal, que o
     servidor resolve como PRODUCTION por padrao)."""
+    if not edition.updates_enabled():
+        return _empty_result(current_version)  # edicao de teste: nunca consulta releases
+
     config_store_factory = config_store_factory or DesktopApiConfigStore
     client_factory = client_factory or DesktopApiClient
 

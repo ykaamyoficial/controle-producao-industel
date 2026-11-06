@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app import edition
+
 import subprocess
 import sys
 import os
@@ -27,7 +29,7 @@ def create_pre_update_backup(target_version: str) -> Path | None:
 def _program_executable_path() -> Path:
     if getattr(sys, "frozen", False):
         return Path(sys.executable)
-    return Path(r"C:\Program Files\Industel\Controle de Producao\ControleProducao.exe")
+    return Path(edition.default_install_dir()) / edition.launcher_exe_name()
 
 
 def _quote_ps(value: str | Path) -> str:

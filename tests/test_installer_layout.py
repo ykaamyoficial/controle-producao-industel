@@ -46,9 +46,11 @@ class InstallerLayoutTests(unittest.TestCase):
         from app.updater.versions import APP_EXECUTABLE_NAME
 
         spec = (_ROOT / "ControleProducao.spec").read_text(encoding="utf-8")
-        self.assertIn(f"name='{APP_EXECUTABLE_NAME[:-4]}'", spec)
+        # Os .spec parametrizam o sufixo da edicao de teste (_S); em producao e vazio.
+        self.assertEqual(APP_EXECUTABLE_NAME, "ControleProducaoApp.exe")
+        self.assertIn("name='ControleProducao' + _S + 'App'", spec)
         launcher_spec = (_ROOT / "Launcher.spec").read_text(encoding="utf-8")
-        self.assertIn("name='ControleProducao'", launcher_spec)
+        self.assertIn("name='ControleProducao' + _S", launcher_spec)
 
 
 if __name__ == "__main__":

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app import edition
+
 import os
 import re
 import hashlib
@@ -19,7 +21,7 @@ def safe_attachment_filename(filename: str | None, fallback: str = "anexo") -> s
 
 def chat_attachment_cache_dir() -> Path:
     root = os.getenv("LOCALAPPDATA") or os.getenv("APPDATA") or str(Path.home())
-    path = Path(root) / "ControleProducaoIndustel" / "cache" / "chat" / "attachments"
+    path = Path(root) / edition.chat_cache_dir_name() / "cache" / "chat" / "attachments"
     path.mkdir(parents=True, exist_ok=True)
     return path
 

@@ -13,6 +13,8 @@ o Updater nunca chega a ser lancado e o sistema continua bloqueado.
 
 from __future__ import annotations
 
+from app import edition
+
 import os
 import sys
 import time
@@ -102,6 +104,8 @@ class UpdateCoordinator:
         com a versao que o servidor esta oferecendo (defesa em profundidade
         contra uma corrida onde a release obrigatoria mudou entre a consulta
         de compatibilidade e o clique em 'Atualizar agora')."""
+        if not edition.updates_enabled():
+            return UpdateLaunchResult(False, None, None, error_message="Atualizacao automatica desativada na edicao de teste.")
         settings = self._config_store_factory().load_settings()
         if not settings.enabled:
             return UpdateLaunchResult(False, None, None, error_message="Integracao com a API esta desativada.")
@@ -140,6 +144,8 @@ class UpdateCoordinator:
         """`manifest_url`/`package_url` sao os caminhos relativos devolvidos por
         GET /updates/desktop (Fase 12) -- ja incluem o grant de download. Nunca
         recebe uma URL do GitHub (Fase 12, Secao 23)."""
+        if not edition.updates_enabled():
+            return UpdateLaunchResult(False, None, None, error_message="Atualizacao automatica desativada na edicao de teste.")
         settings = self._config_store_factory().load_settings()
         try:
             base_url = normalize_api_base_url(settings.base_url)
@@ -260,5 +266,5 @@ class UpdateCoordinator:
     def _updater_launch_command(self, request_path: Path) -> tuple[Path, list[str]]:
         if is_packaged():
             exe_dir = Path(sys.executable).resolve().parent
-            return exe_dir / "Updater.exe", ["--request", str(request_path)]
+            return exe_dir / edition.updater_exe_name(), ["--request", str(request_path)]
         return Path(sys.executable), ["-m", "app.updater", "--request", str(request_path)]

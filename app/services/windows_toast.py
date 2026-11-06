@@ -8,6 +8,8 @@ funcionava — sem perder o aviso.
 
 from __future__ import annotations
 
+from app import edition
+
 import threading
 from typing import Callable
 
@@ -18,7 +20,7 @@ log = get_logger("windows_toast")
 
 # Mesmo AUMID de sempre: preserva as escolhas que o usuario ja fez em
 # Configuracoes > Notificacoes do Windows.
-TOAST_APP_ID = "Controle de Producao Industel"
+TOAST_APP_ID = edition.toast_app_id()
 OPEN_BUTTON_LABEL = "Abrir"
 
 _toaster = None

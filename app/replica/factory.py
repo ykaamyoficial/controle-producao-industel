@@ -10,6 +10,8 @@ Desligada por padrao. No arquivo de configuracao:
 
 from __future__ import annotations
 
+from app import edition
+
 import hashlib
 import os
 from pathlib import Path
@@ -39,7 +41,7 @@ def get_replica_dir() -> Path:
     # Dados por usuario do Windows (nao ProgramData, que e compartilhado na maquina).
     local_app_data = os.environ.get("LOCALAPPDATA")
     if is_packaged() and local_app_data:
-        return Path(local_app_data) / "ControleProducao" / "replica"
+        return Path(local_app_data) / edition.data_dir_name() / "replica"
     return get_app_data_dir() / "replica"
 
 

@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse, urlunparse
 
+from app import edition
 from app.services.app_logging import get_logger
 from app.services.app_paths import get_config_path
 from app.services.configuration_service import get_configuration_service
@@ -71,10 +72,23 @@ def normalize_api_base_url(value: str) -> str:
     host = (parsed.hostname or "").lower()
     if host == "0.0.0.0":
         raise DesktopApiConfigError("0.0.0.0 e o endereco de bind do servidor; informe o IP ou nome real do servidor na rede.")
+    if edition.is_test():
+        try:
+            edition.check_test_api_url(url)
+        except ValueError as exc:
+            raise DesktopApiConfigError(str(exc)) from None
     path = "/" + "/".join(part for part in parsed.path.split("/") if part)
     if path == "/":
         path = ""
     return urlunparse((parsed.scheme, parsed.netloc, path, "", "", ""))
+
+
+def resolve_test_base_url(saved_url: str | None) -> str:
+    """Edicao de teste: URL salva se valida e nao oficial; senao o padrao de dev (8001)."""
+    try:
+        return normalize_api_base_url(saved_url or "")
+    except DesktopApiConfigError:
+        return edition.TEST_API_BASE_URL
 
 
 class DesktopApiConfigStore:
@@ -95,6 +109,8 @@ class DesktopApiConfigStore:
         ``base_url`` persistido (por escrita explicita via ``save_settings``),
         distinto de ``load_settings()`` sempre devolver um valor (que pode ser
         apenas o default de fabrica em memoria, nunca gravado)."""
+        if edition.is_test():
+            return True
         raw = dict(self._read_full_config().get(API_CONFIG_KEY) or {})
         return bool(str(raw.get("base_url") or "").strip())
 
@@ -102,14 +118,17 @@ class DesktopApiConfigStore:
         raw = dict(self._read_full_config().get(API_CONFIG_KEY) or {})
         base_url = str(raw.get("base_url") or DEFAULT_API_BASE_URL)
         env_override = (os.environ.get(API_BASE_URL_ENV_OVERRIDE) or "").strip()
-        if env_override:
+        is_test = edition.is_test()
+        if env_override and not is_test:
             log.info(
                 "Configuracao da API desktop: base_url sobrescrita por variavel de ambiente %s (uso de desenvolvimento/suporte)",
                 API_BASE_URL_ENV_OVERRIDE,
             )
             base_url = env_override
+        if is_test:  # edicao de teste: so a config salva vale (nunca a variavel de ambiente nem a porta oficial)
+            base_url = resolve_test_base_url(raw.get("base_url"))
         return DesktopApiSettings(
-            enabled=bool(raw.get("enabled", False)),
+            enabled=True if is_test else bool(raw.get("enabled", False)),
             base_url=base_url,
             connect_timeout=float(raw.get("connect_timeout") or DEFAULT_CONNECT_TIMEOUT),
             read_timeout=float(raw.get("read_timeout") or DEFAULT_READ_TIMEOUT),

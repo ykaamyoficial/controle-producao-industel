@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app import edition
+
 import ctypes
 import sys
 from pathlib import Path
@@ -7,7 +9,7 @@ from pathlib import Path
 from PySide6.QtGui import QIcon
 
 
-APP_USER_MODEL_ID = "Industel.ControleProducao.2"
+APP_USER_MODEL_ID = edition.app_user_model_id()
 
 
 def app_icon_path() -> Path:

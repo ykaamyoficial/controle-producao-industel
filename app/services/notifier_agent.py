@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app import edition
+
 import ctypes
 import json
 import sys
@@ -21,16 +23,16 @@ from app.ui.app_icon import app_icon_path, toast_icon_path
 
 log = get_logger("notifier_agent")
 
-MAIN_APP_MUTEX_NAME = "Global\\ControleProducaoIndustel_MainAppRunning"
-NOTIFIER_INSTANCE_MUTEX_NAME = "Global\\ControleProducaoIndustel_NotifierInstance"
+MAIN_APP_MUTEX_NAME = edition.main_app_mutex_name()
+NOTIFIER_INSTANCE_MUTEX_NAME = edition.notifier_mutex_name()
 STATE_FILE_NAME = creds.STATE_FILE_NAME
 PENDING_DEEP_LINK_FILE_NAME = "pending_deep_link.json"
 # Push instantaneo via WebSocket + este poll como rede de seguranca (WS caido,
 # maquina que dormiu). Bem mais curto que os 180s do desenho antigo so-poll.
 POLL_INTERVAL_SECONDS = 60
-TOAST_APP_ID = "Controle de Producao Industel"
+TOAST_APP_ID = edition.toast_app_id()
 STARTUP_SCRIPT_NAME = "ControleProducaoIndustelNotificacoes.bat"  # legado (pasta Startup)
-STARTUP_RUN_VALUE_NAME = "ControleProducaoIndustelNotificacoes"
+STARTUP_RUN_VALUE_NAME = edition.startup_run_value_name()
 RUN_KEY_PATH = r"Software\Microsoft\Windows\CurrentVersion\Run"
 SYNCHRONIZE = 0x00100000
 ERROR_ALREADY_EXISTS = 183

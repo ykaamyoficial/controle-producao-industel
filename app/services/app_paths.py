@@ -4,6 +4,8 @@ import os
 import sys
 from pathlib import Path
 
+from app import edition
+
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 APP_DIR = ROOT_DIR / "app"
@@ -33,7 +35,7 @@ def get_launcher_path() -> Path:
     if not is_packaged():
         return Path(sys.executable)
     root = get_install_root()
-    launcher = root / "ControleProducao.exe"
+    launcher = root / edition.launcher_exe_name()
     if launcher.is_file():
         return launcher
     return Path(sys.executable).resolve()
@@ -44,7 +46,7 @@ def get_program_data_root() -> Path:
     if override:
         return Path(override)
     program_data = os.environ.get("ProgramData", r"C:\ProgramData")
-    return Path(program_data) / "Industel" / "ControleProducao"
+    return Path(program_data) / "Industel" / edition.data_dir_name()
 
 
 def get_app_data_dir() -> Path:
@@ -70,7 +72,7 @@ def get_logs_dir() -> Path:
     if is_packaged():
         app_data = os.environ.get("APPDATA")
         if app_data:
-            return Path(app_data) / "ControleProducao" / "logs"
+            return Path(app_data) / edition.data_dir_name() / "logs"
     return get_app_data_dir() / "logs"
 
 

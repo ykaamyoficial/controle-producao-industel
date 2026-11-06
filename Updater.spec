@@ -9,6 +9,14 @@
 # riscos/pendencias, antes do primeiro uso real.
 
 from PyInstaller.utils.hooks import collect_submodules
+import os
+# Edicao de teste (scripts/build_test_installer.py): variaveis de ambiente
+# trocam nomes, assets e embutem app/config/edition.json. Sem elas o build e
+# o oficial, identico ao de sempre.
+_EDITION = os.environ.get('CONTROLE_PRODUCAO_EDITION', '').strip().lower()
+_S = 'Teste' if _EDITION == 'teste' else ''
+_EDITION_FILE = os.environ.get('CONTROLE_PRODUCAO_EDITION_FILE', '')
+_EXTRA_DATAS = [(_EDITION_FILE, 'app\\config')] if _EDITION_FILE else []
 
 hiddenimports = ['hashlib', 'json', 'zipfile', 'shutil', 'ctypes']
 hiddenimports += collect_submodules('httpx')
@@ -18,7 +26,7 @@ a = Analysis(
     ['app\\updater\\__main__.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=_EXTRA_DATAS,
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
@@ -34,7 +42,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='Updater',
+    name='Updater' + _S,
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -53,5 +61,5 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name='Updater',
+    name='Updater' + _S,
 )

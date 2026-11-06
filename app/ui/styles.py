@@ -1258,6 +1258,14 @@ def _build_stylesheet(palette: dict) -> str:
         background: {chrome_bg};
         border: 0;
     }}
+    QLabel#TestEditionBadge {{
+        font-size: 10px;
+        font-weight: 700;
+        color: {warning};
+        border: 1px solid {warning};
+        border-radius: 4px;
+        padding: 1px 6px;
+    }}
     QLabel#TitleBarAppName {{
         font-size: 11px;
         font-weight: 700;

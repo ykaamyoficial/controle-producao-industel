@@ -12,6 +12,7 @@ from app.services.api_proposal_storage import OfficialProposalApiStorage, api_pe
 from app.services.api_reports import ApiExecutiveDashboardService, ApiOperationalReportsService
 from app.services.remanagement_badges import decorate_rows as decorate_remanagement_rows, index_badges as index_remanagement_badges, situation_label
 from app.services.status_sorting import sort_fiscal_rows, sort_process_rows
+from app import edition
 from app.services.app_paths import ensure_app_data_dirs, get_config_example_path, get_config_path
 from app.services.app_logging import get_logger
 from app.services.short_cache import ShortLivedCache
@@ -180,6 +181,9 @@ def load_app_config() -> dict[str, Any]:
     data.setdefault('platform_api', {'enabled': False, 'base_url': 'http://127.0.0.1:8100', 'environment_type': 'production', 'company_code': '', 'company_name': ''})
     data.setdefault('saved_reports', legacy.DEFAULT_REPORT_DEFINITIONS)
     data['color_palette'] = normalize_palette_name(data.get('color_palette'))
+    if edition.is_test():
+        from app.integrations.api.config import resolve_test_base_url
+        data['desktop_api'] = {**data['desktop_api'], 'enabled': True, 'base_url': resolve_test_base_url(data['desktop_api'].get('base_url'))}
     data.pop('postgresql_official_proposals_enabled', None)
     data.pop('db_path', None)
     data.pop('backup_dir', None)

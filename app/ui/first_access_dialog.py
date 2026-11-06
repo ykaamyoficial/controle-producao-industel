@@ -3,6 +3,7 @@ from __future__ import annotations
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QLineEdit, QVBoxLayout, QWidget
 
+from app import edition
 from app.integrations.api.client import DesktopApiClient
 from app.integrations.api.config import DesktopApiConfigError, DesktopApiConfigStore, normalize_api_base_url
 from app.services.app_logging import get_logger
@@ -96,7 +97,7 @@ class FirstAccessDialog(QDialog):
         field_row.setContentsMargins(0, 0, 0, 0)
         field_row.addWidget(QLabel("Endereço da API"))
         self.url_field = QLineEdit()
-        self.url_field.setPlaceholderText("http://192.168.1.50:8000")
+        self.url_field.setPlaceholderText("https://producaodev.ykora.com.br" if edition.is_test() else "http://192.168.1.50:8000")
         self.url_field.textChanged.connect(self._on_field_changed)
         field_row.addWidget(self.url_field, 1)
         self.field_container.hide()

@@ -70,7 +70,9 @@ services:
       SMTP_FROM: ${SMTP_FROM:-}
       SMTP_STARTTLS: ${SMTP_STARTTLS:-true}
     ports:
-      - "127.0.0.1:${API_PORT:-8001}:8000"
+      # API_BIND=0.0.0.0 abre a API de dev para a rede local (teste em outro computador).
+      # Padrao 127.0.0.1: so este computador. A dev tem senhas/chaves de desenvolvimento conhecidas.
+      - "${API_BIND:-127.0.0.1}:${API_PORT:-8001}:8000"
     volumes:
       - ./api:/app/api
     command: python -m uvicorn api.app.main:app --host 0.0.0.0 --port 8000 --reload

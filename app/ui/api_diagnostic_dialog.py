@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from app import edition
 from app.integrations.api.auth_client import AuthApiClient
 from app.integrations.api.client import DesktopApiClient
 from app.integrations.api.compatibility import compatibility_report
@@ -135,7 +136,7 @@ class ApiDiagnosticDialog(QDialog):
         grid.addWidget(self.enabled_check, 0, 0, 1, 2)
         grid.addWidget(QLabel("URL da API"), 1, 0)
         self.base_url = QLineEdit()
-        self.base_url.setPlaceholderText("http://127.0.0.1:8000")
+        self.base_url.setPlaceholderText("https://producaodev.ykora.com.br" if edition.is_test() else "http://127.0.0.1:8000")
         grid.addWidget(self.base_url, 1, 1)
         grid.addWidget(QLabel("Timeout conexão"), 2, 0)
         self.connect_timeout = QLineEdit()

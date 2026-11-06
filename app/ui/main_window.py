@@ -37,6 +37,7 @@ from app.ui.sidebar import NAV_LABELS, Sidebar
 from app.ui.icons import icon_cache
 from app.ui.styles import app_stylesheet, chrome_bg_color
 from app.version import APP_DISPLAY_NAME, APP_VERSION
+from app import edition
 from app.services.update_distribution_client import check_for_updates
 from app.services.app_logging import get_logger
 from app.ui.update_dialog import UpdateDialog
@@ -133,7 +134,7 @@ class MainWindow(FramelessHitTestMixin, QMainWindow):
         self._update_available_notice = update_available_notice
         self._update_available_notice_shown = False
         self.pages: dict[str, QWidget] = {}
-        self.setWindowTitle(f"{APP_DISPLAY_NAME} {APP_VERSION}")
+        self.setWindowTitle(f"{edition.display_name()} {APP_VERSION}")
         self.setWindowIcon(app_icon())
         self.resize(1380, 820)
         self.setMinimumSize(1120, 680)

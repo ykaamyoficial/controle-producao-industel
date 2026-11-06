@@ -3,7 +3,9 @@ from __future__ import annotations
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QCheckBox, QDialog, QLabel, QLineEdit, QVBoxLayout
 
+from app import edition
 from app.services.login_preferences import load_login_preferences, save_login_preferences
+from app.ui.api_diagnostic_dialog import ApiDiagnosticDialog
 from app.ui.app_icon import app_icon
 from app.ui.components.dialog_shell import window_title_row
 from app.ui.components.modern_button import ModernButton
@@ -51,6 +53,10 @@ class LoginDialog(QDialog):
         layout.addWidget(self.password)
         layout.addWidget(self.remember_user)
         layout.addWidget(self.error)
+        if edition.is_test():
+            server = ModernButton("Configurar servidor", "settings", variant="ghost")
+            server.clicked.connect(lambda: ApiDiagnosticDialog(self).exec())
+            layout.addWidget(server, alignment=Qt.AlignRight)
         layout.addWidget(enter, alignment=Qt.AlignRight)
         if remembered_login:
             self.password.setFocus()

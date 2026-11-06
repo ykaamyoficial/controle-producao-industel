@@ -1,5 +1,14 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+import os
+# Edicao de teste (scripts/build_test_installer.py): variaveis de ambiente
+# trocam nomes, assets e embutem app/config/edition.json. Sem elas o build e
+# o oficial, identico ao de sempre.
+_EDITION = os.environ.get('CONTROLE_PRODUCAO_EDITION', '').strip().lower()
+_S = 'Teste' if _EDITION == 'teste' else ''
+_EDITION_FILE = os.environ.get('CONTROLE_PRODUCAO_EDITION_FILE', '')
+_EXTRA_DATAS = [(_EDITION_FILE, 'app\\config')] if _EDITION_FILE else []
+_ASSETS = os.environ.get('CONTROLE_PRODUCAO_ASSETS_DIR', 'app\\assets')
 
 hiddenimports = ['hmac', 'hashlib', 'secrets', 'json', 'sqlite3', 'datetime', 'pathlib', 'shutil']
 hiddenimports += collect_submodules('PySide6.QtWidgets')
@@ -38,10 +47,10 @@ a = Analysis(
     pathex=[],
     binaries=winrt_binaries,
     datas=[
-        ('app\\assets', 'app\\assets'),
+        (_ASSETS, 'app\\assets'),
         ('app\\migrations', 'app\\migrations'),
         ('app\\config\\controle_producao_config.example.json', 'app\\config'),
-    ] + certifi_datas,
+    ] + certifi_datas + _EXTRA_DATAS,
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
@@ -59,25 +68,28 @@ exe = EXE(
     exclude_binaries=True,
     # Layout versionado: o exe real e ControleProducaoApp.exe (em versions/<v>/);
     # ControleProducao.exe na raiz da instalacao e o launcher (Launcher.spec).
-    name='ControleProducaoApp',
+    name='ControleProducao' + _S + 'App',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    # Qt/PySide6 nao deve ser comprimido por UPX: em alguns Windows isso
+    # provoca "DLL load failed ... procedimento nao encontrado" ao importar
+    # QtWidgets, mesmo com todas as DLLs presentes.
+    upx=False,
     console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=['app\\assets\\images\\Logo_Industel_Icone.ico'],
+    icon=[os.path.join(_ASSETS, 'images', 'Logo_Industel_Icone.ico')],
 )
 coll = COLLECT(
     exe,
     a.binaries,
     a.datas,
     strip=False,
-    upx=True,
+    upx=False,
     upx_exclude=[],
-    name='ControleProducao',
+    name='ControleProducao' + _S,
 )

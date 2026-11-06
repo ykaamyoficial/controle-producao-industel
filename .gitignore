@@ -70,3 +70,5 @@ reports/
 
 # Rascunhos/artefatos de sessao (screenshots, PDFs de referencia)
 /tmp/
+build_teste/
+dist_teste/

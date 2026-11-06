@@ -4,11 +4,21 @@
 # Sem UI, sem rede -- so stdlib + app.updater.versions. Onefile NAO: onefile
 # descompacta em %TEMP% a cada abertura (lento e mais sujeito a antivirus).
 
+import os
+# Edicao de teste (scripts/build_test_installer.py): variaveis de ambiente
+# trocam nomes, assets e embutem app/config/edition.json. Sem elas o build e
+# o oficial, identico ao de sempre.
+_EDITION = os.environ.get('CONTROLE_PRODUCAO_EDITION', '').strip().lower()
+_S = 'Teste' if _EDITION == 'teste' else ''
+_EDITION_FILE = os.environ.get('CONTROLE_PRODUCAO_EDITION_FILE', '')
+_EXTRA_DATAS = [(_EDITION_FILE, 'app\\config')] if _EDITION_FILE else []
+_ASSETS = os.environ.get('CONTROLE_PRODUCAO_ASSETS_DIR', 'app/assets')
+
 a = Analysis(
     ['app/launcher/launcher.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=_EXTRA_DATAS,
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
@@ -25,8 +35,8 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='ControleProducao',
-    icon='app/assets/images/Logo_Industel_Icone.ico',
+    name='ControleProducao' + _S,
+    icon=os.path.join(_ASSETS, 'images', 'Logo_Industel_Icone.ico'),
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

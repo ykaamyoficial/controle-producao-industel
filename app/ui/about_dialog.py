@@ -6,6 +6,7 @@ from app.ui.app_icon import app_icon
 from app.ui.components.dialog_shell import dialog_footer, dialog_header
 from app.ui.components.modern_button import ModernButton
 from app.ui.dialog_utils import style_dialog_from_parent
+from app import edition
 from app.version import APP_BUILD, APP_DISPLAY_NAME, APP_PUBLISHER, APP_VERSION
 
 
@@ -21,7 +22,7 @@ class AboutDialog(QDialog):
         layout.setContentsMargins(16, 14, 16, 14)
         layout.setSpacing(10)
 
-        name = QLabel(APP_DISPLAY_NAME)
+        name = QLabel(edition.display_name())
         layout.addWidget(dialog_header(name, f"Versão {APP_VERSION} - build {APP_BUILD} · {APP_PUBLISHER}"))
 
         support = QLabel("Dúvidas ou problemas? Fale com o time de TI da Industel.")
