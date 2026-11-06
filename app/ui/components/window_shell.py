@@ -453,12 +453,17 @@ class WindowShell(QObject):
     # -- eventos ---------------------------------------------------------
 
     def eventFilter(self, watched, event):  # noqa: N802 (Qt override)
+        dialog = getattr(self, "_dialog", None)
+        if dialog is None:
+            # O PySide pode entregar o evento a uma casca cujo objeto Python ja foi
+            # coletado (o QObject C++ continua vivo): sem __init__ ela nao tem estado.
+            # Nesse caso nao filtra, em vez de levantar AttributeError no meio do evento.
+            return False
         kind = event.type()
         if watched is self._grip:
             if kind == QEvent.Move:
                 self._place_grip()
             return False
-        dialog = self._dialog
         if watched is not dialog:
             return False
         if kind == QEvent.Paint:

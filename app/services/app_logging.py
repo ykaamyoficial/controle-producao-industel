@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import faulthandler
 import getpass
 import logging
 import platform
@@ -42,6 +43,22 @@ class SafeRotatingFileHandler(RotatingFileHandler):
             self._rotation_disabled = True
 
 
+_native_crash_file = None
+
+
+def _enable_native_crash_log(log_dir: Path) -> None:
+    """Queda do processo sem traceback Python (violação de acesso, estouro de pilha) deixa o
+    rastro das threads em crash_nativo.log, ao lado do log normal."""
+    global _native_crash_file
+    if _native_crash_file is not None:
+        return
+    try:
+        _native_crash_file = open(log_dir / "crash_nativo.log", "a", encoding="utf-8")  # noqa: SIM115 (vive com o processo)
+        faulthandler.enable(file=_native_crash_file, all_threads=True)
+    except Exception:  # diagnóstico nunca pode impedir o programa de abrir
+        _native_crash_file = None
+
+
 def configure_logging() -> logging.Logger:
     logger = logging.getLogger(LOGGER_NAME)
     if logger.handlers:
@@ -58,6 +75,7 @@ def configure_logging() -> logging.Logger:
     logger.addHandler(handler)
     logger.setLevel(logging.INFO)
     logger.propagate = False
+    _enable_native_crash_log(log_dir)
     logger.info(
         "Aplicacao iniciada | versao=%s | computador=%s | usuario_windows=%s",
         APP_VERSION,
