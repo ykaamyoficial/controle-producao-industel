@@ -34,6 +34,10 @@ CHAT_SEND = "chat.send"
 CHAT_VIEW_FINALIZED = "chat.view_finalized"
 CHAT_ADMIN = "chat.admin"
 NOTIFICATIONS_VIEW = "notifications.view"
+INSPECTION_VIEW = "inspection.view"
+INSPECTION_EDIT = "inspection.edit"
+LOGISTICS_VIEW = "logistics.view"
+LOGISTICS_EDIT = "logistics.edit"
 UPDATES_MANAGE = "updates.manage"
 SYSTEM_MAINTENANCE_MANAGE = "system.maintenance_manage"
 
@@ -75,6 +79,10 @@ OFFICIAL_PERMISSIONS = [
     (CHAT_VIEW_FINALIZED, "Visualizar conversas finalizadas", "chat"),
     (CHAT_ADMIN, "Administrar modulo de chat", "chat"),
     (NOTIFICATIONS_VIEW, "Visualizar a central de notificacoes", "notifications"),
+    (INSPECTION_VIEW, "Visualizar Inspecao", "inspection"),
+    (INSPECTION_EDIT, "Registrar andamento da Inspecao", "inspection"),
+    (LOGISTICS_VIEW, "Visualizar Logistica", "logistics"),
+    (LOGISTICS_EDIT, "Registrar LOGs e cargas de entrega", "logistics"),
     (UPDATES_MANAGE, "Administrar releases de atualizacao do Desktop", "updates"),
     (SYSTEM_MAINTENANCE_MANAGE, "Administrar o Maintenance Mode do servidor", "system"),
 ]

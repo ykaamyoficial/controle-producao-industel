@@ -37,5 +37,9 @@
   "20261008_0035_remanagement_stage_transfers.py": "3bed81e64a0672cb2e6f1916dc3a5fe6d9a195a49adfc1635abfb7cd3932c07e",
   "20261009_0036_remanagement_item_mode.py": "9b385da364c8362f88495eb211d8ddd0bc3332509a309872afa72577f9621e4d",
   "20261013_0037_notification_devices.py": "5017d98b470c128aee06c33df7ed67ecc1110ed4382f4dde18153312c6ac80fc",
-  "20261014_0038_daily_report_preferences.py": "da0e3ecc4d5e2e95d860ad4cec359cb431f9b36e43928da8475def6f7baa3df5"
+  "20261014_0038_daily_report_preferences.py": "da0e3ecc4d5e2e95d860ad4cec359cb431f9b36e43928da8475def6f7baa3df5",
+  "20261020_0039_create_inspection.py": "b98be0057cabee1931036e8c160148b3afd0b7150dcb74a5a974e27d0e7b6827",
+  "20261020_0040_create_logistics.py": "6dbd4c3eb20979ca1db793f039cce3d27ccd546349c9ddceb6ee1b731fb5071d",
+  "20261021_0041_proposal_requires_inspection.py": "1b12b366d411ecacc30d206f76ff1be8b47d1cd9ca3c470ed960f989920acb5e",
+  "20261021_0042_inspection_stage_pendente.py": "25a6ccd6986f11b3476c3297f005de9537ceafe45a5bec5350b6c5301e4df567"
 }

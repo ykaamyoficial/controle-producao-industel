@@ -193,5 +193,25 @@
     "classification": "ADDITIVE",
     "summary": "Adiciona notification_user_settings.daily_report_enabled (default true) e daily_report_hour (nullable) para o relatorio diario por e-mail.",
     "justification": "Duas ADD COLUMN em tabela pequena: daily_report_enabled com server_default true (todo usuario existente continua recebendo, comportamento igual ao anterior) e daily_report_hour nullable (NULL = horario padrao do servidor), mais um CHECK que so aceita 0-23. Nenhuma coluna, linha ou constraint existente e alterada e o codigo antigo ignora as colunas novas. Desktop antigo + API nova continuam compativeis (campos opcionais no PUT /notifications/settings). O downgrade remove o CHECK e as duas colunas, perdendo apenas a preferencia escolhida."
+  },
+  "20261020_0039": {
+    "classification": "ADDITIVE",
+    "summary": "Cria inspections (uma inspecao NQT por PD) e inspection_events (historico), e semeia as permissoes inspection.view e inspection.edit (vinculadas ao perfil admin).",
+    "justification": "Somente CREATE TABLE de duas tabelas novas e vazias (PK, UNIQUE em pd_code e nqt_code, CHECKs, FKs para users e entre as duas) e um indice, mais INSERT idempotente (ON CONFLICT DO NOTHING) de duas permissoes novas e do vinculo ao admin. Nenhuma tabela, coluna, linha ou constraint existente e alterada; codigo antigo ignora as tabelas e permissoes novas. O downgrade remove o vinculo, as permissoes e as duas tabelas."
+  },
+  "20261020_0040": {
+    "classification": "ADDITIVE",
+    "summary": "Cria logistics_loads (cargas de entrega), logistics_logs (LOGs), logistics_log_items (vinculo proposta-LOG com historico de remocao) e logistics_events, e semeia as permissoes logistics.view e logistics.edit (vinculadas ao perfil admin).",
+    "justification": "Somente CREATE TABLE de quatro tabelas novas e vazias (PK, UNIQUE no codigo LOG, CHECKs, FKs para users, proposals e entre si) e indices, incluindo um indice unico parcial (uma proposta so em um vinculo ativo), mais INSERT idempotente (ON CONFLICT DO NOTHING) de duas permissoes novas e do vinculo ao admin. Nenhuma tabela, coluna, linha ou constraint existente e alterada (proposals so e referenciada por FK); codigo antigo ignora as tabelas e permissoes novas. O downgrade remove o vinculo, as permissoes e as quatro tabelas."
+  },
+  "20261021_0041": {
+    "classification": "ADDITIVE",
+    "summary": "Adiciona proposals.requires_inspection (boolean not null, default false) para marcar propostas que precisam de inspecao.",
+    "justification": "Uma ADD COLUMN com server_default false: toda proposta existente nasce desmarcada (comportamento igual ao anterior) e o PostgreSQL aplica o default sem reescrever a tabela. Nenhuma coluna, linha ou constraint existente e alterada; o codigo antigo ignora a coluna nova e INSERTs antigos usam o default. Desktop antigo + API nova continuam compativeis (campo opcional em criar/editar proposta). O downgrade remove a coluna, perdendo apenas a marcacao."
+  },
+  "20261021_0042": {
+    "classification": "TRANSITIONAL",
+    "summary": "Troca o CHECK ck_inspections_stage para aceitar a nova etapa inicial pendente (solicitacao pendente).",
+    "justification": "Sem alterar dados: DROP + CREATE do CHECK em tabela pequena e nova, ampliando o conjunto de valores (as linhas existentes continuam validas e nao mudam de etapa). Transitoria porque a API nova exige a constraint nova (grava pendente) e o downgrade reescreve linhas pendente para cadastro antes de restaurar o CHECK antigo. Codigo antigo continua operando sobre a constraint ampliada."
   }
 }

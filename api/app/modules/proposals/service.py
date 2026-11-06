@@ -246,6 +246,7 @@ def proposal_list_item(row: Proposal):
         "parent_proposal_id": row.parent_proposal_id,
         "is_cancelled": row.is_cancelled,
         "is_completed": row.is_completed,
+        "requires_inspection": row.requires_inspection,
         "legacy_updated_at": row.legacy_updated_at,
         "synced_at": row.synced_at,
         "version": row.version,
@@ -4600,6 +4601,7 @@ async def create_proposal(session: AsyncSession, payload: ProposalCreate, actor:
         current_status=current_status,
         general_status=current_status,
         warehouse_status=warehouse_status,
+        requires_inspection=payload.requires_inspection,
         is_partial=False,
         is_cancelled=False,
         is_completed=False,
@@ -4642,16 +4644,23 @@ async def update_proposal(session: AsyncSession, proposal_id: int, payload: Prop
         "proposal_date": "proposal_date",
         "deadline_date": "deadline_date",
         "warehouse_status": "warehouse_status",
+        "requires_inspection": "requires_inspection",
         "notes": "notes",
     }
     data = payload.model_dump(exclude_unset=True)
     data.pop("version", None)
+    if data.get("requires_inspection", True) is None:
+        data.pop("requires_inspection")
     if "warehouse_status" in data:
         data["warehouse_status"] = _normalize_warehouse_status(data["warehouse_status"])
     for input_name, model_name in field_map.items():
         if input_name in data and getattr(proposal, model_name) != data[input_name]:
             setattr(proposal, model_name, data[input_name])
             changed.append(model_name)
+    if "requires_inspection" in changed and not proposal.requires_inspection:
+        from api.app.modules.inspection.service import ensure_can_unmark_inspection
+
+        await ensure_can_unmark_inspection(session, proposal.order_reference)
     if changed:
         _touch(proposal, actor)
         await _record_event(session, proposal, "PROPOSAL_UPDATED", actor, request_id=request_id, metadata={"fields": changed, "version": proposal.version})

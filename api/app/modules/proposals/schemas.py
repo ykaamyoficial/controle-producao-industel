@@ -69,6 +69,7 @@ class ProposalListItem(BaseModel):
     parent_proposal_id: int | None = None
     is_cancelled: bool
     is_completed: bool
+    requires_inspection: bool = False
     legacy_updated_at: datetime | None = None
     synced_at: datetime
     version: int = 1
@@ -267,6 +268,7 @@ class ProposalCreate(BaseModel):
     deadline_date: date | None = None
     source: str = Field(default="MANUAL", max_length=80)
     warehouse_status: str | None = Field(default=None, max_length=120)
+    requires_inspection: bool = False
     notes: str | None = None
     import_metadata: dict[str, Any] | None = None
     items: list[ProposalItemCreate] = Field(min_length=1)
@@ -327,6 +329,7 @@ class ProposalUpdate(BaseModel):
     proposal_date: date | None = None
     deadline_date: date | None = None
     warehouse_status: str | None = Field(default=None, max_length=120)
+    requires_inspection: bool | None = None
     notes: str | None = None
 
 

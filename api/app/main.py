@@ -24,6 +24,8 @@ from api.app.modules.auth.router import router as auth_router
 from api.app.modules.channels.router import router as channels_router
 from api.app.modules.chat.router import router as chat_router
 from api.app.modules.health.router import router as health_router
+from api.app.modules.inspection.router import router as inspection_router
+from api.app.modules.logistics.router import router as logistics_router
 from api.app.modules.maintenance.router import router as maintenance_admin_router
 from api.app.modules.roles.router import router as roles_router
 from api.app.modules.nomus_integration.router import router as nomus_integration_router
@@ -218,6 +220,8 @@ def create_app() -> FastAPI:
     application.include_router(proposal_import_router, prefix="/api/v1")
     application.include_router(nomus_integration_router, prefix="/api/v1")
     application.include_router(almox_router, prefix="/api/v1")
+    application.include_router(inspection_router, prefix="/api/v1")
+    application.include_router(logistics_router, prefix="/api/v1")
     application.include_router(provisioning_router, prefix="/api/v1")
     application.include_router(updates_router, prefix="/api/v1")
     application.include_router(update_audit_router, prefix="/api/v1")

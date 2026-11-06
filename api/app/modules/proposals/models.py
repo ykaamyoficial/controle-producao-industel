@@ -53,6 +53,7 @@ class Proposal(Base):
     is_partial: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     is_cancelled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     is_completed: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    requires_inspection: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     cancelled_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     cancellation_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
