@@ -66,6 +66,18 @@ def normalize_decimal(value: Any) -> Decimal | None:
         raise NormalizationError(f"Numero decimal invalido: {value!r}") from exc
 
 
+_PT_BR_THOUSANDS_RE = re.compile(r"^[1-9]\d{0,2}(?:\.\d{3})+$")
+
+
+def normalize_quantity_br(value: Any) -> Decimal | None:
+    """Quantidade no formato pt-BR do Nomus: '1.800' = 1800 e '0.250' = 0.25."""
+    if isinstance(value, str):
+        raw = normalize_text(value).replace(" ", "")
+        if _PT_BR_THOUSANDS_RE.match(raw):
+            value = raw.replace(".", "")
+    return normalize_decimal(value)
+
+
 def normalize_integer(value: Any) -> int | None:
     number = normalize_decimal(value)
     if number is None:

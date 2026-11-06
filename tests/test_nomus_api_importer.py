@@ -265,6 +265,18 @@ class NomusApiImporterTests(unittest.TestCase):
         self.assertTrue(result.items[0].weight_needs_confirmation)
         self.assertIn("NOMUS_API_WEIGHT_MISSING", {warning.code for warning in result.warnings})
 
+    def test_quantity_with_thousands_dot_is_not_read_as_decimal(self):
+        payload = _order_payload(items=[
+            {"item": "1", "descricao": "Parafuso", "qtde": "1.800"},
+            {"item": "2", "descricao": "Parafuso", "qtde": "2.696"},
+            {"item": "3", "descricao": "Parafuso", "qtde": "10"},
+        ])
+        importer = NomusApiImporter(FakeNomusClient([]))
+
+        result = importer.convert_order_payload(payload, requested_identifier="CP05252")
+
+        self.assertEqual([item.quantity for item in result.items], [1800, 2696, 10])
+
     def test_invalid_quantity_generates_error_without_guessing_value(self):
         payload = _order_payload(items=[{"item": "1", "descricao": "Viga metalica", "quantidade": "abc"}])
         importer = NomusApiImporter(FakeNomusClient([]))

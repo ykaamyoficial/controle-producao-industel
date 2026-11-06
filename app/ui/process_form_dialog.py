@@ -253,6 +253,28 @@ class ProcessFormDialog(QDialog):
         importer = ProposalImportDialog(self, allow_pdf_selection=False)
         if not importer.load_pdf(path):
             return
+        # O PDF so identifica a proposta; os itens vem da API do Nomus (o PDF erra milhar, ex.: 1.800).
+        proposal_number = str(importer.collect_data().get("proposal_number") or "").strip()
+        if proposal_number and self._nomus_api_import_available()[0]:
+            lookup = NomusApiImportDialog(self, initial_identifier=proposal_number, auto_start=True)
+            if lookup.exec() == QDialog.Accepted and lookup.preview_payload:
+                api_importer = ProposalImportDialog(
+                    self,
+                    initial_data=lookup.preview_payload,
+                    standard_result=lookup.standard_result,
+                    source_label="Origem dos dados",
+                    allow_pdf_selection=False,
+                )
+                self._transfer_import_dialog_data(api_importer)
+                return
+            answer = QMessageBox.question(
+                self,
+                "Importar proposta Nomus",
+                "Nao foi possivel obter os itens pela API do Nomus.\n\n"
+                "Usar os itens lidos do PDF? Confira as quantidades antes de salvar.",
+            )
+            if answer != QMessageBox.Yes:
+                return
         self._transfer_import_dialog_data(importer)
 
     def open_nomus_api_preview(self):

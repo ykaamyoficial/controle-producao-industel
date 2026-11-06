@@ -49,6 +49,8 @@ class NomusApiImportDialog(QDialog):
         config_store: NomusApiConfigStore | None = None,
         importer_factory: ImporterFactory | None = None,
         synchronous: bool = False,
+        initial_identifier: str = "",
+        auto_start: bool = False,
     ):
         super().__init__(parent)
         self.setWindowTitle("Buscar proposta no Nomus")
@@ -66,6 +68,10 @@ class NomusApiImportDialog(QDialog):
         self._worker: NomusImportWorker | None = None
         self._progress_dialog: NomusImportProgressDialog | None = None
         self._build()
+        if initial_identifier:
+            self.identifier.setText(initial_identifier)
+        if auto_start and initial_identifier:
+            QTimer.singleShot(0, self.start_lookup)
 
     def _build(self):
         root = QVBoxLayout(self)

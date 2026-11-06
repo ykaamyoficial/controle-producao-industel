@@ -42,6 +42,7 @@ from api.app.modules.proposal_import.pipeline.normalizers import (
     normalize_description,
     normalize_identifier,
     normalize_optional_text,
+    normalize_quantity_br,
 )
 from api.app.modules.proposal_import.pipeline.schemas import (
     FieldConfidence,
@@ -502,7 +503,7 @@ def parse_order_item(payload: dict[str, Any], fallback_number: int) -> NomusApiO
     )))
     product_id = _safe_text(_first_present(payload, ("idProduto",)))
     description = _pick_item_description(payload)
-    quantity = _safe_decimal(_first_present(payload, ("quantidade", "qtde", "quantity")))
+    quantity = _safe_quantity(_first_present(payload, ("quantidade", "qtde", "quantity")))
     unit = _safe_text(_first_present_nested(payload, (
         ("unidade",),
         ("unidadeMedida",),
@@ -824,6 +825,13 @@ def _safe_text(value: Any) -> str | None:
 def _safe_decimal(value: Any) -> Decimal | None:
     try:
         return normalize_decimal(value)
+    except NormalizationError:
+        return None
+
+
+def _safe_quantity(value: Any) -> Decimal | None:
+    try:
+        return normalize_quantity_br(value)
     except NormalizationError:
         return None
 

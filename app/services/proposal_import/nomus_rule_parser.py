@@ -4,7 +4,7 @@ import re
 import unicodedata
 from datetime import datetime
 
-from .normalizers import normalize_description
+from .normalizers import normalize_description, normalize_quantity_br
 from .schemas import (
     ProposalImportField,
     ProposalImportItem,
@@ -44,15 +44,15 @@ _ITEM_ROW_RE = re.compile(r"^\d{3}\s+\S+\s+.+$", re.IGNORECASE)
 _PRODUCT_TITLE_RE = re.compile(r"^(?P<code>\d{3}(?:\.\w+)+)\s*-\s+(?P<title>.+)", re.IGNORECASE)
 _SIMPLE_ITEM_RE = re.compile(
     r"^(?P<number>\d{3})\s+(?P<code>\S+)\s+(?P<body>.+?)\s+"
-    r"(?P<unit>UNIDADE|UN|PC|PECA|PEÇA)\s+(?P<qty>\d+(?:[.,]\d+)?)\s+(?:N/A|.+)?$",
+    r"(?P<unit>UNIDADE|UN|PC|PECA|PEÇA)\s+(?P<qty>\d{1,3}(?:\.\d{3})+(?:,\d+)?|\d+(?:[.,]\d+)?)\s+(?:N/A|.+)?$",
     re.IGNORECASE,
 )
-_NCM_QTY_RE = re.compile(r"(?<!\d)(?P<ncm>\d{8})(?!\d)\s+(?P<qty>\d+(?:[.,]\d+)?)(?![,\w])")
+_NCM_QTY_RE = re.compile(r"(?<!\d)(?P<ncm>\d{8})(?!\d)\s+(?P<qty>\d{1,3}(?:\.\d{3})+(?:,\d+)?|\d+(?:[.,]\d+)?)(?![,\w])")
 _STANDALONE_NCM_RE = re.compile(r"(?<!\d)\d{8}(?!\d)")
 _NCM_TABLE_TAIL_RE = re.compile(
     r"(?<!\d)(?P<ncm>\d{8})(?!\d)\s+"
     r"(?P<unit>UNIDADE|UN|PC|PECA|PEÇA)\s+"
-    r"(?P<qty>\d+(?:[.,]\d+)?)"
+    r"(?P<qty>\d{1,3}(?:\.\d{3})+(?:,\d+)?|\d+(?:[.,]\d+)?)"
     r"(?:\s+\d[\d.]*(?:[.,]\d+)?)?"
     r"(?:\s+\d+)?"
     r"(?:\s+R\$\s*\d[\d.]*,\d{2})?",
@@ -94,6 +94,10 @@ _ITEM_DESCRIPTION_FOOTER_TERMS = (
 
 def _field(value, confidence: float = 0.0, needs_confirmation: bool = True, source: str = "rule"):
     return ProposalImportField(value=value, confidence=confidence, needs_confirmation=needs_confirmation, source=source)
+
+
+def _parse_quantity(raw: str) -> int:
+    return int(normalize_quantity_br(raw))
 
 
 def _clean_space(value: str) -> str:
@@ -354,8 +358,7 @@ def _extract_budget_items(lines: list[str]) -> list[ProposalImportItem]:
         ncm = ncm_match.group("ncm") if ncm_match else None
         quantity: int | None = None
         if ncm_match:
-            quantity_raw = ncm_match.group("qty").replace(",", ".")
-            quantity = int(float(quantity_raw))
+            quantity = _parse_quantity(ncm_match.group("qty"))
             description = _remove_ncm_table_tail(body)
         else:
             description = body
@@ -484,7 +487,7 @@ def _simple_item_from_match(match: re.Match[str], block: list[str], item_index: 
     body = _remove_ncm_table_tail(body)
     description = normalize_description(_description_money_free(body)) or f"Item {item_number:03d}"
     unit = _clean_space(match.group("unit")).upper()
-    quantity = int(float(match.group("qty").replace(",", ".")))
+    quantity = _parse_quantity(match.group("qty"))
     return ProposalImportItem(
         item_number=item_number,
         product_code=product_code if product_code.upper() != "N/A" else None,
@@ -531,7 +534,7 @@ def _extract_simple_order_items_legacy(lines: list[str]) -> list[ProposalImportI
         body = _remove_ncm_table_tail(body)
         description = normalize_description(_description_money_free(body)) or f"Item {item_number:03d}"
         unit = _clean_space(match.group("unit")).upper()
-        quantity = int(float(match.group("qty").replace(",", ".")))
+        quantity = _parse_quantity(match.group("qty"))
         items.append(
             ProposalImportItem(
                 item_number=item_number,

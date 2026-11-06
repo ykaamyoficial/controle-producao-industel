@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 
 from app.ui.process_form_dialog import ProcessFormDialog
 
@@ -144,7 +144,9 @@ class NomusFormTransferTests(unittest.TestCase):
         with patch(
             "app.ui.process_form_dialog.QFileDialog.getOpenFileName",
             return_value=("C:/tmp/proposta.pdf", "Documentos PDF (*.pdf)"),
-        ), patch("app.ui.process_form_dialog.ProposalImportDialog", FakeImportDialog):
+        ), patch("app.ui.process_form_dialog.ProposalImportDialog", FakeImportDialog), patch.object(
+            self.form, "_nomus_api_import_available", return_value=(False, "")
+        ):
             self.form.open_nomus_preview()
 
         self.assertEqual(self.form.fields["proposta"].text(), "CP05228")
@@ -153,6 +155,98 @@ class NomusFormTransferTests(unittest.TestCase):
         self.assertEqual(self.form.fields["prazo_entrega"].text(), "15/06/2026")
         self.assertEqual(self.form.items_table.rowCount(), 2)
         self.assertEqual(self.service.save_calls, [])
+
+    def _pdf_flow(self, lookup_cls, answer=None):
+        outcome = {"api_data": None}
+
+        class FakeImportDialog:
+            def __init__(self, parent=None, allow_pdf_selection=True, initial_data=None, **kwargs):
+                self.initial_data = initial_data
+                self.prepared_data = None
+
+            def load_pdf(self, path):
+                return True
+
+            def validate_import(self):
+                return True
+
+            def collect_data(self):
+                if self.initial_data is not None:
+                    outcome["api_data"] = self.initial_data
+                    return self.initial_data
+                return reviewed_data()
+
+        patches = [
+            patch("app.ui.process_form_dialog.QFileDialog.getOpenFileName", return_value=("C:/tmp/p.pdf", "")),
+            patch("app.ui.process_form_dialog.ProposalImportDialog", FakeImportDialog),
+            patch("app.ui.process_form_dialog.NomusApiImportDialog", lookup_cls),
+            patch.object(self.form, "_nomus_api_import_available", return_value=(True, "")),
+        ]
+        if answer is not None:
+            patches.append(patch("app.ui.process_form_dialog.QMessageBox.question", return_value=answer))
+        for item in patches:
+            item.start()
+        try:
+            self.form.open_nomus_preview()
+        finally:
+            for item in reversed(patches):
+                item.stop()
+        return outcome
+
+    def test_open_nomus_preview_uses_api_items_when_lookup_succeeds(self):
+        calls = {}
+        api_data = reviewed_data()
+        api_data["items"] = [dict(item, quantity=1800) for item in api_data["items"]]
+
+        class OkLookup:
+            preview_payload = api_data
+            standard_result = None
+
+            def __init__(self, parent=None, initial_identifier="", auto_start=False):
+                calls["identifier"] = initial_identifier
+                calls["auto_start"] = auto_start
+
+            def exec(self):
+                return QDialog.Accepted
+
+        outcome = self._pdf_flow(OkLookup)
+
+        self.assertEqual(calls, {"identifier": "CP05228", "auto_start": True})
+        self.assertIs(outcome["api_data"], api_data)
+        self.assertEqual(self.form.items_table.rowCount(), len(api_data["items"]))
+
+    def test_open_nomus_preview_falls_back_to_pdf_items_when_api_fails_and_user_accepts(self):
+        class FailLookup:
+            preview_payload = None
+            standard_result = None
+
+            def __init__(self, parent=None, initial_identifier="", auto_start=False):
+                pass
+
+            def exec(self):
+                return QDialog.Rejected
+
+        outcome = self._pdf_flow(FailLookup, answer=QMessageBox.Yes)
+
+        self.assertIsNone(outcome["api_data"])
+        self.assertEqual(self.form.fields["proposta"].text(), "CP05228")
+        self.assertEqual(self.form.items_table.rowCount(), 2)
+
+    def test_open_nomus_preview_imports_nothing_when_api_fails_and_user_declines(self):
+        class FailLookup:
+            preview_payload = None
+            standard_result = None
+
+            def __init__(self, parent=None, initial_identifier="", auto_start=False):
+                pass
+
+            def exec(self):
+                return QDialog.Rejected
+
+        self._pdf_flow(FailLookup, answer=QMessageBox.No)
+
+        self.assertEqual(self.form.fields["proposta"].text(), "")
+        self.assertEqual(self.form.items_table.rowCount(), 0)
 
     def test_open_nomus_preview_does_nothing_when_file_dialog_is_cancelled(self):
         with patch(

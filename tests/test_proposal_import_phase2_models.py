@@ -10,6 +10,7 @@ from app.services.proposal_import.normalizers import (
     NormalizationError,
     normalize_date,
     normalize_decimal,
+    normalize_quantity_br,
     normalize_text,
 )
 from app.services.proposal_import.proposal_import_orchestrator import import_nomus_from_text
@@ -46,6 +47,25 @@ class ProposalImportPhase2ModelTests(unittest.TestCase):
         self.assertEqual(normalize_date("2026-06-19"), date(2026, 6, 19))
         with self.assertRaises(NormalizationError):
             normalize_decimal("abc")
+
+    def test_quantity_br_reads_dot_as_thousands(self):
+        self.assertEqual(normalize_quantity_br("1.800"), Decimal("1800"))
+        self.assertEqual(normalize_quantity_br("2.696"), Decimal("2696"))
+        self.assertEqual(normalize_quantity_br("1.234.567"), Decimal("1234567"))
+        self.assertEqual(normalize_quantity_br("1.800,0000"), Decimal("1800.0000"))
+        self.assertEqual(normalize_quantity_br("1,5"), Decimal("1.5"))
+        self.assertEqual(normalize_quantity_br("0.250"), Decimal("0.250"))
+        self.assertEqual(normalize_quantity_br("107"), Decimal("107"))
+        self.assertEqual(normalize_quantity_br(Decimal("1.8")), Decimal("1.8"))
+
+    def test_rule_parser_quantity_regex_keeps_thousands(self):
+        from app.services.proposal_import.nomus_rule_parser import _NCM_QTY_RE, _parse_quantity
+
+        match = _NCM_QTY_RE.search("73181500 1.800,0000 R$ 5,70")
+        self.assertEqual(match.group("qty"), "1.800,0000")
+        self.assertEqual(_parse_quantity(match.group("qty")), 1800)
+        self.assertEqual(_parse_quantity("2.696"), 2696)
+        self.assertEqual(_parse_quantity("6"), 6)
 
     def test_standard_result_is_attached_without_changing_legacy_payload(self):
         result = import_nomus_from_text(SAMPLE_TEXT)

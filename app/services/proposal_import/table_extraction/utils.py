@@ -4,7 +4,7 @@ import re
 import unicodedata
 from decimal import Decimal
 
-from ..normalizers import NormalizationError, normalize_decimal, normalize_description, normalize_integer, normalize_optional_text
+from ..normalizers import NormalizationError, normalize_decimal, normalize_description, normalize_integer, normalize_optional_text, normalize_quantity_br
 from .models import FINANCIAL_HEADER_TERMS, FINANCIAL_TEXT_TERMS
 
 
@@ -127,7 +127,7 @@ def normalize_item_number(value: object) -> int | None:
 
 def normalize_quantity(value: object) -> Decimal | None:
     try:
-        quantity = normalize_decimal(clean_text(value))
+        quantity = normalize_quantity_br(clean_text(value))
     except NormalizationError:
         return None
     if quantity is None or quantity <= 0:
