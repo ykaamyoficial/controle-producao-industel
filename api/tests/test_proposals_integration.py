@@ -3200,6 +3200,81 @@ class ProposalsIntegrationTests(unittest.TestCase):
         self.assertEqual(cancelled.json()["status_fiscal"], "NOTA_FISCAL_PARCIAL")
         self.assertGreaterEqual(len(cancelled.json()["events"]), 4)
 
+    def test_official_fiscal_cancel_invoice_reuses_number_and_correction_keeps_invoice_id(self):
+        headers = self._headers()
+        proposal = self.client.post("/api/v1/proposals", json=_proposal_payload("CP04003", [_item_payload("1", requires_galvanization=False), _item_payload("2", requires_galvanization=False)]), headers=headers).json()
+        record = next(item for item in self.client.get("/api/v1/fiscal/records", headers=headers).json()["items"] if item["proposal_id"] == proposal["id"])
+        detail = self.client.get(f"/api/v1/fiscal/records/{record['id']}", headers=headers).json()
+        item1, item2 = detail["items"][0], detail["items"][1]
+
+        registered = self.client.post(f"/api/v1/fiscal/records/{record['id']}/invoices", json={"version": detail["version"], "invoice_number": "NF-04003", "items": [{"fiscal_item_id": item1["id"]}]}, headers=headers)
+        self.assertEqual(registered.status_code, 201)
+        invoice_id = registered.json()["invoices"][0]["id"]
+
+        duplicate = self.client.post(f"/api/v1/fiscal/records/{record['id']}/invoices", json={"version": registered.json()["version"], "invoice_number": "NF-04003", "items": [{"fiscal_item_id": item2["id"]}]}, headers=headers)
+        self.assertEqual(duplicate.status_code, 409)
+        self.assertEqual(duplicate.json()["error"]["code"], "FISCAL_INVOICE_DUPLICATED")
+
+        # Motivo obrigatorio.
+        no_reason = self.client.post(f"/api/v1/fiscal/invoices/{invoice_id}/cancel", json={"version": registered.json()["version"], "reason": ""}, headers=headers)
+        self.assertEqual(no_reason.status_code, 422)
+
+        cancelled = self.client.post(f"/api/v1/fiscal/invoices/{invoice_id}/cancel", json={"version": registered.json()["version"], "reason": "NF digitada errada"}, headers=headers)
+        self.assertEqual(cancelled.status_code, 200)
+        body = cancelled.json()
+        self.assertEqual(body["status_fiscal"], "FALTA_EMITIR_NOTA_FISCAL")
+        self.assertEqual(body["invoices"], [])
+        self.assertEqual(body["invoice_numbers"], [])
+        self.assertEqual(len(body["cancelled_invoices"]), 1)
+        self.assertEqual(body["cancelled_invoices"][0]["status"], "CANCELADA")
+        self.assertEqual(body["cancelled_invoices"][0]["cancel_reason"], "NF digitada errada")
+        self.assertTrue(body["cancelled_invoices"][0]["cancelled_by_name"])
+        self.assertTrue(all(float(item["billed_quantity"]) == 0 for item in body["items"]))
+
+        again = self.client.post(f"/api/v1/fiscal/invoices/{invoice_id}/cancel", json={"version": body["version"], "reason": "De novo"}, headers=headers)
+        self.assertEqual(again.status_code, 409)
+        self.assertEqual(again.json()["error"]["code"], "FISCAL_INVOICE_ALREADY_CANCELLED")
+        missing = self.client.post("/api/v1/fiscal/invoices/99999999/cancel", json={"version": 1, "reason": "x"}, headers=headers)
+        self.assertEqual(missing.status_code, 404)
+        self.assertEqual(missing.json()["error"]["code"], "FISCAL_INVOICE_NOT_FOUND")
+
+        cancellations = self.client.get("/api/v1/fiscal/cancellations", params={"search": "NF-04003"}, headers=headers)
+        self.assertEqual(cancellations.status_code, 200)
+        self.assertEqual([row["invoice_id"] for row in cancellations.json()["items"]], [invoice_id])
+        self.assertEqual(cancellations.json()["items"][0]["cancel_reason"], "NF digitada errada")
+        self.assertEqual(cancellations.json()["items"][0]["proposal_number"], "CP04003")
+
+        # O mesmo numero volta a ser aceito (indice unico parcial) e a antiga continua cancelada.
+        reused = self.client.post(f"/api/v1/fiscal/records/{record['id']}/invoices", json={"version": body["version"], "invoice_number": "NF-04003", "items": [{"fiscal_item_id": item1["id"]}]}, headers=headers)
+        self.assertEqual(reused.status_code, 201)
+        new_invoice_id = reused.json()["invoices"][0]["id"]
+        self.assertNotEqual(new_invoice_id, invoice_id)
+        self.assertEqual(reused.json()["invoice_numbers"], ["NF-04003"])
+
+        # Corrigir: mesmo id, tudo trocado, os dois itens, nada aparece em Cancelamentos.
+        corrected = self.client.post(
+            f"/api/v1/fiscal/invoices/{new_invoice_id}/correct",
+            json={"version": reused.json()["version"], "invoice_number": "NF-04003-OK", "series": "1", "observation": "Corrigida", "items": [{"fiscal_item_id": item1["id"]}, {"fiscal_item_id": item2["id"]}]},
+            headers=headers,
+        )
+        self.assertEqual(corrected.status_code, 200)
+        self.assertEqual(corrected.json()["status_fiscal"], "NOTA_FISCAL_EMITIDA")
+        self.assertEqual([row["id"] for row in corrected.json()["invoices"]], [new_invoice_id])
+        self.assertEqual(corrected.json()["invoices"][0]["invoice_number"], "NF-04003-OK")
+        self.assertEqual(corrected.json()["invoices"][0]["item_count"], 2)
+        self.assertIn("FISCAL_INVOICE_CORRECTED", [event["event_type"] for event in corrected.json()["events"]])
+        self.assertEqual(self.client.get("/api/v1/fiscal/cancellations", headers=headers).json()["total"], 1)
+
+        # Recorrigir com o proprio numero: a propria nota nao conta como duplicata.
+        same_number = self.client.post(f"/api/v1/fiscal/invoices/{new_invoice_id}/correct", json={"version": corrected.json()["version"], "invoice_number": "NF-04003-OK", "series": "1", "items": [{"fiscal_item_id": item1["id"]}, {"fiscal_item_id": item2["id"]}]}, headers=headers)
+        self.assertEqual(same_number.status_code, 200)  # a propria nota nao conta como duplicata
+
+        withdrawn = self.client.post(f"/api/v1/fiscal/records/{record['id']}/withdrawal", json={"version": same_number.json()["version"], "observation": "Retirada"}, headers=headers)
+        self.assertEqual(withdrawn.status_code, 200)
+        blocked = self.client.post(f"/api/v1/fiscal/invoices/{new_invoice_id}/correct", json={"version": withdrawn.json()["version"], "invoice_number": "NF-04003-X", "items": [{"fiscal_item_id": item1["id"]}]}, headers=headers)
+        self.assertEqual(blocked.status_code, 409)
+        self.assertEqual(blocked.json()["error"]["code"], "FISCAL_INVOICE_WITHDRAWN")
+
     def test_official_fiscal_indicators_and_critical_pending_are_operationally_independent(self):
         headers = self._headers()
         proposal = self._proposal_ready_for_expedition("CP04002", headers, [_item_payload("1", requires_galvanization=False)])

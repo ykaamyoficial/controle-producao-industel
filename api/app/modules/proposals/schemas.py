@@ -1386,6 +1386,8 @@ class FiscalInvoiceItemSummary(BaseModel):
     fiscal_item_id: int
     proposal_item_id: int
     item_number: str
+    product_code: str | None = None
+    description: str | None = None
     quantity: Decimal
     weight: Decimal | None = None
     active: bool
@@ -1410,6 +1412,11 @@ class FiscalInvoiceSummary(BaseModel):
     quantity: Decimal
     weight: Decimal
     items: list[FiscalInvoiceItemSummary] = Field(default_factory=list)
+    # Preenchidos so quando status == "CANCELADA".
+    cancelled_at: datetime | None = None
+    cancelled_by: int | None = None
+    cancelled_by_name: str | None = None
+    cancel_reason: str | None = None
 
 
 class FiscalEventSummary(BaseModel):
@@ -1458,7 +1465,10 @@ class FiscalRecordSummary(BaseModel):
 
 class FiscalRecordDetail(FiscalRecordSummary):
     items: list[FiscalItemSummary] = Field(default_factory=list)
+    # NFs emitidas (aba Emissoes): nunca inclui as canceladas.
     invoices: list[FiscalInvoiceSummary] = Field(default_factory=list)
+    # NFs inteiras canceladas (status "CANCELADA"), mais recentes primeiro.
+    cancelled_invoices: list[FiscalInvoiceSummary] = Field(default_factory=list)
     events: list[FiscalEventSummary] = Field(default_factory=list)
 
 
@@ -1577,6 +1587,64 @@ class FiscalCancelInvoiceItemRequest(BaseModel):
 
     version: int = Field(ge=1)
     reason: str = Field(min_length=1, max_length=1000)
+
+
+class FiscalCancelInvoiceRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    version: int = Field(ge=1)
+    reason: str = Field(min_length=1, max_length=1000)
+
+    @field_validator("reason", mode="before")
+    @classmethod
+    def strip_reason(cls, value):
+        return value.strip() if isinstance(value, str) else value
+
+
+class FiscalCorrectInvoiceRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    version: int = Field(ge=1)
+    invoice_number: str = Field(min_length=1, max_length=80)
+    series: str | None = Field(default=None, max_length=40)
+    issued_at: datetime | None = None
+    observation: str | None = Field(default=None, max_length=1000)
+    items: list[FiscalEmissionItemInput] = Field(max_length=500)
+
+    @field_validator("invoice_number", "series", mode="before")
+    @classmethod
+    def strip_correction_text(cls, value):
+        return value.strip() if isinstance(value, str) else value
+
+
+class FiscalCancellationItem(BaseModel):
+    invoice_id: int
+    fiscal_record_id: int
+    proposal_id: int
+    proposal_number: str
+    customer_name: str
+    project_name: str | None = None
+    lot: str | None = None
+    invoice_number: str
+    series: str | None = None
+    issued_at: datetime
+    emission_type: str
+    observation: str | None = None
+    item_count: int
+    quantity: Decimal
+    weight: Decimal
+    items: list[FiscalInvoiceItemSummary] = Field(default_factory=list)
+    cancelled_at: datetime | None = None
+    cancelled_by: int | None = None
+    cancelled_by_name: str | None = None
+    cancel_reason: str | None = None
+
+
+class PaginatedFiscalCancellationsResponse(BaseModel):
+    items: list[FiscalCancellationItem]
+    total: int
+    limit: int
+    offset: int
 
 
 class FiscalWithdrawalRequest(BaseModel):

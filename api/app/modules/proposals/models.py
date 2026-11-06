@@ -4,7 +4,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import BigInteger, Boolean, CheckConstraint, Date, DateTime, ForeignKey, Identity, Index, Numeric, String, Text, UniqueConstraint, func
+from sqlalchemy import BigInteger, Boolean, CheckConstraint, Date, DateTime, ForeignKey, Identity, Index, Numeric, String, Text, UniqueConstraint, func, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -506,7 +506,15 @@ class FiscalItem(Base):
 class FiscalInvoice(Base):
     __tablename__ = "fiscal_invoices"
     __table_args__ = (
-        UniqueConstraint("invoice_number", "series", name="uq_fiscal_invoices_number_series"),
+        # Parcial: o numero de uma NF cancelada pode ser reutilizado. Mesma semantica de NULL
+        # da constraint antiga (serie NULL nao conflita); a API barra duplicidade com serie NULL.
+        Index(
+            "uq_fiscal_invoices_number_series",
+            "invoice_number",
+            "series",
+            unique=True,
+            postgresql_where=text("status <> 'CANCELADA'"),
+        ),
         UniqueConstraint("legacy_id", name="uq_fiscal_invoices_legacy_id"),
         Index("ix_fiscal_invoices_record", "fiscal_record_id"),
         Index("ix_fiscal_invoices_number", "invoice_number"),
@@ -526,6 +534,9 @@ class FiscalInvoice(Base):
     status: Mapped[str] = mapped_column(String(40), nullable=False, server_default="REGISTRADA")
     source: Mapped[str] = mapped_column(String(40), nullable=False, server_default="MANUAL")
     observation: Mapped[str | None] = mapped_column(Text, nullable=True)
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    cancelled_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    cancel_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     version: Mapped[int] = mapped_column(nullable=False, server_default="1")
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
     created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)

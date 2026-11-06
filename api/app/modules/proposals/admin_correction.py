@@ -341,7 +341,7 @@ def collect_facts(proposal: Proposal) -> AdministrativeFacts:
         if member.fiscal_record and member.fiscal_record.active
     ]
     fiscal_items = [item for record in fiscal_records for item in record.items if item.active]
-    fiscal_invoices = [invoice for record in fiscal_records for invoice in record.invoices if invoice.active]
+    fiscal_invoices = [invoice for record in fiscal_records for invoice in record.invoices if invoice.active and invoice.status != "CANCELADA"]
 
     return AdministrativeFacts(
         active_items=len(items),

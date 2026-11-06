@@ -41,5 +41,6 @@
   "20261020_0039_create_inspection.py": "b98be0057cabee1931036e8c160148b3afd0b7150dcb74a5a974e27d0e7b6827",
   "20261020_0040_create_logistics.py": "6dbd4c3eb20979ca1db793f039cce3d27ccd546349c9ddceb6ee1b731fb5071d",
   "20261021_0041_proposal_requires_inspection.py": "1b12b366d411ecacc30d206f76ff1be8b47d1cd9ca3c470ed960f989920acb5e",
-  "20261021_0042_inspection_stage_pendente.py": "25a6ccd6986f11b3476c3297f005de9537ceafe45a5bec5350b6c5301e4df567"
+  "20261021_0042_inspection_stage_pendente.py": "25a6ccd6986f11b3476c3297f005de9537ceafe45a5bec5350b6c5301e4df567",
+  "20261106_0043_fiscal_invoice_cancellation.py": "3cad57c4fea7ed3dc142604cb8d6ebf84bca9813bfdedb96082a704fb9ddfb7d"
 }

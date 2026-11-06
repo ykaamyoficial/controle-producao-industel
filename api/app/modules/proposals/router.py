@@ -40,6 +40,8 @@ from api.app.modules.proposals.schemas import (
     ExpeditionRemanageRequest,
     ExpeditionVersionRequest,
     FiscalCancelInvoiceItemRequest,
+    FiscalCancelInvoiceRequest,
+    FiscalCorrectInvoiceRequest,
     FiscalBatchRequest,
     FiscalBatchResponse,
     FiscalIndicators,
@@ -60,6 +62,7 @@ from api.app.modules.proposals.schemas import (
     PaginatedExpeditionResponse,
     RemanagementBadgesResponse,
     StageLedgerResponse,
+    PaginatedFiscalCancellationsResponse,
     PaginatedFiscalResponse,
     PaginatedProposalResponse,
     PaginatedProductionItemResponse,
@@ -549,6 +552,27 @@ async def register_fiscal_batch(payload: FiscalBatchRequest, request: Request, s
 @router.post("/fiscal/invoice-items/{invoice_item_id}/cancel", response_model=FiscalRecordDetail)
 async def cancel_fiscal_invoice_item(invoice_item_id: int, payload: FiscalCancelInvoiceItemRequest, request: Request, session: AsyncSession = Depends(get_db_session), actor: User = Depends(require_permission(FISCAL_CANCEL_LINK))):
     return await service.cancel_fiscal_invoice_item(session, invoice_item_id, payload, actor, request_id=getattr(request.state, "request_id", None))
+
+
+@router.post("/fiscal/invoices/{invoice_id}/cancel", response_model=FiscalRecordDetail)
+async def cancel_fiscal_invoice(invoice_id: int, payload: FiscalCancelInvoiceRequest, request: Request, session: AsyncSession = Depends(get_db_session), actor: User = Depends(require_permission(FISCAL_CANCEL_LINK))):
+    return await service.cancel_fiscal_invoice(session, invoice_id, payload, actor, request_id=getattr(request.state, "request_id", None))
+
+
+@router.post("/fiscal/invoices/{invoice_id}/correct", response_model=FiscalRecordDetail)
+async def correct_fiscal_invoice(invoice_id: int, payload: FiscalCorrectInvoiceRequest, request: Request, session: AsyncSession = Depends(get_db_session), actor: User = Depends(require_permission(FISCAL_REGISTER_EMISSION))):
+    return await service.correct_fiscal_invoice(session, invoice_id, payload, actor, request_id=getattr(request.state, "request_id", None))
+
+
+@router.get("/fiscal/cancellations", response_model=PaginatedFiscalCancellationsResponse)
+async def list_fiscal_cancellations(
+    search: str | None = Query(default=None, max_length=180),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    session: AsyncSession = Depends(get_db_session),
+    _actor: User = Depends(require_permission(FISCAL_VIEW)),
+):
+    return await service.list_fiscal_cancellations(session, search=search, limit=limit, offset=offset)
 
 
 @router.post("/fiscal/records/{fiscal_record_id}/withdrawal", response_model=FiscalRecordDetail)

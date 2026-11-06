@@ -9,8 +9,8 @@ from types import SimpleNamespace
 from api.app.modules.proposals import schemas, service
 
 
-def _invoice(number, day, *, active=True, row_id=1):
-    return SimpleNamespace(invoice_number=number, active=active, issued_at=datetime(2026, 10, day, tzinfo=UTC), id=row_id)
+def _invoice(number, day, *, active=True, row_id=1, status="REGISTRADA"):
+    return SimpleNamespace(invoice_number=number, active=active, status=status, issued_at=datetime(2026, 10, day, tzinfo=UTC), id=row_id)
 
 
 class InvoiceNumbersTests(unittest.TestCase):
@@ -19,7 +19,7 @@ class InvoiceNumbersTests(unittest.TestCase):
         self.assertEqual(service._invoice_numbers(invoices), ["1001", "1002"])
 
     def test_cancelled_invoices_and_blank_numbers_are_left_out(self):
-        invoices = [_invoice("1001", 3, row_id=1), _invoice("1002", 4, active=False, row_id=2), _invoice("  ", 5, row_id=3)]
+        invoices = [_invoice("1001", 3, row_id=1), _invoice("1002", 4, active=False, row_id=2), _invoice("  ", 5, row_id=3), _invoice("1003", 6, row_id=4, status="CANCELADA")]
         self.assertEqual(service._invoice_numbers(invoices), ["1001"])
 
     def test_placeholder_registry_numbers_are_not_shown_as_a_nota_fiscal(self):

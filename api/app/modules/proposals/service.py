@@ -48,6 +48,9 @@ from api.app.modules.proposals.schemas import (
     ExpeditionRemanageRequest,
     ExpeditionVersionRequest,
     FiscalCancelInvoiceItemRequest,
+    FiscalCancelInvoiceRequest,
+    FiscalCancellationItem,
+    FiscalCorrectInvoiceRequest,
     FiscalBatchRequest,
     FiscalBatchResponse,
     FiscalBatchProposalResult,
@@ -78,6 +81,7 @@ from api.app.modules.proposals.schemas import (
     StageLedgerResponse,
     PaginatedExpeditionItemResponse,
     PaginatedExpeditionResponse,
+    PaginatedFiscalCancellationsResponse,
     PaginatedFiscalResponse,
     PaginatedProposalResponse,
     PaginatedGalvanizationCandidateResponse,
@@ -917,6 +921,7 @@ def _proposal_search_clause(search: str | None, *, include_invoices: bool = Fals
         invoice_match = exists().where(
             FiscalInvoice.proposal_id == Proposal.id,
             FiscalInvoice.active.is_(True),
+            FiscalInvoice.status != "CANCELADA",
             FiscalInvoice.invoice_number.not_like("REGISTRO-%"),
             func.strpos(func.lower(FiscalInvoice.invoice_number), needle) > 0,
         )
@@ -2787,7 +2792,16 @@ async def list_fiscal_records(session: AsyncSession, *, search: str | None, stat
 
 async def get_fiscal_detail(session: AsyncSession, fiscal_record_id: int) -> FiscalRecordDetail:
     record = await _get_fiscal_record(session, fiscal_record_id)
-    return _fiscal_record_detail(record)
+    names = await _user_display_names(session, [invoice.cancelled_by for invoice in record.invoices])
+    return _fiscal_record_detail(record, names)
+
+
+async def _user_display_names(session: AsyncSession, user_ids) -> dict[int, str]:
+    ids = {int(user_id) for user_id in user_ids if user_id is not None}
+    if not ids:
+        return {}
+    rows = (await session.execute(select(User.id, User.display_name).where(User.id.in_(ids)))).all()
+    return {int(user_id): name for user_id, name in rows}
 
 
 async def fiscal_indicators(session: AsyncSession) -> FiscalIndicators:
@@ -2910,15 +2924,7 @@ async def register_fiscal_batch(session: AsyncSession, payload: FiscalBatchReque
             _ensure_fiscal_version(record, request.version)
             if record.status_fiscal == "NOTA_FISCAL_EMITIDA":
                 raise ApiError(error_codes.FISCAL_INVALID_STATE, f"A proposta fiscal {record.id} ja esta concluida.", status_code=409)
-            duplicate = (await session.execute(
-                select(FiscalInvoice)
-                .where(FiscalInvoice.invoice_number == request.invoice_number)
-                .where(FiscalInvoice.series.is_(None) if request.series is None else FiscalInvoice.series == request.series)
-                .where(FiscalInvoice.active.is_(True))
-                .where(FiscalInvoice.status != "CANCELADA")
-            )).scalars().first()
-            if duplicate is not None:
-                raise ApiError(error_codes.FISCAL_INVOICE_DUPLICATED, f"A NF {request.invoice_number} ja existe para esta serie.", status_code=409)
+            await _ensure_invoice_number_free(session, request.invoice_number, request.series)
             selected = _selected_fiscal_items(record, [FiscalEmissionItemInput(**item.model_dump()) for item in request.items] if request.items is not None else None)
             if not selected and record.items:
                 raise ApiError(error_codes.FISCAL_ITEM_INVALID, "Selecione pelo menos um item fiscal.", status_code=409)
@@ -3010,6 +3016,14 @@ async def cancel_fiscal_invoice_item(session: AsyncSession, invoice_item_id: int
     invoice_item.cancelled_at = datetime.now(UTC)
     invoice_item.cancelled_by = actor.id
     invoice_item.cancel_reason = payload.reason
+    parent = invoice_item.invoice
+    if not any(line.active for line in parent.items):
+        # Ultima linha ativa: a nota fica sem itens, entao vira CANCELADA (libera o numero, sai de Emissoes).
+        parent.status = "CANCELADA"
+        parent.cancelled_at = invoice_item.cancelled_at
+        parent.cancelled_by = actor.id
+        parent.cancel_reason = payload.reason
+        _touch(parent, actor)
     _recalculate_fiscal_record(record)
     _touch(record, actor)
     await _record_fiscal_event(session, record, "FISCAL_INVOICE_ITEM_CANCELLED", actor, fiscal_item=item, fiscal_invoice=invoice_item.invoice, request_id=request_id, from_status=previous, to_status=record.status_fiscal, metadata={"invoice_item_id": invoice_item_id, "reason": payload.reason})
@@ -3017,6 +3031,206 @@ async def cancel_fiscal_invoice_item(session: AsyncSession, invoice_item_id: int
     await session.commit()
     session.expire_all()
     return await get_fiscal_detail(session, record_id)
+
+
+async def _ensure_invoice_number_free(session: AsyncSession, invoice_number: str, series: str | None, *, except_invoice_id: int | None = None) -> None:
+    """NF cancelada nao ocupa o numero; `except_invoice_id` e a propria nota numa correcao."""
+    statement = (
+        select(FiscalInvoice.id)
+        .where(FiscalInvoice.invoice_number == invoice_number)
+        .where(func.coalesce(FiscalInvoice.series, "") == (series or ""))
+        .where(FiscalInvoice.active.is_(True))
+        .where(FiscalInvoice.status != "CANCELADA")
+    )
+    if except_invoice_id is not None:
+        statement = statement.where(FiscalInvoice.id != except_invoice_id)
+    if (await session.execute(statement.limit(1))).first() is not None:
+        raise ApiError(error_codes.FISCAL_INVOICE_DUPLICATED, f"A NF {invoice_number} ja existe para esta serie.", status_code=409)
+
+
+async def _get_fiscal_invoice_record(session: AsyncSession, invoice_id: int) -> tuple[FiscalInvoice, FiscalRecord]:
+    """Nota + controle fiscal da proposta (travado), validando existencia e proposta nao cancelada."""
+    record_id = (await session.execute(select(FiscalInvoice.fiscal_record_id).where(FiscalInvoice.id == invoice_id, FiscalInvoice.active.is_(True)))).scalar_one_or_none()
+    if record_id is None:
+        raise ApiError(error_codes.FISCAL_INVOICE_NOT_FOUND, "Nota fiscal nao encontrada.", status_code=404)
+    record = await _get_fiscal_record(session, int(record_id), for_update=True)
+    _ensure_proposal_not_cancelled(record.proposal)
+    invoice = next(row for row in record.invoices if row.id == invoice_id)
+    if invoice.status == "CANCELADA":
+        raise ApiError(error_codes.FISCAL_INVOICE_ALREADY_CANCELLED, "A nota fiscal ja esta cancelada.", status_code=409)
+    return invoice, record
+
+
+def _revert_invoice_line(line: FiscalInvoiceItem) -> FiscalItem:
+    """Devolve o faturado da linha ao saldo do item (status recalculado; o _touch fica com quem chama)."""
+    item = line.fiscal_item
+    item.billed_quantity = max(Decimal("0"), item.billed_quantity - line.quantity).quantize(Decimal("0.0001"))
+    if line.weight is not None:
+        item.billed_weight = max(Decimal("0"), item.billed_weight - line.weight).quantize(Decimal("0.0001"))
+    _recalculate_fiscal_item_status(item)
+    return item
+
+
+def _recalculate_after_invoice_change(record: FiscalRecord) -> None:
+    """Recalcula o controle fiscal ignorando NFs canceladas; mantem a retirada se a NF continua emitida."""
+    withdrawn = record.fiscal_situation == "NF_RETIRADA_CLIENTE"
+    live = [row for row in record.invoices if row.active and row.status != "CANCELADA"]
+    if any(item.active for item in record.items):
+        _recalculate_fiscal_record(record)
+    elif live:
+        record.status_fiscal, record.fiscal_situation = "NOTA_FISCAL_EMITIDA", "NF_EMITIDA"
+    else:
+        record.status_fiscal, record.fiscal_situation = "FALTA_EMITIR_NOTA_FISCAL", "AGUARDANDO_NF"
+    if withdrawn and record.status_fiscal == "NOTA_FISCAL_EMITIDA":
+        record.fiscal_situation = "NF_RETIRADA_CLIENTE"
+    elif withdrawn:
+        # A retirada deixou de valer (a NF emitida foi cancelada): limpa o registro dela.
+        record.invoice_withdrawn_at = record.withdrawn_by = record.withdrawal_observation = None
+    if not live:
+        record.last_emission_at = None
+
+
+def _invoice_snapshot(invoice: FiscalInvoice, lines) -> dict:
+    return {
+        "invoice_number": invoice.invoice_number,
+        "series": invoice.series,
+        "issued_at": invoice.issued_at.isoformat() if invoice.issued_at else None,
+        "observation": invoice.observation,
+        "items": [
+            {
+                "fiscal_item_id": int(line.fiscal_item_id),
+                "item_number": line.fiscal_item.proposal_item.item_number,
+                "quantity": str(line.quantity),
+                "weight": str(line.weight) if line.weight is not None else None,
+            }
+            for line in lines
+        ],
+    }
+
+
+async def cancel_fiscal_invoice(session: AsyncSession, invoice_id: int, payload: FiscalCancelInvoiceRequest, actor: User, *, request_id: str | None) -> FiscalRecordDetail:
+    """Cancela a nota inteira (todas as linhas ativas + status CANCELADA) numa transacao; o numero fica livre."""
+    try:
+        invoice, record = await _get_fiscal_invoice_record(session, invoice_id)
+        _ensure_fiscal_version(record, payload.version)
+        previous = record.status_fiscal
+        now = datetime.now(UTC)
+        lines = [line for line in invoice.items if line.active]
+        snapshot = _invoice_snapshot(invoice, lines)
+        for item in {line.fiscal_item_id: _revert_invoice_line(line) for line in lines}.values():
+            _touch(item, actor)
+        for line in lines:
+            line.active = False
+            line.cancelled_at = now
+            line.cancelled_by = actor.id
+            line.cancel_reason = payload.reason
+        invoice.status = "CANCELADA"
+        invoice.cancelled_at = now
+        invoice.cancelled_by = actor.id
+        invoice.cancel_reason = payload.reason
+        _touch(invoice, actor)
+        _recalculate_after_invoice_change(record)
+        _touch(record, actor)
+        await _record_fiscal_event(session, record, "FISCAL_INVOICE_CANCELLED", actor, fiscal_invoice=invoice, request_id=request_id, from_status=previous, to_status=record.status_fiscal, metadata={**snapshot, "reason": payload.reason})
+        record_id = record.id
+        await session.commit()
+    except Exception:
+        await session.rollback()
+        raise
+    session.expire_all()
+    return await get_fiscal_detail(session, record_id)
+
+
+async def correct_fiscal_invoice(session: AsyncSession, invoice_id: int, payload: FiscalCorrectInvoiceRequest, actor: User, *, request_id: str | None) -> FiscalRecordDetail:
+    """Corrige numero/serie/data/observacao/itens da MESMA nota (mesmo id), em uma transacao."""
+    try:
+        invoice, record = await _get_fiscal_invoice_record(session, invoice_id)
+        _ensure_fiscal_version(record, payload.version)
+        if record.fiscal_situation == "NF_RETIRADA_CLIENTE":
+            raise ApiError(error_codes.FISCAL_INVOICE_WITHDRAWN, "A NF ja foi retirada pelo cliente e nao pode ser corrigida.", status_code=409)
+        if not payload.items and any(item.active for item in record.items):
+            raise ApiError(error_codes.FISCAL_INVOICE_CORRECTION_INVALID, "Selecione pelo menos um item fiscal.", status_code=409)
+        await _ensure_invoice_number_free(session, payload.invoice_number, payload.series, except_invoice_id=invoice.id)
+        previous = record.status_fiscal
+        old_lines = [line for line in invoice.items if line.active]
+        before = _invoice_snapshot(invoice, old_lines)
+        touched = {line.fiscal_item_id: _revert_invoice_line(line) for line in old_lines}
+        # O _touch dos itens so ocorre depois da selecao: a versao enviada pelo cliente vale para o estado lido.
+        selected = _selected_fiscal_items(record, payload.items) if payload.items else []
+        now = datetime.now(UTC)
+        for line in old_lines:
+            line.active = False
+            line.cancelled_at = now
+            line.cancelled_by = actor.id
+            line.cancel_reason = CORRECTION_REPLACED_REASON
+        new_lines = []
+        for item, qty, weight in selected:
+            item.billed_quantity = (item.billed_quantity + qty).quantize(Decimal("0.0001"))
+            if weight is not None:
+                item.billed_weight = (item.billed_weight + weight).quantize(Decimal("0.0001"))
+            _recalculate_fiscal_item_status(item)
+            touched[item.id] = item
+            line = FiscalInvoiceItem(fiscal_invoice_id=invoice.id, fiscal_item_id=item.id, proposal_id=record.proposal_id, proposal_item_id=item.proposal_item_id, quantity=qty, weight=weight, created_by=actor.id)
+            line.fiscal_item = item
+            session.add(line)
+            new_lines.append(line)
+        for item in touched.values():
+            _touch(item, actor)
+        invoice.invoice_number = payload.invoice_number
+        invoice.series = payload.series or None
+        if payload.issued_at is not None:
+            invoice.issued_at = payload.issued_at
+        invoice.observation = payload.observation
+        _recalculate_after_invoice_change(record)
+        _assert_fiscal_record_invariants(record)
+        invoice.emission_type = "TOTAL" if record.status_fiscal == "NOTA_FISCAL_EMITIDA" else "PARCIAL"
+        _touch(invoice, actor)
+        _touch(record, actor)
+        await _record_fiscal_event(session, record, "FISCAL_INVOICE_CORRECTED", actor, fiscal_invoice=invoice, request_id=request_id, from_status=previous, to_status=record.status_fiscal, metadata={"invoice_number": invoice.invoice_number, "before": before, "after": _invoice_snapshot(invoice, new_lines)})
+        record_id = record.id
+        await session.commit()
+    except IntegrityError as exc:
+        await session.rollback()
+        if "uq_fiscal_invoices_number_series" not in str(exc):
+            raise
+        raise ApiError(error_codes.FISCAL_INVOICE_DUPLICATED, f"A NF {payload.invoice_number} ja existe para esta serie.", status_code=409)
+    except Exception:
+        await session.rollback()
+        raise
+    session.expire_all()
+    return await get_fiscal_detail(session, record_id)
+
+
+async def list_fiscal_cancellations(session: AsyncSession, *, search: str | None, limit: int, offset: int) -> PaginatedFiscalCancellationsResponse:
+    """NFs inteiras canceladas (as correcoes nao entram), mais recentes primeiro."""
+    conditions = [FiscalInvoice.active.is_(True), FiscalInvoice.status == "CANCELADA"]
+    needle = (search or "").strip().lower()
+    if needle:
+        conditions.append(or_(_proposal_search_clause(search), func.strpos(func.lower(FiscalInvoice.invoice_number), needle) > 0))
+    base = select(FiscalInvoice).join(FiscalRecord, FiscalRecord.id == FiscalInvoice.fiscal_record_id).join(Proposal, Proposal.id == FiscalRecord.proposal_id).where(*conditions)
+    total = (await session.execute(select(func.count()).select_from(base.subquery()))).scalar_one()
+    invoices = (await session.execute(
+        base.options(selectinload(FiscalInvoice.items).selectinload(FiscalInvoiceItem.fiscal_item).selectinload(FiscalItem.proposal_item), selectinload(FiscalInvoice.fiscal_record).selectinload(FiscalRecord.proposal))
+        .order_by(FiscalInvoice.cancelled_at.desc().nulls_last(), FiscalInvoice.id.desc())
+        .limit(limit)
+        .offset(offset)
+    )).scalars().unique().all()
+    names = await _user_display_names(session, [invoice.cancelled_by for invoice in invoices])
+    rows = []
+    for invoice in invoices:
+        summary = _fiscal_invoice_summary(invoice, names)
+        proposal = invoice.fiscal_record.proposal
+        rows.append(FiscalCancellationItem(
+            invoice_id=invoice.id,
+            fiscal_record_id=invoice.fiscal_record_id,
+            proposal_id=invoice.proposal_id,
+            proposal_number=proposal.proposal_number,
+            customer_name=proposal.customer_name,
+            project_name=proposal.project_name,
+            lot=proposal.lot,
+            **summary.model_dump(include={"invoice_number", "series", "issued_at", "emission_type", "observation", "item_count", "quantity", "weight", "items", "cancelled_at", "cancelled_by", "cancelled_by_name", "cancel_reason"}),
+        ))
+    return PaginatedFiscalCancellationsResponse(items=rows, total=total, limit=limit, offset=offset)
 
 
 async def mark_fiscal_invoice_withdrawn(session: AsyncSession, fiscal_record_id: int, payload: FiscalWithdrawalRequest, actor: User, *, request_id: str | None) -> FiscalRecordDetail:
@@ -3083,6 +3297,8 @@ async def _get_fiscal_record(session: AsyncSession, fiscal_record_id: int, *, fo
     return record
 
 
+# Linhas trocadas por uma correcao: nao fazem parte da nota cancelada depois.
+CORRECTION_REPLACED_REASON = "Substituida na correcao da nota"
 _AUTO_FISCAL_OBSERVATION = "Entrada fiscal oficial automatica."
 
 
@@ -3296,11 +3512,11 @@ def _fiscal_pending_weight(record: FiscalRecord) -> Decimal:
 
 
 def _invoice_numbers(invoices) -> list[str]:
-    """Numeros das NFs ativas, na ordem de emissao e sem repetir. O numero
+    """Numeros das NFs ativas (nao canceladas), na ordem de emissao e sem repetir. O numero
     "REGISTRO-..." e um marcador gerado quando o usuario nao informou a NF, nao
     um numero de nota: nao aparece."""
     numbers: list[str] = []
-    for invoice in sorted((row for row in invoices if row.active), key=lambda row: (row.issued_at, row.id)):
+    for invoice in sorted((row for row in invoices if row.active and row.status != "CANCELADA"), key=lambda row: (row.issued_at, row.id)):
         number = str(invoice.invoice_number or "").strip()
         if number and not number.startswith("REGISTRO-") and number not in numbers:
             numbers.append(number)
@@ -3312,7 +3528,7 @@ async def _invoice_numbers_by_proposal(session: AsyncSession, proposal_ids: list
     if not proposal_ids:
         return {}
     rows = (await session.execute(
-        select(FiscalInvoice).where(FiscalInvoice.proposal_id.in_(proposal_ids), FiscalInvoice.active.is_(True))
+        select(FiscalInvoice).where(FiscalInvoice.proposal_id.in_(proposal_ids), FiscalInvoice.active.is_(True), FiscalInvoice.status != "CANCELADA")
     )).scalars().all()
     grouped: dict[int, list[FiscalInvoice]] = {}
     for row in rows:
@@ -3363,12 +3579,15 @@ def _fiscal_record_summary(record: FiscalRecord) -> FiscalRecordSummary:
     )
 
 
-def _fiscal_record_detail(record: FiscalRecord) -> FiscalRecordDetail:
+def _fiscal_record_detail(record: FiscalRecord, user_names: dict[int, str] | None = None) -> FiscalRecordDetail:
     data = _fiscal_record_summary(record).model_dump()
     items = [_fiscal_item_summary(item) for item in sorted([item for item in record.items if item.active], key=lambda row: (row.proposal_item.item_number, row.id))]
-    invoices = [_fiscal_invoice_summary(invoice) for invoice in sorted([invoice for invoice in record.invoices if invoice.active], key=lambda row: (row.issued_at, row.id), reverse=True)]
+    ordered = sorted([invoice for invoice in record.invoices if invoice.active], key=lambda row: (row.issued_at, row.id), reverse=True)
+    invoices = [_fiscal_invoice_summary(invoice) for invoice in ordered if invoice.status != "CANCELADA"]
+    cancelled = sorted([invoice for invoice in ordered if invoice.status == "CANCELADA"], key=lambda row: (row.cancelled_at or row.issued_at, row.id), reverse=True)
+    cancelled_invoices = [_fiscal_invoice_summary(invoice, user_names) for invoice in cancelled]
     events = [FiscalEventSummary(id=event.id, event_type=event.event_type, from_status=event.from_status, to_status=event.to_status, actor_user_id=event.actor_user_id, created_at=event.created_at, metadata=event.metadata_) for event in sorted(record.events, key=lambda row: (row.created_at, row.id), reverse=True)]
-    return FiscalRecordDetail(**data, items=items, invoices=invoices, events=events)
+    return FiscalRecordDetail(**data, items=items, invoices=invoices, cancelled_invoices=cancelled_invoices, events=events)
 
 
 def _fiscal_item_summary(item: FiscalItem) -> FiscalItemSummary:
@@ -3391,8 +3610,10 @@ def _fiscal_item_summary(item: FiscalItem) -> FiscalItemSummary:
     )
 
 
-def _fiscal_invoice_summary(invoice: FiscalInvoice) -> FiscalInvoiceSummary:
-    active_items = [item for item in invoice.items if item.active]
+def _fiscal_invoice_summary(invoice: FiscalInvoice, user_names: dict[int, str] | None = None) -> FiscalInvoiceSummary:
+    cancelled = invoice.status == "CANCELADA"
+    # Nota cancelada: mostra as linhas que ela tinha (ja inativas), menos as trocadas por correcao.
+    active_items = [item for item in invoice.items if (item.cancel_reason != CORRECTION_REPLACED_REASON if cancelled else item.active)]
     items = [
         FiscalInvoiceItemSummary(
             id=item.id,
@@ -3400,6 +3621,8 @@ def _fiscal_invoice_summary(invoice: FiscalInvoice) -> FiscalInvoiceSummary:
             fiscal_item_id=item.fiscal_item_id,
             proposal_item_id=item.proposal_item_id,
             item_number=item.fiscal_item.proposal_item.item_number,
+            product_code=item.fiscal_item.proposal_item.product_code,
+            description=item.fiscal_item.proposal_item.description,
             quantity=item.quantity,
             weight=item.weight,
             active=item.active,
@@ -3425,6 +3648,10 @@ def _fiscal_invoice_summary(invoice: FiscalInvoice) -> FiscalInvoiceSummary:
         quantity=sum((item.quantity for item in active_items), Decimal("0")).quantize(Decimal("0.0001")),
         weight=sum(((item.weight or Decimal("0")) for item in active_items), Decimal("0")).quantize(Decimal("0.0001")),
         items=items,
+        cancelled_at=invoice.cancelled_at if cancelled else None,
+        cancelled_by=invoice.cancelled_by if cancelled else None,
+        cancelled_by_name=(user_names or {}).get(int(invoice.cancelled_by)) if cancelled and invoice.cancelled_by is not None else None,
+        cancel_reason=invoice.cancel_reason if cancelled else None,
     )
 
 
@@ -4307,6 +4534,11 @@ def _reason_suffix(metadata: dict) -> str:
     return f" ({reason})" if reason else ""
 
 
+def _nf_label(metadata: dict) -> str:
+    number = str(metadata.get("invoice_number") or "")
+    return f"NF {number}" if number and not number.startswith("REGISTRO-") else "nota fiscal"
+
+
 def _code_suffix(metadata: dict) -> str:
     code = metadata.get("code")
     return f" ({code})" if code else ""
@@ -4367,6 +4599,8 @@ ACTIVITY_TEMPLATES = {
     ),
     "FISCAL_BATCH_CONFIRMED": lambda who, md: f"{who} confirmou o lote de emissoes fiscais.",
     "FISCAL_INVOICE_ITEM_CANCELLED": lambda who, md: f"{who} cancelou um item da nota fiscal{_reason_suffix(md)}.",
+    "FISCAL_INVOICE_CANCELLED": lambda who, md: f"{who} cancelou a {_nf_label(md)}{_reason_suffix(md)}.",
+    "FISCAL_INVOICE_CORRECTED": lambda who, md: f"{who} corrigiu a {_nf_label(md)}.",
     "FISCAL_INVOICE_WITHDRAWN": lambda who, md: f"{who} registrou a retirada da nota fiscal.",
     "PROPOSAL_ITEM_CREATED": lambda who, md: (
         f"{who} incluiu o item {md['item_number']} na proposta." if md.get("item_number") else f"{who} incluiu um item na proposta."

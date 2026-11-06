@@ -213,5 +213,10 @@
     "classification": "TRANSITIONAL",
     "summary": "Troca o CHECK ck_inspections_stage para aceitar a nova etapa inicial pendente (solicitacao pendente).",
     "justification": "Sem alterar dados: DROP + CREATE do CHECK em tabela pequena e nova, ampliando o conjunto de valores (as linhas existentes continuam validas e nao mudam de etapa). Transitoria porque a API nova exige a constraint nova (grava pendente) e o downgrade reescreve linhas pendente para cadastro antes de restaurar o CHECK antigo. Codigo antigo continua operando sobre a constraint ampliada."
+  },
+  "20261106_0043": {
+    "classification": "TRANSITIONAL",
+    "summary": "Adiciona fiscal_invoices.cancelled_at/cancelled_by/cancel_reason, marca como CANCELADA as NFs fantasma (todas as linhas ja canceladas) e troca a UNIQUE (invoice_number, series) por indice unico parcial (WHERE status <> 'CANCELADA', mesma semantica de NULL da constraint antiga) para liberar o numero de NF cancelada.",
+    "justification": "Tres ADD COLUMN nullable (codigo antigo ignora), um UPDATE de dados limitado a NFs REGISTRADA sem nenhuma linha ativa (passam a CANCELADA com motivo/autor/data da ultima linha cancelada) e a troca da constraint unica por indice unico parcial. Transitoria porque a API nova depende do indice parcial para reutilizar numeros de NF cancelada e o contrato muda: NF cancelada deixa de aparecer em Emissoes e passa a ter status CANCELADA. O indice parcial nunca e mais restritivo que a constraint antiga (serie NULL nao conflita nos dois), entao nao falha com dados existentes. O downgrade aborta se algum numero foi reutilizado apos cancelamento (a constraint antiga nao permite) e, fora isso, restaura a constraint e remove as colunas, perdendo apenas motivo/autor/data do cancelamento."
   }
 }
