@@ -544,6 +544,38 @@ class OfficialProposalApiStorage:
         finally:
             client.close()
 
+    def undo_candidate(self, proposal_id: int) -> dict[str, Any]:
+        client, proposals, token = self._client()
+        try:
+            return proposals.undo_candidate(token, proposal_id)
+        finally:
+            client.close()
+
+    def undo_last_action(
+        self,
+        proposal_id: int,
+        expected_version: int,
+        target_request_id: str,
+        reason: str,
+        idempotency_key: str,
+    ) -> dict[str, Any]:
+        client, proposals, token = self._client()
+        try:
+            return _api_proposal_to_process(
+                proposals.undo_last_action(
+                    token,
+                    proposal_id,
+                    {
+                        "expected_version": int(expected_version),
+                        "target_request_id": target_request_id,
+                        "reason": reason,
+                        "idempotency_key": idempotency_key,
+                    },
+                )
+            )
+        finally:
+            client.close()
+
     def start_production(self, proposal_id: int, version: int, observation: str = "") -> dict[str, Any]:
         client, proposals, token = self._client()
         try:
@@ -2644,6 +2676,8 @@ def _api_history_to_legacy(row: dict[str, Any]) -> dict[str, Any]:
         "status_real_novo": row.get("to_status") or "",
         "origem": row.get("source") or "",
         "request_id": row.get("request_id") or "",
+        "desfeita": bool(row.get("undone")),
+        "desfeita_por_evento_id": row.get("undone_by_event_id"),
     }
 
 

@@ -56,6 +56,13 @@ class ProposalsApiClient:
             access_token=access_token,
         ).data
 
+    def undo_candidate(self, access_token: str, proposal_id: int) -> dict[str, Any]:
+        """Ultima acao desfazivel da proposta (so leitura; falta de permissao vem como can_undo=false)."""
+        return self.client.get(f"/api/v1/proposals/{int(proposal_id)}/undo/candidate", access_token=access_token).data
+
+    def undo_last_action(self, access_token: str, proposal_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+        return self.client.post(f"/api/v1/proposals/{int(proposal_id)}/undo", json_payload=payload, access_token=access_token).data
+
     def list_production_proposals(self, access_token: str, **filters) -> dict[str, Any]:
         params = urlencode({key: value for key, value in filters.items() if value not in (None, "")})
         path = "/api/v1/production/proposals" + (f"?{params}" if params else "")

@@ -2175,6 +2175,30 @@ class BackendService:
         except Exception as exc:
             raise self._api_app_error(exc) from exc
 
+    def undo_candidate(self, process_id: int) -> dict[str, Any]:
+        """Ultima acao desfazivel da proposta (`GET /proposals/{id}/undo/candidate`); a API decide permissao e regras."""
+        if not self.user:
+            raise legacy.AppError('Usuario nao autenticado.')
+        try:
+            return self.official_proposal_storage.undo_candidate(process_id)
+        except Exception as exc:
+            raise self._api_app_error(exc) from exc
+
+    def undo_last_action(self, process_id: int, expected_version: int, target_request_id: str, reason: str, idempotency_key: str):
+        if not self.user:
+            raise legacy.AppError('Usuario nao autenticado.')
+        reason = (reason or '').strip()
+        if not reason:
+            raise legacy.AppError('Informe o motivo do desfazer.')
+        try:
+            return self.official_proposal_storage.undo_last_action(
+                process_id, expected_version, target_request_id, reason, idempotency_key
+            )
+        except Exception as exc:
+            raise self._api_app_error(exc) from exc
+        finally:
+            self._invalidate_operational_cache()
+
     def process_actions(self, process_id: int, area: str | None=None, row_context: dict[str, Any] | None = None) -> list[dict[str, str]]:
         if area == 'CONTROLE GERAL':
             if not self.can_edit(area):
