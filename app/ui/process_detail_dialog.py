@@ -4,6 +4,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QDialog, QFrame, QHBoxLayout, QLabel, QStackedLayout, QVBoxLayout, QWidget
 
 from app.services.app_logging import get_logger
+from app.ui.action_center.undo_dialog import UndoActionDialog
 from app.ui.animations import fade_in
 from app.ui.background_worker import start_worker
 from app.ui.components.detail_widgets import CountTabWidget
@@ -15,6 +16,7 @@ from app.ui.components.skeleton import SkeletonRows
 from app.ui.components.status_badge import StatusBadge
 from app.ui.dialog_utils import apply_large_dialog_geometry, style_dialog_from_parent
 from app.ui.format_utils import format_empty, format_proposal_header
+from app.ui.icons import AppIcons
 from app.ui.process_detail.cargas_tab import CargasTab
 from app.ui.process_detail.family_header import FamilyStrip, consolidated_badge, has_partials
 from app.ui.process_detail.fiscal_entrega_tab import FiscalEntregaTab
@@ -115,14 +117,17 @@ class ProcessDetailDialog(QDialog):
         panel_layout.addWidget(self.family_strip)
 
         # Acoes a direita: secundaria, UMA primaria e "Fechar" sempre por ultimo.
+        self.undo_button = ModernButton("Desfazer última ação", AppIcons.HISTORY, variant="ghost")
         self.edit_button = ModernButton("Editar", "edit")
         self.actions_button = ModernButton("Ações", "status", accent=True)
         close = ModernButton("Fechar", "clear", variant="ghost")
+        self.undo_button.clicked.connect(self.undo_last_action)
         self.edit_button.clicked.connect(self.edit_process)
         self.actions_button.clicked.connect(self.change_status)
         close.clicked.connect(self.accept)
         header.addLayout(title_box, 1)
         header.addStretch()
+        header.addWidget(self.undo_button, 0, Qt.AlignVCenter)
         header.addWidget(self.edit_button, 0, Qt.AlignVCenter)
         header.addWidget(self.actions_button, 0, Qt.AlignVCenter)
         header.addWidget(close, 0, Qt.AlignVCenter)
@@ -195,6 +200,7 @@ class ProcessDetailDialog(QDialog):
 
     def load(self):
         self.tabs.setEnabled(False)
+        self.undo_button.setEnabled(False)
         self.edit_button.setEnabled(False)
         self.actions_button.setEnabled(False)
         if not self.process:
@@ -210,6 +216,7 @@ class ProcessDetailDialog(QDialog):
             log.exception("Falha ao carregar Detalhes da proposta | process_ids=%r", self.process_ids, exc_info=exc)
             if self.process:
                 # Recarga falhou: mantem os dados que ja estavam na tela.
+                self.undo_button.setEnabled(True)
                 self.edit_button.setEnabled(True)
                 self.actions_button.setEnabled(True)
             else:
@@ -226,6 +233,7 @@ class ProcessDetailDialog(QDialog):
 
     def _render_loaded(self, payload: dict) -> None:
         self.tabs.setEnabled(True)
+        self.undo_button.setEnabled(True)
         self.edit_button.setEnabled(True)
         self.actions_button.setEnabled(True)
         processes = payload["processes"]
@@ -266,6 +274,8 @@ class ProcessDetailDialog(QDialog):
 
         cancelled = bool(p.get("is_cancelled")) or (p.get("status_geral") or p.get("status_localizacao")) == "CANCELADA"
         self.edit_button.setVisible(not cancelled and len(self.process_ids) == 1)
+        # Desfazer vale para uma proposta so; mesmo cancelada o dialogo explica o que a API permite.
+        self.undo_button.setVisible(len(self.process_ids) == 1)
         self.actions_button.setVisible(not cancelled)
 
         partials = payload["partials"]
@@ -387,6 +397,12 @@ class ProcessDetailDialog(QDialog):
 
     def edit_process(self):
         dialog = ProcessFormDialog(self.service, self.process_id, self)
+        if dialog.exec():
+            self.changed = True
+            self.load()
+
+    def undo_last_action(self):
+        dialog = UndoActionDialog(self.service, self.process_id, self)
         if dialog.exec():
             self.changed = True
             self.load()
