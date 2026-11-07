@@ -57,7 +57,8 @@ Ordem: T1 -> T2 -> T3 -> T4 -> T5 (API); T6 -> T7 -> T8 -> T9 -> T10 (Desktop); 
 - Interfaces: `POST /warehouse/proposals/{proposal_id}/stock-deduction`, corpo `WarehouseStockDeductionRequest{version: int, deducted: bool}`; devolve `WarehouseProposalSummary`. Eventos `WAREHOUSE_STOCK_DEDUCTED` e `WAREHOUSE_STOCK_DEDUCTION_REVERTED` (rótulos nos dois mapas de eventos de `service.py`, ~4569 e ~7150, área ALMOXARIFADO). Em lote, o Desktop chama a rota por proposta (sem rota nova).
 - Regras: confirmar só com status `SEPARADO`, `ALMOXARIFADO_ENTREGUE_PARCIAL` ou `ALMOXARIFADO_ENTREGUE`; senão 409 `PROPOSAL_INVALID_STATE`. Confirmar já confirmada ou desfazer já pendente é idempotente (sem evento novo). Grava `warehouse_stock_deducted_at` e `..._by_user_id`; desfazer zera os dois. Valida `version` (`_ensure_version`) e incrementa via `_touch`.
 - Pista: em `undo.py`, `lane_of` passa a devolver `LANE_WAREHOUSE` também para os dois eventos novos. A baixa não entra no desfazer da Fase 14 (o botão próprio já desfaz): sem handler, ela aparece como "não suportada" na pilha do Almoxarifado, e a pilha do GERAL não é afetada.
-- Passos: testes (confirmar, desfazer, status inválido, versão velha, idempotência, `lane_of` dos eventos novos, desfazer geral não bloqueado por baixa) falhando; implementar; commit.
+- Desfazer da transição de status (D14): em `undo.py`, o handler do Almoxarifado (~linha 292) passa a restaurar também `warehouse_stock_deducted_at = None` e `warehouse_stock_deducted_by_user_id = None` no `proposal_restore`, e a pré-visualização de mudanças (`FIELD_LABELS`, ~linha 89) mostra "Baixa no estoque" quando ela for zerada. Para o desfazer enxergar a baixa, a confirmação de baixa não pode virar a "última ação" da pista: o desfazer da transição de status continua sendo oferecido mesmo com baixa posterior (a baixa é anulada junto).
+- Passos: testes (confirmar, desfazer, status inválido, versão velha, idempotência, `lane_of` dos eventos novos, desfazer geral não bloqueado por baixa, desfazer do status zera a baixa e o contador) falhando; implementar; commit.
 
 ### T5. Itens do Almoxarifado
 - Arquivos: `service.py`, `schemas.py`, `router.py`, `api/tests/test_warehouse_items.py` (novo).
@@ -100,7 +101,7 @@ Ordem: T1 -> T2 -> T3 -> T4 -> T5 (API); T6 -> T7 -> T8 -> T9 -> T10 (Desktop); 
 
 1. Entrada por número em proposta cuja `version` mudou durante a chamada (duas telas): a entrada não usa `version`; conferir que não sobrescreve um status mais avançado (só entra se NULL ou AGUARDANDO_CONFIRMACAO, dentro da transação, com a linha travada).
 2. Proposta mãe em Separado com filha parcial: a filha herda `warehouse_status` da mãe (`remanagement_rows.py`) mas nunca aparece na aba nem no contador (`parent_proposal_id IS NULL`).
-3. Desfazer (Fase 14) da transição de status de uma proposta que já tem baixa confirmada: a baixa deve ficar coerente (decidir no T4: bloquear o desfazer enquanto houver baixa, ou zerar a baixa).
+3. Desfazer (Fase 14) da transição de status de uma proposta que já tem baixa confirmada: decidido pelo Henrique (D14), o desfazer **zera a baixa** junto com o status, num único passo, e o contador reflete isso. Cobrir também o caso em que o status volta para `NULL` (a proposta some da aba).
 4. `warehouse_rows` com teto de 200: se a aba passar disso, o contador (da API) e a lista (cortada) divergem. Registrar o teto no teste.
 5. Colar números com caracteres estranhos (aspas, ponto final de e-mail, ` `) e lista com mais de 200 números.
 

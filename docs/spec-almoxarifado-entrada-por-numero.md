@@ -100,6 +100,7 @@ Permissão: a mesma do status de Almoxarifado (`proposals.change_status` na áre
 | D11 | Transição nova | `EM_SEPARACAO -> SEM_PARAFUSOS` | mantém "Sem parafusos" alcançável | Claude | 2026-11-07 |
 | D12 | Backfill | Entregues antigas recebem baixa preenchida | evitar reaparecer o histórico | Henrique (confirmou) | 2026-11-07 |
 | D13 | Contador | Calculado na API, exclui Sem parafusos | correto com paginação | Claude | 2026-11-07 |
+| D14 | Desfazer vs baixa | Desfazer a última transição de status (Fase 14) de uma proposta com baixa confirmada **zera a baixa** | manter status e baixa coerentes | Henrique | 2026-11-07 |
 
 ## Premissas e riscos
 
