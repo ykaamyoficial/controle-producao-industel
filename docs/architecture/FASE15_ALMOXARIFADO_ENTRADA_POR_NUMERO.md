@@ -29,6 +29,12 @@ Spec: `docs/spec-almoxarifado-entrada-por-numero.md` (D1 a D14). Plano: `docs/pl
 7. Evento de baixa nunca vira "última ação" da pista geral do desfazer.
 8. Desfazer a transição de status zera a baixa no mesmo passo.
 
+## Decisões posteriores (Henrique, 2026-11-07)
+
+1. Confirmar ou desfazer a baixa **não notifica** criador nem participantes; o evento segue no histórico e na atividade da proposta.
+2. Se a correção administrativa ou o sync legado mudarem o `warehouse_status`, a baixa é zerada no mesmo passo, só quando o status realmente mudou (status igual preserva). A correção administrativa hoje não grava `warehouse_status`; a trava vale para quando gravar. O avanço normal (`SEPARADO` -> `ALMOXARIFADO_ENTREGUE`) mantém a baixa.
+3. Proposta entregue com baixa sai da lista e nada será construído para isso: desfazer a baixa continua pelo Action Center ou pelo desfazer do status.
+
 ## Validação
 
 Ambiente da API: Postgres descartável (`cp_test_pg_tmp`, porta 55440, banco `controle_test`), `APP_ENV=test`, `SECRET_KEY` de teste, `POSTGRES_TEST_DATABASE_URL` apontando só para ele.
@@ -42,20 +48,18 @@ python -m pytest api/tests -q --deselect api/tests/test_replica_views_parity.py
                                                          # 1426 passed, 2 skipped, 4 failed, 4 deselected
 ```
 
+- Decisões posteriores (mesmo Postgres descartável, `-p no:cacheprovider`): `test_warehouse_stock_deduction.py` + `test_proposal_undo_rules.py` = 61 passed; `test_warehouse_enter/items/list.py`, `test_notifications_service.py`, `test_proposal_undo.py` = 53 passed; depois do item 2, `test_warehouse_*.py`, `test_administrative_correction_rules.py`, `test_proposal_undo*.py`, `test_legacy_sync_integration.py`, `test_sync_service.py`, `test_remanagement_rows.py`, `test_terminal_proposal_cancellation.py`, `test_notifications_service.py` = 170 passed, 0 skipped; `test_proposals_integration.py -k "administrative or correction or sync"` = 7 passed. Testes novos: zero notificação ao confirmar e desfazer em 3 propostas seguidas (com controle que prova que o avanço de status notifica) e evento no histórico; sync legado zera a baixa só com status diferente; avanço normal mantém a baixa; correção administrativa zera (e a prévia mostra) só com status diferente; filha do remanejamento nasce sem baixa.
 - Desktop: a única falha foi `test_nomus_phase6_performance.py::test_controlled_benchmark_and_load_matrix`, benchmark de tempo que estourou porque duas cópias da suíte rodaram ao mesmo tempo; sozinho passa (3 passed).
 - API: falham `test_deployment_rollback_integration.py` (2), `test_docker_release_integration.py` (1), que dependem de container Docker de release ficar saudável, e `test_update_audit_router.py` (1), que o `maestro` informou já falhar em `6c7daf9`, antes da fase (não reconferido por mim). `test_replica_views_parity.py` foi deixado de fora (4 deselected): o `maestro` informou 2 falhas nele também anteriores à fase.
 
 ## Pendência encontrada
 
 - **Nada foi testado contra a API de dev (8001)** e a migration não subiu no banco de dev; o visual (inclusive tema escuro) não foi conferido por captura; os testes de tela usam worker síncrono.
-- A correção administrativa e o sync legado ainda mudam o status do Almoxarifado sem limpar a baixa.
 - A D14 zera a baixa sempre que um status é desfeito, mesmo se a baixa foi confirmada antes da transição desfeita (baixa em SEPARADO, depois ENTREGUE; desfazer ENTREGUE->SEPARADO zera a baixa).
 - `warehouse_rows` mantém o teto de 200 linhas: acima disso o contador (API) e a lista cortada divergem (registrado em teste).
 - Baixa em lote e Action Center mandam `version=None` e o serviço busca a versão atual: na prática o controle otimista fica desligado; se a consulta do estado da baixa falhar, o card some sem aviso; o lote decide por cache de seleção que pode estar velho.
 - `GET /proposals/{id}` não traz `stock_deducted`; o Action Center faz uma consulta extra à lista do Almoxarifado por número ao abrir (recomendado expor o campo no detalhe).
-- Proposta entregue com baixa sai da lista: "Desfazer baixa" só é alcançável pelo Action Center ainda aberto ou pelo desfazer do status.
 - Parser de números separa por espaço; um número com espaço interno no banco viraria dois (banco real não conferido). Status legado fora de `WAREHOUSE_STATUSES` não aparece na aba e a entrada o trata como `JA_NA_ABA` (sem teste).
-- A API notifica criador e participantes ao confirmar ou desfazer uma baixa, o que pode virar ruído no lote.
 - Título do diálogo de lote sem acento ("Acoes em lote").
 
 ## Conclusão
