@@ -419,6 +419,7 @@ class ModernTable(QTableView):
             "numero_item": 75,
             "quantidade_separada": 95,
             "status_expedicao_item": 250,
+            "status_almoxarifado_item": 215,
             "codigo_produto": 95,
             "product_code": 95,
             "descricao": 280,

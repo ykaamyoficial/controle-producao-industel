@@ -29,6 +29,15 @@ AREA_ITEM_COLUMNS = {
         ("proposta", "Proposta"),
         ("status_expedicao_item", "Situação"),
     ],
+    # So consulta: itens ativos das propostas que estao na aba Almoxarifado.
+    "ALMOXARIFADO": [
+        ("proposta", "Proposta"),
+        ("cliente", "Cliente"),
+        ("codigo_produto", "Código"),
+        ("descricao", "Descrição"),
+        ("quantidade", "Quantidade"),
+        ("status_almoxarifado_item", "Situação"),
+    ],
     "GALVANIZACAO": [
         ("numero_item", "Item"),
         ("proposta", "Proposta"),
@@ -50,6 +59,7 @@ AREA_STATUS_COLUMN_MAP = {
     "status_producao_item": "PRODUCAO",
     "status_galvanizacao": "GALVANIZACAO",
     "status_expedicao_item": "EXPEDICAO",
+    "status_almoxarifado_item": "ALMOXARIFADO",
 }
 
 WEIGHT_COLUMNS = {"peso_total"}
