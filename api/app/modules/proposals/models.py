@@ -44,6 +44,8 @@ class Proposal(Base):
     galvanization_status: Mapped[str | None] = mapped_column(String(120), nullable=True)
     shipping_status: Mapped[str | None] = mapped_column(String(120), nullable=True)
     warehouse_status: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    warehouse_stock_deducted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    warehouse_stock_deducted_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     flow_situation: Mapped[str | None] = mapped_column(String(120), nullable=True)
     has_production_pending: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     process_type: Mapped[str | None] = mapped_column(String(80), nullable=True)

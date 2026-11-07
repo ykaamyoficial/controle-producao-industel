@@ -218,5 +218,10 @@
     "classification": "TRANSITIONAL",
     "summary": "Adiciona fiscal_invoices.cancelled_at/cancelled_by/cancel_reason, marca como CANCELADA as NFs fantasma (todas as linhas ja canceladas) e troca a UNIQUE (invoice_number, series) por indice unico parcial (WHERE status <> 'CANCELADA', mesma semantica de NULL da constraint antiga) para liberar o numero de NF cancelada.",
     "justification": "Tres ADD COLUMN nullable (codigo antigo ignora), um UPDATE de dados limitado a NFs REGISTRADA sem nenhuma linha ativa (passam a CANCELADA com motivo/autor/data da ultima linha cancelada) e a troca da constraint unica por indice unico parcial. Transitoria porque a API nova depende do indice parcial para reutilizar numeros de NF cancelada e o contrato muda: NF cancelada deixa de aparecer em Emissoes e passa a ter status CANCELADA. O indice parcial nunca e mais restritivo que a constraint antiga (serie NULL nao conflita nos dois), entao nao falha com dados existentes. O downgrade aborta se algum numero foi reutilizado apos cancelamento (a constraint antiga nao permite) e, fora isso, restaura a constraint e remove as colunas, perdendo apenas motivo/autor/data do cancelamento."
+  },
+  "20261107_0044": {
+    "classification": "DATA_MIGRATION",
+    "summary": "Adiciona proposals.warehouse_stock_deducted_at e warehouse_stock_deducted_by_user_id (baixa no estoque do Almoxarifado) e preenche a data nas propostas ja em ALMOXARIFADO_ENTREGUE.",
+    "justification": "Duas ADD COLUMN nullable (codigo antigo ignora) e uma FK nullable para users com ON DELETE SET NULL, mais um UPDATE de dados limitado a warehouse_status = 'ALMOXARIFADO_ENTREGUE' que grava a data da migration (usuario fica nulo) para que o historico ja entregue nao reapareca na aba Almoxarifado nem infle o contador de baixas pendentes (decisao D12 do Henrique). Nenhuma outra linha ou coluna e alterada; o UPDATE nao e reversivel linha a linha, mas o downgrade apenas remove FK e colunas, perdendo so a marcacao de baixa. Exige ciencia humana porque muda quais propostas a API nova mostra."
   }
 }
