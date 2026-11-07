@@ -2,9 +2,17 @@ from __future__ import annotations
 
 from typing import Protocol
 
+from app.services.app_logging import get_logger
 from app.ui.action_center.context import ProposalActionContext
 from app.ui.action_center.descriptor import ActionCategory, ActionDescriptor
 from app.ui.icons import AppIcons
+
+log = get_logger("action_center")
+
+# Acao so de UI/roteamento (nunca vem de process_actions): abre o dialogo de
+# desfazer a ultima acao. Fica FORA de PRIMARY_ACTION_KEYS de proposito - desfazer
+# nunca pode virar a acao principal do card.
+UNDO_ACTION_ID = "UNDO_LAST_ACTION"
 
 # Visual-only remaps: keep the label/status/permission logic in backend_adapter.py untouched,
 # only pick a more legible icon glyph for a handful of well-known actions. Keyed by action id,
@@ -272,3 +280,46 @@ class GalvanizationActionProvider:
                 raw=action.raw,
             ))
         return result
+
+
+class UndoActionProvider:
+    """Envolve outro provider e acrescenta o card "Desfazer ultima acao"
+    (ATTENTION, nunca primario) quando a API informa uma ultima acao na
+    proposta. Consulta `service.undo_candidate()` a cada abertura/recarga; se a
+    consulta falhar (API antiga, rede, proposta sem historico), o card
+    simplesmente nao aparece e as demais acoes seguem intactas. Quem decide se
+    pode desfazer (permissao, regras, bloqueios) e sempre a API - o dialogo
+    mostra o motivo quando `can_undo` e falso."""
+
+    def __init__(self, inner, service):
+        self._inner = inner
+        self.service = service
+
+    def get_actions(self, context: ProposalActionContext) -> list[ActionDescriptor]:
+        actions = self._inner.get_actions(context)
+        try:
+            candidate = self.service.undo_candidate(context.proposal_id)
+        except Exception:
+            log.warning("Falha ao consultar a ultima acao desfazivel: proposal_id=%s", context.proposal_id, exc_info=True)
+            return actions
+        action = candidate.get("action") if isinstance(candidate, dict) else None
+        if not isinstance(action, dict):
+            return actions
+        label = str(action.get("label") or action.get("title") or "").strip()
+        description = f'Desfaz "{label}".' if label else "Desfaz a última ação registrada nesta proposta."
+        if not candidate.get("can_undo"):
+            description = "Veja por que a última ação não pode ser desfeita."
+        return [
+            *actions,
+            ActionDescriptor(
+                id=UNDO_ACTION_ID,
+                label="Desfazer última ação",
+                description=description,
+                icon=AppIcons.HISTORY,
+                category=ActionCategory.ATTENTION,
+                area=context.area,
+                order=len(actions),
+                status="",
+                raw={"candidate": candidate},
+            ),
+        ]

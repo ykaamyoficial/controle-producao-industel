@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
 from app.services.app_logging import get_logger
 from app.ui.action_center.context import ProposalActionContext
 from app.ui.action_center.descriptor import ActionCategory, ActionDescriptor
-from app.ui.action_center.provider import AREA_COLOR_KEYS, CATEGORY_TO_CARD_TYPE
+from app.ui.action_center.provider import AREA_COLOR_KEYS, CATEGORY_TO_CARD_TYPE, UNDO_ACTION_ID
 from app.ui.action_center.registry import ActionRegistry
 from app.ui.background_worker import start_worker
 from app.ui.components.action_card_button import ActionCardButton
@@ -162,14 +162,16 @@ class ProposalActionCenter(QDialog):
         self._clear_layout(layout)
         self._action_buttons = []
         actions = self.context.available_actions
-        if not actions:
+        # O card "Desfazer" e acrescentado pelo provider e nao conta como acao da etapa.
+        if not any(action.id != UNDO_ACTION_ID for action in actions):
             message = "Não há nenhuma ação disponível nesta etapa."
             if self.area == "GALVANIZACAO":
                 message = "Esta movimentação é controlada pela tela Cargas."
             empty = QLabel(message)
             empty.setObjectName("Caption")
             layout.addWidget(empty)
-            return
+            if not actions:
+                return
 
         grid_widget = QWidget()
         grid = QGridLayout(grid_widget)

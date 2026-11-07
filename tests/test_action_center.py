@@ -8,6 +8,7 @@ from PySide6.QtWidgets import QApplication
 
 from PySide6.QtWidgets import QMessageBox
 
+from tests.undo_fakes import NoUndoActionMixin
 from app.services.backend_adapter import OFFICIAL_COLOR_PALETTES
 from app.ui.action_center.context import ProposalActionContext
 from app.ui.action_center.descriptor import ActionCategory, ActionDescriptor
@@ -33,7 +34,7 @@ def _control_general_actions(status: str, completed: bool = False) -> list[dict]
     return actions
 
 
-class FakeControlGeneralService:
+class FakeControlGeneralService(NoUndoActionMixin):
     """Fake service exercising only the CONTROLE GERAL surface StatusDialog/
     ProposalActionCenter actually calls - mirrors FakeService's shape from
     test_status_dialog.py but tracks update_status calls so tests can assert
@@ -104,7 +105,7 @@ _WAREHOUSE_LABELS_FOLLOWUP = {
 _WAREHOUSE_ICONS = {"EM_SEPARACAO": "stock", "SEM_PARAFUSOS": "clear"}
 
 
-class FakeWarehouseService:
+class FakeWarehouseService(NoUndoActionMixin):
     """Mirrors the real ALMOXARIFADO state machine
     (next_status_options()/process_actions() in backend_adapter.py) closely
     enough to exercise WarehouseStatusHandler without a real API/DB."""
@@ -152,7 +153,7 @@ class FakeWarehouseService:
         return {}
 
 
-class FakeExpeditionService:
+class FakeExpeditionService(NoUndoActionMixin):
     """Mirrors BackendAdapter.process_actions()'s EXPEDICAO branch
     (app/services/backend_adapter.py:1305-1324) and update_status()'s
     EXPEDICAO branch (:1436-1455) closely enough to exercise

@@ -6,6 +6,7 @@ from unittest.mock import patch
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 
+from tests.undo_fakes import NoUndoActionMixin
 from app.services.backend_adapter import OFFICIAL_COLOR_PALETTES
 from app.ui.icons import AppIcons, icon_provider
 from app.ui.icons.icon_registry import ICON_REGISTRY, LUCIDE_DIR
@@ -34,7 +35,7 @@ def _production_actions(status: str) -> list[dict]:
     return actions
 
 
-class FakeService:
+class FakeService(NoUndoActionMixin):
     def __init__(self, status: str, palette_name: str = "claro", admin: bool = False):
         self.status = status
         self.palette = OFFICIAL_COLOR_PALETTES[palette_name]

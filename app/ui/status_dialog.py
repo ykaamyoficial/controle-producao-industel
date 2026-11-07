@@ -18,10 +18,11 @@ from app.ui.action_center.handlers.production import (
     DefineItemFlowHandler, EditItemWeightsHandler, ProductionPauseDialog, ProductionStatusHandler,
     RegisterProductionHandler,
 )
+from app.ui.action_center.handlers.undo import UndoLastActionHandler
 from app.ui.action_center.handlers.warehouse import WarehouseStatusHandler
 from app.ui.action_center.provider import (
-    CATEGORY_TO_CARD_TYPE, GalvanizationActionProvider, action_category, action_description, action_icon,
-    primary_action_index,
+    CATEGORY_TO_CARD_TYPE, UNDO_ACTION_ID, GalvanizationActionProvider, UndoActionProvider, action_category,
+    action_description, action_icon, primary_action_index,
 )
 from app.ui.action_center.proposal_action_center import ProposalActionCenter
 from app.ui.action_center.registry import ActionRegistry
@@ -61,7 +62,7 @@ class StatusDialog(ProposalActionCenter):
     para as acoes de Galvanizacao que esta fase ainda nao migra."""
 
     def __init__(self, service, process_id: int, area: str | None, parent=None, row_context: dict | None = None):
-        provider = GalvanizationActionProvider(service)
+        provider = UndoActionProvider(GalvanizationActionProvider(service), service)
         registry = self._build_registry()
         super().__init__(service, process_id, area, provider, registry, parent, row_context=row_context)
 
@@ -92,6 +93,7 @@ class StatusDialog(ProposalActionCenter):
         registry.register(
             "OPEN_RELATED_GALVANIZATION_LOAD", OpenRelatedGalvanizationLoadHandler(), area="GALVANIZACAO"
         )
+        registry.register(UNDO_ACTION_ID, UndoLastActionHandler())
         return registry
 
     # Pure presentation-mapping helpers kept here as thin delegates so

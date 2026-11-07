@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 
 from PySide6.QtWidgets import QApplication
 
+from tests.undo_fakes import NoUndoActionMixin
 from app.services.backend_adapter import OFFICIAL_COLOR_PALETTES
 from app.ui.action_center.context import ProposalActionContext
 from app.ui.action_center.descriptor import ActionCategory
@@ -29,7 +30,7 @@ def _galvanization_actions(status: str, active_loads: list[dict]) -> list[dict]:
     return actions
 
 
-class FakeGalvanizationService:
+class FakeGalvanizationService(NoUndoActionMixin):
     """Mirrors the GALVANIZACAO surface of BackendAdapter (process_actions +
     process_loads) closely enough to exercise the Fase 6 handlers/provider
     without a real API/DB."""
