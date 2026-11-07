@@ -110,7 +110,9 @@ from api.app.modules.proposals.schemas import (
     SyncSummary,
     WarehouseEnterRequest,
     WarehouseEnterResponse,
+    WarehouseProposalSummary,
     WarehouseStatusRequest,
+    WarehouseStockDeductionRequest,
 )
 
 
@@ -305,6 +307,17 @@ async def update_warehouse_status(
     actor: User = Depends(require_permission(PROPOSALS_CHANGE_STATUS)),
 ):
     return await service.update_warehouse_status(session, proposal_id, payload, actor, request_id=getattr(request.state, "request_id", None))
+
+
+@router.post("/warehouse/proposals/{proposal_id}/stock-deduction", response_model=WarehouseProposalSummary)
+async def set_warehouse_stock_deduction(
+    proposal_id: int,
+    payload: WarehouseStockDeductionRequest,
+    request: Request,
+    session: AsyncSession = Depends(get_db_session),
+    actor: User = Depends(require_permission(PROPOSALS_CHANGE_STATUS)),
+):
+    return await service.set_warehouse_stock_deduction(session, proposal_id, payload, actor, request_id=getattr(request.state, "request_id", None))
 
 
 @router.get("/production/proposals/{proposal_id}", response_model=ProductionProposalDetail)

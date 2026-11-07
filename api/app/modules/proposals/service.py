@@ -147,6 +147,7 @@ from api.app.modules.proposals.schemas import (
     WarehouseEnterResponse,
     WarehouseEnterResult,
     WarehouseStatusRequest,
+    WarehouseStockDeductionRequest,
 )
 
 logger = logging.getLogger(__name__)
@@ -215,7 +216,7 @@ WAREHOUSE_VISIBLE_STATUSES = ("EM_SEPARACAO", "SEPARADO", "ALMOXARIFADO_ENTREGUE
 WAREHOUSE_DEDUCTION_STATUSES = ("SEPARADO", "ALMOXARIFADO_ENTREGUE_PARCIAL", "ALMOXARIFADO_ENTREGUE")
 WAREHOUSE_NEXT_STATUSES = {
     "AGUARDANDO_CONFIRMACAO": {"EM_SEPARACAO", "SEM_PARAFUSOS"},
-    "EM_SEPARACAO": {"SEPARADO"},
+    "EM_SEPARACAO": {"SEPARADO", "SEM_PARAFUSOS"},
     "SEPARADO": {"ALMOXARIFADO_ENTREGUE", "ALMOXARIFADO_ENTREGUE_PARCIAL"},
     "ALMOXARIFADO_ENTREGUE_PARCIAL": {"ALMOXARIFADO_ENTREGUE"},
 }
@@ -693,6 +694,38 @@ async def update_warehouse_status(session: AsyncSession, proposal_id: int, paylo
     await session.commit()
     refreshed = await get_proposal(session, proposal_id)
     return _warehouse_proposal_summary(refreshed)
+
+
+async def set_warehouse_stock_deduction(session: AsyncSession, proposal_id: int, payload: WarehouseStockDeductionRequest, actor: User, *, request_id: str | None) -> WarehouseProposalSummary:
+    """Confirma (`deducted=True`) ou desfaz a baixa no estoque. Idempotente: pedir o estado em que a
+    proposta ja esta devolve o resumo sem evento e sem mexer na versao (nem confere `version`)."""
+    proposal = await _get_production_proposal_for_update(session, proposal_id)
+    _ensure_proposal_not_cancelled(proposal)
+    already = proposal.warehouse_stock_deducted_at is not None
+    if already == payload.deducted:
+        return _warehouse_proposal_summary(proposal)
+    _ensure_version(proposal.version, payload.version)
+    status = proposal.warehouse_status
+    if payload.deducted and status not in WAREHOUSE_DEDUCTION_STATUSES:
+        raise ApiError(error_codes.PROPOSAL_INVALID_STATE, "A baixa no estoque so pode ser confirmada de Separado em diante.", status_code=409)
+    previous_at = proposal.warehouse_stock_deducted_at
+    proposal.warehouse_stock_deducted_at = datetime.now(UTC) if payload.deducted else None
+    proposal.warehouse_stock_deducted_by_user_id = actor.id if payload.deducted else None
+    _touch(proposal, actor)
+    await _record_event(
+        session,
+        proposal,
+        "WAREHOUSE_STOCK_DEDUCTED" if payload.deducted else "WAREHOUSE_STOCK_DEDUCTION_REVERTED",
+        actor,
+        request_id=request_id,
+        from_area="ALMOXARIFADO",
+        from_status=status,
+        to_area="ALMOXARIFADO",
+        to_status=status,
+        metadata={"version": proposal.version, "warehouse_status": status, "previous_stock_deducted_at": previous_at.isoformat() if previous_at else None},
+    )
+    await session.commit()
+    return _warehouse_proposal_summary(await get_proposal(session, proposal_id))
 
 
 async def get_production_detail(session: AsyncSession, proposal_id: int) -> ProductionProposalDetail:
@@ -4656,6 +4689,8 @@ ACTIVITY_TEMPLATES = {
     "PROPOSAL_ITEM_UPDATED": lambda who, md: f"{who} editou um item da proposta.",
     "PROPOSAL_ADMINISTRATIVE_CORRECTION": lambda who, md: f"{who} registrou uma correcao administrativa.",
     "WAREHOUSE_STATUS_CHANGED": lambda who, md: f"{who} atualizou o status no almoxarifado.",
+    "WAREHOUSE_STOCK_DEDUCTED": lambda who, md: f"{who} confirmou a baixa no estoque do almoxarifado.",
+    "WAREHOUSE_STOCK_DEDUCTION_REVERTED": lambda who, md: f"{who} desfez a baixa no estoque do almoxarifado.",
     "PRODUCTION_STARTED": lambda who, md: f"{who} iniciou a producao.",
     "PRODUCTION_PAUSED": lambda who, md: f"{who} pausou a producao{_reason_suffix(md)}.",
     "PRODUCTION_RESUMED": lambda who, md: f"{who} retomou a producao.",
@@ -7237,6 +7272,8 @@ async def _request_event_exists(
 _NOTIFY_PROPOSAL_EVENTS: dict[str, tuple[str, str]] = {
     "PROPOSAL_STATUS_CHANGED": ("PROPOSTA_STATUS", "normal"),
     "WAREHOUSE_STATUS_CHANGED": ("ALMOXARIFADO", "normal"),
+    "WAREHOUSE_STOCK_DEDUCTED": ("ALMOXARIFADO", "normal"),
+    "WAREHOUSE_STOCK_DEDUCTION_REVERTED": ("ALMOXARIFADO", "normal"),
     "PROPOSAL_CANCELLED": ("PROPOSTA_STATUS", "alta"),
     "PROPOSAL_CANCELLED_TERMINAL": ("PROPOSTA_STATUS", "alta"),
     "PROPOSAL_DEACTIVATED": ("PROPOSTA_STATUS", "alta"),

@@ -64,6 +64,10 @@ LANE_GENERAL = "GERAL"
 LANE_WAREHOUSE = "ALMOXARIFADO"
 LANE_FISCAL = "FISCAL"
 
+# Baixa no estoque do Almoxarifado: pertence a pista do Almoxarifado, mas nunca e "a ultima acao" dela
+# (D14): quem se desfaz e a transicao de status, que zera a baixa junto. A baixa em si e desfeita pelo botao proprio.
+STOCK_EVENT_TYPES = frozenset({"WAREHOUSE_STOCK_DEDUCTED", "WAREHOUSE_STOCK_DEDUCTION_REVERTED"})
+
 # Campos de estado da proposta que as acoes v1 mexem; gravados em ``metadata.previous_state`` do evento
 # original para que o inverso restaure o valor exato (e nao um valor deduzido).
 STATE_FIELDS = (
@@ -87,6 +91,7 @@ FIELD_LABELS = {
     "galvanization_status": "Status da galvanizacao",
     "shipping_status": "Status da expedicao",
     "warehouse_status": "Status do almoxarifado",
+    "warehouse_stock_deducted_at": "Baixa no estoque",
     "flow_situation": "Situacao do fluxo",
     "has_production_pending": "Pendencia de producao",
     "is_completed": "Proposta concluida",
@@ -159,7 +164,7 @@ class ActionGroup:
 
 def lane_of(group: ActionGroup) -> str:
     """Pista da acao: Almoxarifado e Fiscal ficam fora da pilha do fluxo geral (producao, expedicao...)."""
-    if "WAREHOUSE_STATUS_CHANGED" in group.types:
+    if "WAREHOUSE_STATUS_CHANGED" in group.types or group.types & STOCK_EVENT_TYPES:
         return LANE_WAREHOUSE
     if any(event.source == "fiscal" or event.event_type.startswith("FISCAL_") for event in group.events):
         return LANE_FISCAL
@@ -183,8 +188,12 @@ def build_groups(events: list[EventRef]) -> list[ActionGroup]:
 
 
 def pick_latest(groups: list[ActionGroup], lane: str = LANE_GENERAL) -> ActionGroup | None:
-    """Topo da pilha da pista: o grupo mais recente que nao foi desfeito nem e, ele mesmo, um desfazer."""
-    live = [group for group in groups if not group.undone and not group.is_undo and lane_of(group) == lane]
+    """Topo da pilha da pista: o grupo mais recente que nao foi desfeito nem e, ele mesmo, um desfazer.
+    Grupos so de baixa no estoque ficam de fora (ver STOCK_EVENT_TYPES)."""
+    live = [
+        group for group in groups
+        if not group.undone and not group.is_undo and lane_of(group) == lane and not group.types <= STOCK_EVENT_TYPES
+    ]
     return max(live, key=lambda group: group.sort_key) if live else None
 
 
@@ -295,7 +304,8 @@ def _eval_warehouse(ctx: UndoContext) -> Evaluation:
     # previous_warehouse_status guarda o valor exato (None = "nao definido", diferente de AGUARDANDO_CONFIRMACAO);
     # eventos antigos so tem from_status.
     previous = event.metadata["previous_warehouse_status"] if "previous_warehouse_status" in event.metadata else event.from_status
-    ev.proposal_restore = {"warehouse_status": previous}
+    # D14: voltar o status zera a baixa no estoque junto (a baixa so vale de SEPARADO em diante).
+    ev.proposal_restore = {"warehouse_status": previous, "warehouse_stock_deducted_at": None, "warehouse_stock_deducted_by_user_id": None}
     return ev
 
 
@@ -513,10 +523,14 @@ def _json(value: Any) -> Any:
 def build_changes(proposal: Any, ev: Evaluation) -> list[ProposalUndoChange]:
     changes: list[ProposalUndoChange] = []
     for name, restored in ev.proposal_restore.items():
+        if name == "warehouse_stock_deducted_by_user_id":  # acompanha warehouse_stock_deducted_at, que ja e mostrado
+            continue
         current = getattr(proposal, name, None)
         if _fmt(current) != _fmt(restored):
             # warehouse_status nulo e exibido como NAO_DEFINIDO, o mesmo rotulo que o resto do sistema usa.
             show = (lambda v: _fmt(v) or "NAO_DEFINIDO") if name == "warehouse_status" else _fmt
+            if name == "warehouse_stock_deducted_at":
+                show = lambda v: "Confirmada" if v else "Pendente"  # noqa: E731
             changes.append(ProposalUndoChange(field=name, label=FIELD_LABELS.get(name, name), current_value=show(current), restored_value=show(restored)))
     for row in ev.item_restores:
         for name, restored in row.values.items():
@@ -706,6 +720,8 @@ async def undo_action(
             raise ApiError(error_codes.UNDO_ALREADY_UNDONE, "Esta acao ja foi desfeita.", status_code=409)
         if target.is_undo:
             raise ApiError(error_codes.UNDO_NOT_SUPPORTED, "Um desfazer nao pode ser desfeito.", status_code=409)
+        if target.types <= STOCK_EVENT_TYPES:
+            raise ApiError(error_codes.UNDO_NOT_SUPPORTED, "A baixa no estoque se desfaz pela acao Desfazer baixa.", status_code=409)
         latest = pick_latest(groups, lane_of(target))
         if latest is not target:
             raise ApiError(

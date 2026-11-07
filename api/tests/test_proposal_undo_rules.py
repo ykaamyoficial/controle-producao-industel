@@ -127,6 +127,27 @@ def test_almoxarifado_e_fiscal_tem_pilha_propria():
     assert undo.pick_latest(groups, undo.LANE_FISCAL).request_id == "r-fiscal"
 
 
+def test_eventos_de_baixa_ficam_na_pista_do_almoxarifado_e_nunca_sao_o_topo_dela():
+    events = [
+        ev("PRODUCTION_STARTED", "r-prod", minutes=0),
+        ev("WAREHOUSE_STATUS_CHANGED", "r-almox", minutes=1),
+        ev("WAREHOUSE_STOCK_DEDUCTED", "r-baixa", minutes=2),
+        ev("WAREHOUSE_STOCK_DEDUCTION_REVERTED", "r-desbaixa", minutes=3),
+    ]
+    groups = undo.build_groups(events)
+    lanes = {g.request_id: undo.lane_of(g) for g in groups}
+    assert lanes["r-baixa"] == lanes["r-desbaixa"] == undo.LANE_WAREHOUSE
+    # a baixa nao tira o desfazer do status do Almoxarifado do topo, nem mexe na pilha geral
+    assert undo.pick_latest(groups, undo.LANE_WAREHOUSE).request_id == "r-almox"
+    assert undo.pick_latest(groups, undo.LANE_GENERAL).request_id == "r-prod"
+    assert undo.pick_latest(groups, undo.LANE_FISCAL) is None
+
+
+def test_so_baixa_na_pista_do_almoxarifado_nao_tem_candidato():
+    groups = undo.build_groups([ev("WAREHOUSE_STOCK_DEDUCTED", "r-baixa")])
+    assert undo.pick_latest(groups, undo.LANE_WAREHOUSE) is None
+
+
 def test_pista_sem_acoes_nao_tem_candidato():
     groups = undo.build_groups([ev("PRODUCTION_STARTED", "r1"), ev("WAREHOUSE_STATUS_CHANGED", "r2", minutes=1)])
     assert undo.pick_latest(groups, undo.LANE_FISCAL) is None
@@ -269,12 +290,34 @@ def test_evento_antigo_sem_snapshot_nao_e_desfazivel():
 def test_status_do_almoxarifado_usa_from_status_do_evento():
     event = ev("WAREHOUSE_STATUS_CHANGED", "r", from_status="AGUARDANDO_CONFIRMACAO", to_status="EM_SEPARACAO")
     result = undo._eval_warehouse(ctx([event], proposal(warehouse_status="EM_SEPARACAO")))
-    assert not result.blockers and result.proposal_restore == {"warehouse_status": "AGUARDANDO_CONFIRMACAO"}
+    assert not result.blockers and result.proposal_restore == {"warehouse_status": "AGUARDANDO_CONFIRMACAO", "warehouse_stock_deducted_at": None, "warehouse_stock_deducted_by_user_id": None}
     stale = undo._eval_warehouse(ctx([event], proposal(warehouse_status="SEPARADO")))
     assert [code for code, _ in stale.blockers] == ["STATE_CHANGED"]
 
     exact = ev("WAREHOUSE_STATUS_CHANGED", "r", from_status="AGUARDANDO_CONFIRMACAO", to_status="EM_SEPARACAO", metadata={"previous_warehouse_status": None})
-    assert undo._eval_warehouse(ctx([exact], proposal(warehouse_status="EM_SEPARACAO"))).proposal_restore == {"warehouse_status": None}
+    assert undo._eval_warehouse(ctx([exact], proposal(warehouse_status="EM_SEPARACAO"))).proposal_restore == {"warehouse_status": None, "warehouse_stock_deducted_at": None, "warehouse_stock_deducted_by_user_id": None}
+
+
+def test_desfazer_status_do_almoxarifado_zera_a_baixa_e_nao_bloqueia_por_causa_dela():
+    event = ev("WAREHOUSE_STATUS_CHANGED", "r", from_status="SEPARADO", to_status="ALMOXARIFADO_ENTREGUE", metadata={"previous_warehouse_status": "SEPARADO"})
+    baixada = proposal(warehouse_status="ALMOXARIFADO_ENTREGUE", warehouse_stock_deducted_at=T0, warehouse_stock_deducted_by_user_id=7)
+    result = undo._eval_warehouse(ctx([event], baixada))
+    assert result.blockers == [] and result.unsupported is None
+    assert result.proposal_restore == {"warehouse_status": "SEPARADO", "warehouse_stock_deducted_at": None, "warehouse_stock_deducted_by_user_id": None}
+    changes = {c.field: c for c in undo.build_changes(baixada, result)}
+    assert set(changes) == {"warehouse_status", "warehouse_stock_deducted_at"}
+    assert changes["warehouse_stock_deducted_at"].label == "Baixa no estoque"
+    assert (changes["warehouse_stock_deducted_at"].current_value, changes["warehouse_stock_deducted_at"].restored_value) == ("Confirmada", "Pendente")
+    # sem baixa, a pre-visualizacao nao inventa mudanca de baixa
+    pendente = proposal(warehouse_status="ALMOXARIFADO_ENTREGUE", warehouse_stock_deducted_at=None, warehouse_stock_deducted_by_user_id=None)
+    assert {c.field for c in undo.build_changes(pendente, undo._eval_warehouse(ctx([event], pendente)))} == {"warehouse_status"}
+
+
+def test_eventos_de_baixa_tem_rotulo_e_notificam_na_area_almoxarifado():
+    for event_type in ("WAREHOUSE_STOCK_DEDUCTED", "WAREHOUSE_STOCK_DEDUCTION_REVERTED"):
+        assert _NOTIFY_PROPOSAL_EVENTS[event_type][0] == "ALMOXARIFADO"
+        headline = _activity_headline(event_type, "Ana", {}, None, None)
+        assert headline.startswith("Ana ") and "baixa" in headline
 
 
 def test_iniciar_producao_restaura_snapshot_e_pausa_retomada_sao_inversas():

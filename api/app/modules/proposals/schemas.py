@@ -371,6 +371,13 @@ class WarehouseEnterResponse(BaseModel):
     items: list[WarehouseEnterResult]
 
 
+class WarehouseStockDeductionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    version: int = Field(ge=1)
+    deducted: bool
+
+
 class WarehouseStatusRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
