@@ -38,6 +38,7 @@ from app.ui.chat_center_page import ChatCenterDialog
 from app.ui.remanagement_info_dialog import RemanagementInfoDialog
 from app.ui.remanagement_wizard import RemanagementWizardDialog
 from app.ui.batch_selection_review_dialog import BatchSelectionReviewDialog
+from app.ui.warehouse_enter_dialog import WarehouseEnterDialog
 
 log = get_logger("process_page")
 
@@ -164,6 +165,8 @@ class ProcessPage(QWidget):
         status_btn = ModernButton("Ações", "status", accent=not can_create)
         batch_btn = ModernButton("Ações em lote", "batch")
         remanage_btn = ModernButton("Remanejamento compensado", "load")
+        # Almoxarifado: so entra na aba quem o usuario digita (secundario; o primario segue sendo "Acoes").
+        self.add_proposals_button = ModernButton("Adicionar propostas", "new")
         self.action_buttons = [
             apply_btn,
             clear_btn,
@@ -173,6 +176,7 @@ class ProcessPage(QWidget):
             status_btn,
             batch_btn,
             remanage_btn,
+            self.add_proposals_button,
         ]
         apply_btn.clicked.connect(self.refresh)
         clear_btn.clicked.connect(self.clear)
@@ -184,6 +188,7 @@ class ProcessPage(QWidget):
             self.activate_batch_selection if self.area in _CHECKBOX_BATCH_AREAS else self.change_status_batch
         )
         remanage_btn.clicked.connect(self.open_early_remanagement_delivery)
+        self.add_proposals_button.clicked.connect(self.open_warehouse_enter)
         title = QLabel(self.title)
         title.setObjectName("FilterTitle")
         style_area_title(title, self.area, self.service.palette)
@@ -204,10 +209,12 @@ class ProcessPage(QWidget):
             proposal_actions.addWidget(batch_btn)
         if self.area == "EXPEDICAO" and self._can_edit_area("EXPEDICAO"):
             proposal_actions.addWidget(remanage_btn)
+        if self._shows_add_proposals():
+            proposal_actions.addWidget(self.add_proposals_button)
         if can_create:
             proposal_actions.addWidget(new_btn)
 
-        self.normal_action_buttons = [details_btn, new_btn, edit_btn, status_btn, batch_btn, remanage_btn]
+        self.normal_action_buttons = [details_btn, new_btn, edit_btn, status_btn, batch_btn, remanage_btn, self.add_proposals_button]
         self.batch_mode_label = QLabel("Modo de seleção")
         self.batch_mode_label.setObjectName("BatchModeLabel")
         self.batch_count_label = QLabel("0 propostas selecionadas")
@@ -379,6 +386,11 @@ class ProcessPage(QWidget):
                 self.empty_state.set_text(
                     "Nenhum resultado para os filtros aplicados",
                     "Ajuste a busca, status ou prazo para ampliar a consulta.",
+                )
+            elif self.area == "ALMOXARIFADO":
+                self.empty_state.set_text(
+                    "Nenhuma proposta no almoxarifado",
+                    "Use “Adicionar propostas” para trazer propostas pelo número.",
                 )
             else:
                 self.empty_state.set_text(
@@ -606,7 +618,12 @@ class ProcessPage(QWidget):
             return self._can_edit_area(self.area or "")
         if widget is self.normal_action_buttons[5]:
             return self.area == "EXPEDICAO" and self._can_edit_area("EXPEDICAO")
+        if widget is self.add_proposals_button:
+            return self._shows_add_proposals()
         return True
+
+    def _shows_add_proposals(self) -> bool:
+        return self.area == "ALMOXARIFADO" and self._can_edit_area("ALMOXARIFADO")
 
     def _handle_table_click(self, proxy_index):
         if not self.batch_selection.active or not proxy_index.isValid():
@@ -784,6 +801,15 @@ class ProcessPage(QWidget):
             return
         dialog = FlowReviewDialog(self.service, process_ids, self, origin="ProducaoLote")
         if dialog.exec() or dialog.changed:
+            self.refresh()
+
+    def open_warehouse_enter(self):
+        if not self._shows_add_proposals():
+            ToastNotification(self.window(), "Seu usuário não pode adicionar propostas ao Almoxarifado.", "error")
+            return
+        dialog = WarehouseEnterDialog(self.service, self)
+        dialog.exec()
+        if dialog.changed:
             self.refresh()
 
     def open_early_remanagement_delivery(self):
