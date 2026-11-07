@@ -78,6 +78,16 @@ Sem permissão de usuário: quem chama é o outro sistema, autenticado pela assi
 estado da proposta antes e depois (pelo histórico do ORM); no commit envia, em segundo plano, só as
 transições líquidas. Nenhum arquivo de `proposals/` foi alterado e **não há migration**.
 
+## Desfazer a liberação
+
+Desfazer a última ação de uma proposta (`POST /proposals/{id}/undo`) pode voltar a proposta de `LIBERADA` para
+`AGUARDANDO_LIBERACAO`. Isso **não envia webhook**: o gancho só envia transição *para* `LIBERADA`, `RETIRADA` ou
+`CONCLUIDA`, e voltar para "sem estado" nunca gera evento. Então o Almox+ continua somando a proposta na demanda
+até a próxima conciliação horária (ou ao abrir a tela). O diálogo de desfazer avisa isso em `side_effects`
+(`ALMOX_NOT_NOTIFIED`: "O Almox+ nao e avisado; a conciliacao horaria acerta."). Desfazer o início, a pausa ou a
+retomada da produção não muda o estado do Almox+ (continua `LIBERADA`). Nenhum arquivo de `almox_integration/`
+foi alterado por esse recurso.
+
 ## Limites conhecidos
 
 - Sem fila persistente: um webhook perdido (processo reiniciado entre o commit e o envio) só é
