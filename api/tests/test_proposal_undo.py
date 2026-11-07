@@ -193,7 +193,8 @@ class ProposalUndoIntegrationTests(unittest.TestCase):
         return pid
 
     def _candidate(self, pid: int, headers=None, lane: str | None = None) -> dict:
-        response = self._get(f"/proposals/{pid}/undo/candidate" + (f"?lane={lane}" if lane else ""), headers)
+        # lane vai em params: com `params={}` (sem filtros) o httpx 0.28 descarta a query string da URL.
+        response = self._get(f"/proposals/{pid}/undo/candidate", headers, **({"lane": lane} if lane else {}))
         self.assertEqual(response.status_code, 200, response.text)
         return response.json()
 
@@ -523,12 +524,13 @@ class ProposalUndoIntegrationTests(unittest.TestCase):
                 after_action = self._state(pid)
                 version = self._proposal(pid)["version"]
 
-                candidate = self._candidate(pid, author_headers)
+                lane = "ALMOXARIFADO" if name == "WAREHOUSE_STATUS" else None  # o Almoxarifado tem pilha propria
+                candidate = self._candidate(pid, author_headers, lane)
                 self.assertEqual((candidate["handler"], candidate["undo_class"], candidate["can_undo"]), (name, HANDLER_CLASSES[name], True))
-                as_other = self._candidate(pid, other_headers)
+                as_other = self._candidate(pid, other_headers, lane)
                 self.assertFalse(as_other["can_undo"])
                 self.assertIn("Somente quem fez a acao", as_other["cannot_undo_reason"])
-                self.assertFalse(self._candidate(pid, nobody_headers)["can_undo"])
+                self.assertFalse(self._candidate(pid, nobody_headers, lane)["can_undo"])
 
                 for headers in (other_headers, nobody_headers):
                     denied = self._undo(pid, rid, headers)
