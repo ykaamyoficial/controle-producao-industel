@@ -339,6 +339,38 @@ class ProposalUpdate(BaseModel):
     notes: str | None = None
 
 
+class WarehouseEnterRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    numbers: list[str] = Field(min_length=1, max_length=200)
+
+    @field_validator("numbers")
+    @classmethod
+    def normalize_numbers(cls, value: list[str]) -> list[str]:
+        """Trim, sem vazios e sem repetidos (ignorando caixa), na ordem em que vieram."""
+        seen: set[str] = set()
+        result: list[str] = []
+        for raw in value:
+            number = raw.strip()
+            if number and number.lower() not in seen:
+                seen.add(number.lower())
+                result.append(number)
+        if not result:
+            raise ValueError("Informe ao menos um numero de proposta.")
+        return result
+
+
+class WarehouseEnterResult(BaseModel):
+    number: str
+    result: Literal["ENTROU", "JA_NA_ABA", "JA_ENTREGUE", "NAO_ENCONTRADA", "CANCELADA", "PROPOSTA_PARCIAL"]
+    proposal_id: int | None = None
+    message: str
+
+
+class WarehouseEnterResponse(BaseModel):
+    items: list[WarehouseEnterResult]
+
+
 class WarehouseStatusRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

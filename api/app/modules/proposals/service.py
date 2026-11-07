@@ -143,6 +143,9 @@ from api.app.modules.proposals.schemas import (
     SyncSummary,
     ProposalItemUpdate,
     WarehouseProposalSummary,
+    WarehouseEnterRequest,
+    WarehouseEnterResponse,
+    WarehouseEnterResult,
     WarehouseStatusRequest,
 )
 
@@ -598,6 +601,68 @@ async def list_warehouse_proposals(session: AsyncSession, *, search: str | None,
     return PaginatedWarehouseProposalResponse(
         items=[_warehouse_proposal_summary(row) for row in paged], total=len(rows), limit=limit, offset=offset, pending_stock_deduction=int(pending),
     )
+
+
+_WAREHOUSE_ENTER_MESSAGES = {
+    "ENTROU": "Entrou no Almoxarifado em separacao.",
+    "JA_NA_ABA": "Ja esta no Almoxarifado.",
+    "JA_ENTREGUE": "Ja foi entregue pelo Almoxarifado.",
+    "NAO_ENCONTRADA": "Proposta nao encontrada.",
+    "CANCELADA": "Proposta cancelada.",
+    "PROPOSTA_PARCIAL": "Numero de proposta parcial: use o numero da proposta mae.",
+}
+
+
+async def enter_warehouse_by_numbers(session: AsyncSession, payload: WarehouseEnterRequest, actor: User, *, request_id: str | None) -> WarehouseEnterResponse:
+    """Coloca no Almoxarifado (EM_SEPARACAO) as propostas digitadas. Resultado independente por numero.
+
+    As linhas sao travadas (FOR UPDATE, por id) e o status e lido ja travado: so entra quem esta
+    sem status ou aguardando confirmacao, entao nunca regride um status mais avancado."""
+    keys = {number.lower() for number in payload.numbers}
+    rows = (
+        await session.execute(
+            select(Proposal)
+            .options(lazyload("*"))
+            .where(Proposal.active.is_(True), func.lower(Proposal.proposal_number).in_(keys))
+            .order_by(Proposal.id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+    ).scalars().all()
+    by_key = {row.proposal_number.lower(): row for row in rows}
+    results: list[WarehouseEnterResult] = []
+    for number in payload.numbers:
+        proposal = by_key.get(number.lower())
+        if proposal is None:
+            outcome = "NAO_ENCONTRADA"
+        elif _proposal_is_cancelled(proposal):
+            outcome = "CANCELADA"
+        elif proposal.parent_proposal_id is not None:
+            outcome = "PROPOSTA_PARCIAL"
+        elif proposal.warehouse_status == "ALMOXARIFADO_ENTREGUE":
+            outcome = "JA_ENTREGUE"
+        elif proposal.warehouse_status not in (None, "AGUARDANDO_CONFIRMACAO"):
+            outcome = "JA_NA_ABA"
+        else:
+            outcome = "ENTROU"
+            previous_warehouse_status = proposal.warehouse_status
+            proposal.warehouse_status = "EM_SEPARACAO"
+            _touch(proposal, actor)
+            await _record_event(
+                session,
+                proposal,
+                "WAREHOUSE_STATUS_CHANGED",
+                actor,
+                request_id=request_id,
+                from_area="ALMOXARIFADO",
+                from_status=previous_warehouse_status or "AGUARDANDO_CONFIRMACAO",
+                to_area="ALMOXARIFADO",
+                to_status="EM_SEPARACAO",
+                metadata={"source": "entrada_por_numero", "version": proposal.version, "previous_warehouse_status": previous_warehouse_status},
+            )
+        results.append(WarehouseEnterResult(number=number, result=outcome, proposal_id=int(proposal.id) if proposal is not None else None, message=_WAREHOUSE_ENTER_MESSAGES[outcome]))
+    await session.commit()
+    return WarehouseEnterResponse(items=results)
 
 
 async def update_warehouse_status(session: AsyncSession, proposal_id: int, payload: WarehouseStatusRequest, actor: User, *, request_id: str | None) -> WarehouseProposalSummary:

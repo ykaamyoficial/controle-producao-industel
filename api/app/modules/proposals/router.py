@@ -108,6 +108,8 @@ from api.app.modules.proposals.schemas import (
     RemanagementReviewResult,
     RemanagementSummary,
     SyncSummary,
+    WarehouseEnterRequest,
+    WarehouseEnterResponse,
     WarehouseStatusRequest,
 )
 
@@ -282,6 +284,16 @@ async def list_warehouse_proposals(
     _actor: User = Depends(require_permission(PROPOSALS_VIEW)),
 ):
     return await service.list_warehouse_proposals(session, search=search, status=status_filter, limit=limit, offset=offset)
+
+
+@router.post("/warehouse/proposals/enter", response_model=WarehouseEnterResponse)
+async def enter_warehouse_by_numbers(
+    payload: WarehouseEnterRequest,
+    request: Request,
+    session: AsyncSession = Depends(get_db_session),
+    actor: User = Depends(require_permission(PROPOSALS_CHANGE_STATUS)),
+):
+    return await service.enter_warehouse_by_numbers(session, payload, actor, request_id=getattr(request.state, "request_id", None))
 
 
 @router.post("/warehouse/proposals/{proposal_id}/status")
