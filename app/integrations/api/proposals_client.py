@@ -56,9 +56,11 @@ class ProposalsApiClient:
             access_token=access_token,
         ).data
 
-    def undo_candidate(self, access_token: str, proposal_id: int) -> dict[str, Any]:
-        """Ultima acao desfazivel da proposta (so leitura; falta de permissao vem como can_undo=false)."""
-        return self.client.get(f"/api/v1/proposals/{int(proposal_id)}/undo/candidate", access_token=access_token).data
+    def undo_candidate(self, access_token: str, proposal_id: int, lane: str | None = None) -> dict[str, Any]:
+        """Ultima acao desfazivel da proposta na pista (GERAL, ALMOXARIFADO ou FISCAL; so leitura;
+        falta de permissao vem como can_undo=false)."""
+        query = f"?{urlencode({'lane': lane})}" if lane else ""
+        return self.client.get(f"/api/v1/proposals/{int(proposal_id)}/undo/candidate{query}", access_token=access_token).data
 
     def undo_last_action(self, access_token: str, proposal_id: int, payload: dict[str, Any]) -> dict[str, Any]:
         return self.client.post(f"/api/v1/proposals/{int(proposal_id)}/undo", json_payload=payload, access_token=access_token).data

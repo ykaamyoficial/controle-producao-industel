@@ -2175,12 +2175,12 @@ class BackendService:
         except Exception as exc:
             raise self._api_app_error(exc) from exc
 
-    def undo_candidate(self, process_id: int) -> dict[str, Any]:
-        """Ultima acao desfazivel da proposta (`GET /proposals/{id}/undo/candidate`); a API decide permissao e regras."""
+    def undo_candidate(self, process_id: int, lane: str | None = None) -> dict[str, Any]:
+        """Ultima acao desfazivel da proposta na pista (`GET /proposals/{id}/undo/candidate`); a API decide permissao e regras."""
         if not self.user:
             raise legacy.AppError('Usuario nao autenticado.')
         try:
-            return self.official_proposal_storage.undo_candidate(process_id)
+            return self.official_proposal_storage.undo_candidate(process_id, lane)
         except Exception as exc:
             raise self._api_app_error(exc) from exc
 

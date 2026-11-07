@@ -221,8 +221,13 @@ class UndoActionDialog(QDialog):
         self.body_stack.setCurrentWidget(self.skeleton)
         self._update_state()
         self._thread = start_worker(
-            self, lambda: self.service.undo_candidate(self.process_id), self._reload_success, self._reload_error
+            self, self._fetch_candidate, self._reload_success, self._reload_error
         )
+
+    def _fetch_candidate(self):
+        # Recarrega na mesma pista do candidato aberto (Almoxarifado/Fiscal); o fluxo geral e o default da API.
+        lane = (self.candidate or {}).get("lane")
+        return self.service.undo_candidate(self.process_id, **({"lane": lane} if lane and lane != "GERAL" else {}))
 
     def _reload_success(self, candidate):
         self._loading = False

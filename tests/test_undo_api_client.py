@@ -23,6 +23,8 @@ class UndoApiClientTests(unittest.TestCase):
         api.undo_candidate("tok", 10)
         client.get.assert_called_once_with("/api/v1/proposals/10/undo/candidate", access_token="tok")
         payload = {"expected_version": 7, "target_request_id": "req-1", "reason": "errei", "idempotency_key": "chave-123456"}
+        api.undo_candidate("tok", 10, "ALMOXARIFADO")
+        client.get.assert_called_with("/api/v1/proposals/10/undo/candidate?lane=ALMOXARIFADO", access_token="tok")
         api.undo_last_action("tok", 10, payload)
         client.post.assert_called_once_with("/api/v1/proposals/10/undo", json_payload=payload, access_token="tok")
 
@@ -40,7 +42,7 @@ class UndoStorageTests(unittest.TestCase):
         proposals.undo_candidate.return_value = CANDIDATE
         storage, client = self._storage(proposals)
         self.assertIs(storage.undo_candidate(10), CANDIDATE)
-        proposals.undo_candidate.assert_called_once_with("tok", 10)
+        proposals.undo_candidate.assert_called_once_with("tok", 10, None)
         client.close.assert_called_once()
 
     def test_undo_sends_exactly_the_contract_fields_and_maps_the_detail(self):

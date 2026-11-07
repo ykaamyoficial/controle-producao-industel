@@ -307,6 +307,20 @@ class UndoProviderTests(QtCase):
 
         self.assertNotIn(UNDO_ACTION_ID, [a.id for a in self._actions(Weird())])
 
+    def test_lane_is_sent_only_for_almoxarifado_and_fiscal(self):
+        class Spy:
+            calls = []
+
+            def undo_candidate(self, process_id, **kwargs):
+                self.calls.append(kwargs)
+                return candidate()
+
+        spy = Spy()
+        for area in ("PRODUCAO", "ALMOXARIFADO", "FISCAL"):
+            context = ProposalActionContext(proposal_id=10, area=area, current_status="INICIADO", proposal_number="CP1", client_name="X")
+            UndoActionProvider(self.Inner(), spy).get_actions(context)
+        self.assertEqual(spy.calls, [{}, {"lane": "ALMOXARIFADO"}, {"lane": "FISCAL"}])
+
     def test_not_undoable_action_still_gets_a_card_that_explains_why(self):
         actions = self._actions(FakeUndoService([candidate(undoable=False, can_undo=False, cannot_undo_reason="não dá")]))
         undo = actions[-1]

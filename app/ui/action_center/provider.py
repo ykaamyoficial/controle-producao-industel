@@ -298,7 +298,9 @@ class UndoActionProvider:
     def get_actions(self, context: ProposalActionContext) -> list[ActionDescriptor]:
         actions = self._inner.get_actions(context)
         try:
-            candidate = self.service.undo_candidate(context.proposal_id)
+            # Almoxarifado e Fiscal tem pilha propria; o fluxo geral nao passa pista (default da API).
+            lane = context.area if context.area in ("ALMOXARIFADO", "FISCAL") else None
+            candidate = self.service.undo_candidate(context.proposal_id, **({"lane": lane} if lane else {}))
         except Exception:
             log.warning("Falha ao consultar a ultima acao desfazivel: proposal_id=%s", context.proposal_id, exc_info=True)
             return actions

@@ -544,10 +544,10 @@ class OfficialProposalApiStorage:
         finally:
             client.close()
 
-    def undo_candidate(self, proposal_id: int) -> dict[str, Any]:
+    def undo_candidate(self, proposal_id: int, lane: str | None = None) -> dict[str, Any]:
         client, proposals, token = self._client()
         try:
-            return proposals.undo_candidate(token, proposal_id)
+            return proposals.undo_candidate(token, proposal_id, lane)
         finally:
             client.close()
 
