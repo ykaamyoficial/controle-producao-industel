@@ -10,11 +10,12 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import QThread
 from PySide6.QtWidgets import QApplication
 
+from tests.undo_fakes import NoUndoActionMixin
 from app.services.backend_adapter import OFFICIAL_COLOR_PALETTES, legacy
 from app.ui.process_detail_dialog import ProcessDetailDialog
 
 
-class FakeDetailService:
+class FakeDetailService(NoUndoActionMixin):
     """Fake minimo o bastante para exercitar as 6 abas de ProcessDetailDialog
     sem falar com a API real - segue a mesma forma de dados que
     `BackendService`/`OfficialProposalApiStorage` ja devolvem hoje (mesmos

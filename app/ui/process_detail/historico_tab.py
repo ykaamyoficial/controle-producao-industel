@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -20,6 +21,7 @@ from app.ui.components.badge_delegate import BadgeColumnDelegate, set_status_bad
 from app.ui.components.detail_widgets import EM_DASH
 from app.ui.format_utils import format_empty
 from app.ui.sidebar import NAV_LABELS
+from app.ui.theme_tokens import active_tokens
 
 _WHEN_COLUMN = 0
 _AREA_COLUMN = 1
@@ -28,6 +30,7 @@ _STATUS_COLUMN = 3
 _DETAIL_COLUMN = 4
 _ALL_AREAS = "Todas as áreas"
 _ARROW = "→"
+_UNDONE_LABEL = "Desfeita"
 
 
 def friendly_when(value: Any, now: datetime | None = None) -> str:
@@ -169,7 +172,9 @@ class HistoricoTab(QWidget):
         self.table.setRowCount(len(rows))
         for row, item in enumerate(rows):
             area = str(item.get("area") or "")
-            status_text = self._status_text(item, area)
+            undone = bool(item.get("desfeita"))
+            # Acao ja desfeita: a coluna Status avisa e a linha fica riscada e discreta.
+            status_text = _UNDONE_LABEL if undone else self._status_text(item, area)
             values = [
                 friendly_when(item.get("data_hora")),
                 self._area_label(self._area_key(item)) if area else EM_DASH,
@@ -181,6 +186,12 @@ class HistoricoTab(QWidget):
                 cell = QTableWidgetItem(str(value or ""))
                 cell.setTextAlignment(Qt.AlignVCenter | Qt.AlignLeft)
                 cell.setToolTip(str(value or "") if col != _WHEN_COLUMN else str(item.get("data_hora") or ""))
-                if col == _STATUS_COLUMN and status_text:
+                if undone:
+                    cell.setForeground(QBrush(QColor(active_tokens()["muted"])))
+                    if col != _STATUS_COLUMN:
+                        font = cell.font()
+                        font.setStrikeOut(True)
+                        cell.setFont(font)
+                elif col == _STATUS_COLUMN and status_text:
                     set_status_badge(cell, item.get("status_real_novo") or "", self.service.palette, area)
                 self.table.setItem(row, col, cell)
