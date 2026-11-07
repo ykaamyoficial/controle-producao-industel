@@ -640,7 +640,7 @@ class BackendService:
         if area == 'PARCIAIS':
             return ['FINALIZADO_PARCIAL', 'ITEM_PENDENTE_FABRICACAO', 'DISPONIVEL_PARCIAL', 'RETORNOU_PARCIAL', 'AGUARDANDO_SEPARACAO_PARCIAL', 'ENTREGUE_PARCIAL', 'NOTA_FISCAL_PARCIAL', 'ALMOXARIFADO_ENTREGUE_PARCIAL']
         if area == 'ALMOXARIFADO':
-            return ['NAO_DEFINIDO', 'AGUARDANDO_CONFIRMACAO', 'EM_SEPARACAO', 'SEPARADO', 'SEM_PARAFUSOS', 'ALMOXARIFADO_ENTREGUE', 'ALMOXARIFADO_ENTREGUE_PARCIAL']
+            return ['EM_SEPARACAO', 'SEPARADO', 'SEM_PARAFUSOS', 'ALMOXARIFADO_ENTREGUE', 'ALMOXARIFADO_ENTREGUE_PARCIAL']
         return []
 
     def status_label(self, status: str) -> str:
@@ -1087,6 +1087,54 @@ class BackendService:
             )
         except Exception as exc:
             raise self._api_app_error(exc) from exc
+
+    def warehouse_items_queue(self, filters: dict[str, Any] | None=None) -> list[dict[str, Any]]:
+        """Itens ativos das propostas da aba Almoxarifado (aba "Itens", so leitura)."""
+        filters = filters or {}
+        try:
+            key = f"warehouse_items:{tuple(sorted(filters.items()))}"
+            return self._cached_read(
+                key,
+                lambda: self.official_proposal_storage.warehouse_items_queue(search=filters.get('text') or None),
+                ttl=2.0,
+            )
+        except Exception as exc:
+            raise self._api_app_error(exc) from exc
+
+    def warehouse_pending_count(self) -> int:
+        """Propostas aguardando baixa no estoque, como a API contou na ultima leitura da lista do Almoxarifado."""
+        return int(getattr(self.official_proposal_storage, 'warehouse_pending_stock_deduction', 0) or 0)
+
+    def warehouse_enter(self, numbers: list[str]) -> list[dict[str, Any]]:
+        """Entrada por numero: um resultado por numero (ENTROU, JA_NA_ABA, JA_ENTREGUE, NAO_ENCONTRADA, CANCELADA, PROPOSTA_PARCIAL)."""
+        if not self.user:
+            raise legacy.AppError('Usuario nao autenticado.')
+        if not self.can_edit('ALMOXARIFADO'):
+            raise legacy.AppError('Seu usuario nao pode alterar o Almoxarifado.')
+        self._invalidate_operational_cache()
+        try:
+            return self.official_proposal_storage.warehouse_enter(numbers)
+        except Exception as exc:
+            raise self._api_app_error(exc) from exc
+        finally:
+            self._invalidate_operational_cache()
+
+    def warehouse_set_stock_deduction(self, proposal_id: int, version: int | None, deducted: bool) -> dict[str, Any]:
+        """Confirma (`deducted=True`) ou desfaz a baixa no estoque. Sem `version`, usa a versao atual da proposta."""
+        if not self.user:
+            raise legacy.AppError('Usuario nao autenticado.')
+        if not self.can_edit('ALMOXARIFADO'):
+            raise legacy.AppError('Seu usuario nao pode alterar o Almoxarifado.')
+        self._invalidate_operational_cache()
+        try:
+            if version is None:
+                process = self.official_proposal_storage.get_process(proposal_id)
+                version = int(process.get('api_version') or process.get('version') or 0)
+            return self.official_proposal_storage.warehouse_set_stock_deduction(proposal_id, int(version), deducted)
+        except Exception as exc:
+            raise self._api_app_error(exc) from exc
+        finally:
+            self._invalidate_operational_cache()
 
     def galvanization_items_queue(self, filters: dict[str, Any] | None=None) -> list[dict[str, Any]]:
         filters = filters or {}
@@ -2113,7 +2161,7 @@ class BackendService:
             if status in ('AGUARDANDO_CONFIRMACAO', 'NAO_DEFINIDO', ''):
                 return ['EM_SEPARACAO', 'SEM_PARAFUSOS']
             if status == 'EM_SEPARACAO':
-                return ['SEPARADO']
+                return ['SEPARADO', 'SEM_PARAFUSOS']
             if status == 'SEPARADO':
                 return ['ALMOXARIFADO_ENTREGUE', 'ALMOXARIFADO_ENTREGUE_PARCIAL']
             if status == 'ALMOXARIFADO_ENTREGUE_PARCIAL':

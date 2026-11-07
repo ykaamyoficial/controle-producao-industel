@@ -337,10 +337,15 @@ class OfficialProposalApiStorage:
         finally:
             client.close()
 
+    # Baixas pendentes da ultima leitura de `warehouse_rows` (a API conta no SQL, sem depender do teto da lista).
+    warehouse_pending_stock_deduction: int = 0
+
     def warehouse_rows(self, filters: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         filters = filters or {}
         client, proposals, token = self._client()
         try:
+            # shortcut: teto fixo de 200 linhas (maximo da API por pagina); com mais propostas na aba o contador
+            # (da API) e a lista (cortada) divergem. Paginar quando a aba passar disso na pratica.
             payload = proposals.list_warehouse_proposals(
                 token,
                 search=filters.get("text") or None,
@@ -348,9 +353,42 @@ class OfficialProposalApiStorage:
                 limit=200,
                 offset=0,
             )
+            self.warehouse_pending_stock_deduction = int(payload.get("pending_stock_deduction") or 0)
             return [_api_warehouse_to_process(row) for row in payload.get("items", [])]
         finally:
             client.close()
+
+    def warehouse_enter(self, numbers: list[str]) -> list[dict[str, Any]]:
+        """Entrada por numero. Um item por numero, na ordem enviada: `number`, `result`, `proposal_id`, `message`."""
+        client, proposals, token = self._client()
+        try:
+            return list(proposals.enter_warehouse(token, list(numbers)).get("items") or [])
+        finally:
+            client.close()
+
+    def warehouse_set_stock_deduction(self, proposal_id: int, version: int, deducted: bool) -> dict[str, Any]:
+        client, proposals, token = self._client()
+        try:
+            return _api_warehouse_to_process(
+                proposals.set_stock_deduction(token, int(proposal_id), {"version": int(version), "deducted": bool(deducted)})
+            )
+        finally:
+            client.close()
+
+    def warehouse_items_queue(self, *, max_rows: int = EXPEDITION_ITEMS_MAX_ROWS, **filters) -> list[dict[str, Any]]:
+        """Itens ativos das propostas da aba, de 500 em 500 (limite da API) ate `max_rows`."""
+        rows: list[dict[str, Any]] = []
+        client, proposals, token = self._client()
+        try:
+            while len(rows) < max_rows:
+                payload = proposals.list_warehouse_items(token, limit=min(500, max_rows - len(rows)), offset=len(rows), **filters)
+                page = payload.get("items") or []
+                rows.extend(_api_warehouse_item_row_to_process_item(row) for row in page)
+                if not page or len(rows) >= int(payload.get("total") or 0):
+                    break
+        finally:
+            client.close()
+        return rows
 
     def update_warehouse_status(self, proposal_id: int, version: int, status: str, observation: str = "") -> dict[str, Any]:
         client, proposals, token = self._client()
@@ -2233,6 +2271,40 @@ def _api_warehouse_to_process(row: dict[str, Any]) -> dict[str, Any]:
         "quantidade_itens": row.get("total_items", 0),
         "peso": _decimal_text(row.get("total_weight")),
         "atualizado_em": _datetime_br(row.get("updated_at")),
+        "baixa_estoque": bool(row.get("stock_deducted")),
+        "baixa_estoque_em": _datetime_br(row.get("stock_deducted_at")),
+        "baixa_estoque_status": _stock_deduction_state(row),
+    }
+
+
+# Status do Almoxarifado em que ha material separado e, portanto, baixa a dar (SEM_PARAFUSOS nunca tem).
+STOCK_DEDUCTION_STATUSES = ("SEPARADO", "ALMOXARIFADO_ENTREGUE_PARCIAL", "ALMOXARIFADO_ENTREGUE")
+
+
+def _stock_deduction_state(row: dict[str, Any]) -> str:
+    """BAIXA_CONFIRMADA, BAIXA_PENDENTE (so onde cabe baixa) ou "" (coluna mostra "-")."""
+    if row.get("stock_deducted"):
+        return "BAIXA_CONFIRMADA"
+    if str(row.get("warehouse_status") or "").upper() in STOCK_DEDUCTION_STATUSES:
+        return "BAIXA_PENDENTE"
+    return ""
+
+
+def _api_warehouse_item_row_to_process_item(row: dict[str, Any]) -> dict[str, Any]:
+    """Linha da aba "Itens" do Almoxarifado (so leitura). A API nao manda id do item: a linha nao tem `id`."""
+    return {
+        "id": None,
+        "numero_item": row.get("item_number") or "",
+        "codigo_produto": row.get("product_code") or "",
+        "descricao": row.get("description") or "",
+        "unidade": row.get("unit") or "",
+        "quantidade": _decimal_text(row.get("quantity")) or "0",
+        "peso_total": _decimal_text(row.get("total_weight")),
+        "status_almoxarifado_item": row.get("warehouse_status") or "",
+        "processo_atual_id": row.get("proposal_id"),
+        "api_proposal_id": row.get("proposal_id"),
+        "proposta": row.get("proposal_number") or "",
+        "cliente": row.get("customer_name") or "",
     }
 
 

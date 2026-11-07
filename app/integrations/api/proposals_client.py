@@ -99,6 +99,21 @@ class ProposalsApiClient:
     def update_warehouse_status(self, access_token: str, proposal_id: int, payload: dict[str, Any]) -> dict[str, Any]:
         return self.client.post(f"/api/v1/warehouse/proposals/{proposal_id}/status", json_payload=payload, access_token=access_token).data
 
+    def enter_warehouse(self, access_token: str, numbers: list[str]) -> dict[str, Any]:
+        """Entrada por numero: `{"items": [{number, result, proposal_id, message}]}`."""
+        return self.client.post("/api/v1/warehouse/proposals/enter", json_payload={"numbers": list(numbers)}, access_token=access_token).data
+
+    def set_stock_deduction(self, access_token: str, proposal_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+        """Confirma/desfaz a baixa no estoque (`{"version", "deducted"}`); devolve a linha da lista do Almoxarifado."""
+        return self.client.post(
+            f"/api/v1/warehouse/proposals/{proposal_id}/stock-deduction", json_payload=payload, access_token=access_token
+        ).data
+
+    def list_warehouse_items(self, access_token: str, **filters) -> dict[str, Any]:
+        params = urlencode({key: value for key, value in filters.items() if value not in (None, "")})
+        path = "/api/v1/warehouse/items" + (f"?{params}" if params else "")
+        return self.client.get(path, access_token=access_token).data
+
     def get_production_detail(self, access_token: str, proposal_id: int) -> dict[str, Any]:
         return self.client.get(f"/api/v1/production/proposals/{proposal_id}", access_token=access_token).data
 
