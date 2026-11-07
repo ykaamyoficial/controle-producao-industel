@@ -90,6 +90,7 @@ from api.app.modules.proposals.schemas import (
     PaginatedPartialProposalResponse,
     PaginatedProductionItemResponse,
     PaginatedProductionResponse,
+    PaginatedWarehouseItemResponse,
     PaginatedWarehouseProposalResponse,
     PartialProposalSummary,
     ProposalAdministrativeCorrectionOptionsResponse,
@@ -146,6 +147,7 @@ from api.app.modules.proposals.schemas import (
     WarehouseEnterRequest,
     WarehouseEnterResponse,
     WarehouseEnterResult,
+    WarehouseItemRow,
     WarehouseStatusRequest,
     WarehouseStockDeductionRequest,
 )
@@ -601,6 +603,39 @@ async def list_warehouse_proposals(session: AsyncSession, *, search: str | None,
     pending = (await session.execute(select(func.count()).select_from(Proposal).where(_warehouse_pending_deduction_clause()))).scalar_one()
     return PaginatedWarehouseProposalResponse(
         items=[_warehouse_proposal_summary(row) for row in paged], total=len(rows), limit=limit, offset=offset, pending_stock_deduction=int(pending),
+    )
+
+
+async def list_warehouse_items(session: AsyncSession, *, search: str | None, limit: int, offset: int) -> PaginatedWarehouseItemResponse:
+    """Itens ativos das propostas da aba Almoxarifado (mesma regra de `_warehouse_visible_clause`).
+    Filtro, ordem (so ids) e paginacao no SQL, como `list_expedition_items`."""
+    conditions = [_warehouse_visible_clause(), ProposalItem.active.is_(True)]
+    needle = (search or "").strip().lower()
+    if needle:
+        item_text = func.lower(func.concat(func.coalesce(ProposalItem.product_code, ""), " ", ProposalItem.description))
+        conditions.append(or_(_proposal_search_clause(search), func.strpos(item_text, needle) > 0))
+    source = select(Proposal, ProposalItem).join(ProposalItem, ProposalItem.proposal_id == Proposal.id).where(*conditions)
+    total = (await session.execute(select(func.count()).select_from(source.subquery()))).scalar_one()
+    rows = (await session.execute(source.options(lazyload("*")).order_by(Proposal.id, ProposalItem.id).limit(limit).offset(offset))).all()
+    return PaginatedWarehouseItemResponse(
+        items=[
+            WarehouseItemRow(
+                proposal_id=proposal.id,
+                proposal_number=proposal.proposal_number,
+                customer_name=proposal.customer_name,
+                item_number=item.item_number,
+                product_code=item.product_code,
+                description=item.description,
+                quantity=item.quantity,
+                unit=item.unit,
+                total_weight=item.total_weight,
+                warehouse_status=proposal.warehouse_status or "",
+            )
+            for proposal, item in rows
+        ],
+        total=int(total),
+        limit=limit,
+        offset=offset,
     )
 
 

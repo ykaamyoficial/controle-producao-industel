@@ -69,6 +69,7 @@ from api.app.modules.proposals.schemas import (
     PaginatedProductionItemResponse,
     PaginatedProductionResponse,
     PaginatedRemanagementResponse,
+    PaginatedWarehouseItemResponse,
     PaginatedWarehouseProposalResponse,
     ProposalActivityItem,
     ProposalCancelRequest,
@@ -286,6 +287,17 @@ async def list_warehouse_proposals(
     _actor: User = Depends(require_permission(PROPOSALS_VIEW)),
 ):
     return await service.list_warehouse_proposals(session, search=search, status=status_filter, limit=limit, offset=offset)
+
+
+@router.get("/warehouse/items", response_model=PaginatedWarehouseItemResponse)
+async def list_warehouse_items(
+    search: str | None = Query(default=None, max_length=180),
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    session: AsyncSession = Depends(get_db_session),
+    _actor: User = Depends(require_permission(PROPOSALS_VIEW)),
+):
+    return await service.list_warehouse_items(session, search=search, limit=limit, offset=offset)
 
 
 @router.post("/warehouse/proposals/enter", response_model=WarehouseEnterResponse)

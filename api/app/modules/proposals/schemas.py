@@ -371,6 +371,28 @@ class WarehouseEnterResponse(BaseModel):
     items: list[WarehouseEnterResult]
 
 
+class WarehouseItemRow(BaseModel):
+    """Item ativo de uma proposta que esta na aba Almoxarifado (aba "Itens", so consulta)."""
+
+    proposal_id: int
+    proposal_number: str
+    customer_name: str
+    item_number: str
+    product_code: str | None = None
+    description: str
+    quantity: Decimal
+    unit: str | None = None
+    total_weight: Decimal | None = None
+    warehouse_status: str
+
+
+class PaginatedWarehouseItemResponse(BaseModel):
+    items: list[WarehouseItemRow]
+    total: int
+    limit: int
+    offset: int
+
+
 class WarehouseStockDeductionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
