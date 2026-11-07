@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
@@ -16,6 +17,7 @@ STATE_FIELDS = (
     "galvanization_status",
     "shipping_status",
     "warehouse_status",
+    "warehouse_stock_deducted_at",
     "flow_situation",
     "has_production_pending",
     "is_completed",
@@ -68,11 +70,24 @@ def _decimal(value: Any) -> Decimal:
 def _json_value(value: Any) -> Any:
     if isinstance(value, Decimal):
         return str(value.quantize(Decimal("0.0001")))
+    if isinstance(value, datetime):
+        return value.isoformat()
     return value
 
 
 def _state_value(value: Any) -> Any:
     return value.strip().upper() if isinstance(value, str) else value
+
+
+def effective_updates(proposal: Proposal, updates: dict[str, Any]) -> dict[str, Any]:
+    """Mudar o warehouse_status por fora zera a baixa no estoque no mesmo passo (so se o status mudou)."""
+    if (
+        "warehouse_status" in updates
+        and _state_value(proposal.warehouse_status) != _state_value(updates["warehouse_status"])
+        and proposal.warehouse_stock_deducted_at is not None
+    ):
+        return {**updates, "warehouse_stock_deducted_at": None, "warehouse_stock_deducted_by_user_id": None}
+    return updates
 
 
 def normalize_area(value: str | None) -> str:
@@ -729,7 +744,7 @@ def preview(
     changes = []
     effects: list[str] = []
     if candidate:
-        for field, after in candidate.updates.items():
+        for field, after in effective_updates(proposal, candidate.updates).items():
             before = getattr(proposal, field)
             if _state_value(before) != _state_value(after):
                 changes.append({"field": field, "before": _json_value(before), "after": _json_value(after)})
@@ -762,7 +777,7 @@ def preview(
 def option_payload(candidate: CorrectionCandidate, proposal: Proposal) -> dict[str, Any]:
     changes = [
         field
-        for field, value in candidate.updates.items()
+        for field, value in effective_updates(proposal, candidate.updates).items()
         if _state_value(getattr(proposal, field)) != _state_value(value)
     ]
     return {

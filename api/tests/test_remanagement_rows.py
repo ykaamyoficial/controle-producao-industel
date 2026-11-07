@@ -6,10 +6,14 @@ pecas por produto e por estagio nao mudam.
 
 from __future__ import annotations
 
+import asyncio
 import unittest
 from decimal import Decimal
 from unittest.mock import patch
 
+from sqlalchemy import text
+
+from api.app.database.session import get_engine
 from api.tests import test_expedition_fiscal_read_path as read_path
 from api.tests.test_proposals_integration import _integration_enabled, _item_payload, _proposal_payload
 
@@ -130,6 +134,27 @@ class RemanagementByRowsTests(unittest.TestCase):
         destination_history = [row["event_type"] for row in self._get(f"/api/v1/proposals/{destination['id']}/history", limit=100)]
         self.assertIn("COMPENSATED_REMANAGEMENT_APPLIED", origin_history)
         self.assertIn("COMPENSATED_REMANAGEMENT_RECEIVED", destination_history)
+
+    def test_the_children_inherit_the_warehouse_status_but_are_born_without_the_stock_deduction(self):
+        items = [("1", "450.400", "2.0000"), ("2", "450.398", "1.0000"), ("3", "450.830", "1.0000"), ("4", "450.3", "1.0000")]
+        source = self._ready_source("ROW-K1", items)
+        destination = self._destination("ROW-K2", items)
+        source_items, destination_items = self._item_ids(source), self._item_ids(destination)
+
+        async def sql(statement, **params):
+            async with get_engine().begin() as conn:
+                result = await conn.execute(text(statement), params)
+                return result.fetchall() if result.returns_rows else []
+
+        asyncio.run(sql("UPDATE proposals SET warehouse_status = 'SEPARADO', warehouse_stock_deducted_at = now(), warehouse_stock_deducted_by_user_id = 1 WHERE id = :id", id=source["id"]))
+        payload = self._payload(destination, [(destination_items["3"], source_items["3"], source["id"], "1.0000")], "row-op-keep")
+        with patch(SWITCH, True):
+            self._post("/api/v1/shipping/remanagements/confirm", payload)
+
+        children = asyncio.run(sql("SELECT proposal_number, warehouse_status, warehouse_stock_deducted_at, warehouse_stock_deducted_by_user_id FROM proposals WHERE parent_proposal_id = :id ORDER BY id", id=source["id"]))
+        self.assertGreaterEqual(len(children), 2)
+        for number, status, deducted_at, deducted_by in children:
+            self.assertEqual((status, deducted_at, deducted_by), ("SEPARADO", None, None), number)
 
     def test_the_replacement_comes_back_the_parts_join_and_the_mother_is_reborn(self):
         items = [("1", "450.400", "2.0000"), ("2", "450.398", "1.0000"), ("3", "450.830", "1.0000"), ("4", "450.3", "1.0000")]

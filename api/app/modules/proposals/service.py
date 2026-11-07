@@ -19,6 +19,7 @@ from api.app.modules.proposals.admin_correction import (
     STATE_FIELDS as ADMINISTRATIVE_STATE_FIELDS,
     VALID_TARGETS as ADMINISTRATIVE_VALID_TARGETS,
     allowed_corrections as administrative_allowed_corrections,
+    effective_updates as administrative_effective_updates,
     collect_facts as collect_administrative_facts,
     normalize_area as normalize_administrative_area,
     normalize_status as normalize_administrative_status,
@@ -5259,7 +5260,7 @@ async def administrative_correction(
         before_snapshot = administrative_snapshot(proposal, facts)
         from_area = proposal.current_area
         from_status = proposal.current_status
-        for field, value in candidate.updates.items():
+        for field, value in administrative_effective_updates(proposal, candidate.updates).items():
             setattr(proposal, field, value)
         _touch(proposal, actor)
         after_snapshot = administrative_snapshot(proposal, collect_administrative_facts(proposal))
@@ -7726,6 +7727,10 @@ def _items_unchanged(proposal: Proposal, payload: ProposalSyncPayload) -> bool:
 
 
 def _apply_proposal(proposal: Proposal, payload: ProposalSyncPayload) -> None:
+    if proposal.warehouse_status != payload.warehouse_status:
+        # Status do Almoxarifado mudou por fora: a baixa no estoque deixa de valer, no mesmo passo.
+        proposal.warehouse_stock_deducted_at = None
+        proposal.warehouse_stock_deducted_by_user_id = None
     for field in (
         "legacy_id", "proposal_number", "customer_name", "project_name", "order_reference", "lot",
         "proposal_date", "deadline_date", "current_area", "current_status", "general_status",

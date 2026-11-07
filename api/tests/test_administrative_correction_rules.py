@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
 from pydantic import ValidationError
 
+from api.app.modules.proposals import admin_correction
 from api.app.modules.proposals.admin_correction import (
     allowed_corrections,
     blockers_for,
@@ -314,3 +316,38 @@ def test_apply_schema_requires_reason_version_and_idempotency_key():
             reason="   ",
             idempotency_key="admin-test-1",
         )
+
+
+def _baixada(status: str) -> Proposal:
+    proposal = _proposal(produced=True, galvanization="NAO")
+    proposal.current_area = "EXPEDICAO"
+    proposal.warehouse_status = status
+    proposal.warehouse_stock_deducted_at = datetime.now(UTC)
+    proposal.warehouse_stock_deducted_by_user_id = 5
+    return proposal
+
+
+def test_correcao_que_muda_o_status_do_almoxarifado_zera_a_baixa_e_a_previa_mostra(monkeypatch):
+    # hoje a projecao nao grava warehouse_status; a trava vale para quando gravar
+    original = admin_correction._projection
+    monkeypatch.setattr(admin_correction, "_projection", lambda facts, area, status: {**original(facts, area, status), "warehouse_status": "EM_SEPARACAO"})
+    proposal = _baixada("ALMOXARIFADO_ENTREGUE")
+
+    changes = {row["field"]: row for row in preview(proposal, "EXPEDICAO", "EM_SEPARACAO")["changes"]}
+    assert changes["warehouse_status"]["after"] == "EM_SEPARACAO"
+    assert changes["warehouse_stock_deducted_at"]["after"] is None and changes["warehouse_stock_deducted_at"]["before"]
+    assert "warehouse_stock_deducted_at" in admin_correction.option_payload(allowed_corrections(proposal)[0], proposal)["changed_fields"]
+    updates = admin_correction.effective_updates(proposal, allowed_corrections(proposal)[0].updates)
+    assert (updates["warehouse_stock_deducted_at"], updates["warehouse_stock_deducted_by_user_id"]) == (None, None)
+    json.dumps(snapshot(proposal))  # o snapshot vai para o metadata do evento: a data precisa serializar
+
+
+def test_correcao_com_o_mesmo_status_do_almoxarifado_preserva_a_baixa(monkeypatch):
+    original = admin_correction._projection
+    monkeypatch.setattr(admin_correction, "_projection", lambda facts, area, status: {**original(facts, area, status), "warehouse_status": "SEPARADO"})
+    proposal = _baixada("SEPARADO")
+
+    result = preview(proposal, "EXPEDICAO", "EM_SEPARACAO")
+    assert "warehouse_stock_deducted_at" not in {row["field"] for row in result["changes"]}
+    updates = admin_correction.effective_updates(proposal, allowed_corrections(proposal)[0].updates)
+    assert "warehouse_stock_deducted_at" not in updates

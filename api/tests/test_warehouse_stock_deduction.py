@@ -279,6 +279,41 @@ class WarehouseStockDeductionTests(WarehouseApiTestCase):
             self.assertEqual(len(headlines), 2, headlines)
             self.assertTrue(all("baixa no estoque" in headline for headline in headlines), headlines)
 
+    def test_avancar_o_status_pelo_fluxo_normal_mantem_a_baixa(self):
+        proposal_id = self._make("KEEP-1", warehouse_status="SEPARADO")
+        self.assertEqual(self._deduct(proposal_id).status_code, 200)
+        self.assertEqual(self._status(proposal_id, "ALMOXARIFADO_ENTREGUE").status_code, 200)
+        row = self._row(proposal_id)
+        self.assertEqual(row.warehouse_status, "ALMOXARIFADO_ENTREGUE")
+        self.assertIsNotNone(row.warehouse_stock_deducted_at)
+        self.assertEqual(self._warehouse_numbers(), set())  # entregue com baixa nao reaparece na aba
+
+    # ---- sync legado: status do Almoxarifado mudou por fora zera a baixa -----------------------------
+    def _sync(self, warehouse_status, seed):
+        proposal = {
+            "legacy_id": 900, "proposal_number": "SYNC-1", "customer_name": "Cliente Legado", "current_area": "EXPEDICAO", "current_status": "SEPARADO",
+            "warehouse_status": warehouse_status, "source": "sqlite", "source_hash": f"{seed:064d}",
+            "items": [{"legacy_id": 9001, "item_number": "1", "description": "Item", "quantity": "1.0000", "unit_weight": "1.0000", "total_weight": "1.0000", "produce_internally": "sim", "requires_galvanization": "nao", "source_hash": f"{9001:064d}"}],
+        }
+        batch = {"source_identifier": "legacy.db", "dry_run": False, "batch_number": 1, "batch_total": 1, "proposals": [proposal]}
+        response = self.client.post(f"{API}/admin/sync/proposals", json=batch, headers=self.headers)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["updated"] + response.json()["created"], 1, response.text)
+
+    def test_sync_legado_zera_a_baixa_so_quando_o_status_do_almoxarifado_muda(self):
+        self._sync("SEPARADO", 1)
+        proposal_id = self._id("SYNC-1")
+        self.assertEqual(self._deduct(proposal_id).status_code, 200)
+        self._sync("SEPARADO", 2)  # hash novo, mesmo status: a baixa fica
+        row = self._row(proposal_id)
+        self.assertEqual((row.warehouse_status, row.warehouse_stock_deducted_by_user_id), ("SEPARADO", 1))
+        self.assertIsNotNone(row.warehouse_stock_deducted_at)
+        self._sync("ALMOXARIFADO_ENTREGUE", 3)  # status mudou: a baixa zera no mesmo passo
+        row = self._row(proposal_id)
+        self.assertEqual(row.warehouse_status, "ALMOXARIFADO_ENTREGUE")
+        self.assertIsNone(row.warehouse_stock_deducted_at)
+        self.assertIsNone(row.warehouse_stock_deducted_by_user_id)
+
     # ---- util ---------------------------------------------------------------
     def _enter_with_number(self, number):
         self._make(number)
