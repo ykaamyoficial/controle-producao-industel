@@ -691,8 +691,11 @@ class WarehouseStockDeductionBatchTests(unittest.TestCase):
         action = next(a for a in dialog.actions if a.status == "REVERT")
         with patch("app.ui.action_center.batch_action_center.QMessageBox.question", return_value=QMessageBox.Yes), patch(
             "app.ui.action_center.batch_action_center.start_worker", side_effect=_run_synchronously
-        ), patch("app.ui.action_center.batch_action_center.QMessageBox.information"):
+        ), patch("app.ui.action_center.batch_action_center.QMessageBox.information"), patch(
+            "app.ui.action_center.batch_action_center.QMessageBox.warning"
+        ) as warning:
             dialog.run_action(action)
+        warning.assert_not_called()
         self.assertEqual(service.deduction_calls, [(10, None, False)])
 
     def test_failure_in_the_middle_does_not_stop_the_others_and_is_reported_by_number(self):

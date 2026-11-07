@@ -822,8 +822,11 @@ class WarehouseStockDeductionActionTests(unittest.TestCase):
         service = FakeWarehouseService("SEPARADO", stock_deducted=False)
         dialog = StatusDialog(service, 5, "ALMOXARIFADO")
         (action,) = self._stock_actions(dialog)
-        with patch("app.ui.action_center.proposal_action_center.start_worker", side_effect=_synchronous_start_worker):
+        with patch("app.ui.action_center.proposal_action_center.start_worker", side_effect=_synchronous_start_worker), patch(
+            "app.ui.action_center.proposal_action_center.QMessageBox.warning"
+        ) as warning:
             dialog.run_action(action)
+        warning.assert_not_called()
         # version None: o servico usa a versao atual da proposta (como update_status).
         self.assertEqual(service.calls, [("warehouse_set_stock_deduction", 5, None, True)])
         (after,) = self._stock_actions(dialog)
@@ -836,8 +839,11 @@ class WarehouseStockDeductionActionTests(unittest.TestCase):
         service = FakeWarehouseService("SEPARADO", stock_deducted=True)
         dialog = StatusDialog(service, 5, "ALMOXARIFADO")
         (action,) = self._stock_actions(dialog)
-        with patch("app.ui.action_center.proposal_action_center.start_worker", side_effect=_synchronous_start_worker):
+        with patch("app.ui.action_center.proposal_action_center.start_worker", side_effect=_synchronous_start_worker), patch(
+            "app.ui.action_center.proposal_action_center.QMessageBox.warning"
+        ) as warning:
             dialog.run_action(action)
+        warning.assert_not_called()
         self.assertEqual(service.calls, [("warehouse_set_stock_deduction", 5, None, False)])
         self.assertEqual(self._stock_actions(dialog)[0].status, "CONFIRM")
 
