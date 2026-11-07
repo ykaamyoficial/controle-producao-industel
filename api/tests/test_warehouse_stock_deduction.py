@@ -5,9 +5,9 @@ from __future__ import annotations
 import asyncio
 import unittest
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 
-from api.app.database.session import get_sessionmaker
+from api.app.database.session import get_engine, get_sessionmaker
 from api.app.modules.proposals.models import ProposalEvent
 from api.tests._warehouse_support import WarehouseApiTestCase, _integration_enabled
 
@@ -232,6 +232,52 @@ class WarehouseStockDeductionTests(WarehouseApiTestCase):
         refused = self._undo(proposal_id, "rid-baixa3", "key-d3-baixa")
         self.assertEqual((refused.status_code, refused.json()["error"]["code"]), (409, "UNDO_NOT_SUPPORTED"))
         self.assertIsNotNone(self._row(proposal_id).warehouse_stock_deducted_at)
+
+    # ---- sem notificacao (decisao 2026-11-07) --------------------------------
+    def _notifications(self):
+        async def go():
+            async with get_engine().begin() as conn:
+                return (await conn.execute(text("SELECT (SELECT count(*) FROM notifications), (SELECT count(*) FROM notification_deliveries)"))).one()
+
+        return tuple(asyncio.run(go()))
+
+    def _watched(self, number, creator_id, participant_id, **fields):
+        """Proposta que normalmente notificaria: criador e participante do chat sao outros usuarios (nao o ator)."""
+        proposal_id = self._make(number, created_by=creator_id, **fields)
+
+        async def go():
+            async with get_engine().begin() as conn:
+                conversation_id = (await conn.execute(text("INSERT INTO chat_conversations (kind, proposal_id) VALUES ('PROPOSTA', :p) RETURNING id"), {"p": proposal_id})).scalar_one()
+                await conn.execute(text("INSERT INTO chat_messages (conversation_id, author_user_id, body) VALUES (:c, :u, 'oi')"), {"c": conversation_id, "u": participant_id})
+
+        asyncio.run(go())
+        return proposal_id
+
+    def test_baixa_nao_cria_notificacao_ao_confirmar_nem_ao_desfazer_inclusive_em_lote(self):
+        self._seed_user("criador", ["proposals.view"])  # id 2
+        self._seed_user("participante", ["proposals.view"])  # id 3
+        ids = [self._watched(f"N-{i}", 2, 3, warehouse_status="SEPARADO") for i in range(3)]
+        control = self._watched("N-CTRL", 2, 3, warehouse_status="EM_SEPARACAO")
+
+        # controle: o avanco de status continua notificando criador e participante
+        self.assertEqual(self._status(control, "SEPARADO").status_code, 200)
+        notified = self._notifications()
+        self.assertGreater(notified[0], 0, "o controle precisa notificar, senao o teste nao prova nada")
+
+        for deducted in (True, False):  # "em lote" = o Desktop chama a rota uma vez por proposta
+            for proposal_id in ids:
+                self.assertEqual(self._deduct(proposal_id, deducted).status_code, 200)
+            self.assertEqual(self._notifications(), notified)
+        for proposal_id in ids:
+            self.assertEqual([event[0] for event in self._stock_events(proposal_id)], ["WAREHOUSE_STOCK_DEDUCTED", "WAREHOUSE_STOCK_DEDUCTION_REVERTED"])
+            history = self.client.get(f"{API}/proposals/{proposal_id}/history", headers=self.headers)
+            self.assertEqual(history.status_code, 200, history.text)
+            self.assertTrue({"WAREHOUSE_STOCK_DEDUCTED", "WAREHOUSE_STOCK_DEDUCTION_REVERTED"} <= {row["event_type"] for row in history.json()})
+            activities = self.client.get(f"{API}/proposals/{proposal_id}/activities", headers=self.headers)
+            self.assertEqual(activities.status_code, 200, activities.text)
+            headlines = [row["headline"] for row in activities.json() if row["event_type"].startswith("WAREHOUSE_STOCK_")]
+            self.assertEqual(len(headlines), 2, headlines)
+            self.assertTrue(all("baixa no estoque" in headline for headline in headlines), headlines)
 
     # ---- util ---------------------------------------------------------------
     def _enter_with_number(self, number):

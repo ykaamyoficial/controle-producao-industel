@@ -7307,9 +7307,8 @@ async def _request_event_exists(
 _NOTIFY_PROPOSAL_EVENTS: dict[str, tuple[str, str]] = {
     "PROPOSAL_STATUS_CHANGED": ("PROPOSTA_STATUS", "normal"),
     "WAREHOUSE_STATUS_CHANGED": ("ALMOXARIFADO", "normal"),
-    "WAREHOUSE_STOCK_DEDUCTED": ("ALMOXARIFADO", "normal"),
-    "WAREHOUSE_STOCK_DEDUCTION_REVERTED": ("ALMOXARIFADO", "normal"),
-    "PROPOSAL_CANCELLED": ("PROPOSTA_STATUS", "alta"),
+    # Baixa no estoque (confirmar/desfazer) fica so no historico: de proposito nao notifica (decisao 2026-11-07).
+    "PROPOSAL_CANCELLED":("PROPOSTA_STATUS", "alta"),
     "PROPOSAL_CANCELLED_TERMINAL": ("PROPOSTA_STATUS", "alta"),
     "PROPOSAL_DEACTIVATED": ("PROPOSTA_STATUS", "alta"),
     "PROPOSAL_REACTIVATED": ("PROPOSTA_STATUS", "normal"),

@@ -313,9 +313,9 @@ def test_desfazer_status_do_almoxarifado_zera_a_baixa_e_nao_bloqueia_por_causa_d
     assert {c.field for c in undo.build_changes(pendente, undo._eval_warehouse(ctx([event], pendente)))} == {"warehouse_status"}
 
 
-def test_eventos_de_baixa_tem_rotulo_e_notificam_na_area_almoxarifado():
+def test_eventos_de_baixa_tem_rotulo_e_nao_notificam():
     for event_type in ("WAREHOUSE_STOCK_DEDUCTED", "WAREHOUSE_STOCK_DEDUCTION_REVERTED"):
-        assert _NOTIFY_PROPOSAL_EVENTS[event_type][0] == "ALMOXARIFADO"
+        assert event_type not in _NOTIFY_PROPOSAL_EVENTS
         headline = _activity_headline(event_type, "Ana", {}, None, None)
         assert headline.startswith("Ana ") and "baixa" in headline
 
