@@ -599,5 +599,124 @@ class RoutingErrorTests(unittest.TestCase):
         warning.assert_called_once()
 
 
+def _row(process_id, status, deducted=False):
+    return {"id": process_id, "proposta": f"CP{process_id}", "status_almoxarifado": status, "baixa_estoque": deducted}
+
+
+class WarehouseStockDeductionBatchTests(unittest.TestCase):
+    """Baixa no estoque em lote (Fase 15): cards pelo estado de cada linha selecionada; uma chamada por proposta;
+    a falha de uma nao derruba as outras."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication([])
+
+    @staticmethod
+    def _service():
+        service = FakeBatchService("ALMOXARIFADO", common_statuses=[])
+        service.deduction_calls = []
+
+        def set_deduction(process_id, version, deducted):
+            service.deduction_calls.append((process_id, version, deducted))
+            if process_id in service.failing:
+                raise RuntimeError("Esta proposta foi alterada por outro usuario.")
+            return {}
+
+        service.failing = set()
+        service.warehouse_set_stock_deduction = set_deduction
+        return service
+
+    @staticmethod
+    def _dialog(service, ids, rows):
+        labels = {process_id: f"CP{process_id}" for process_id in ids}
+        return BatchProposalActionCenter(service, ids, "ALMOXARIFADO", proposal_labels=labels, proposal_rows=rows)
+
+    @staticmethod
+    def _cards(dialog):
+        return [(a.label, a.status, a.category) for a in dialog.actions if a.id == "STOCK_DEDUCTION"]
+
+    def test_confirm_card_is_primary_and_revert_is_normal(self):
+        rows = {10: _row(10, "SEPARADO"), 20: _row(20, "ALMOXARIFADO_ENTREGUE", deducted=True)}
+        dialog = self._dialog(self._service(), [10, 20], rows)
+        self.assertEqual(
+            self._cards(dialog),
+            [
+                ("Confirmar baixa no estoque", "CONFIRM", ActionCategory.PRIMARY),
+                ("Desfazer baixa", "REVERT", ActionCategory.NORMAL),
+            ],
+        )
+        self.assertEqual(len([a for a in dialog.actions if a.category == ActionCategory.PRIMARY]), 1)
+
+    def test_coverage_is_in_the_description_when_only_part_of_the_selection_qualifies(self):
+        rows = {10: _row(10, "SEPARADO"), 20: _row(20, "EM_SEPARACAO"), 30: _row(30, "SEM_PARAFUSOS")}
+        dialog = self._dialog(self._service(), [10, 20, 30], rows)
+        card = next(a for a in dialog.actions if a.id == "STOCK_DEDUCTION")
+        self.assertIn("1 de 3", card.description)
+        self.assertEqual(card.raw["eligible_ids"], [10])
+
+    def test_no_card_for_em_separacao_sem_parafusos_or_unknown_rows(self):
+        rows = {10: _row(10, "EM_SEPARACAO"), 20: _row(20, "SEM_PARAFUSOS", deducted=False)}
+        dialog = self._dialog(self._service(), [10, 20, 30], rows)  # 30 sem linha conhecida
+        self.assertEqual(self._cards(dialog), [])
+        self.assertEqual(dialog.actions, [])
+
+    def test_other_areas_never_get_the_card(self):
+        service = FakeBatchService("EXPEDICAO", common_statuses=["SEPARADO"])
+        dialog = BatchProposalActionCenter(service, [10], "EXPEDICAO", proposal_rows={10: _row(10, "SEPARADO")})
+        self.assertEqual(self._cards(dialog), [])
+
+    def test_confirm_makes_one_call_per_eligible_proposal_only(self):
+        service = self._service()
+        rows = {10: _row(10, "SEPARADO"), 20: _row(20, "ALMOXARIFADO_ENTREGUE_PARCIAL"), 30: _row(30, "EM_SEPARACAO")}
+        dialog = self._dialog(service, [10, 20, 30], rows)
+        action = next(a for a in dialog.actions if a.status == "CONFIRM")
+        with patch("app.ui.action_center.batch_action_center.QMessageBox.question", return_value=QMessageBox.Yes) as question, patch(
+            "app.ui.action_center.batch_action_center.start_worker", side_effect=_run_synchronously
+        ), patch("app.ui.action_center.batch_action_center.QMessageBox.warning") as warning:
+            dialog.run_action(action)
+        self.assertEqual(service.deduction_calls, [(10, None, True), (20, None, True)])
+        warning.assert_not_called()
+        self.assertIn("CP10", question.call_args.args[2])
+        self.assertNotIn("CP30", question.call_args.args[2])
+        self.assertTrue(dialog.changed)
+        self.assertTrue(dialog.result())
+
+    def test_revert_sends_deducted_false(self):
+        service = self._service()
+        dialog = self._dialog(service, [10], {10: _row(10, "SEPARADO", deducted=True)})
+        action = next(a for a in dialog.actions if a.status == "REVERT")
+        with patch("app.ui.action_center.batch_action_center.QMessageBox.question", return_value=QMessageBox.Yes), patch(
+            "app.ui.action_center.batch_action_center.start_worker", side_effect=_run_synchronously
+        ):
+            dialog.run_action(action)
+        self.assertEqual(service.deduction_calls, [(10, None, False)])
+
+    def test_failure_in_the_middle_does_not_stop_the_others_and_is_reported_by_number(self):
+        service = self._service()
+        service.failing = {20}
+        rows = {n: _row(n, "SEPARADO") for n in (10, 20, 30)}
+        dialog = self._dialog(service, [10, 20, 30], rows)
+        action = next(a for a in dialog.actions if a.status == "CONFIRM")
+        with patch("app.ui.action_center.batch_action_center.QMessageBox.question", return_value=QMessageBox.Yes), patch(
+            "app.ui.action_center.batch_action_center.start_worker", side_effect=_run_synchronously
+        ), patch("app.ui.action_center.batch_action_center.QMessageBox.warning") as warning:
+            dialog.run_action(action)
+        self.assertEqual([call[0] for call in service.deduction_calls], [10, 20, 30])  # a 30 foi tentada apos a falha da 20
+        warning.assert_called_once()
+        text = warning.call_args.args[2]
+        self.assertIn("2 proposta(s) alterada(s): CP10, CP30", text)
+        self.assertIn("CP20: Esta proposta foi alterada por outro usuario.", text)
+        self.assertTrue(dialog.changed)
+
+    def test_declining_the_confirmation_does_not_call_the_service(self):
+        service = self._service()
+        dialog = self._dialog(service, [10], {10: _row(10, "SEPARADO")})
+        action = next(a for a in dialog.actions if a.status == "CONFIRM")
+        with patch("app.ui.action_center.batch_action_center.QMessageBox.question", return_value=QMessageBox.No):
+            dialog.run_action(action)
+        self.assertEqual(service.deduction_calls, [])
+        self.assertFalse(dialog.changed)
+
+
 if __name__ == "__main__":
     unittest.main()

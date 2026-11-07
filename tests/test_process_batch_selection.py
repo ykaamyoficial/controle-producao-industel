@@ -412,6 +412,7 @@ class ProcessBatchSelectionTests(unittest.TestCase):
                 captured["ids"] = list(process_ids)
                 captured["area"] = area
                 captured["labels"] = kwargs.get("proposal_labels")
+                captured["rows"] = kwargs.get("proposal_rows")
 
             def exec(_self):
                 return True
@@ -424,6 +425,8 @@ class ProcessBatchSelectionTests(unittest.TestCase):
         self.assertEqual(captured["ids"], [27, 10])
         self.assertEqual(captured["area"], "PRODUCAO")
         self.assertEqual(captured["labels"], {27: "CP06120", 10: "CP05266"})
+        # As linhas da tabela vao junto (o Almoxarifado decide os cards de baixa por elas).
+        self.assertEqual(captured["rows"], {27: ROWS[1], 10: ROWS[0]})
         self.assertEqual(service.last_validation, None)
         self.assertFalse(page.batch_selection.active)
         self.assertEqual(page.batch_selection.selected_ids, set())

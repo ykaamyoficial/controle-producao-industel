@@ -14,6 +14,12 @@ log = get_logger("action_center")
 # nunca pode virar a acao principal do card.
 UNDO_ACTION_ID = "UNDO_LAST_ACTION"
 
+# Baixa no estoque do Almoxarifado: um id so, e o `status` do descriptor diz o que fazer
+# ("CONFIRM" confirma, "REVERT" desfaz). Nao sao status de proposta - so rotulam a acao.
+STOCK_DEDUCTION_ACTION_ID = "STOCK_DEDUCTION"
+STOCK_DEDUCTION_CONFIRM = "CONFIRM"
+STOCK_DEDUCTION_REVERT = "REVERT"
+
 # Visual-only remaps: keep the label/status/permission logic in backend_adapter.py untouched,
 # only pick a more legible icon glyph for a handful of well-known actions. Keyed by action id,
 # by (id, target status) when the id alone is shared by several unrelated transitions (e.g.
@@ -55,6 +61,8 @@ ACTION_DESCRIPTIONS = {
     # "SEPARADO" is ambiguous between areas (see comment on ICON_OVERRIDES) - scoped to Expedicao
     # so it never shadows Almoxarifado's ("STATUS", "SEPARADO") entry above.
     ("STATUS", "SEPARADO", "EXPEDICAO"): "Registre os itens desta proposta que já foram separados.",
+    (STOCK_DEDUCTION_ACTION_ID, STOCK_DEDUCTION_CONFIRM): "Confirma que o material desta proposta já saiu do estoque.",
+    (STOCK_DEDUCTION_ACTION_ID, STOCK_DEDUCTION_REVERT): "Volta a baixa no estoque para pendente.",
 }
 # Actions that represent moving the proposal's main operation forward - the first (id, status,
 # area) triple present becomes the "primary" card (status/area=None matches anything). If none
@@ -70,6 +78,8 @@ PRIMARY_ACTION_KEYS = (
     ("STATUS", "LIBERADO_PRODUCAO", None),
     ("STATUS", "SEPARACAO_INICIADA", "EXPEDICAO"),
     ("STATUS", "SEPARADO", "EXPEDICAO"),
+    # Almoxarifado: separado (ou entregue) sem baixa, o proximo passo e dar a baixa no estoque.
+    (STOCK_DEDUCTION_ACTION_ID, STOCK_DEDUCTION_CONFIRM, "ALMOXARIFADO"),
 )
 # Statuses that pause/suspend a flow (not destructive) get the discreet "attention" treatment.
 WARNING_STATUSES = ("PARADO",)

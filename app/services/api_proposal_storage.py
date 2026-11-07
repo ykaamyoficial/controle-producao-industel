@@ -358,6 +358,11 @@ class OfficialProposalApiStorage:
         finally:
             client.close()
 
+    def warehouse_row(self, proposal_id: int, proposal_number: str) -> dict[str, Any] | None:
+        """Linha da proposta na lista do Almoxarifado, ou None se ela nao esta na aba (a API nao tem rota por id)."""
+        rows = self.warehouse_rows({"text": proposal_number})
+        return next((row for row in rows if int(row.get("id") or 0) == int(proposal_id)), None)
+
     def warehouse_enter(self, numbers: list[str]) -> list[dict[str, Any]]:
         """Entrada por numero. Um item por numero, na ordem enviada: `number`, `result`, `proposal_id`, `message`."""
         client, proposals, token = self._client()

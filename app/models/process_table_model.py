@@ -59,9 +59,12 @@ AREA_COLUMNS = {
     "ALMOXARIFADO": [
         ("status_icon", ""),
         ("proposta", "Proposta"), ("chat_icon", ""), ("cliente", "Cliente"), ("status_almoxarifado", "Etapa/Status"),
-        ("prazo_entrega", "Prazo"), ("obra_site", "Obra/Site"),
+        ("baixa_estoque_status", "Baixa"), ("prazo_entrega", "Prazo"), ("obra_site", "Obra/Site"),
     ],
 }
+
+# Selo da coluna "Baixa" do Almoxarifado (valores de `baixa_estoque_status` da linha).
+STOCK_DEDUCTION_LABELS = {"BAIXA_PENDENTE": "Baixa pendente", "BAIXA_CONFIRMADA": "Baixa confirmada"}
 
 
 _AREA_SHORT = {
@@ -173,6 +176,8 @@ class ProcessTableModel(QAbstractTableModel):
                 return ""
             if key == "proposta":
                 return format_proposal_label(row.get(key))
+            if key == "baixa_estoque_status":
+                return STOCK_DEDUCTION_LABELS.get(str(row.get(key) or ""), "—")
             return self.service.display_cell(key, row.get(key), row)
         if role == Qt.ToolTipRole:
             if key == "status_icon":

@@ -198,6 +198,10 @@ class StatusBadgeDelegate(QStyledItemDelegate):
         if key == "proposta" and index.data(REMANAGEMENT_MARK_ROLE):
             self._paint_remanagement_proposal(painter, option, index)
             return
+        if key == "baixa_estoque_status" and not index.data(Qt.UserRole + 2):
+            # Sem baixa a dar (Em separacao, Sem parafusos): travessao, nao um selo neutro.
+            super().paint(painter, option, index)
+            return
         if key and ("status" in key or key == "localizacao_atual"):
             text = index.data(Qt.DisplayRole) or "-"
             raw = index.data(Qt.UserRole + 2) or text
@@ -380,6 +384,7 @@ class ModernTable(QTableView):
             "status_galvanizacao": 220,
             "status_expedicao": 215,
             "status_almoxarifado": 215,
+            "baixa_estoque_status": 150,
             "status_fiscal": 170,
             "data_entrada_fiscal": 125,
             "data_ultima_emissao": 130,

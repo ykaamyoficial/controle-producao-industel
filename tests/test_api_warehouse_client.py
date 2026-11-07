@@ -90,6 +90,17 @@ class WarehouseStorageTests(unittest.TestCase):
         storage.warehouse_rows()
         self.assertEqual(storage.warehouse_pending_stock_deduction, 0)
 
+    def test_warehouse_row_finds_one_proposal_by_id_in_the_search_result(self):
+        proposals = MagicMock()
+        proposals.list_warehouse_proposals.return_value = {
+            "items": [_row(id=70, proposal_number="CP70"), _row(id=7, proposal_number="CP7")], "total": 2, "pending_stock_deduction": 1,
+        }
+        storage, _client = self._storage(proposals)
+        row = storage.warehouse_row(7, "CP7")
+        self.assertEqual(row["id"], 7)
+        self.assertEqual(proposals.list_warehouse_proposals.call_args.kwargs["search"], "CP7")
+        self.assertIsNone(storage.warehouse_row(8, "CP7"))
+
     def test_enter_returns_the_result_list_in_order(self):
         results = [
             {"number": "CP1", "result": "ENTROU", "proposal_id": 1, "message": "ok"},

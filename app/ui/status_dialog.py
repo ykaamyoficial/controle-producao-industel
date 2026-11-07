@@ -19,9 +19,9 @@ from app.ui.action_center.handlers.production import (
     RegisterProductionHandler,
 )
 from app.ui.action_center.handlers.undo import UndoLastActionHandler
-from app.ui.action_center.handlers.warehouse import WarehouseStatusHandler
+from app.ui.action_center.handlers.warehouse import WarehouseStatusHandler, WarehouseStockDeductionHandler
 from app.ui.action_center.provider import (
-    CATEGORY_TO_CARD_TYPE, UNDO_ACTION_ID, GalvanizationActionProvider, UndoActionProvider, action_category,
+    CATEGORY_TO_CARD_TYPE, STOCK_DEDUCTION_ACTION_ID, UNDO_ACTION_ID, GalvanizationActionProvider, UndoActionProvider, action_category,
     action_description, action_icon, primary_action_index,
 )
 from app.ui.action_center.proposal_action_center import ProposalActionCenter
@@ -76,6 +76,7 @@ class StatusDialog(ProposalActionCenter):
         registry.register("STATUS", ControlGeneralStatusHandler(), area="CONTROLE GERAL")
         registry.register("ADD_TO_INSPECTION", AddToInspectionHandler(), area="CONTROLE GERAL")
         registry.register("STATUS", WarehouseStatusHandler(), area="ALMOXARIFADO")
+        registry.register(STOCK_DEDUCTION_ACTION_ID, WarehouseStockDeductionHandler(), area="ALMOXARIFADO")
         registry.register("STATUS", ExpeditionStatusHandler(), area="EXPEDICAO")
         registry.register("REGISTER_DELIVERY", RegisterDeliveryHandler())
         # MANAGE_LOAD chega do backend como uma unica acao, mas

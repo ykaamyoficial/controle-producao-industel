@@ -703,8 +703,11 @@ class ProcessPage(QWidget):
             for row in self.batch_selection.selected_entities()
             if row.get("id")
         }
+        proposal_rows = {
+            int(row["id"]): row for row in self.batch_selection.selected_entities() if row.get("id")
+        }
         dialog = BatchProposalActionCenter(
-            self.service, process_ids, self.area or "", self, proposal_labels=proposal_labels
+            self.service, process_ids, self.area or "", self, proposal_labels=proposal_labels, proposal_rows=proposal_rows,
         )
         if dialog.exec() or dialog.changed:
             self._complete_batch_action("Ações em lote aplicadas com sucesso.")

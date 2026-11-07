@@ -1373,6 +1373,8 @@ STATUS_CATEGORY_BY_STATUS = {
     "SEM_PARAFUSOS": "danger",
     "ALMOXARIFADO_ENTREGUE": "final_done",
     "ALMOXARIFADO_ENTREGUE_PARCIAL": "attention",
+    "BAIXA_PENDENTE": "attention",
+    "BAIXA_CONFIRMADA": "done",
     "FALTA_EMITIR_NOTA_FISCAL": "danger",
     "AGUARDANDO_NF": "waiting",
     "CP_EM_PROCESSAMENTO": "progress",

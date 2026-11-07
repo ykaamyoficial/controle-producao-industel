@@ -77,6 +77,49 @@ class ItemRowTests(unittest.TestCase):
         self.assertEqual(summary_text([_item(), _item(item_number="3"), _item(proposal_id=8, proposal_number="CP2")]), "3 itens em 2 propostas")
 
 
+class DeductionColumnTests(QtCase):
+    """Coluna "Baixa" da tabela de propostas do Almoxarifado (selo, sem trocar a identidade visual)."""
+
+    @staticmethod
+    def _model(rows):
+        from app.models.process_table_model import ProcessTableModel
+
+        return ProcessTableModel(FakeWarehouseService(), "ALMOXARIFADO", rows)
+
+    def test_warehouse_table_has_the_baixa_column_and_the_other_areas_do_not(self):
+        from app.models.process_table_model import AREA_COLUMNS
+
+        self.assertIn(("baixa_estoque_status", "Baixa"), AREA_COLUMNS["ALMOXARIFADO"])
+        for area in ("PRODUCAO", "GALVANIZACAO", "EXPEDICAO"):
+            self.assertNotIn("baixa_estoque_status", [key for key, _label in AREA_COLUMNS[area]])
+
+    def test_labels_for_pending_confirmed_and_not_applicable(self):
+        rows = [
+            {"id": 1, "baixa_estoque_status": "BAIXA_PENDENTE"},
+            {"id": 2, "baixa_estoque_status": "BAIXA_CONFIRMADA"},
+            {"id": 3, "baixa_estoque_status": ""},
+        ]
+        model = self._model(rows)
+        column = [key for key, _label in model.columns].index("baixa_estoque_status")
+        self.assertEqual([model.index(row, column).data() for row in range(3)], ["Baixa pendente", "Baixa confirmada", "—"])
+
+    def test_selos_use_status_colors_by_token_and_the_table_paints(self):
+        from app.ui.components.modern_table import ModernTable
+        from app.ui.styles import status_color
+
+        palette = FakeWarehouseService().palette
+        pending, _ = status_color("BAIXA_PENDENTE", palette)
+        done, _ = status_color("BAIXA_CONFIRMADA", palette)
+        neutral, _ = status_color("", palette)
+        self.assertNotEqual(pending, done)
+        self.assertNotIn(pending, (done, neutral))
+        rows = [{"id": 1, "proposta": "CP1", "baixa_estoque_status": "BAIXA_PENDENTE"}, {"id": 2, "proposta": "CP2", "baixa_estoque_status": ""}]
+        table = ModernTable(FakeWarehouseService())
+        table.setModel(self._model(rows))
+        table.resize(1200, 200)
+        self.assertFalse(table.grab().isNull())
+
+
 class ItemsPageTests(QtCase):
     def _page(self, service=None):
         service = service or FakeWarehouseService()

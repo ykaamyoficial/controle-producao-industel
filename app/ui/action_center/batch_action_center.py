@@ -6,8 +6,10 @@ from PySide6.QtWidgets import (
 
 from app.services.app_logging import get_logger
 from app.ui.action_center.descriptor import ActionCategory, ActionDescriptor
+from app.services.api_proposal_storage import STOCK_DEDUCTION_STATUSES
 from app.ui.action_center.provider import (
-    AREA_COLOR_KEYS, CATEGORY_TO_CARD_TYPE, action_category, action_description, action_icon, primary_action_index,
+    AREA_COLOR_KEYS, CATEGORY_TO_CARD_TYPE, STOCK_DEDUCTION_ACTION_ID, STOCK_DEDUCTION_CONFIRM, STOCK_DEDUCTION_REVERT,
+    action_category, action_description, action_icon, primary_action_index,
 )
 from app.ui.action_center.handlers.galvanization import (
     RETURNABLE_LOAD_STATUSES,
@@ -58,6 +60,7 @@ class BatchProposalActionCenter(QDialog):
         parent=None,
         *,
         proposal_labels: dict[int, str] | None = None,
+        proposal_rows: dict[int, dict] | None = None,
         item_rows: list[dict] | None = None,
         item_action_host=None,
     ):
@@ -66,6 +69,8 @@ class BatchProposalActionCenter(QDialog):
         self.process_ids = list(dict.fromkeys(int(value) for value in process_ids if value))
         self.area = area
         self.proposal_labels = proposal_labels or {}
+        # Linhas da tabela por id: o Almoxarifado olha o status e a baixa de cada proposta para decidir os cards de baixa.
+        self.proposal_rows = proposal_rows or {}
         self.item_rows = self._deduplicate_item_rows(item_rows or [])
         self.item_ids = [int(row.get("api_id") or row.get("id")) for row in self.item_rows]
         self.item_action_host = item_action_host
@@ -314,7 +319,42 @@ class BatchProposalActionCenter(QDialog):
             raw.append({"id": "REGISTER_DELIVERY", "label": "Registrar retirada do cliente", "icon": "status", "status": "", "area": self.area})
         for status in statuses:
             raw.append({"id": "STATUS", "label": self.service.action_label(self.area, status), "icon": "status", "status": status, "area": self.area})
+        if self.area == "ALMOXARIFADO":
+            raw.extend(self._stock_deduction_actions())
         return raw
+
+    def _stock_deduction_groups(self) -> tuple[list[int], list[int]]:
+        """(ids a confirmar, ids a desfazer) entre as propostas selecionadas: so onde ha material separado
+        (SEPARADO, entrega parcial, entregue). SEM_PARAFUSOS e EM_SEPARACAO ficam de fora."""
+        confirm: list[int] = []
+        revert: list[int] = []
+        for process_id in self.process_ids:
+            row = self.proposal_rows.get(process_id) or {}
+            if str(row.get("status_almoxarifado") or "").upper() not in STOCK_DEDUCTION_STATUSES:
+                continue
+            (revert if row.get("baixa_estoque") else confirm).append(process_id)
+        return confirm, revert
+
+    def _stock_deduction_actions(self) -> list[dict]:
+        confirm, revert = self._stock_deduction_groups()
+        total = len(self.process_ids)
+        actions: list[dict] = []
+        for ids, status, label, description in (
+            (confirm, STOCK_DEDUCTION_CONFIRM, "Confirmar baixa no estoque", "Confirma a baixa no estoque das propostas selecionadas."),
+            (revert, STOCK_DEDUCTION_REVERT, "Desfazer baixa", "Volta a baixa no estoque das propostas selecionadas para pendente."),
+        ):
+            if ids:
+                actions.append({
+                    "id": STOCK_DEDUCTION_ACTION_ID, "label": label, "icon": "stock", "status": status, "area": self.area,
+                    "description": self._eligible_description(len(ids), total, description), "eligible_ids": ids,
+                })
+        return actions
+
+    @staticmethod
+    def _eligible_description(eligible: int, total: int, description: str) -> str:
+        if eligible == total:
+            return description
+        return f"Disponível para {eligible} de {total} propostas. {description}"
 
     def _production_flow_selection_state(self) -> str:
         defined: list[bool] = []
@@ -483,6 +523,8 @@ class BatchProposalActionCenter(QDialog):
             self._open_manage_load_new()
         elif descriptor.id == "REGISTER_RETURN":
             self._open_register_return()
+        elif descriptor.id == STOCK_DEDUCTION_ACTION_ID:
+            self._apply_stock_deduction(descriptor)
         else:
             log.error("Acao de lote sem rota: id=%s area=%s", descriptor.id, self.area)
             QMessageBox.warning(self, "Ações em lote", "Esta ação não está disponível nesta versão.")
@@ -520,12 +562,13 @@ class BatchProposalActionCenter(QDialog):
         else:
             log.error("Acao de itens sem rota: id=%s", descriptor.id)
 
-    def _confirmation_text(self, label: str) -> str:
-        proposals = [self._proposal_label(process_id) for process_id in self.process_ids[:12]]
+    def _confirmation_text(self, label: str, process_ids: list[int] | None = None) -> str:
+        process_ids = self.process_ids if process_ids is None else process_ids
+        proposals = [self._proposal_label(process_id) for process_id in process_ids[:12]]
         visible = "\n".join(f"- {proposal}" for proposal in proposals)
-        extra = f"\n- ... e mais {len(self.process_ids) - 12}" if len(self.process_ids) > 12 else ""
+        extra = f"\n- ... e mais {len(process_ids) - 12}" if len(process_ids) > 12 else ""
         suffix = f"\n\nPropostas afetadas:\n{visible}{extra}" if visible else ""
-        return f"Aplicar {label} em {len(self.process_ids)} proposta(s)?{suffix}"
+        return f"Aplicar {label} em {len(process_ids)} proposta(s)?{suffix}"
 
     def _validated_process_ids(self, action_id: str) -> list[int] | None:
         """Revalida no estado oficial atual a selecao acumulada (a mesma
@@ -575,6 +618,28 @@ class BatchProposalActionCenter(QDialog):
             except Exception as exc:
                 failures.append(f"{self._proposal_label(process_id)}: {exc}")
         return changed, failures
+
+    def _apply_stock_deduction(self, descriptor: ActionDescriptor):
+        ids = [int(value) for value in descriptor.raw.get("eligible_ids") or []]
+        if not ids:
+            return
+        deducted = descriptor.status == STOCK_DEDUCTION_CONFIRM
+        if QMessageBox.question(self, "Ações em lote", self._confirmation_text(descriptor.label, ids)) != QMessageBox.Yes:
+            return
+        self._run_background_action(lambda: self._set_stock_deduction_for_all(ids, deducted))
+
+    def _set_stock_deduction_for_all(self, process_ids: list[int], deducted: bool) -> tuple[int, list[str], list[str]]:
+        """Uma chamada por proposta: a falha de uma (ex.: versao conflitante) nao derruba as outras.
+        Devolve (quantas deram certo, falhas "numero: motivo", numeros que deram certo)."""
+        done: list[str] = []
+        failures: list[str] = []
+        for process_id in process_ids:
+            try:
+                self.service.warehouse_set_stock_deduction(process_id, None, deducted)
+                done.append(self._proposal_label(process_id))
+            except Exception as exc:
+                failures.append(f"{self._proposal_label(process_id)}: {exc}")
+        return len(done), failures, done
 
     def _open_register_production(self):
         if self._validated_process_ids("STATUS") is None:
@@ -665,11 +730,12 @@ class BatchProposalActionCenter(QDialog):
 
     def _on_action_success(self, result):
         self._set_running(False)
-        changed, failures = result
+        changed, failures, *extra = result
         if failures:
+            done = f": {', '.join(extra[0][:12])}" if extra and extra[0] else ""
             QMessageBox.warning(
                 self, "Acoes em lote",
-                f"{changed} proposta(s) alterada(s).\n\nNão alteradas:\n" + "\n".join(failures[:12]),
+                f"{changed} proposta(s) alterada(s){done}.\n\nNão alteradas:\n" + "\n".join(failures[:12]),
             )
         self.changed = True
         self.accept()

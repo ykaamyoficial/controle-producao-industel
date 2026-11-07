@@ -110,11 +110,17 @@ class FakeWarehouseService(NoUndoActionMixin):
     (next_status_options()/process_actions() in backend_adapter.py) closely
     enough to exercise WarehouseStatusHandler without a real API/DB."""
 
-    def __init__(self, status: str = "", palette_name: str = "claro", admin: bool = False, can_edit: bool = True):
+    def __init__(
+        self, status: str = "", palette_name: str = "claro", admin: bool = False, can_edit: bool = True,
+        stock_deducted: bool | None = None, deduction_error: Exception | None = None,
+    ):
         self.status = status
         self.palette = OFFICIAL_COLOR_PALETTES[palette_name]
         self._admin = admin
         self._can_edit = can_edit
+        # None = a baixa nao entra no cenario (testes antigos); True/False = estado da baixa da proposta.
+        self.stock_deducted = stock_deducted
+        self.deduction_error = deduction_error
         self.calls: list[tuple] = []
 
     def get_process_dict(self, process_id):
@@ -122,6 +128,13 @@ class FakeWarehouseService(NoUndoActionMixin):
 
     def get_process_area_dict(self, process_id, area):
         return self.get_process_dict(process_id)
+
+    def warehouse_set_stock_deduction(self, proposal_id, version, deducted):
+        self.calls.append(("warehouse_set_stock_deduction", proposal_id, version, deducted))
+        if self.deduction_error is not None:
+            raise self.deduction_error
+        self.stock_deducted = deducted
+        return {}
 
     def current_location(self, process):
         return ("ALMOXARIFADO", "Almoxarifado", self.status)
@@ -145,6 +158,12 @@ class FakeWarehouseService(NoUndoActionMixin):
             label = labels.get(target, target.replace("_", " ").title())
             icon = _WAREHOUSE_ICONS.get(target, "status")
             actions.append({"id": "STATUS", "label": label, "icon": icon, "status": target, "area": "ALMOXARIFADO"})
+        # Espelha BackendService._stock_deduction_actions: so onde ha material separado.
+        if self.stock_deducted is not None and self.status in ("SEPARADO", "ALMOXARIFADO_ENTREGUE_PARCIAL", "ALMOXARIFADO_ENTREGUE"):
+            if self.stock_deducted:
+                actions.append({"id": "STOCK_DEDUCTION", "label": "Desfazer baixa", "icon": "stock", "status": "REVERT", "area": "ALMOXARIFADO"})
+            else:
+                actions.append({"id": "STOCK_DEDUCTION", "label": "Confirmar baixa no estoque", "icon": "stock", "status": "CONFIRM", "area": "ALMOXARIFADO"})
         return actions
 
     def update_status(self, process_id, area, status, observation="", item_ids=None, produced_weight=None):
@@ -755,6 +774,154 @@ class WarehouseActionCenterTests(unittest.TestCase):
         self.assertNotEqual(light.service.palette["accent"], dark.service.palette["accent"])
         self.assertTrue(light._action_buttons)
         self.assertTrue(dark._action_buttons)
+
+
+class WarehouseStockDeductionActionTests(unittest.TestCase):
+    """Baixa no estoque (Fase 15): "Confirmar baixa no estoque" e a acao primaria de SEPARADO, entrega parcial e
+    entregue sem baixa; "Desfazer baixa" e normal; nunca em EM_SEPARACAO/SEM_PARAFUSOS."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication([])
+
+    @staticmethod
+    def _stock_actions(dialog):
+        return [a for a in dialog.context.available_actions if a.id == "STOCK_DEDUCTION"]
+
+    def test_confirm_is_the_primary_action_when_there_is_material_without_deduction(self):
+        for status in ("SEPARADO", "ALMOXARIFADO_ENTREGUE_PARCIAL", "ALMOXARIFADO_ENTREGUE"):
+            with self.subTest(status=status):
+                dialog = StatusDialog(FakeWarehouseService(status, stock_deducted=False), 1, "ALMOXARIFADO")
+                (action,) = self._stock_actions(dialog)
+                self.assertEqual((action.label, action.status, action.category), ("Confirmar baixa no estoque", "CONFIRM", ActionCategory.PRIMARY))
+                primaries = [a for a in dialog.context.available_actions if a.category == ActionCategory.PRIMARY]
+                self.assertEqual(primaries, [action])
+
+    def test_revert_is_a_normal_action_when_already_deducted(self):
+        dialog = StatusDialog(FakeWarehouseService("SEPARADO", stock_deducted=True), 1, "ALMOXARIFADO")
+        (action,) = self._stock_actions(dialog)
+        self.assertEqual((action.label, action.status, action.category), ("Desfazer baixa", "REVERT", ActionCategory.NORMAL))
+        # Com a baixa feita nenhuma acao vira primaria: nada e forcado.
+        self.assertFalse([a for a in dialog.context.available_actions if a.category == ActionCategory.PRIMARY])
+
+    def test_no_deduction_card_without_separated_material(self):
+        for status in ("EM_SEPARACAO", "SEM_PARAFUSOS", ""):
+            with self.subTest(status=status):
+                dialog = StatusDialog(FakeWarehouseService(status, stock_deducted=False), 1, "ALMOXARIFADO")
+                self.assertEqual(self._stock_actions(dialog), [])
+
+    def test_every_deduction_descriptor_has_a_description_and_a_registered_handler(self):
+        registry = StatusDialog._build_registry()
+        for deducted in (False, True):
+            dialog = StatusDialog(FakeWarehouseService("SEPARADO", stock_deducted=deducted), 1, "ALMOXARIFADO")
+            (action,) = self._stock_actions(dialog)
+            self.assertTrue(action.description)
+            self.assertIsNotNone(registry.resolve(action.id, action.area))
+
+    def test_confirm_calls_the_service_with_the_current_version_and_flips_the_card_in_place(self):
+        service = FakeWarehouseService("SEPARADO", stock_deducted=False)
+        dialog = StatusDialog(service, 5, "ALMOXARIFADO")
+        (action,) = self._stock_actions(dialog)
+        with patch("app.ui.action_center.proposal_action_center.start_worker", side_effect=_synchronous_start_worker):
+            dialog.run_action(action)
+        # version None: o servico usa a versao atual da proposta (como update_status).
+        self.assertEqual(service.calls, [("warehouse_set_stock_deduction", 5, None, True)])
+        (after,) = self._stock_actions(dialog)
+        self.assertEqual(after.status, "REVERT")
+        self.assertNotEqual(dialog.result(), 1)  # a Central segue aberta
+        dialog.reject()
+        self.assertEqual(dialog.result(), 1)  # e fechar avisa a pagina que houve mudanca
+
+    def test_revert_calls_the_service_with_deducted_false(self):
+        service = FakeWarehouseService("SEPARADO", stock_deducted=True)
+        dialog = StatusDialog(service, 5, "ALMOXARIFADO")
+        (action,) = self._stock_actions(dialog)
+        with patch("app.ui.action_center.proposal_action_center.start_worker", side_effect=_synchronous_start_worker):
+            dialog.run_action(action)
+        self.assertEqual(service.calls, [("warehouse_set_stock_deduction", 5, None, False)])
+        self.assertEqual(self._stock_actions(dialog)[0].status, "CONFIRM")
+
+    def test_api_error_is_shown_and_nothing_changes(self):
+        service = FakeWarehouseService(
+            "SEPARADO", stock_deducted=False, deduction_error=RuntimeError("Esta proposta foi alterada por outro usuario."),
+        )
+        dialog = StatusDialog(service, 5, "ALMOXARIFADO")
+        (action,) = self._stock_actions(dialog)
+        with patch("app.ui.action_center.proposal_action_center.start_worker", side_effect=_synchronous_start_worker), patch(
+            "app.ui.action_center.proposal_action_center.QMessageBox.warning"
+        ) as warning:
+            dialog.run_action(action)
+        warning.assert_called_once()
+        self.assertIn("outro usuario", warning.call_args.args[2])
+        self.assertEqual(self._stock_actions(dialog)[0].status, "CONFIRM")
+
+    def test_primary_key_is_scoped_to_the_warehouse(self):
+        from app.ui.action_center.provider import PRIMARY_ACTION_KEYS, primary_action_index
+
+        self.assertIn(("STOCK_DEDUCTION", "CONFIRM", "ALMOXARIFADO"), PRIMARY_ACTION_KEYS)
+        actions = [
+            {"id": "STATUS", "label": "x", "icon": "status", "status": "ALMOXARIFADO_ENTREGUE", "area": "ALMOXARIFADO"},
+            {"id": "STOCK_DEDUCTION", "label": "y", "icon": "stock", "status": "CONFIRM", "area": "ALMOXARIFADO"},
+        ]
+        self.assertEqual(primary_action_index(actions), 1)
+        self.assertEqual(primary_action_index([{**actions[1], "area": "EXPEDICAO"}]), -1)
+
+
+class BackendStockDeductionActionTests(unittest.TestCase):
+    """BackendService.process_actions (ALMOXARIFADO) decide o card de baixa pelo estado vindo da API."""
+
+    @staticmethod
+    def _service(status, row, *, row_error=None):
+        from app.services.backend_adapter import BackendService
+
+        service = BackendService.__new__(BackendService)
+        service.user = {"id": 1}
+        service.can_edit = lambda area: True
+        storage = MagicMock()
+        storage.get_process.return_value = {"id": 7, "proposta": "CP00007", "status_almoxarifado": status, "api_version": 3}
+        if row_error is not None:
+            storage.warehouse_row.side_effect = row_error
+        else:
+            storage.warehouse_row.return_value = row
+        service.official_proposal_storage = storage
+        return service, storage
+
+    @staticmethod
+    def _stock(actions):
+        return [(a["label"], a["status"]) for a in actions if a["id"] == "STOCK_DEDUCTION"]
+
+    def test_pending_deduction_offers_confirm_and_done_offers_revert(self):
+        service, storage = self._service("SEPARADO", {"id": 7, "baixa_estoque": False})
+        self.assertEqual(self._stock(service.process_actions(7, "ALMOXARIFADO")), [("Confirmar baixa no estoque", "CONFIRM")])
+        storage.warehouse_row.assert_called_with(7, "CP00007")
+        service, _ = self._service("ALMOXARIFADO_ENTREGUE_PARCIAL", {"id": 7, "baixa_estoque": True})
+        self.assertEqual(self._stock(service.process_actions(7, "ALMOXARIFADO")), [("Desfazer baixa", "REVERT")])
+
+    def test_never_offered_without_separated_material_and_the_api_is_not_even_asked(self):
+        for status in ("EM_SEPARACAO", "SEM_PARAFUSOS", "AGUARDANDO_CONFIRMACAO", ""):
+            with self.subTest(status=status):
+                service, storage = self._service(status, {"id": 7, "baixa_estoque": False})
+                self.assertEqual(self._stock(service.process_actions(7, "ALMOXARIFADO")), [])
+                storage.warehouse_row.assert_not_called()
+
+    def test_delivered_proposal_missing_from_the_list_already_has_the_deduction(self):
+        # Entregue com baixa pendente fica na lista; se saiu dela, a baixa foi confirmada (e pode ser desfeita).
+        service, _ = self._service("ALMOXARIFADO_ENTREGUE", None)
+        self.assertEqual(self._stock(service.process_actions(7, "ALMOXARIFADO")), [("Desfazer baixa", "REVERT")])
+        # SEPARADO fora da lista (cancelada/parcial): nenhuma acao de baixa.
+        service, _ = self._service("SEPARADO", None)
+        self.assertEqual(self._stock(service.process_actions(7, "ALMOXARIFADO")), [])
+
+    def test_unreachable_api_leaves_the_status_actions_intact(self):
+        service, _ = self._service("SEPARADO", None, row_error=RuntimeError("fora do ar"))
+        actions = service.process_actions(7, "ALMOXARIFADO")
+        self.assertEqual(self._stock(actions), [])
+        self.assertTrue([a for a in actions if a["id"] == "STATUS"])
+
+    def test_without_edit_permission_there_is_no_action_at_all(self):
+        service, _ = self._service("SEPARADO", {"id": 7, "baixa_estoque": False})
+        service.can_edit = lambda area: False
+        self.assertEqual(service.process_actions(7, "ALMOXARIFADO"), [])
 
 
 class ExpeditionActionCenterTests(unittest.TestCase):

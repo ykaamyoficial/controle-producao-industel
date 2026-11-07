@@ -8,7 +8,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 from urllib.parse import urlparse, urlunparse
 from app.integrations.api.exceptions import ApiBusinessError
-from app.services.api_proposal_storage import OfficialProposalApiStorage, api_permission_level, user_message_for_api_error
+from app.services.api_proposal_storage import STOCK_DEDUCTION_STATUSES, OfficialProposalApiStorage, api_permission_level, user_message_for_api_error
 from app.services.api_reports import ApiExecutiveDashboardService, ApiOperationalReportsService
 from app.services.remanagement_badges import decorate_rows as decorate_remanagement_rows, index_badges as index_remanagement_badges, situation_label
 from app.services.status_sorting import sort_fiscal_rows, sort_process_rows
@@ -2349,8 +2349,32 @@ class BackendService:
             for status in options:
                 label, icon = labels.get(status, (self.area_status_label(area, status), 'status'))
                 actions.append({'id': 'STATUS', 'label': label, 'icon': icon, 'status': status, 'area': 'ALMOXARIFADO'})
+            actions.extend(self._stock_deduction_actions(process_id, process, current_status))
             return actions
         return []
+
+    def _stock_deduction_actions(self, process_id: int, process: dict[str, Any], status: str) -> list[dict[str, str]]:
+        """"Confirmar baixa no estoque" (ou "Desfazer baixa") so onde ha material separado: SEPARADO, entrega
+        parcial e entregue. Nunca em EM_SEPARACAO nem SEM_PARAFUSOS. O estado da baixa vem sempre da API (a
+        linha da proposta na lista do Almoxarifado), nunca de uma linha antiga da tela."""
+        if status not in STOCK_DEDUCTION_STATUSES:
+            return []
+        try:
+            row = self.official_proposal_storage.warehouse_row(process_id, process.get('proposta') or '')
+        except Exception:
+            log.warning('Estado da baixa no estoque indisponivel: proposal_id=%s', process_id, exc_info=True)
+            return []
+        if row is None:
+            # Entregue com baixa pendente fica na lista; se nao esta la, a baixa ja foi confirmada.
+            # Nos demais status a proposta sempre aparece, entao a ausencia e cancelada/parcial: sem acao.
+            if status != 'ALMOXARIFADO_ENTREGUE':
+                return []
+            deducted = True
+        else:
+            deducted = bool(row.get('baixa_estoque'))
+        if deducted:
+            return [{'id': 'STOCK_DEDUCTION', 'label': 'Desfazer baixa', 'icon': 'stock', 'status': 'REVERT', 'area': 'ALMOXARIFADO'}]
+        return [{'id': 'STOCK_DEDUCTION', 'label': 'Confirmar baixa no estoque', 'icon': 'stock', 'status': 'CONFIRM', 'area': 'ALMOXARIFADO'}]
 
     def action_label(self, area: str, status: str) -> str:
         if area == 'ALMOXARIFADO' and status == 'EM_SEPARACAO':
