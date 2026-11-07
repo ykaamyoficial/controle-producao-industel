@@ -13,6 +13,7 @@ from app.ui.format_utils import format_proposal_label
 from app.ui.action_center.batch_action_center import BatchProposalActionCenter
 from app.ui.background_worker import start_worker
 from app.ui.refresh_coordinator import RefreshCoordinator
+from app.ui.components.count_pill import CountPill
 from app.ui.components.empty_state import EmptyState
 from app.ui.components.area_identity import area_subtitle, style_area_title
 from app.ui.components.modern_button import ModernButton
@@ -196,7 +197,17 @@ class ProcessPage(QWidget):
         subtitle.setObjectName("FilterSubtitle")
         title_col = QVBoxLayout()
         title_col.setSpacing(1)
-        title_col.addWidget(title)
+        # Almoxarifado: selo discreto ao lado do titulo com as baixas no estoque pendentes (esconde com zero).
+        self.pending_badge = CountPill(self.service.palette) if self.area == "ALMOXARIFADO" else None
+        if self.pending_badge is not None:
+            title_row = QHBoxLayout()
+            title_row.setSpacing(8)
+            title_row.addWidget(title)
+            title_row.addWidget(self.pending_badge)
+            title_row.addStretch()
+            title_col.addLayout(title_row)
+        else:
+            title_col.addWidget(title)
         title_col.addWidget(subtitle)
 
         proposal_actions = QHBoxLayout()
@@ -528,6 +539,17 @@ class ProcessPage(QWidget):
         if total is not None:
             self._update_pager(total)
         self._sync_batch_header()
+        self._update_pending_badge()
+
+    def _update_pending_badge(self):
+        if self.pending_badge is None:
+            return
+        try:
+            count = int(self.service.warehouse_pending_count())
+        except Exception:
+            return  # servico sem contador: mantem o ultimo valor
+        noun = "proposta aguardando" if count == 1 else "propostas aguardando"
+        self.pending_badge.set_count(count, f"{count} {noun} baixa no estoque")
 
     def _refresh_error(self, exc):
         self._set_loading(False)

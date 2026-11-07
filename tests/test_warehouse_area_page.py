@@ -3,13 +3,14 @@ from __future__ import annotations
 import os
 import unittest
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication, QStackedWidget, QWidget
 
 from app.models.item_table_model import ItemTableModel
+from app.ui.components.count_badge import format_count_badge
 from app.services.api_proposal_storage import _api_warehouse_item_row_to_process_item
 from app.ui import warehouse_items_page as page_module
 from app.ui.main_window import MainWindow
@@ -118,6 +119,110 @@ class DeductionColumnTests(QtCase):
         table.setModel(self._model(rows))
         table.resize(1200, 200)
         self.assertFalse(table.grab().isNull())
+
+
+class PendingCounterTests(QtCase):
+    """Selo ao lado do titulo "Almoxarifado": baixas pendentes, pintado em paintEvent (nunca via setText)."""
+
+    def _page(self, area="ALMOXARIFADO"):
+        service = FakeWarehouseService()
+        page = ProcessPage(service, area, area.title())
+        page._refresh_coordinator = RefreshCoordinator(page, start_worker=_sync_worker)
+        self.addCleanup(page.deleteLater)
+        return page, service
+
+    @staticmethod
+    def _text(page):
+        return format_count_badge(page.pending_badge._badge_count)
+
+    def test_zero_hides_the_badge_and_n_shows_it_with_the_tooltip(self):
+        page, service = self._page()
+        page.show()
+        self.addCleanup(page.close)
+        page.refresh()
+        self.assertTrue(page.pending_badge.isHidden())
+        self.assertEqual(self._text(page), "")
+        service.pending = 3
+        page.refresh()
+        self.assertFalse(page.pending_badge.isHidden())
+        self.assertEqual(self._text(page), "3")
+        self.assertEqual(page.pending_badge.toolTip(), "3 propostas aguardando baixa no estoque")
+        service.pending = 1
+        page.refresh()
+        self.assertEqual(page.pending_badge.toolTip(), "1 proposta aguardando baixa no estoque")
+
+    def test_over_99_shows_99_plus(self):
+        page, service = self._page()
+        service.pending = 150
+        page.refresh()
+        self.assertEqual(self._text(page), "99+")
+
+    def test_the_number_is_painted_not_set_as_text(self):
+        from PySide6.QtWidgets import QLabel
+
+        page, service = self._page()
+        service.pending = 7
+        page.refresh()
+        badge = page.pending_badge
+        self.assertNotIsInstance(badge, QLabel)
+        self.assertFalse(hasattr(badge, "text"))
+        badge.resize(badge.sizeHint())
+        image = badge.grab().toImage()
+        self.assertFalse(image.isNull())
+        # Pintado: o selo tem pixels de duas cores (fundo e numero), nao e um bloco liso.
+        colors = {image.pixelColor(x, y).rgba() for x in range(image.width()) for y in range(image.height())}
+        self.assertGreater(len(colors), 2)
+
+    def test_the_badge_does_not_resize_the_title_row_when_it_shows_and_hides(self):
+        page, service = self._page()
+        page.show()
+        self.addCleanup(page.close)
+        page.refresh()
+        title = page.findChild(page_module.QLabel, "FilterTitle")
+        width_without = title.width()
+        service.pending = 12
+        page.refresh()
+        self.assertEqual(title.width(), width_without)
+
+    def test_updates_after_a_deduction_when_the_page_refreshes(self):
+        page, service = self._page()
+        service.pending = 2
+        page.refresh()
+        self.assertEqual(self._text(page), "2")
+        dialog = MagicMock()
+        dialog.exec.return_value = True
+        dialog.success_message = "ok"
+
+        def confirm_one(*_args, **_kwargs):
+            service.pending = 1  # a baixa foi dada: a API passa a contar uma a menos
+            return dialog
+
+        with patch("app.ui.process_page.open_proposal_action_center", side_effect=confirm_one):
+            page.change_status_for_id(5)
+        self.assertEqual(self._text(page), "1")
+
+    def test_service_without_a_counter_keeps_the_last_value_and_does_not_break(self):
+        page, service = self._page()
+        service.pending = 4
+        page.refresh()
+        del FakeWarehouseService.warehouse_pending_count
+        self.addCleanup(setattr, FakeWarehouseService, "warehouse_pending_count", lambda self: self.pending)
+        page.refresh()
+        self.assertEqual(self._text(page), "4")
+
+    def test_only_the_warehouse_page_has_the_badge(self):
+        for area in ("PRODUCAO", "EXPEDICAO", "CONTROLE GERAL"):
+            page, _ = self._page(area)
+            self.assertIsNone(page.pending_badge)
+
+    def test_area_page_shows_the_badge_on_the_proposals_tab(self):
+        service = FakeWarehouseService()
+        service.pending = 9
+        page = WarehouseAreaPage(service)
+        self.addCleanup(page.deleteLater)
+        page.proposals_page._refresh_coordinator = RefreshCoordinator(page.proposals_page, start_worker=_sync_worker)
+        page.refresh()
+        self.assertEqual(format_count_badge(page.proposals_page.pending_badge._badge_count), "9")
 
 
 class ItemsPageTests(QtCase):
