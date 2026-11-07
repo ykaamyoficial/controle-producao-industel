@@ -9,7 +9,7 @@ Decisões fechadas:
 
 - Quem pode: o **autor** da ação **ou** um superusuário, sempre com a **permissão da ação
   original**. Sem permissão nova e **sem migration**.
-- Só a **última** ação (pilha, LIFO por `request_id`). Um grupo que já contém `ACTION_UNDONE`
+- Só a **última** ação (pilha, LIFO por `request_id`), **por pista**: Almoxarifado (`WAREHOUSE_STATUS_CHANGED`) e Fiscal (eventos `FISCAL_*` / tabela fiscal) não seguem o fluxo geral até a expedição, então cada um tem a sua pilha (`GERAL`, `ALMOXARIFADO`, `FISCAL`). Uma ação de uma pista nunca é a "última" de outra. `GET .../undo/candidate?lane=` (default `GERAL`); o `POST` valida a pilha da pista da ação-alvo. O Desktop passa a pista pelo `context.area` da Central de Ações. Um grupo que já contém `ACTION_UNDONE`
   nunca é candidato.
 - Cancelar proposta fica fora do desfazer.
 - Desfazer a liberação **não avisa o Almox+**; a conciliação horária acerta o estado.

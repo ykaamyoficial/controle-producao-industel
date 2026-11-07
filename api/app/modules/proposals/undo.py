@@ -4,6 +4,8 @@ Regras de produto (aprovadas pelo Henrique):
 
 * so a ultima acao da proposta, em pilha: o grupo de eventos de um mesmo ``request_id`` e uma
   "acao"; grupos ja desfeitos e grupos que sao um proprio ``ACTION_UNDONE`` nao entram na pilha;
+* Almoxarifado e Fiscal nao seguem o fluxo geral do contrato ate a expedicao: cada um tem a sua
+  propria pilha ("pista"), e uma acao de uma pista nunca e a "ultima" de outra;
 * quem desfaz: o autor da acao ou um superusuario, sempre com a permissao da acao original;
 * sem migration e sem permissao nova: o desfazer e um evento ``ACTION_UNDONE`` em ``proposal_events``
   que aponta para o ``request_id`` desfeito (``metadata.undone_request_id``);
@@ -57,6 +59,10 @@ from api.app.modules.proposals.schemas import (
 from api.app.shared.formatting import format_quantity
 
 ACTION_UNDONE = "ACTION_UNDONE"
+
+LANE_GENERAL = "GERAL"
+LANE_WAREHOUSE = "ALMOXARIFADO"
+LANE_FISCAL = "FISCAL"
 
 # Campos de estado da proposta que as acoes v1 mexem; gravados em ``metadata.previous_state`` do evento
 # original para que o inverso restaure o valor exato (e nao um valor deduzido).
@@ -151,6 +157,15 @@ class ActionGroup:
         return found[0] if found else None
 
 
+def lane_of(group: ActionGroup) -> str:
+    """Pista da acao: Almoxarifado e Fiscal ficam fora da pilha do fluxo geral (producao, expedicao...)."""
+    if "WAREHOUSE_STATUS_CHANGED" in group.types:
+        return LANE_WAREHOUSE
+    if any(event.source == "fiscal" or event.event_type.startswith("FISCAL_") for event in group.events):
+        return LANE_FISCAL
+    return LANE_GENERAL
+
+
 def build_groups(events: list[EventRef]) -> list[ActionGroup]:
     """Agrupa por request_id (evento sem request_id vira um grupo proprio) e marca os ja desfeitos."""
     by_key: dict[str, list[EventRef]] = defaultdict(list)
@@ -167,9 +182,9 @@ def build_groups(events: list[EventRef]) -> list[ActionGroup]:
     ]
 
 
-def pick_latest(groups: list[ActionGroup]) -> ActionGroup | None:
-    """Topo da pilha: o grupo mais recente que nao foi desfeito nem e, ele mesmo, um desfazer."""
-    live = [group for group in groups if not group.undone and not group.is_undo]
+def pick_latest(groups: list[ActionGroup], lane: str = LANE_GENERAL) -> ActionGroup | None:
+    """Topo da pilha da pista: o grupo mais recente que nao foi desfeito nem e, ele mesmo, um desfazer."""
+    live = [group for group in groups if not group.undone and not group.is_undo and lane_of(group) == lane]
     return max(live, key=lambda group: group.sort_key) if live else None
 
 
@@ -606,12 +621,12 @@ def _analyze(proposal: Any, group: ActionGroup, handler: UndoHandler | None) -> 
     return handler.evaluate(UndoContext(proposal=proposal, group=group, exp_items=exp_items))
 
 
-async def get_candidate(session: AsyncSession, proposal_id: int, actor: User) -> ProposalUndoCandidateResponse:
+async def get_candidate(session: AsyncSession, proposal_id: int, actor: User, lane: str = LANE_GENERAL) -> ProposalUndoCandidateResponse:
     from api.app.modules.proposals import service
 
     proposal = await _load_proposal(session, proposal_id, for_update=False)
-    group = pick_latest(build_groups(await load_events(session, proposal_id)))
-    response = ProposalUndoCandidateResponse(proposal_id=proposal.id, proposal_version=proposal.version)
+    group = pick_latest(build_groups(await load_events(session, proposal_id)), lane)
+    response = ProposalUndoCandidateResponse(proposal_id=proposal.id, proposal_version=proposal.version, lane=lane)
     if group is None:
         response.cannot_undo_reason = "Nao ha nenhuma acao para desfazer nesta proposta."
         return response
@@ -691,7 +706,7 @@ async def undo_action(
             raise ApiError(error_codes.UNDO_ALREADY_UNDONE, "Esta acao ja foi desfeita.", status_code=409)
         if target.is_undo:
             raise ApiError(error_codes.UNDO_NOT_SUPPORTED, "Um desfazer nao pode ser desfeito.", status_code=409)
-        latest = pick_latest(groups)
+        latest = pick_latest(groups, lane_of(target))
         if latest is not target:
             raise ApiError(
                 error_codes.UNDO_NOT_LATEST,

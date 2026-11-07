@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+from typing import Literal
 
 from fastapi import APIRouter, Depends, Query, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -629,10 +630,15 @@ async def get_proposal_activities(
 
 
 @router.get("/proposals/{proposal_id}/undo/candidate", response_model=ProposalUndoCandidateResponse)
-async def get_undo_candidate(proposal_id: int, session: AsyncSession = Depends(get_db_session), actor: User = Depends(get_current_active_user)):
-    """Ultima acao desfazivel da proposta. Gate: so autenticado; a permissao da acao e a regra autor/superusuario
+async def get_undo_candidate(
+    proposal_id: int,
+    lane: Literal["GERAL", "ALMOXARIFADO", "FISCAL"] = Query("GERAL"),
+    session: AsyncSession = Depends(get_db_session),
+    actor: User = Depends(get_current_active_user),
+):
+    """Ultima acao desfazivel da proposta na pista pedida (Almoxarifado e Fiscal nao entram na pilha do fluxo geral). Gate: so autenticado; a permissao da acao e a regra autor/superusuario
     entram em `can_undo` (nunca em 403), para a interface decidir se mostra o botao."""
-    return await undo.get_candidate(session, proposal_id, actor)
+    return await undo.get_candidate(session, proposal_id, actor, lane)
 
 
 @router.post("/proposals/{proposal_id}/undo", response_model=ProposalDetail)

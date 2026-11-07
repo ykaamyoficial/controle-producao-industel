@@ -2014,6 +2014,7 @@ class ProposalUndoAction(BaseModel):
 class ProposalUndoCandidateResponse(BaseModel):
     proposal_id: int
     proposal_version: int
+    lane: Literal["GERAL", "ALMOXARIFADO", "FISCAL"] = "GERAL"
     action: ProposalUndoAction | None = None
     handler: str | None = None
     undo_class: Literal["A", "B", "C"] | None = None

@@ -112,6 +112,26 @@ def test_desfazer_em_cadeia_chega_ate_a_criacao_e_acaba():
     assert undo.pick_latest(undo.build_groups(events)).request_id == "r1"
 
 
+def test_almoxarifado_e_fiscal_tem_pilha_propria():
+    events = [
+        ev("PRODUCTION_STARTED", "r-prod", minutes=0),
+        ev("WAREHOUSE_STATUS_CHANGED", "r-almox", minutes=1),
+        ev("FISCAL_INVOICE_REGISTERED", "r-fiscal", minutes=2, source="fiscal"),
+    ]
+    groups = undo.build_groups(events)
+    # a ultima acao do fluxo geral ignora Almox e Fiscal, mesmo sendo mais antiga
+    assert undo.pick_latest(groups).request_id == "r-prod"
+    assert undo.pick_latest(groups, undo.LANE_GENERAL).request_id == "r-prod"
+    # e Almox/Fiscal nao enxergam o fluxo geral nem um ao outro
+    assert undo.pick_latest(groups, undo.LANE_WAREHOUSE).request_id == "r-almox"
+    assert undo.pick_latest(groups, undo.LANE_FISCAL).request_id == "r-fiscal"
+
+
+def test_pista_sem_acoes_nao_tem_candidato():
+    groups = undo.build_groups([ev("PRODUCTION_STARTED", "r1"), ev("WAREHOUSE_STATUS_CHANGED", "r2", minutes=1)])
+    assert undo.pick_latest(groups, undo.LANE_FISCAL) is None
+
+
 def test_evento_sem_request_id_e_um_grupo_proprio():
     events = [ev("PROPOSAL_STATUS_CHANGED", None, minutes=0), ev("PRODUCTION_STARTED", None, minutes=1)]
     groups = undo.build_groups(events)

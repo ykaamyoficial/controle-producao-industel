@@ -192,8 +192,8 @@ class ProposalUndoIntegrationTests(unittest.TestCase):
         self.assertEqual(done.json()["current_area"], "EXPEDICAO")
         return pid
 
-    def _candidate(self, pid: int, headers=None) -> dict:
-        response = self._get(f"/proposals/{pid}/undo/candidate", headers)
+    def _candidate(self, pid: int, headers=None, lane: str | None = None) -> dict:
+        response = self._get(f"/proposals/{pid}/undo/candidate" + (f"?lane={lane}" if lane else ""), headers)
         self.assertEqual(response.status_code, 200, response.text)
         return response.json()
 
@@ -256,9 +256,24 @@ class ProposalUndoIntegrationTests(unittest.TestCase):
                 self.assertEqual((candidate["handler"], candidate["undo_class"], candidate["can_undo"]), (handler, undo_class, True))
         warehouse = self._post(f"/warehouse/proposals/{pid}/status", {"version": self._proposal(pid)["version"], "status": "EM_SEPARACAO", "observation": "ok"})
         self.assertEqual(warehouse.status_code, 200, warehouse.text)
-        candidate = self._candidate(pid)
-        self.assertEqual((candidate["handler"], candidate["undo_class"]), ("WAREHOUSE_STATUS", "A"))
+        # Almoxarifado tem pilha propria: nao vira a "ultima acao" do fluxo geral (continua sendo a retomada).
+        self.assertEqual(self._candidate(pid)["handler"], "RESUME_PRODUCTION")
+        candidate = self._candidate(pid, lane="ALMOXARIFADO")
+        self.assertEqual((candidate["handler"], candidate["undo_class"], candidate["lane"]), ("WAREHOUSE_STATUS", "A", "ALMOXARIFADO"))
         self.assertEqual(candidate["changes"][0]["restored_value"], "NAO_DEFINIDO")
+        self.assertIsNone(self._candidate(pid, lane="FISCAL")["action"])
+
+    def test_acao_do_fluxo_geral_nao_trava_o_desfazer_do_almoxarifado(self):
+        pid = self._create("UNDO-004")
+        self._release(pid)
+        self.assertEqual(self._post(f"/warehouse/proposals/{pid}/status", {"version": self._proposal(pid)["version"], "status": "EM_SEPARACAO"}, rid="rid-wh").status_code, 200)
+        self.assertEqual(self._production(pid, "start", rid="rid-start").status_code, 200)
+        # a producao veio depois, mas o Almox desfaz o seu proprio status sem desfazer a producao
+        self.assertEqual(self._undo(pid, "rid-wh").status_code, 200)
+        self.assertEqual(self._proposal(pid)["production_status"], "INICIADO")
+        # e a producao desfaz a sua acao mesmo com uma acao do Almox mais recente
+        self.assertEqual(self._post(f"/warehouse/proposals/{pid}/status", {"version": self._proposal(pid)["version"], "status": "EM_SEPARACAO"}, rid="rid-wh2").status_code, 200)
+        self.assertEqual(self._undo(pid, "rid-start").status_code, 200)
 
     def test_acoes_fora_da_v1_vem_com_action_e_undoable_false(self):
         pid = self._create("UNDO-003")
