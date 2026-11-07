@@ -30,6 +30,7 @@ from api.app.modules.proposals.compensation import Allocation, CompensationError
 from api.app.modules.proposals.domain import ProductionStateMachine, ProposalStateMachine
 from api.app.modules.proposals.models import ExpeditionEvent, ExpeditionItem, FiscalEvent, FiscalInvoice, FiscalInvoiceItem, FiscalRecord, FiscalItem, GalvanizationLoad, GalvanizationLoadEvent, GalvanizationLoadItem, ProductionAllocationTransfer, Proposal, ProposalEvent, ProposalItem, ProposalRemanagement, ProposalRemanagementItem, RemanagementStageTransfer, SyncRun
 from api.app.modules.proposals import remanagement as remanagement_rules
+from api.app.modules.proposals.undo import ACTION_UNDONE, proposal_state_snapshot, undone_event_map
 from api.app.modules.proposals.remanagement import calculate_item_balance, items_are_compatible, max_remanageable, quantity
 from api.app.modules.proposals.stage_ledger import load_pipeline_quantities
 from api.app.modules.proposals.stage_swap import OBLIGATION_STAGES, STAGE_AWAITING_GALVANIZATION, STAGE_IN_GALVANIZATION, STAGE_TO_PRODUCE, STAGE_UNDEFINED_FLOW, verify_swap_conservation
@@ -585,6 +586,7 @@ async def update_warehouse_status(session: AsyncSession, proposal_id: int, paylo
     current = proposal.warehouse_status or "AGUARDANDO_CONFIRMACAO"
     if next_status not in WAREHOUSE_NEXT_STATUSES.get(current, set()) and next_status != current:
         raise ApiError(error_codes.PROPOSAL_INVALID_STATE, "Transicao de Almoxarifado nao permitida.", status_code=409)
+    previous_warehouse_status = proposal.warehouse_status
     proposal.warehouse_status = next_status
     _touch(proposal, actor)
     await _record_event(
@@ -597,7 +599,7 @@ async def update_warehouse_status(session: AsyncSession, proposal_id: int, paylo
         from_status=current,
         to_area="ALMOXARIFADO",
         to_status=next_status,
-        metadata={"observation": payload.observation, "version": proposal.version},
+        metadata={"observation": payload.observation, "version": proposal.version, "previous_warehouse_status": previous_warehouse_status},
     )
     await session.commit()
     refreshed = await get_proposal(session, proposal_id)
@@ -1273,18 +1275,20 @@ async def start_expedition_separation(session: AsyncSession, proposal_id: int, p
         raise ApiError(error_codes.EXPEDITION_ITEM_NOT_AVAILABLE, "Nao existem itens disponiveis para Expedicao.", status_code=409)
     now = datetime.now(UTC)
     from_status = proposal.shipping_status or proposal.current_status
+    previous_state = proposal_state_snapshot(proposal)
     for item in items:
         if item.status == "EM_SEPARACAO":
+            previous_started_at = item.separation_started_at.isoformat() if item.separation_started_at else None
             item.status = "SEPARACAO_INICIADA"
             item.separation_started_at = now
             _touch(item, actor)
-            await _record_expedition_event(session, proposal, "EXPEDITION_SEPARATION_STARTED", actor, expedition_item=item, request_id=request_id, from_status="EM_SEPARACAO", to_status=item.status, metadata={"observation": payload.observation})
+            await _record_expedition_event(session, proposal, "EXPEDITION_SEPARATION_STARTED", actor, expedition_item=item, request_id=request_id, from_status="EM_SEPARACAO", to_status=item.status, metadata={"observation": payload.observation, "previous_separation_started_at": previous_started_at})
     proposal.current_area = "EXPEDICAO"
     proposal.current_status = "SEPARACAO_INICIADA"
     proposal.shipping_status = "SEPARACAO_INICIADA"
     proposal.general_status = "EM_EXPEDICAO"
     _touch(proposal, actor)
-    await _record_event(session, proposal, "EXPEDITION_SEPARATION_STARTED", actor, request_id=request_id, from_area="EXPEDICAO", from_status=from_status, to_area="EXPEDICAO", to_status="SEPARACAO_INICIADA", metadata={"observation": payload.observation})
+    await _record_event(session, proposal, "EXPEDITION_SEPARATION_STARTED", actor, request_id=request_id, from_area="EXPEDICAO", from_status=from_status, to_area="EXPEDICAO", to_status="SEPARACAO_INICIADA", metadata={"observation": payload.observation, "previous_state": previous_state})
     await session.commit()
     return await get_expedition_detail(session, proposal_id)
 
@@ -1294,18 +1298,20 @@ async def separate_expedition_items(session: AsyncSession, proposal_id: int, pay
     _ensure_version(proposal.version, payload.version)
     await _ensure_expedition_items_for_proposal(session, proposal)
     selected = _selected_expedition_items(proposal, payload.items)
+    previous_state = proposal_state_snapshot(proposal)
     for exp_item, qty in selected:
         pending = exp_item.available_quantity - exp_item.separated_quantity - exp_item.remanaged_quantity
         if qty <= Decimal("0") or qty > pending:
             raise ApiError(error_codes.EXPEDITION_QUANTITY_INVALID, "Quantidade separada excede o saldo disponivel.", status_code=409)
         previous = exp_item.status
+        previous_separated = (str(exp_item.separated_quantity), exp_item.separated_at.isoformat() if exp_item.separated_at else None)
         exp_item.separated_quantity = (exp_item.separated_quantity + qty).quantize(Decimal("0.0001"))
         exp_item.status = "SEPARADO" if exp_item.separated_quantity + exp_item.remanaged_quantity >= exp_item.available_quantity else "SEPARACAO_INICIADA"
         exp_item.separated_at = datetime.now(UTC) if exp_item.status == "SEPARADO" else exp_item.separated_at
         _touch(exp_item, actor)
-        await _record_expedition_event(session, proposal, "EXPEDITION_ITEM_SEPARATED", actor, expedition_item=exp_item, request_id=request_id, from_status=previous, to_status=exp_item.status, metadata={"quantity": str(qty), "observation": payload.observation})
+        await _record_expedition_event(session, proposal, "EXPEDITION_ITEM_SEPARATED", actor, expedition_item=exp_item, request_id=request_id, from_status=previous, to_status=exp_item.status, metadata={"quantity": str(qty), "observation": payload.observation, "previous_separated_quantity": previous_separated[0], "previous_separated_at": previous_separated[1]})
     _recalculate_expedition_proposal_state(proposal, actor)
-    await _record_event(session, proposal, "EXPEDITION_SEPARATION_RECALCULATED", actor, request_id=request_id, to_area="EXPEDICAO", to_status=proposal.current_status, metadata={"observation": payload.observation})
+    await _record_event(session, proposal, "EXPEDITION_SEPARATION_RECALCULATED", actor, request_id=request_id, to_area="EXPEDICAO", to_status=proposal.current_status, metadata={"observation": payload.observation, "previous_state": previous_state})
     reborn = await _reborn_parent_when_children_converge(session, proposal, actor, request_id=request_id)
     await session.commit()
     return await get_expedition_detail(session, reborn.id if reborn is not None else proposal_id)
@@ -4465,17 +4471,19 @@ async def list_proposal_history(
         users = (await session.execute(select(User).where(User.id.in_(actor_ids)))).scalars().all()
         users_by_id = {row.id: row for row in users}
 
+    # Calculado sobre todos os eventos da familia carregados acima (nao so a pagina devolvida).
+    undone_by = undone_event_map([(int(e.id), e.proposal_id, e.event_type, e.metadata_) for e in proposal_events])
     rows: list[ProposalHistoryItem] = []
     for event in proposal_events:
-        rows.append(_proposal_history_item("proposal", event, event.proposal_id, proposals_by_id, users_by_id))
+        rows.append(_proposal_history_item("proposal", event, event.proposal_id, proposals_by_id, users_by_id, undone_by=undone_by))
     for event in expedition_events:
-        rows.append(_proposal_history_item("expedition", event, event.proposal_id, proposals_by_id, users_by_id, area="EXPEDICAO"))
+        rows.append(_proposal_history_item("expedition", event, event.proposal_id, proposals_by_id, users_by_id, area="EXPEDICAO", undone_by=undone_by))
     for event in galvanization_events:
         if event.proposal_id is not None:
-            rows.append(_proposal_history_item("galvanization", event, event.proposal_id, proposals_by_id, users_by_id, area="GALVANIZACAO"))
+            rows.append(_proposal_history_item("galvanization", event, event.proposal_id, proposals_by_id, users_by_id, area="GALVANIZACAO", undone_by=undone_by))
     for event in fiscal_events:
         event_proposal_id = fiscal_record_proposals.get(event.fiscal_record_id)
-        rows.append(_proposal_history_item("fiscal", event, event_proposal_id, proposals_by_id, users_by_id, area="FISCAL"))
+        rows.append(_proposal_history_item("fiscal", event, event_proposal_id, proposals_by_id, users_by_id, area="FISCAL", undone_by=undone_by))
 
     rows.sort(key=lambda item: (item.created_at, item.source, item.id), reverse=True)
     return _group_history_rows(rows)[offset:offset + limit]
@@ -4489,10 +4497,12 @@ def _proposal_history_item(
     users_by_id: dict[int, User],
     *,
     area: str | None = None,
+    undone_by: dict[tuple[int, str], int] | None = None,
 ) -> ProposalHistoryItem:
     metadata = event.metadata_ if isinstance(event.metadata_, dict) else {}
     proposal = proposals_by_id.get(int(proposal_id or 0))
     actor = users_by_id.get(int(event.actor_user_id or 0))
+    undone_event_id = (undone_by or {}).get((int(proposal_id), event.request_id)) if proposal_id is not None and event.request_id else None
     return ProposalHistoryItem(
         id=int(event.id),
         source=source,
@@ -4511,6 +4521,8 @@ def _proposal_history_item(
         ),
         detail=_history_detail(metadata),
         request_id=event.request_id,
+        undone=undone_event_id is not None and event.event_type != ACTION_UNDONE,
+        undone_by_event_id=undone_event_id if event.event_type != ACTION_UNDONE else None,
         created_at=event.created_at,
     )
 
@@ -4521,7 +4533,8 @@ def _history_observation(metadata: dict) -> str | None:
         if value not in (None, ""):
             return str(value)
     if metadata:
-        return "; ".join(f"{key}: {value}" for key, value in metadata.items() if value not in (None, ""))
+        # previous_* (estado anterior gravado para o desfazer) e dado tecnico, nao observacao.
+        return "; ".join(f"{key}: {value}" for key, value in metadata.items() if value not in (None, "") and not key.startswith("previous_")) or None
     return None
 
 
@@ -4633,6 +4646,7 @@ ACTIVITY_TEMPLATES = {
     ),
     "GALVANIZATION_PROPOSAL_RETURN_RECALCULATED": lambda who, md: f"{who} recalculou o retorno da galvanizacao da proposta.",
     "GALVANIZATION_RETURN_RECORDED_AFTER_CANCELLATION": lambda who, md: f"{who} registrou o retorno da galvanizacao apos o cancelamento.",
+    ACTION_UNDONE: lambda who, md: f"{who} desfez a acao \"{md['undone_label']}\"{_reason_suffix(md)}.",
 }
 
 # Frase para varios eventos iguais (mesmo autor e mesma requisicao) numa linha so.
@@ -4945,6 +4959,7 @@ async def change_proposal_status(session: AsyncSession, proposal_id: int, payloa
     _ensure_version(proposal.version, payload.version)
     from_area, from_status = proposal.current_area, proposal.current_status
     ProposalStateMachine.validate_transition(from_area, from_status, payload.to_area, payload.to_status)
+    previous_state = proposal_state_snapshot(proposal)
     proposal.current_area = payload.to_area
     proposal.current_status = payload.to_status
     proposal.general_status = "EM_PRODUCAO" if payload.to_area == "PRODUCAO" else payload.to_status
@@ -4964,7 +4979,7 @@ async def change_proposal_status(session: AsyncSession, proposal_id: int, payloa
         from_status=from_status,
         to_area=payload.to_area,
         to_status=payload.to_status,
-        metadata={"reason": payload.reason, "version": proposal.version},
+        metadata={"reason": payload.reason, "version": proposal.version, "previous_state": previous_state},
     )
     if payload.to_area == "PRODUCAO" and proposal.current_area != "PRODUCAO":
         await _record_event(
@@ -5151,6 +5166,7 @@ async def start_production(session: AsyncSession, proposal_id: int, payload: Pro
         raise ApiError(error_codes.PRODUCTION_NO_INTERNAL_ITEMS, "Nao existem itens para producao interna.", status_code=409)
     from_status = current
     previous_area = proposal.current_area
+    previous_state = proposal_state_snapshot(proposal)
     proposal.production_status = "INICIADO"
     if previous_area == "PRODUCAO":
         proposal.current_status = "INICIADO"
@@ -5171,6 +5187,7 @@ async def start_production(session: AsyncSession, proposal_id: int, payload: Pro
             "version": proposal.version,
             "current_area": previous_area,
             "reallocated": previous_area != "PRODUCAO",
+            "previous_state": previous_state,
         },
     )
     await session.commit()
@@ -5185,6 +5202,7 @@ async def pause_production(session: AsyncSession, proposal_id: int, payload: Pro
     ProductionStateMachine.ensure_can_pause(current)
 
     current_area = proposal.current_area
+    previous_state = proposal_state_snapshot(proposal)
     proposal.production_status = ProductionStateMachine.PAUSED
     if current_area == "PRODUCAO":
         proposal.current_status = ProductionStateMachine.PAUSED
@@ -5199,7 +5217,7 @@ async def pause_production(session: AsyncSession, proposal_id: int, payload: Pro
         from_status=current,
         to_area="PRODUCAO",
         to_status=ProductionStateMachine.PAUSED,
-        metadata={"reason": payload.reason, "version": proposal.version, "current_area": current_area},
+        metadata={"reason": payload.reason, "version": proposal.version, "current_area": current_area, "previous_state": previous_state},
     )
     await session.commit()
     return _production_detail(await get_proposal(session, proposal.id))
@@ -5213,6 +5231,7 @@ async def resume_production(session: AsyncSession, proposal_id: int, payload: Pr
     ProductionStateMachine.ensure_can_resume(current)
 
     current_area = proposal.current_area
+    previous_state = proposal_state_snapshot(proposal)
     proposal.production_status = ProductionStateMachine.STARTED
     if current_area == "PRODUCAO":
         proposal.current_status = ProductionStateMachine.STARTED
@@ -5227,7 +5246,7 @@ async def resume_production(session: AsyncSession, proposal_id: int, payload: Pr
         from_status=current,
         to_area="PRODUCAO",
         to_status=ProductionStateMachine.STARTED,
-        metadata={"observation": payload.observation, "version": proposal.version, "current_area": current_area},
+        metadata={"observation": payload.observation, "version": proposal.version, "current_area": current_area, "previous_state": previous_state},
     )
     await session.commit()
     return _production_detail(await get_proposal(session, proposal.id))
@@ -7150,6 +7169,7 @@ _NOTIFY_PROPOSAL_EVENTS: dict[str, tuple[str, str]] = {
     "COMPENSATED_REMANAGEMENT_RECEIVED": ("PROPOSTA_STATUS", "normal"),
     "PARENT_PROPOSAL_OPERATIONAL_DEATH": ("PROPOSTA_STATUS", "alta"),
     "PARENT_PROPOSAL_REBORN": ("PROPOSTA_STATUS", "normal"),
+    ACTION_UNDONE: ("PROPOSTA_STATUS", "normal"),
 }
 
 

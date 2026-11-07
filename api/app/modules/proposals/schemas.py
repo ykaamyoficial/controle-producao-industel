@@ -203,6 +203,9 @@ class ProposalHistoryItem(BaseModel):
     detail: str | None = None
     count: int = 1
     request_id: str | None = None
+    # Desfazer: True quando um ACTION_UNDONE da mesma proposta aponta para o request_id deste evento.
+    undone: bool = False
+    undone_by_event_id: int | None = None
     created_at: datetime
 
 
@@ -1964,3 +1967,59 @@ class ProposalFamilyResponse(BaseModel):
     items: list[FamilyItemRow]
     # Parciais para o seletor (filhas ou lotes). Vazio = proposta sem parciais.
     partials: list[FamilyPartial] = Field(default_factory=list)
+
+
+class ProposalUndoRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expected_version: int = Field(ge=1)
+    target_request_id: str = Field(min_length=1, max_length=100)
+    reason: str = Field(min_length=1, max_length=1000)
+    idempotency_key: str = Field(min_length=8, max_length=100)
+
+    @field_validator("target_request_id", "reason", "idempotency_key", mode="before")
+    @classmethod
+    def strip_undo_text(cls, value):
+        return value.strip() if isinstance(value, str) else value
+
+
+class ProposalUndoBlocker(BaseModel):
+    code: str
+    message: str
+
+
+class ProposalUndoChange(BaseModel):
+    field: str
+    label: str
+    current_value: str | None = None
+    restored_value: str | None = None
+
+
+class ProposalUndoSideEffect(BaseModel):
+    code: str
+    message: str
+
+
+class ProposalUndoAction(BaseModel):
+    request_id: str | None = None
+    event_type: str
+    label: str
+    title: str
+    actor_user_id: int | None = None
+    actor_name: str | None = None
+    created_at: datetime
+    event_count: int = 1
+
+
+class ProposalUndoCandidateResponse(BaseModel):
+    proposal_id: int
+    proposal_version: int
+    action: ProposalUndoAction | None = None
+    handler: str | None = None
+    undo_class: Literal["A", "B", "C"] | None = None
+    undoable: bool = False
+    can_undo: bool = False
+    cannot_undo_reason: str | None = None
+    blockers: list[ProposalUndoBlocker] = Field(default_factory=list)
+    changes: list[ProposalUndoChange] = Field(default_factory=list)
+    side_effects: list[ProposalUndoSideEffect] = Field(default_factory=list)

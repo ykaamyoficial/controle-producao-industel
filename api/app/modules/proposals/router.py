@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, Query, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.app.database.session import get_db_session
-from api.app.modules.auth.dependencies import require_any_permission, require_permission, require_superuser
+from api.app.modules.auth.dependencies import get_current_active_user, require_any_permission, require_permission, require_superuser
 from api.app.modules.auth.models import User
 from api.app.modules.auth.permissions import (
     AUDIT_VIEW,
@@ -30,7 +30,7 @@ from api.app.modules.auth.permissions import (
     PRODUCTION_UPDATE,
     PRODUCTION_VIEW,
 )
-from api.app.modules.proposals import family, service
+from api.app.modules.proposals import family, service, undo
 from api.app.modules.proposals.schemas import (
     ExpeditionItemsRequest,
     ExpeditionProposalDetail,
@@ -84,6 +84,8 @@ from api.app.modules.proposals.schemas import (
     ProposalItemUpdate,
     ProposalStatusChangeRequest,
     ProposalSyncBatch,
+    ProposalUndoCandidateResponse,
+    ProposalUndoRequest,
     ProposalUpdate,
     ProductionCompleteItemsRequest,
     ProductionItemFlowRequest,
@@ -624,6 +626,19 @@ async def get_proposal_activities(
     reusa a mesma permissao de visualizacao da proposta ja usada pelo
     historico de auditoria (/proposals/{id}/history)."""
     return await service.list_proposal_activities(session, proposal_id, area=area, before=before, limit=limit)
+
+
+@router.get("/proposals/{proposal_id}/undo/candidate", response_model=ProposalUndoCandidateResponse)
+async def get_undo_candidate(proposal_id: int, session: AsyncSession = Depends(get_db_session), actor: User = Depends(get_current_active_user)):
+    """Ultima acao desfazivel da proposta. Gate: so autenticado; a permissao da acao e a regra autor/superusuario
+    entram em `can_undo` (nunca em 403), para a interface decidir se mostra o botao."""
+    return await undo.get_candidate(session, proposal_id, actor)
+
+
+@router.post("/proposals/{proposal_id}/undo", response_model=ProposalDetail)
+async def undo_proposal_action(proposal_id: int, payload: ProposalUndoRequest, request: Request, session: AsyncSession = Depends(get_db_session), actor: User = Depends(get_current_active_user)):
+    """Desfaz a ultima acao da proposta. O gate de permissao fica no service (permissao da acao original + autor/superusuario)."""
+    return await undo.undo_action(session, proposal_id, payload, actor, request_id=getattr(request.state, "request_id", None))
 
 
 @router.get("/proposals/{proposal_id}", response_model=ProposalDetail)

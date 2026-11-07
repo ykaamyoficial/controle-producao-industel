@@ -181,6 +181,16 @@ def snapshot(proposal: Proposal, facts: AdministrativeFacts | None = None) -> di
     return result
 
 
+def _live_events(proposal: Proposal) -> list[Any]:
+    """Eventos da proposta sem os que foram desfeitos (ACTION_UNDONE aponta o request_id desfeito)."""
+    undone = {
+        (event.metadata_ or {}).get("undone_request_id")
+        for event in proposal.events
+        if event.event_type == "ACTION_UNDONE"
+    }
+    return [event for event in proposal.events if not (event.request_id and event.request_id in undone)]
+
+
 def collect_facts(proposal: Proposal) -> AdministrativeFacts:
     members = _administrative_members(proposal)
     items = [item for member in members for item in member.items if item.active]
@@ -244,14 +254,14 @@ def collect_facts(proposal: Proposal) -> AdministrativeFacts:
     production_events = [
         event
         for member in members
-        for event in member.events
+        for event in _live_events(member)
         if event.event_type in production_event_types
     ]
     production_events.sort(key=lambda event: (event.created_at, event.id or 0))
     latest_production_event = production_events[-1].event_type if production_events else None
     production_released = any(
         event.event_type == "PROPOSAL_STATUS_CHANGED" and normalize_area(event.to_area) == "PRODUCAO"
-        for event in proposal.events
+        for event in _live_events(proposal)
     ) or bool(production_events)
 
     required_galv = [item for item in items if item.requires_galvanization == "SIM"]
