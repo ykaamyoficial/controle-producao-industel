@@ -2359,6 +2359,9 @@ class BackendService:
         linha da proposta na lista do Almoxarifado), nunca de uma linha antiga da tela."""
         if status not in STOCK_DEDUCTION_STATUSES:
             return []
+        # Filha herda o status mas nunca aparece na aba; cancelada tambem sai da lista: ausencia nao prova baixa.
+        if process.get('parent_proposal_id') or process.get('is_cancelled') or (process.get('status_geral') or '') == 'CANCELADA':
+            return []
         try:
             row = self.official_proposal_storage.warehouse_row(process_id, process.get('proposta') or '')
         except Exception:

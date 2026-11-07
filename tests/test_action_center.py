@@ -912,6 +912,14 @@ class BackendStockDeductionActionTests(unittest.TestCase):
         service, _ = self._service("SEPARADO", None)
         self.assertEqual(self._stock(service.process_actions(7, "ALMOXARIFADO")), [])
 
+    def test_child_or_cancelled_proposal_never_offers_the_deduction(self):
+        # Filha/cancelada nao aparece na lista: a ausencia nao pode virar "Desfazer baixa".
+        for extra in ({"parent_proposal_id": 3}, {"is_cancelled": True}, {"status_geral": "CANCELADA"}):
+            with self.subTest(extra=extra):
+                service, storage = self._service("ALMOXARIFADO_ENTREGUE", None)
+                storage.get_process.return_value = {**storage.get_process.return_value, **extra}
+                self.assertEqual(self._stock(service.process_actions(7, "ALMOXARIFADO")), [])
+
     def test_unreachable_api_leaves_the_status_actions_intact(self):
         service, _ = self._service("SEPARADO", None, row_error=RuntimeError("fora do ar"))
         actions = service.process_actions(7, "ALMOXARIFADO")
