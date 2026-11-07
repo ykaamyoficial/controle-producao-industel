@@ -176,6 +176,8 @@ class WarehouseProposalSummary(BaseModel):
     weight_known_items: int = 0
     weight_total_items: int = 0
     weight_complete: bool = False
+    stock_deducted: bool = False
+    stock_deducted_at: datetime | None = None
     updated_at: datetime | None = None
     version: int = 1
 
@@ -185,6 +187,7 @@ class PaginatedWarehouseProposalResponse(BaseModel):
     total: int
     limit: int
     offset: int
+    pending_stock_deduction: int = 0
 
 
 class ProposalHistoryItem(BaseModel):

@@ -226,6 +226,17 @@ class ListQueryOptimizationTests(unittest.TestCase):
 
     def test_warehouse_list_keeps_order_search_and_item_totals(self):
         ids = self._scenario()
+        # A aba so mostra o que entrou por numero: distribui status do Almoxarifado entre as propostas.
+        keep = {ids["PARCIAL2"], ids["INICIADA"], ids["GALV1"], ids["GALV2"], ids["GALV3"]}
+        rotation = ["SEPARADO", "ALMOXARIFADO_ENTREGUE_PARCIAL", "SEM_PARAFUSOS", None, "AGUARDANDO_CONFIRMACAO"]
+
+        async def assign(session):
+            rows = (await session.execute(select(Proposal).where(Proposal.parent_proposal_id.is_(None)).order_by(Proposal.id))).scalars().unique().all()
+            for index, row in enumerate(rows):
+                row.warehouse_status = "EM_SEPARACAO" if int(row.id) in keep else rotation[index % len(rotation)]
+            await session.commit()
+
+        run(assign)
         full = self._get("/api/v1/warehouse/proposals", limit=200)
         self.assertEqual(full["total"], len(full["items"]))
         self.assertTrue(all(row["total_items"] >= 1 for row in full["items"]))
@@ -235,10 +246,13 @@ class ListQueryOptimizationTests(unittest.TestCase):
             rows = (await session.execute(
                 select(Proposal).where(Proposal.active.is_(True)).where(service._proposal_operational_clause()).where(Proposal.parent_proposal_id.is_(None))
             )).scalars().unique().all()
+            rows = [p for p in rows if p.warehouse_status in service.WAREHOUSE_VISIBLE_STATUSES]
             return {int(p.id): (len(service._active_items(p)), str(service.calculate_weight_coverage(i.total_weight for i in service._active_items(p)).known_weight)) for p in rows}
 
         expected = run(oracle)
         self.assertEqual(set(by_id), set(expected))
+        self.assertGreaterEqual(len(expected), 6)
+        self.assertLess(len(expected), run(_count_roots), "o cenario precisa ter propostas fora da aba")
         for proposal_id, (count, known_weight) in expected.items():
             with self.subTest(proposal_id=proposal_id):
                 self.assertEqual(by_id[proposal_id]["total_items"], count)
@@ -253,8 +267,12 @@ class ListQueryOptimizationTests(unittest.TestCase):
         self.assertEqual({row["id"] for row in searched["items"]}, {ids["GALV1"], ids["GALV2"], ids["GALV3"]})
 
 
+async def _count_roots(session):
+    return len((await session.execute(select(Proposal.id).where(Proposal.parent_proposal_id.is_(None)))).scalars().all())
+
+
 def read_order(row):
-    order = {"NAO_DEFINIDO": 0, "AGUARDANDO_CONFIRMACAO": 1, "EM_SEPARACAO": 2, "SEPARADO": 3, "ALMOXARIFADO_ENTREGUE_PARCIAL": 4, "SEM_PARAFUSOS": 5, "ALMOXARIFADO_ENTREGUE": 6}
+    order = {"EM_SEPARACAO": 2, "SEPARADO": 3, "ALMOXARIFADO_ENTREGUE_PARCIAL": 4, "SEM_PARAFUSOS": 5, "ALMOXARIFADO_ENTREGUE": 6}
     return order.get(row["warehouse_status"], 99)
 
 

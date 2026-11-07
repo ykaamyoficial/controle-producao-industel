@@ -206,6 +206,10 @@ PRODUCTION_ACTIVE_STATUSES = {"LIBERADO_PRODUCAO", "NAO_INICIADO", "ITEM_PENDENT
 PRODUCTION_STARTABLE_STATUSES = ProductionStateMachine.STARTABLE_STATUSES
 PRODUCTION_COMPLETABLE_STATUSES = ProductionStateMachine.COMPLETABLE_STATUSES
 WAREHOUSE_STATUSES = {"AGUARDANDO_CONFIRMACAO", "EM_SEPARACAO", "SEPARADO", "SEM_PARAFUSOS", "ALMOXARIFADO_ENTREGUE", "ALMOXARIFADO_ENTREGUE_PARCIAL"}
+# Status que mantem a proposta na aba Almoxarifado (a entregue so fica enquanto a baixa estiver pendente).
+WAREHOUSE_VISIBLE_STATUSES = ("EM_SEPARACAO", "SEPARADO", "ALMOXARIFADO_ENTREGUE_PARCIAL", "SEM_PARAFUSOS")
+# Status em que a baixa no estoque pode ser confirmada e conta no contador.
+WAREHOUSE_DEDUCTION_STATUSES = ("SEPARADO", "ALMOXARIFADO_ENTREGUE_PARCIAL", "ALMOXARIFADO_ENTREGUE")
 WAREHOUSE_NEXT_STATUSES = {
     "AGUARDANDO_CONFIRMACAO": {"EM_SEPARACAO", "SEM_PARAFUSOS"},
     "EM_SEPARACAO": {"SEPARADO"},
@@ -552,28 +556,48 @@ async def list_partial_proposals(
     return PaginatedPartialProposalResponse(items=[_partial_proposal_summary(row) for row in paged], total=len(filtered), limit=limit, offset=offset)
 
 
+def _warehouse_visible_clause():
+    """Propostas que estao na aba Almoxarifado: entraram por numero (`EM_SEPARACAO` em diante)
+    e, se ja entregues, ainda sem baixa no estoque. Nunca filha, cancelada ou inativa.
+    Unica fonte da regra: lista, contador e itens."""
+    return and_(
+        Proposal.active.is_(True),
+        _proposal_operational_clause(),
+        Proposal.parent_proposal_id.is_(None),
+        or_(
+            Proposal.warehouse_status.in_(WAREHOUSE_VISIBLE_STATUSES),
+            and_(Proposal.warehouse_status == "ALMOXARIFADO_ENTREGUE", Proposal.warehouse_stock_deducted_at.is_(None)),
+        ),
+    )
+
+
+def _warehouse_pending_deduction_clause():
+    return and_(
+        _warehouse_visible_clause(),
+        Proposal.warehouse_status.in_(WAREHOUSE_DEDUCTION_STATUSES),
+        Proposal.warehouse_stock_deducted_at.is_(None),
+    )
+
+
 async def list_warehouse_proposals(session: AsyncSession, *, search: str | None, status: str | None, limit: int, offset: int) -> PaginatedWarehouseProposalResponse:
     stmt = (
         select(Proposal)
         .options(lazyload("*"), _lean_items())
-        .where(Proposal.active.is_(True))
-        .where(_proposal_operational_clause())
-        .where(Proposal.parent_proposal_id.is_(None))
-        .where(or_(Proposal.warehouse_status.in_(WAREHOUSE_STATUSES), Proposal.warehouse_status.is_(None)))
+        .where(_warehouse_visible_clause())
     )
     if status:
-        normalized_status = status.strip().upper()
-        if normalized_status == "NAO_DEFINIDO":
-            stmt = stmt.where(Proposal.warehouse_status.is_(None))
-        else:
-            stmt = stmt.where(Proposal.warehouse_status == normalized_status)
+        stmt = stmt.where(Proposal.warehouse_status == status.strip().upper())
     if search:
         value = f"%{search}%"
         stmt = stmt.where(or_(Proposal.proposal_number.ilike(value), Proposal.customer_name.ilike(value), Proposal.project_name.ilike(value), Proposal.lot.ilike(value)))
     rows = (await session.execute(stmt)).scalars().unique().all()
     rows.sort(key=lambda row: (_warehouse_sort_key(row), -(row.updated_at.timestamp() if row.updated_at else 0), row.id))
     paged = rows[offset:offset + limit]
-    return PaginatedWarehouseProposalResponse(items=[_warehouse_proposal_summary(row) for row in paged], total=len(rows), limit=limit, offset=offset)
+    # Contador (D13): no SQL, independente da pagina, da busca e do filtro de status.
+    pending = (await session.execute(select(func.count()).select_from(Proposal).where(_warehouse_pending_deduction_clause()))).scalar_one()
+    return PaginatedWarehouseProposalResponse(
+        items=[_warehouse_proposal_summary(row) for row in paged], total=len(rows), limit=limit, offset=offset, pending_stock_deduction=int(pending),
+    )
 
 
 async def update_warehouse_status(session: AsyncSession, proposal_id: int, payload: WarehouseStatusRequest, actor: User, *, request_id: str | None) -> WarehouseProposalSummary:
@@ -6885,15 +6909,13 @@ def _warehouse_required_value(status: str | None) -> str:
 
 def _warehouse_sort_key(proposal: Proposal) -> int:
     order = {
-        "NAO_DEFINIDO": 0,
-        "AGUARDANDO_CONFIRMACAO": 1,
         "EM_SEPARACAO": 2,
         "SEPARADO": 3,
         "ALMOXARIFADO_ENTREGUE_PARCIAL": 4,
         "SEM_PARAFUSOS": 5,
         "ALMOXARIFADO_ENTREGUE": 6,
     }
-    return order.get(proposal.warehouse_status or "NAO_DEFINIDO", 99)
+    return order.get(proposal.warehouse_status or "", 99)
 
 
 def _warehouse_proposal_summary(proposal: Proposal) -> WarehouseProposalSummary:
@@ -6916,6 +6938,8 @@ def _warehouse_proposal_summary(proposal: Proposal) -> WarehouseProposalSummary:
         weight_known_items=coverage.known_items,
         weight_total_items=coverage.total_items,
         weight_complete=coverage.complete,
+        stock_deducted=proposal.warehouse_stock_deducted_at is not None,
+        stock_deducted_at=proposal.warehouse_stock_deducted_at,
         updated_at=proposal.updated_at,
         version=proposal.version,
     )
