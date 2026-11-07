@@ -728,15 +728,26 @@ class BatchProposalActionCenter(QDialog):
         self._set_running(True)
         self._action_thread = start_worker(self, operation, self._on_action_success, self._on_action_error)
 
+    @staticmethod
+    def _limited(items: list[str], separator: str) -> str:
+        """Ate 12 itens; com corte termina em "... e mais N" (mesmo padrao da confirmacao)."""
+        text = separator.join(items[:12])
+        return text + (f"{separator}... e mais {len(items) - 12}" if len(items) > 12 else "")
+
     def _on_action_success(self, result):
         self._set_running(False)
         changed, failures, *extra = result
+        done_numbers = extra[0] if extra and extra[0] else []
+        done = f": {self._limited(done_numbers, ', ')}" if done_numbers else ""
         if failures:
-            done = f": {', '.join(extra[0][:12])}" if extra and extra[0] else ""
             QMessageBox.warning(
                 self, "Acoes em lote",
-                f"{changed} proposta(s) alterada(s){done}.\n\nNão alteradas:\n" + "\n".join(failures[:12]),
+                f"{changed} proposta(s) alterada(s){done}.\n\nNão alteradas:\n" + self._limited(failures, "\n"),
             )
+            if not changed:
+                return  # nada mudou: a Central segue aberta com a selecao, mostrando as falhas
+        elif done_numbers:
+            QMessageBox.information(self, "Acoes em lote", f"{changed} proposta(s) alterada(s){done}.")
         self.changed = True
         self.accept()
 

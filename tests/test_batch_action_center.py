@@ -672,10 +672,14 @@ class WarehouseStockDeductionBatchTests(unittest.TestCase):
         action = next(a for a in dialog.actions if a.status == "CONFIRM")
         with patch("app.ui.action_center.batch_action_center.QMessageBox.question", return_value=QMessageBox.Yes) as question, patch(
             "app.ui.action_center.batch_action_center.start_worker", side_effect=_run_synchronously
-        ), patch("app.ui.action_center.batch_action_center.QMessageBox.warning") as warning:
+        ), patch("app.ui.action_center.batch_action_center.QMessageBox.warning") as warning, patch(
+            "app.ui.action_center.batch_action_center.QMessageBox.information"
+        ) as info:
             dialog.run_action(action)
         self.assertEqual(service.deduction_calls, [(10, None, True), (20, None, True)])
         warning.assert_not_called()
+        info.assert_called_once()
+        self.assertIn("2 proposta(s) alterada(s): CP10, CP20", info.call_args.args[2])
         self.assertIn("CP10", question.call_args.args[2])
         self.assertNotIn("CP30", question.call_args.args[2])
         self.assertTrue(dialog.changed)
@@ -687,7 +691,7 @@ class WarehouseStockDeductionBatchTests(unittest.TestCase):
         action = next(a for a in dialog.actions if a.status == "REVERT")
         with patch("app.ui.action_center.batch_action_center.QMessageBox.question", return_value=QMessageBox.Yes), patch(
             "app.ui.action_center.batch_action_center.start_worker", side_effect=_run_synchronously
-        ):
+        ), patch("app.ui.action_center.batch_action_center.QMessageBox.information"):
             dialog.run_action(action)
         self.assertEqual(service.deduction_calls, [(10, None, False)])
 
@@ -707,6 +711,48 @@ class WarehouseStockDeductionBatchTests(unittest.TestCase):
         self.assertIn("2 proposta(s) alterada(s): CP10, CP30", text)
         self.assertIn("CP20: Esta proposta foi alterada por outro usuario.", text)
         self.assertTrue(dialog.changed)
+
+    def _run(self, service, ids):
+        dialog = self._dialog(service, ids, {n: _row(n, "SEPARADO") for n in ids})
+        action = next(a for a in dialog.actions if a.status == "CONFIRM")
+        with patch("app.ui.action_center.batch_action_center.QMessageBox.question", return_value=QMessageBox.Yes), patch(
+            "app.ui.action_center.batch_action_center.start_worker", side_effect=_run_synchronously
+        ), patch("app.ui.action_center.batch_action_center.QMessageBox.warning") as warning, patch(
+            "app.ui.action_center.batch_action_center.QMessageBox.information"
+        ) as info:
+            dialog.run_action(action)
+        return dialog, warning, info
+
+    def test_when_every_proposal_fails_nothing_changed_and_the_dialog_stays_open_with_the_failures(self):
+        service = self._service()
+        service.failing = {10, 20}
+        dialog, warning, info = self._run(service, [10, 20])
+        warning.assert_called_once()
+        info.assert_not_called()
+        text = warning.call_args.args[2]
+        self.assertIn("0 proposta(s) alterada(s)", text)
+        self.assertIn("CP10: Esta proposta foi alterada por outro usuario.", text)
+        self.assertIn("CP20: Esta proposta foi alterada por outro usuario.", text)
+        self.assertFalse(dialog.changed)
+        self.assertEqual(dialog.result(), 0)  # nao fechou como sucesso
+
+    def test_lists_cut_at_12_end_with_e_mais_n(self):
+        ids = list(range(100, 115))  # 15
+        # sucesso: so a lista dos numeros que deram certo
+        dialog, warning, info = self._run(self._service(), ids)
+        text = info.call_args.args[2]
+        self.assertIn("15 proposta(s) alterada(s): CP100,", text)
+        self.assertIn("CP111, ... e mais 3", text)
+        self.assertNotIn("CP112", text)
+        self.assertTrue(dialog.changed)
+        # falhas e sucessos cortados no mesmo relatorio
+        service = self._service()
+        service.failing = set(range(100, 113))  # 13 falhas, 2 sucessos
+        _, warning, _ = self._run(service, ids)
+        text = warning.call_args.args[2]
+        self.assertIn("2 proposta(s) alterada(s): CP113, CP114.", text)
+        self.assertIn("... e mais 1", text)
+        self.assertNotIn("CP112:", text)
 
     def test_declining_the_confirmation_does_not_call_the_service(self):
         service = self._service()
