@@ -26,17 +26,19 @@ from app.ui.components.operational_table import configure_operational_table
 from app.ui.components.page_header import page_header
 from app.ui.components.segmented_control import SegmentedControl
 from app.ui.components.skeleton import SkeletonRows
+from app.ui.inspection_progress import RecordProgressDialog
 from app.ui.inspection_dialogs import (
     InspectionDetailDialog,
     NewInspectionDialog,
     days_text,
+    format_date,
     stage_colors,
     stage_label,
     start_inspection_for_proposal,
 )
 
 PAGE_SIZE = 100
-COLUMNS = ["PD principal", "Propostas", "NQT", "Etapa", "Tentativa", "Dias na etapa"]
+COLUMNS = ["PD principal", "Propostas", "NQT", "Etapa", "Tentativa", "Visita", "Dias na etapa"]
 STAGE_COLUMN = 3
 LEFT_COLUMNS = (0, 1)
 # Filtro -> parametro `stage` da API (None = todas).
@@ -76,7 +78,7 @@ class InspectionPage(QWidget):
         self.new_button = ModernButton("Nova inspeção", "new")
         self.new_button.clicked.connect(self.open_new)
         self.register_button = ModernButton("Registrar andamento", "edit", variant="primary")
-        self.register_button.clicked.connect(self.open_selected)
+        self.register_button.clicked.connect(self.register_selected)
         if self.can_edit:
             actions += [self.start_button, self.new_button, self.register_button]
         header = page_header(
@@ -223,7 +225,8 @@ class InspectionPage(QWidget):
                 item.get("nqt_code") or EM_DASH,
                 stage_label(stage),
                 EM_DASH if to_request else str(item.get("attempt", 1)),
-                EM_DASH if to_request else days_text(item.get("days_in_stage")),
+                format_date(item.get("visit_date")) if item.get("visit_date") and not to_request else EM_DASH,
+                EM_DASH if to_request else days_text(item.get("days_in_stage"), business=item.get("business_days_in_stage")),
             ]
             for column, value in enumerate(values):
                 cell = QTableWidgetItem(value)
@@ -289,6 +292,15 @@ class InspectionPage(QWidget):
         dialog = InspectionDetailDialog(self.service, inspection, self, can_edit=self.can_edit)
         dialog.exec()
         if dialog.changed:
+            self.refresh()
+
+    def register_selected(self) -> None:
+        """"Registrar andamento": abre direto a janela de andamento da inspeção selecionada."""
+        inspection = self.selected_inspection()
+        if inspection is None or self._is_to_request(inspection):
+            return
+        dialog = RecordProgressDialog(self.service, inspection, self)
+        if dialog.exec() and dialog.result_data is not None:
             self.refresh()
 
     def start_selected(self) -> None:

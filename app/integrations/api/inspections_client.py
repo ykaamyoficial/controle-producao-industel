@@ -48,3 +48,14 @@ class InspectionsApiClient:
     def action(self, access_token: str, inspection_id: int, action: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         """`action`: request, register-pd, nqt, decision, pit, approve, reject ou doc."""
         return self.client.post(f"{_BASE}/{int(inspection_id)}/{action}", json_payload=payload or {}, access_token=access_token).data
+
+    def catch_up(self, access_token: str, inspection_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+        """Atualizar atrasado: `{steps: [{action, ...campos, occurred_on, note}], confirm_dates}` (atomico)."""
+        return self.client.post(f"{_BASE}/{int(inspection_id)}/catch-up", json_payload=payload, access_token=access_token).data
+
+    def reschedule_visit(self, access_token: str, inspection_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+        return self.client.post(f"{_BASE}/{int(inspection_id)}/reschedule-visit", json_payload=payload, access_token=access_token).data
+
+    def correct_occurred_on(self, access_token: str, inspection_id: int, event_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+        path = f"{_BASE}/{int(inspection_id)}/events/{int(event_id)}/occurred-on"
+        return self.client.post(path, json_payload=payload, access_token=access_token).data

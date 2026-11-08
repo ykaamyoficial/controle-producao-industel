@@ -73,29 +73,19 @@ class InspectionService:
             )
         )
 
-    def request(self, inspection_id: int, pd_registered: bool) -> dict[str, Any]:
-        return self._call(lambda api, token: api.action(token, inspection_id, "request", {"pd_registered": bool(pd_registered)}))
+    def transition(self, inspection_id: int, action: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        """`action`: request, register-pd, nqt, decision, pit, approve, reject ou doc. O corpo leva os campos da
+        etapa mais `occurred_on`, `note` e (so em `decision`) `confirm_dates`."""
+        return self._call(lambda api, token: api.action(token, inspection_id, action, payload or {}))
 
-    def register_pd(self, inspection_id: int) -> dict[str, Any]:
-        return self._call(lambda api, token: api.action(token, inspection_id, "register-pd"))
+    def catch_up(self, inspection_id: int, steps: list[dict[str, Any]], confirm_dates: bool = False) -> dict[str, Any]:
+        payload = {"steps": steps, **({"confirm_dates": True} if confirm_dates else {})}
+        return self._call(lambda api, token: api.catch_up(token, inspection_id, payload))
 
-    def register_nqt(self, inspection_id: int, nqt_code: str) -> dict[str, Any]:
-        return self._call(lambda api, token: api.action(token, inspection_id, "nqt", {"nqt_code": nqt_code}))
+    def reschedule_visit(self, inspection_id: int, visit_date: str, reason: str, confirm_dates: bool = False) -> dict[str, Any]:
+        payload = {"visit_date": visit_date, "reason": reason, **({"confirm_dates": True} if confirm_dates else {})}
+        return self._call(lambda api, token: api.reschedule_visit(token, inspection_id, payload))
 
-    def decide(self, inspection_id: int, decision: str, visit_date: str | None = None) -> dict[str, Any]:
-        payload: dict[str, Any] = {"decision": decision}
-        if visit_date:
-            payload["visit_date"] = visit_date
-        return self._call(lambda api, token: api.action(token, inspection_id, "decision", payload))
-
-    def register_pit(self, inspection_id: int, pit_link: str) -> dict[str, Any]:
-        return self._call(lambda api, token: api.action(token, inspection_id, "pit", {"pit_link": pit_link}))
-
-    def approve(self, inspection_id: int) -> dict[str, Any]:
-        return self._call(lambda api, token: api.action(token, inspection_id, "approve"))
-
-    def reject(self, inspection_id: int, reason: str) -> dict[str, Any]:
-        return self._call(lambda api, token: api.action(token, inspection_id, "reject", {"reason": reason}))
-
-    def register_doc(self, inspection_id: int, doc_link: str) -> dict[str, Any]:
-        return self._call(lambda api, token: api.action(token, inspection_id, "doc", {"doc_link": doc_link}))
+    def correct_occurred_on(self, inspection_id: int, event_id: int, occurred_on: str, reason: str) -> dict[str, Any]:
+        payload = {"occurred_on": occurred_on, "reason": reason}
+        return self._call(lambda api, token: api.correct_occurred_on(token, inspection_id, event_id, payload))

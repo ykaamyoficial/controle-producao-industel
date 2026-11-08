@@ -7,7 +7,6 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
     QAbstractItemView,
-    QCheckBox,
     QDialog,
     QFrame,
     QHeaderView,
@@ -30,13 +29,16 @@ from app.ui.components.detail_widgets import (
     STEP_PENDING,
     CountTabWidget,
     FlowTrail,
+    kv_grid,
     make_panel,
 )
 from app.ui.components.dialog_shell import dialog_footer, dialog_header, dialog_layout, set_notice_kind, set_validation_state
 from app.ui.components.modern_button import ModernButton
 from app.ui.components.path_field import PathField, path_rows_panel
 from app.ui.components.status_badge import StatusBadge
+from app.ui.date_edit_dialog import DateEditDialog
 from app.ui.dialog_utils import style_dialog_from_parent
+from app.ui.inspection_progress import CatchUpDialog, RecordProgressDialog
 from app.ui.styles import STATUS_BADGE_COLORS, _contrast_text, _is_dark
 
 # Categoria de cor (STATUS_BADGE_COLORS) de cada etapa da inspecao.
@@ -109,11 +111,14 @@ def format_moment(value: Any) -> str:
     return moment.strftime(f"{DATE_FORMAT} %H:%M")
 
 
-def days_text(days: Any, *, long: bool = False) -> str:
+def days_text(days: Any, *, long: bool = False, business: Any = None) -> str:
+    """"6 dias (4 úteis)": dias corridos na etapa e, entre parênteses, os dias úteis da fábrica."""
     count = int(days or 0)
-    if long:
-        return f"{count} {'dia' if count == 1 else 'dias'} nesta etapa"
-    return f"{count} d"
+    text = f"{count} {'dia' if count == 1 else 'dias'}" + (" nesta etapa" if long else "")
+    if business is not None:
+        useful = int(business)
+        text += f" ({useful} {'útil' if useful == 1 else 'úteis'})"
+    return text
 
 
 def parse_visit_date(text: str) -> str:
@@ -142,9 +147,35 @@ def _read_only_table(columns: list[str]) -> QTableWidget:
     return table
 
 
+# Orientacao curta de cada etapa (o que costuma acontecer ate o proximo andamento).
+STAGE_HINTS = {
+    "pendente": "A inspeção ainda não foi solicitada. Solicite no portal e registre o andamento.",
+    "cadastro": "O PD ainda não está cadastrado. Peça o cadastro no portal de cadastro e registre quando estiver pronto.",
+    "solicitada": "Solicite a inspeção no portal. Quando o portal gerar o código NQT, registre o andamento.",
+    "nqt": "Aguardando a Equatorial: dispensar a inspeção ou mandar um engenheiro à fábrica (in loco).",
+    "dispensa": "Anexe a documentação PIT no portal e registre onde o arquivo (ou a pasta) está guardado.",
+    "inloco": "Registre o resultado da visita do engenheiro: aprovada ou reprovada.",
+    "doc": "A Equatorial gera o DOC depois da dispensa ou da aprovação. A inspeção só finaliza com o DOC BIM em PDF.",
+    "fim": "Inspeção finalizada. Pedido liberado para a Logística.",
+}
+
+
+def history_registro(event: dict, previous_stage: str | None) -> str:
+    """Texto do histórico: "De X para Y" nas mudanças de etapa, mais motivo e observação."""
+    text = event.get("text") or ""
+    if event.get("kind", "transition") == "transition" and previous_stage and previous_stage != event.get("stage"):
+        text = f"De {stage_label(previous_stage)} para {stage_label(event.get('stage') or '')}. {text}".strip()
+    if event.get("reason"):
+        text = f"{text} Motivo: {event['reason']}" if text else f"Motivo: {event['reason']}"
+    if event.get("note"):
+        text = f"{text} Observação: {event['note']}" if text else f"Observação: {event['note']}"
+    return text
+
+
 class InspectionDetailDialog(QDialog):
-    """Detalhes da inspecao de um PD: trilha do fluxo, proximo passo e historico.
-    Cada acao chama a API; a resposta (InspectionDetail) redesenha a tela.
+    """Detalhes da inspecao de um PD: trilha do fluxo, situacao, andamento e historico.
+    "Registrar andamento", "Atualizar atrasado", "Remarcar visita" e a correcao de data de um
+    andamento abrem janelas proprias; a resposta (InspectionDetail) redesenha a tela.
     `changed` fica True se algo foi registrado, para a lista recarregar."""
 
     changed_signal = Signal()
@@ -156,12 +187,11 @@ class InspectionDetailDialog(QDialog):
         self.data: dict = dict(inspection)
         self.can_edit = bool(service.can_edit("inspection")) if can_edit is None else bool(can_edit)
         self.changed = False
-        self._busy = False
         self._tab_index = 0
         self._content: QWidget | None = None
-        self.field: QLineEdit | None = None
         self.error_label: QLabel | None = None
         self.action_buttons: list[ModernButton] = []
+        self._events: list[dict] = []
         self.setWindowTitle(f"Inspeção {self.data.get('pd_code', '')}")
         self.setMinimumSize(760, 480)
         fit_to_screen(self, 1040, 640)
@@ -176,32 +206,71 @@ class InspectionDetailDialog(QDialog):
         start_worker(self, lambda: self.api.get(inspection_id), self._apply, self._show_error)
 
     def _apply(self, detail: dict) -> None:
-        self._busy = False
         self.data = dict(detail)
         self._render()
 
     def _show_error(self, exc: Exception) -> None:
-        self._busy = False
-        for button in self.action_buttons:
-            button.setEnabled(True)
         if self.error_label is not None:
             self.error_label.setText(str(exc))
             self.error_label.setVisible(True)
-        if getattr(exc, "error_code", None) == "INSPECTION_INVALID_STAGE":
-            self._reload()
-
-    def _run(self, operation: Callable[[], dict]) -> None:
-        if self._busy:
-            return
-        self._busy = True
-        for button in self.action_buttons:
-            button.setEnabled(False)
-        start_worker(self, operation, self._after_action, self._show_error)
 
     def _after_action(self, detail: dict) -> None:
         self.changed = True
         self.changed_signal.emit()
         self._apply(detail)
+
+    # ---- acoes (cada uma abre a sua janela) --------------------------------
+    def open_record(self) -> None:
+        dialog = RecordProgressDialog(self.service, self.data, self)
+        if dialog.exec() and dialog.result_data is not None:
+            self._after_action(dialog.result_data)
+
+    def open_catch_up(self) -> None:
+        dialog = CatchUpDialog(self.service, self.data, self)
+        if dialog.exec() and dialog.result_data is not None:
+            self._after_action(dialog.result_data)
+
+    def open_reschedule(self) -> None:
+        inspection_id = int(self.data["id"])
+        visit = self.data.get("visit_date")
+        dialog = DateEditDialog(
+            self,
+            title="Remarcar visita",
+            subtitle=f"PD {self.data.get('pd_code', '')} · visita in loco hoje em {format_date(visit)}",
+            dates=[("visit_date", "Nova data da visita", date.fromisoformat(str(visit)[:10]) if visit else None)],
+            send=lambda values, reason, _link, confirm: self.api.reschedule_visit(inspection_id, values["visit_date"], reason, confirm),
+            ok_text="Remarcar",
+        )
+        if dialog.exec() and dialog.result_data is not None:
+            self._after_action(dialog.result_data)
+
+    def selected_event(self) -> dict | None:
+        table = getattr(self, "history_table", None)
+        rows = table.selectionModel().selectedRows() if table is not None and table.selectionModel() else []
+        if not rows or not 0 <= rows[0].row() < len(self._events):
+            return None
+        return self._events[rows[0].row()]
+
+    def open_correct_event(self) -> None:
+        event = self.selected_event()
+        if event is None or event.get("kind", "transition") != "transition":
+            if self.error_label is not None:
+                self.error_label.setText("Selecione um andamento do histórico para corrigir a data.")
+                self.error_label.setVisible(True)
+            return
+        inspection_id, event_id = int(self.data["id"]), int(event["id"])
+        occurred = event.get("occurred_on")
+        dialog = DateEditDialog(
+            self,
+            title="Corrigir data do andamento",
+            subtitle=f"{event.get('text') or ''} · hoje consta {format_date(occurred)}",
+            dates=[("occurred_on", "Aconteceu em", date.fromisoformat(str(occurred)[:10]) if occurred else None)],
+            send=lambda values, reason, _link, _confirm: self.api.correct_occurred_on(inspection_id, event_id, values["occurred_on"], reason),
+            ok_text="Corrigir",
+            shortcuts=True,
+        )
+        if dialog.exec() and dialog.result_data is not None:
+            self._after_action(dialog.result_data)
 
     # ---- tela ------------------------------------------------------------
     def _render(self) -> None:
@@ -214,8 +283,6 @@ class InspectionDetailDialog(QDialog):
         stage = data.get("stage") or ""
         palette = self.service.palette
         self.action_buttons = []
-        self.field = None
-        self.registered_check: QCheckBox | None = None
         self.error_label = None
 
         content = QWidget()
@@ -227,23 +294,21 @@ class InspectionDetailDialog(QDialog):
         self.stage_badge = StatusBadge(stage_label(stage), background, foreground)
         proposals = ", ".join(data.get("proposal_numbers") or []) or "sem proposta vinculada"
         nqt = data.get("nqt_code") or "ainda sem código"
-        self.days_label = QLabel(days_text(data.get("days_in_stage"), long=True))
+        self.days_label = QLabel(days_text(data.get("days_in_stage"), long=True, business=data.get("business_days_in_stage")))
         self.attempt_label = QLabel(f"Tentativa {data.get('attempt', 1)}")
         close = ModernButton("Fechar", "close", variant="ghost")
         close.clicked.connect(self.accept)
-        step = self._step()
-        buttons = [self._make_button(*spec) for spec in step["buttons"]] if self.can_edit else []
         layout.addWidget(
             dialog_header(
                 f"Inspeção {data.get('pd_code', '')}",
                 f"{proposals} · NQT {nqt}",
                 status=[self.stage_badge, self.days_label, self.attempt_label],
-                actions=[*buttons, close],
+                actions=[close],
             )
         )
 
         self._tabs = CountTabWidget()
-        self._tabs.addTab(scrolled(self._progress_page(step)), "Andamento")
+        self._tabs.addTab(scrolled(self._progress_page()), "Andamento")
         events = list(data.get("events") or [])
         self._tabs.addTab(self._history_page(events), "Histórico", len(events))
         self._tabs.setCurrentIndex(min(self._tab_index, self._tabs.count() - 1))
@@ -251,129 +316,12 @@ class InspectionDetailDialog(QDialog):
 
         self._content = content
         self._root.addWidget(content, 1)
-        if self.field is not None:
-            self.field.setFocus()
 
     def _make_button(self, text: str, icon: str, variant: str, handler: Callable[[], None]) -> ModernButton:
         button = ModernButton(text, icon, variant=variant)
-        button.clicked.connect(lambda _=False: self._submit(handler))
+        button.clicked.connect(lambda _=False: handler())
         self.action_buttons.append(button)
         return button
-
-    def _submit(self, handler: Callable[[], None]) -> None:
-        if self.error_label is not None:
-            self.error_label.setVisible(False)
-        if self.field is not None:
-            set_validation_state(self.field, "")
-        try:
-            handler()
-        except ValueError as exc:
-            self._invalid(str(exc))
-
-    def _invalid(self, message: str) -> None:
-        if self.error_label is not None:
-            self.error_label.setText(message)
-            self.error_label.setVisible(True)
-        if self.field is not None:
-            set_validation_state(self.field, "error")
-            self.field.setFocus()
-
-    def _text(self) -> str:
-        return self.field.text().strip() if self.field is not None else ""
-
-    # ---- proximo passo por etapa -----------------------------------------
-    def _step(self) -> dict:
-        """Texto, campo e botoes do proximo passo. Cada botao e
-        (rotulo, icone, variante, acao que valida e chama `_run`)."""
-        data = self.data
-        stage = data.get("stage")
-        inspection_id = int(data["id"])
-        service = self.api
-        if stage == "pendente":
-            return {
-                "text": "A inspeção ainda não foi solicitada. Informe se o PD já está cadastrado no portal e solicite.",
-                "checkbox": "PD já cadastrado no portal?",
-                "buttons": [("Solicitar inspeção", "check", "primary", lambda: self._run(lambda: service.request(inspection_id, self.registered_check.isChecked())))],
-            }
-        if stage == "cadastro":
-            return {
-                "text": "O PD ainda não está cadastrado. Peça o cadastro no portal de cadastro e volte aqui.",
-                "buttons": [("PD cadastrado no portal", "check", "primary", lambda: self._run(lambda: service.register_pd(inspection_id)))],
-            }
-        if stage == "solicitada":
-            def register_nqt():
-                code = self._text().upper()
-                if not code:
-                    raise ValueError("Informe o código NQT.")
-                self._run(lambda: service.register_nqt(inspection_id, code))
-
-            return {
-                "text": "Solicite a inspeção no portal. Quando o portal gerar o código, registre aqui.",
-                "field": ("Código NQT", data.get("nqt_code") or "", "NQT-0000"),
-                "buttons": [("Registrar NQT", "check", "primary", register_nqt)],
-            }
-        if stage == "nqt":
-            def dispense():
-                self._run(lambda: service.decide(inspection_id, "dispensa"))
-
-            def on_site():
-                if not self._text():
-                    raise ValueError("Informe a data da visita.")
-                try:
-                    visit = parse_visit_date(self._text())
-                except ValueError:
-                    raise ValueError("Data da visita inválida. Use DD/MM/AAAA.") from None
-                self._run(lambda: service.decide(inspection_id, "inloco", visit))
-
-            return {
-                "text": "Aguardando a Equatorial: dispensar a inspeção ou mandar um engenheiro à fábrica (in loco).",
-                "field": ("Data da visita (só se for in loco)", "", "DD/MM/AAAA"),
-                "buttons": [
-                    ("Equatorial dispensou", "check", "secondary", dispense),
-                    ("Inspeção in loco", "check", "primary", on_site),
-                ],
-            }
-        if stage == "dispensa":
-            def register_pit():
-                link = check_link(self._text(), "PIT")
-                self._run(lambda: service.register_pit(inspection_id, link))
-
-            return {
-                "text": "Anexe a documentação PIT no portal e escolha onde o arquivo (ou a pasta) está guardado.",
-                "field": ("Arquivo ou pasta do PIT", "", "Escolha o arquivo ou a pasta do PIT"),
-                "path": True,
-                "buttons": [("PIT anexado", "check", "primary", register_pit)],
-            }
-        if stage == "inloco":
-            def reject():
-                reason = self._text()
-                if not reason:
-                    raise ValueError("Informe o motivo da reprovação.")
-                self._run(lambda: service.reject(inspection_id, reason))
-
-            return {
-                "text": f"Visita prevista para {format_date(data.get('visit_date'))}. Registre o resultado da inspeção.",
-                "field": ("Motivo (só se reprovada)", "", "Motivo da reprovação"),
-                "buttons": [
-                    ("Reprovada", "close", "secondary", reject),
-                    ("Aprovada", "check", "primary", lambda: self._run(lambda: service.approve(inspection_id))),
-                ],
-            }
-        if stage == "doc":
-            def register_doc():
-                link = check_link(self._text(), "DOC BIM em PDF")
-                self._run(lambda: service.register_doc(inspection_id, link))
-
-            return {
-                "text": "A Equatorial gera o DOC depois da dispensa ou da aprovação. A inspeção só finaliza com o DOC BIM em PDF.",
-                "field": ("Arquivo ou pasta do DOC BIM em PDF", "", "Escolha o arquivo ou a pasta do DOC BIM em PDF"),
-                "path": True,
-                "buttons": [("Registrar DOC e finalizar", "check_double", "primary", register_doc)],
-            }
-        return {
-            "text": "Inspeção finalizada. Pedido liberado para a Logística.",
-            "buttons": [],
-        }
 
     def _trail_steps(self) -> list[dict]:
         data = self.data
@@ -398,7 +346,9 @@ class InspectionDetailDialog(QDialog):
             steps.append({"name": name, "state": state, "label": details[index], "color": color})
         return steps
 
-    def _progress_page(self, step: dict) -> QWidget:
+    def _progress_page(self) -> QWidget:
+        data = self.data
+        stage = data.get("stage") or ""
         page = QWidget()
         layout = QVBoxLayout(page)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -409,36 +359,34 @@ class InspectionDetailDialog(QDialog):
         flow_layout.addWidget(self.trail)
         layout.addWidget(flow_panel)
 
-        panel, panel_layout = make_panel("Próximo passo")
-        self.step_label = QLabel(step["text"])
+        panel, panel_layout = make_panel("Situação e andamento")
+        self.step_label = QLabel(STAGE_HINTS.get(stage, ""))
         self.step_label.setWordWrap(True)
         panel_layout.addWidget(self.step_label)
-        if self.can_edit and step.get("checkbox"):
-            self.registered_check = QCheckBox(step["checkbox"])
-            self.registered_check.setChecked(True)
-            panel_layout.addWidget(self.registered_check)
-        if self.can_edit and step.get("field"):
-            caption, value, placeholder = step["field"]
-            panel_layout.addWidget(QLabel(caption))
-            if step.get("path"):
-                path_field = PathField(placeholder, caption)
-                path_field.setText(value)
-                self.field = path_field.line
-                panel_layout.addWidget(path_field)
-            else:
-                self.field = QLineEdit(value)
-                self.field.setPlaceholderText(placeholder)
-                self.field.setMinimumHeight(34)
-                self.field.setAccessibleName(caption)
-                panel_layout.addWidget(self.field)
-        elif not self.can_edit and step["buttons"]:
+        rows = [
+            ("Etapa atual", stage_label(stage)),
+            ("Desde", format_date(data.get("stage_since_date"))),
+            ("Dias na etapa", days_text(data.get("days_in_stage"), business=data.get("business_days_in_stage"))),
+        ]
+        if data.get("visit_date"):
+            rows.append(("Visita in loco", format_date(data.get("visit_date"))))
+        panel_layout.addLayout(kv_grid(rows))
+        if self.can_edit and stage != "fim":
+            self.record_button = self._make_button("Registrar andamento", "edit", "primary", self.open_record)
+            panel_layout.addWidget(self.record_button)
+            self.catch_up_button = self._make_button("Atualizar atrasado", "refresh", "secondary", self.open_catch_up)
+            panel_layout.addWidget(self.catch_up_button)
+            if stage == "inloco":
+                self.reschedule_button = self._make_button("Remarcar visita", "edit", "secondary", self.open_reschedule)
+                panel_layout.addWidget(self.reschedule_button)
+        elif not self.can_edit and stage != "fim":
             panel_layout.addWidget(QLabel("Você pode consultar, mas não registrar andamento nesta área."))
         self.error_label = set_notice_kind(QLabel(""), "danger")
         self.error_label.setWordWrap(True)
         self.error_label.setVisible(False)
         panel_layout.addWidget(self.error_label)
         layout.addWidget(panel)
-        saved = [("PIT", self.data.get("pit_link") or ""), ("DOC BIM em PDF", self.data.get("doc_link") or "")]
+        saved = [("PIT", data.get("pit_link") or ""), ("DOC BIM em PDF", data.get("doc_link") or "")]
         if any(path for _caption, path in saved):
             docs, docs_layout = make_panel("Documentos salvos")
             docs_layout.addWidget(path_rows_panel(saved))
@@ -448,18 +396,24 @@ class InspectionDetailDialog(QDialog):
 
     def _history_page(self, events: list[dict]) -> QWidget:
         panel, layout = make_panel("Histórico")
-        self.history_table = _read_only_table(["Quando", "Quem", "Etapa", "Tentativa", "Registro"])
+        # Do mais antigo ao mais novo para achar o "de X para Y"; a tela mostra na ordem recebida.
+        previous: dict[int, str | None] = {}
+        last_stage: str | None = None
+        for event in sorted(events, key=lambda e: (str(e.get("created_at") or ""), int(e.get("id") or 0))):
+            previous[id(event)] = last_stage
+            if event.get("kind", "transition") == "transition":
+                last_stage = event.get("stage")
+        self._events = events
+        self.history_table = _read_only_table(["Aconteceu em", "Registrado em", "Quem", "Etapa", "Tentativa", "Registro"])
         self.history_table.setRowCount(len(events))
         for row, event in enumerate(events):
-            text = event.get("text") or ""
-            if event.get("reason"):
-                text = f"{text} Motivo: {event['reason']}" if text else f"Motivo: {event['reason']}"
             values = [
+                format_date(event.get("occurred_on")),
                 format_moment(event.get("created_at")),
                 event.get("actor_name") or EM_DASH,
                 stage_label(event.get("stage") or ""),
                 str(event.get("attempt", "")),
-                text,
+                history_registro(event, previous.get(id(event))),
             ]
             for column, value in enumerate(values):
                 cell = QTableWidgetItem(value)
@@ -467,9 +421,12 @@ class InspectionDetailDialog(QDialog):
                 self.history_table.setItem(row, column, cell)
         header = self.history_table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(4, QHeaderView.Stretch)
+        header.setSectionResizeMode(5, QHeaderView.Stretch)
         self.history_table.resizeRowsToContents()
         layout.addWidget(self.history_table, 1)
+        if self.can_edit:
+            self.correct_button = self._make_button("Corrigir data do andamento", "edit", "secondary", self.open_correct_event)
+            layout.addWidget(self.correct_button)
         return panel
 
 
