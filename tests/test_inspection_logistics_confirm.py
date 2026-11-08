@@ -58,6 +58,18 @@ class TextTests(unittest.TestCase):
         self.assertEqual(confirmation_text({}, "Mensagem da API."), "Mensagem da API.")
 
 
+    def test_orphaned_inspection_and_empty_log_in_load_have_their_own_sentence(self):
+        base = {**CANCEL_INFO, "inspection_orphaned": False, "log_stays_empty_in_load": False}
+        for info in (base, {k: v for k, v in CANCEL_INFO.items()}, {**base, "action": "change_order"}):
+            text = confirmation_text(info)
+            self.assertNotIn("sem nenhuma proposta ativa", text)
+            self.assertNotIn("fica vazio dentro da carga", text)
+        for action in ("cancel", "change_order"):
+            text = confirmation_text({**CHANGE_INFO, "action": action, "inspection_orphaned": True, "log_stays_empty_in_load": True})
+            self.assertIn("a inspeção do PD PD-1201 fica sem nenhuma proposta ativa", text)
+            self.assertIn("O LOG101 fica vazio dentro da carga.", text)
+
+
 class StorageFlagTests(unittest.TestCase):
     def test_flag_goes_in_cancel_and_update_payloads_only_when_confirmed(self):
         sent = {}
@@ -171,8 +183,9 @@ class ChangeOrderTests(unittest.TestCase):
     def _form(self, answer):
         service = self.Spy()
         form = ProcessFormDialog(service, process_id=10)
-        form.fields["pedido_compra"].setText("PD-NOVO") if "pedido_compra" in form.fields else None
-        with patch(QUESTION, return_value=answer) as question, patch.object(QMessageBox, "warning") as warning:
+        self.assertIn("pedido_compra", form.fields)
+        form.fields["pedido_compra"].setText("PD-NOVO")
+        with patch(QUESTION, return_value=answer) as question, patch("app.ui.process_form_dialog.QMessageBox.warning") as warning:
             form.save()
         return form, service, question, warning
 

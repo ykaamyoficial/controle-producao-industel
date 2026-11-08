@@ -2,7 +2,7 @@
 
 Cada etapa tem os resultados possiveis (`OUTCOMES`); o usuario escolhe o que aconteceu, preenche
 so os campos desse resultado, diz QUANDO aconteceu (qualquer data) e registra. Avisos de data da
-API (409) viram a pergunta "Marcar mesmo assim / Escolher outra data".
+API (409) aparecem num painel dentro da propria janela: "Marcar mesmo assim / Escolher outra data".
 """
 
 from __future__ import annotations
@@ -11,8 +11,10 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import Any
 
+from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QButtonGroup,
+    QHBoxLayout,
     QDialog,
     QFrame,
     QLabel,
@@ -30,11 +32,12 @@ from app.ui.components.detail_widgets import make_panel
 from app.ui.components.dialog_shell import dialog_footer, dialog_header, dialog_layout, set_notice_kind
 from app.ui.components.modern_button import ModernButton
 from app.ui.components.path_field import PathField
-from app.ui.date_warnings import handle_date_warning
+from app.ui.date_warnings import CHOOSE_AGAIN_TEXT, CONFIRM_TEXT, date_warning_messages
 from app.ui.dialog_utils import style_dialog_from_parent
 
 MAX_CATCH_UP_STEPS = 20
 NOTE_MAX_LENGTH = 1000
+STALE_ERROR_CODE = "INSPECTION_INVALID_STAGE"
 
 
 @dataclass(frozen=True)
@@ -83,6 +86,8 @@ def stage_name(stage: str) -> str:
 
 class OutcomeForm(QFrame):
     """Um andamento: "O que aconteceu?", campos so do resultado escolhido, "Aconteceu em" e observacao."""
+
+    changed = Signal()  # qualquer campo mudou (esconde o painel de avisos de data)
 
     def __init__(self, stage: str, parent=None, *, title: str = ""):
         super().__init__(parent)
@@ -134,6 +139,13 @@ class OutcomeForm(QFrame):
         if self.outcomes:
             self.radios[self.outcomes[0].key].setChecked(True)
         self._sync_fields()
+        for radio in self.radios.values():
+            radio.toggled.connect(lambda *_: self.changed.emit())
+        self.occurred.changed.connect(self.changed)
+        self.note.textChanged.connect(lambda *_: self.changed.emit())
+        for widget in self.field_widgets.values():
+            line = widget.line if isinstance(widget, (DateQuickField, PathField)) else widget
+            line.textChanged.connect(lambda *_: self.changed.emit())
 
     def outcome(self) -> Outcome | None:
         return next((o for o in self.outcomes if self.radios[o.key].isChecked()), None)
@@ -184,6 +196,50 @@ class OutcomeForm(QFrame):
         return {"action": chosen.action, **body}  # type: ignore[union-attr]
 
 
+class DateWarningPanel(QFrame):
+    """Avisos de data da API dentro da propria janela (sem QMessageBox). "Marcar mesmo assim" chama
+    `on_confirm`; "Escolher outra data" fecha o painel e devolve o foco a `focus_target()`."""
+
+    def __init__(self, on_confirm, focus_target, parent=None):
+        super().__init__(parent)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+        self.label = set_notice_kind(QLabel(""), "warning")
+        self.label.setWordWrap(True)
+        layout.addWidget(self.label)
+        row = QHBoxLayout()
+        row.addStretch(1)
+        self.choose_button = ModernButton(CHOOSE_AGAIN_TEXT, "edit", variant="secondary")
+        self.confirm_button = ModernButton(CONFIRM_TEXT, "check", variant="secondary")
+        self.choose_button.clicked.connect(lambda _=False: self.dismiss(focus=True))
+        self.confirm_button.clicked.connect(lambda _=False: (self.dismiss(), on_confirm()))
+        row.addWidget(self.choose_button)
+        row.addWidget(self.confirm_button)
+        layout.addLayout(row)
+        self._focus_target = focus_target
+        self.setVisible(False)
+
+    def show_messages(self, messages: list[str]) -> None:
+        self.label.setText("\n\n".join(messages))
+        self.setVisible(True)
+
+    def dismiss(self, focus: bool = False) -> None:
+        self.setVisible(False)
+        target = self._focus_target() if focus else None
+        if target is not None:
+            target.setFocus()
+
+
+def _show_date_warning(dialog, exc: Exception) -> bool:
+    """True se `exc` era o 409 de datas (mostrado no painel da janela)."""
+    messages = date_warning_messages(exc)
+    if messages is None:
+        return False
+    dialog.warning_panel.show_messages(messages)
+    return True
+
+
 class RecordProgressDialog(QDialog):
     """"Registrar andamento": uma etapa por vez. `result_data` guarda o InspectionDetail devolvido."""
 
@@ -194,6 +250,7 @@ class RecordProgressDialog(QDialog):
         self.inspection = dict(inspection)
         self.stage = self.inspection.get("stage") or ""
         self.result_data: dict | None = None
+        self.stale = False  # a inspecao mudou de etapa: quem abriu recarrega
         self._busy = False
         self.setWindowTitle("Registrar andamento")
         self.setMinimumWidth(560)
@@ -217,6 +274,9 @@ class RecordProgressDialog(QDialog):
         self.error_label.setWordWrap(True)
         self.error_label.setVisible(False)
         layout.addWidget(self.error_label)
+        self.warning_panel = DateWarningPanel(lambda: self.submit(True), lambda: self.form.occurred.line)
+        self.form.changed.connect(lambda: self.warning_panel.dismiss())
+        layout.addWidget(self.warning_panel)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
@@ -241,11 +301,15 @@ class RecordProgressDialog(QDialog):
         if dialog.exec() and dialog.result_data is not None:
             self.result_data = dialog.result_data
             self.accept()
+        elif dialog.stale:
+            self.stale = True
+            self.reject()
 
     def submit(self, confirm_dates: bool = False) -> None:
         if self._busy:
             return
         self.error_label.setVisible(False)
+        self.warning_panel.dismiss()
         chosen = self.form.outcome()
         try:
             body = self.form.body()
@@ -271,7 +335,11 @@ class RecordProgressDialog(QDialog):
     def _error(self, exc: Exception) -> None:
         self._busy = False
         self.register_button.setEnabled(True)
-        if handle_date_warning(self, exc, lambda: self.submit(True)):
+        if _show_date_warning(self, exc):
+            return
+        if getattr(exc, "error_code", None) == STALE_ERROR_CODE:
+            self.stale = True
+            self.reject()
             return
         self._fail(str(exc))
 
@@ -291,6 +359,7 @@ class CatchUpDialog(QDialog):
         self.inspection = dict(inspection)
         self.result_data: dict | None = None
         self.rows: list[OutcomeForm] = []
+        self.stale = False  # a inspecao mudou de etapa: quem abriu recarrega
         self._busy = False
         self.setWindowTitle("Atualizar atrasado")
         self.setMinimumSize(600, 460)
@@ -323,6 +392,8 @@ class CatchUpDialog(QDialog):
         self.error_label.setWordWrap(True)
         self.error_label.setVisible(False)
         root.addWidget(self.error_label)
+        self.warning_panel = DateWarningPanel(lambda: self.submit(True), lambda: self.rows[0].occurred.line)
+        root.addWidget(self.warning_panel)
         cancel = ModernButton("Cancelar", "close", variant="ghost")
         cancel.clicked.connect(self.reject)
         self.register_button = ModernButton("Registrar tudo", "check", variant="primary")
@@ -341,6 +412,7 @@ class CatchUpDialog(QDialog):
         if not OUTCOMES.get(stage) or len(self.rows) >= MAX_CATCH_UP_STEPS:
             return
         form = OutcomeForm(stage, title=f"Etapa {len(self.rows) + 1}: {stage_name(stage)}")
+        form.changed.connect(lambda: self.warning_panel.dismiss())
         form.group.buttonToggled.connect(lambda *_a, f=form: self._outcome_changed(f))
         self.rows.append(form)
         self._rows_layout.insertWidget(self._rows_layout.count() - 1, form)
@@ -375,6 +447,7 @@ class CatchUpDialog(QDialog):
         if self._busy:
             return
         self.error_label.setVisible(False)
+        self.warning_panel.dismiss()
         steps = []
         for number, form in enumerate(self.rows, start=1):
             try:
@@ -399,11 +472,16 @@ class CatchUpDialog(QDialog):
     def _error(self, exc: Exception) -> None:
         self._busy = False
         self.register_button.setEnabled(True)
-        if handle_date_warning(self, exc, lambda: self.submit(True)):
+        if _show_date_warning(self, exc):
+            return
+        if getattr(exc, "error_code", None) == STALE_ERROR_CODE:
+            self.stale = True
+            self.reject()
             return
         details = getattr(exc, "details", None)
         index = details.get("step_index") if isinstance(details, dict) else None
-        prefix = f"Etapa {int(index) + 1}: " if isinstance(index, int) else ""
+        # A API ja manda "Passo N" na mensagem; so prefixa quando nao veio.
+        prefix = f"Etapa {int(index) + 1}: " if isinstance(index, int) and "Passo" not in str(exc) else ""
         self._fail(f"{prefix}{exc}")
 
     def _fail(self, message: str) -> None:

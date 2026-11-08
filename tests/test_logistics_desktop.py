@@ -15,6 +15,7 @@ from app.services.api_proposal_storage import api_permission_level, legacy_permi
 from app.services.backend_adapter import OFFICIAL_COLOR_PALETTES, AppError
 from app.services.logistics_service import ERROR_MESSAGES, LogisticsService
 from app.ui import date_edit_dialog as date_edit_module
+from app.ui.components import date_quick_field as date_quick_field_module
 from app.ui import logistics_dialogs as dialogs_module
 from app.ui import logistics_page as page_module
 from app.ui.logistics_dialogs import (
@@ -192,6 +193,17 @@ class FakeService:
         return key != "LOGISTICA" or self.edit
 
 
+FIXED_TODAY = date(2026, 11, 10)
+
+
+class FixedDate(date):
+    """`date` cujo today() e fixo: a tela e o teste leem o mesmo dia, mesmo na virada da meia-noite."""
+
+    @classmethod
+    def today(cls):
+        return FIXED_TODAY
+
+
 class QtCase(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -202,6 +214,9 @@ class QtCase(unittest.TestCase):
             item = patch.object(module, "start_worker", _sync_worker)
             item.start()
             self.addCleanup(item.stop)
+        fixed = patch.object(date_quick_field_module, "date", FixedDate)
+        fixed.start()
+        self.addCleanup(fixed.stop)
 
 
 class ClientAndServiceTests(unittest.TestCase):
@@ -589,7 +604,7 @@ class LogDetailDialogTests(QtCase):
             dialog.delivery_button.click()
         name, log_id, delivered, link, reason = api.calls[-1]
         self.assertEqual((name, log_id, link, reason), ("log_delivery", 1, "https://x.example/a.pdf", None))
-        self.assertEqual(delivered, (date.today() - timedelta(days=1)).isoformat())
+        self.assertEqual(delivered, (FIXED_TODAY - timedelta(days=1)).isoformat())
 
     def test_delivery_changing_a_saved_date_needs_a_reason(self):
         dialog, api = self._dialog(delivered_on="2026-11-11")
@@ -610,6 +625,18 @@ class LogDetailDialogTests(QtCase):
     def test_log_in_load_blocks_removal(self):
         dialog, _api = self._dialog(load_id=5, load_code="CE-01")
         self.assertIsNone(dialog.reason_field)
+
+    def test_log_in_load_hides_the_include_panel_and_explains(self):
+        dialog, _api = self._dialog(load_id=5, load_code="CE-01")
+        texts = [label.text() for label in dialog.findChildren(QLabel)]
+        self.assertIsNone(dialog.checklist)
+        self.assertNotIn("Incluir novos pedidos", texts)
+        self.assertIn("LOG em carga não recebe novos pedidos.", texts)
+        self.assertNotIn("Incluir no LOG", [b.text() for b in dialog.action_buttons])
+        dialog, _api = self._dialog()
+        texts = [label.text() for label in dialog.findChildren(QLabel)]
+        self.assertIn("Incluir novos pedidos", texts)
+        self.assertNotIn("LOG em carga não recebe novos pedidos.", texts)
 
     def test_include_proposals_sends_checked_ids(self):
         dialog, api = self._dialog()

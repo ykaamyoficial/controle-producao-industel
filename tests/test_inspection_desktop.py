@@ -15,6 +15,7 @@ from app.services.api_proposal_storage import api_permission_level, legacy_permi
 from app.services.backend_adapter import OFFICIAL_COLOR_PALETTES, AppError
 from app.services.inspection_service import InspectionService
 from app.ui import date_edit_dialog as date_edit_module
+from app.ui.components import date_quick_field as date_quick_field_module
 from app.ui import inspection_dialogs as dialogs_module
 from app.ui import inspection_page as page_module
 from app.ui import inspection_progress as progress_module
@@ -29,6 +30,17 @@ from app.ui.inspection_dialogs import (
 )
 from app.ui.inspection_page import InspectionPage
 from app.ui.sidebar import NAV_LABELS, Sidebar
+
+
+FIXED_TODAY = date(2026, 11, 10)
+
+
+class FixedDate(date):
+    """`date` cujo today() e fixo: a tela e o teste leem o mesmo dia, mesmo na virada da meia-noite."""
+
+    @classmethod
+    def today(cls):
+        return FIXED_TODAY
 
 
 def _sync_worker(owner, operation, on_success, on_error, *, operation_name=None):
@@ -136,6 +148,8 @@ class QtCase(unittest.TestCase):
             patch.object(dialogs_module, "start_worker", _sync_worker),
             patch.object(progress_module, "start_worker", _sync_worker),
             patch.object(date_edit_module, "start_worker", _sync_worker),
+            patch.object(progress_module, "date", FixedDate),
+            patch.object(date_quick_field_module, "date", FixedDate),
         ]
         for item in patches:
             item.start()
@@ -401,6 +415,24 @@ class DetailDialogTests(QtCase):
         self.assertEqual(dialog.stage_badge.text(), "NQT gerado")
         self.assertTrue(dialog.changed)
 
+    def test_stale_record_window_reloads_the_detail(self):
+        dialog, api = self._dialog("solicitada")
+
+        class StaleRecord:
+            result_data = None
+            stale = True
+
+            def __init__(self, service, data, parent):
+                pass
+
+            def exec(self):
+                return 0
+
+        with patch.object(dialogs_module, "RecordProgressDialog", StaleRecord):
+            dialog.record_button.click()
+        self.assertEqual(api.calls, [("get", 1)])
+        self.assertFalse(dialog.changed)
+
     def test_catch_up_button_opens_catch_up_window(self):
         dialog, _api = self._dialog("solicitada")
         opened = []
@@ -534,13 +566,13 @@ class RecordProgressTests(QtCase):
         self.assertIn("NQT gerado", dialog.findChild(QLabel, "FilterSubtitle").text())
         self.assertEqual(sorted(dialog.form.radios), ["dispensed", "on_site"])
         self.assertEqual(dialog.summary.text(), "Vai acontecer: NQT gerado → Dispensada, falta o PIT")
-        self.assertEqual(dialog.form.occurred.text(), date.today().strftime("%d/%m/%Y"))
+        self.assertEqual(dialog.form.occurred.text(), FIXED_TODAY.strftime("%d/%m/%Y"))
         self.assertEqual(dialog.register_button.text(), "Registrar")
 
     def test_date_shortcuts_and_any_date_is_accepted(self):
         dialog, api = self._dialog("cadastro")
         dialog.form.occurred.yesterday_button.click()
-        self.assertEqual(dialog.form.occurred.text(), (date.today() - timedelta(days=1)).strftime("%d/%m/%Y"))
+        self.assertEqual(dialog.form.occurred.text(), (FIXED_TODAY - timedelta(days=1)).strftime("%d/%m/%Y"))
         dialog.form.occurred.today_button.click()
         dialog.form.occurred.line.setText("01/01/2031")  # futuro
         dialog.submit()
@@ -570,7 +602,7 @@ class RecordProgressTests(QtCase):
         dialog, api = self._dialog("nqt", nqt_code="NQT-1")
         self.assertEqual(self._fields(dialog), set())
         dialog.submit()
-        self.assertEqual(api.calls[-1][2:4], ("decision", {"decision": "dispensa", "occurred_on": date.today().isoformat()}))
+        self.assertEqual(api.calls[-1][2:4], ("decision", {"decision": "dispensa", "occurred_on": FIXED_TODAY.isoformat()}))
         dialog, api = self._dialog("nqt", nqt_code="NQT-1")
         dialog.form.radios["on_site"].setChecked(True)
         self.assertEqual(self._fields(dialog), {"visit_date"})
@@ -614,7 +646,7 @@ class RecordProgressTests(QtCase):
         self.assertEqual(sorted(dialog.form.radios), ["needs_pd", "requested"])
         dialog.form.radios["needs_pd"].setChecked(True)
         dialog.submit()
-        self.assertEqual(api.calls[-1][2:4], ("request", {"pd_registered": False, "occurred_on": date.today().isoformat()}))
+        self.assertEqual(api.calls[-1][2:4], ("request", {"pd_registered": False, "occurred_on": FIXED_TODAY.isoformat()}))
 
     def test_date_warning_confirm_resends_same_payload_with_confirm_dates(self):
         dialog, api = self._dialog("nqt", nqt_code="NQT-1")
@@ -622,13 +654,13 @@ class RecordProgressTests(QtCase):
         dialog.form.field_widgets["visit_date"].line.setText("22/11/2026")
         api.error = AppError("Há avisos", error_code="DATE_CONFIRMATION_REQUIRED", details={"warnings": [{"message": "Domingo."}]})
 
-        def confirm(_parent, messages):
-            self.assertEqual(messages, ["Domingo."])
-            api.error = None
-            return True
-
-        with patch("app.ui.date_warnings.ask_date_confirmation", side_effect=confirm):
+        with patch("app.ui.date_warnings.ask_date_confirmation", side_effect=AssertionError("sem QMessageBox")):
             dialog.submit()
+            self.assertFalse(dialog.warning_panel.isHidden())
+            self.assertEqual(dialog.warning_panel.label.text(), "Domingo.")
+            self.assertIsNone(dialog.result_data)
+            api.error = None
+            dialog.warning_panel.confirm_button.click()
         first, second = [c for c in api.calls if c[0] == "transition"]
         self.assertNotIn("confirm_dates", first[3])
         self.assertTrue(second[3].pop("confirm_dates"))
@@ -640,12 +672,37 @@ class RecordProgressTests(QtCase):
         dialog.form.radios["on_site"].setChecked(True)
         dialog.form.field_widgets["visit_date"].line.setText("22/11/2026")
         api.error = AppError("Há avisos", error_code="DATE_CONFIRMATION_REQUIRED", details={"warnings": [{"message": "Domingo."}]})
-        with patch("app.ui.date_warnings.ask_date_confirmation", return_value=False):
+        with patch("app.ui.date_warnings.ask_date_confirmation", side_effect=AssertionError("sem QMessageBox")):
             dialog.submit()
+            self.assertFalse(dialog.warning_panel.isHidden())
+            with patch.object(dialog.form.occurred.line, "setFocus") as focus:
+                dialog.warning_panel.choose_button.click()
+            focus.assert_called_once()
+        self.assertTrue(dialog.warning_panel.isHidden())
         self.assertIsNone(dialog.result_data)
         self.assertTrue(dialog.register_button.isEnabled())
         self.assertEqual(dialog.form.field_widgets["visit_date"].text(), "22/11/2026")
         self.assertEqual(len([c for c in api.calls if c[0] == "transition"]), 1)
+
+    def test_changing_any_field_hides_the_date_warning_panel(self):
+        dialog, api = self._dialog("cadastro")
+        api.error = AppError("Há avisos", error_code="DATE_CONFIRMATION_REQUIRED", details={"warnings": [{"message": "Domingo."}]})
+        dialog.submit()
+        self.assertFalse(dialog.warning_panel.isHidden())
+        dialog.form.occurred.line.setText("02/11/2026")
+        self.assertTrue(dialog.warning_panel.isHidden())
+        dialog.submit()
+        self.assertFalse(dialog.warning_panel.isHidden())
+        dialog.form.note.setText("x")
+        self.assertTrue(dialog.warning_panel.isHidden())
+
+    def test_invalid_stage_closes_the_window_and_flags_reload(self):
+        dialog, api = self._dialog("cadastro")
+        api.error = AppError("A inspeção mudou de etapa. Os dados foram atualizados.", error_code="INSPECTION_INVALID_STAGE")
+        dialog.submit()
+        self.assertTrue(dialog.stale)
+        self.assertEqual(dialog.result(), 0)
+        self.assertTrue(dialog.error_label.isHidden())
 
     def test_api_error_is_shown_in_the_window(self):
         dialog, api = self._dialog("solicitada")
@@ -742,20 +799,34 @@ class CatchUpTests(QtCase):
     def test_api_step_index_is_shown_and_warning_confirm_resends(self):
         dialog, api = self._dialog("solicitada")
         dialog.rows[0].field_widgets["nqt_code"].setText("NQT-1")
-        api.error = AppError("Fora de ordem", error_code="INSPECTION_INVALID_STAGE", details={"step_index": 0})
+        api.error = AppError("Fora de ordem", error_code="OUTRO", details={"step_index": 0})
         dialog.submit()
         self.assertEqual(dialog.error_label.text(), "Etapa 1: Fora de ordem")
+        api.error = AppError("Passo 1: fora de ordem", error_code="OUTRO", details={"step_index": 0})
+        dialog.submit()
+        self.assertEqual(dialog.error_label.text(), "Passo 1: fora de ordem")
         api.error = AppError("Há avisos", error_code="DATE_CONFIRMATION_REQUIRED", details={"warnings": [{"message": "Feriado."}]})
 
-        def confirm(*_):
-            api.error = None
-            return True
-
-        with patch("app.ui.date_warnings.ask_date_confirmation", side_effect=confirm):
+        with patch("app.ui.date_warnings.ask_date_confirmation", side_effect=AssertionError("sem QMessageBox")):
             dialog.submit()
+            self.assertFalse(dialog.warning_panel.isHidden())
+            self.assertEqual(dialog.warning_panel.label.text(), "Feriado.")
+            dialog.rows[0].note.setText("mudou")
+            self.assertTrue(dialog.warning_panel.isHidden())
+            dialog.submit()
+            api.error = None
+            dialog.warning_panel.confirm_button.click()
         calls = [c for c in api.calls if c[0] == "catch_up"]
-        self.assertEqual([c[3] for c in calls], [False, False, True])
+        self.assertEqual([c[3] for c in calls], [False, False, False, False, True])
         self.assertIsNotNone(dialog.result_data)
+
+    def test_invalid_stage_closes_catch_up_and_flags_reload(self):
+        dialog, api = self._dialog("solicitada")
+        dialog.rows[0].field_widgets["nqt_code"].setText("NQT-1")
+        api.error = AppError("Passo 1: mudou", error_code="INSPECTION_INVALID_STAGE", details={"step_index": 0})
+        dialog.submit()
+        self.assertTrue(dialog.stale)
+        self.assertEqual(dialog.result(), 0)
 
 
 class NewInspectionDialogTests(QtCase):

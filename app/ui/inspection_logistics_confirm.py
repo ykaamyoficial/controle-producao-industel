@@ -46,6 +46,10 @@ def confirmation_text(info: dict[str, Any], fallback: str = "") -> str:
             parts.append(f"A proposta sai do {log_code}, porque a inspeção do novo PD não está finalizada (o histórico fica registrado).")
         elif log:
             parts.append(f"A proposta continua no {log_code}.")
+    if inspection and info.get("inspection_orphaned"):
+        parts.append(f"Depois disso, a inspeção do PD {pd} fica sem nenhuma proposta ativa.")
+    if log and info.get("log_stays_empty_in_load"):
+        parts.append(f"O {log_code} fica vazio dentro da carga.")
     return " ".join(parts)
 
 

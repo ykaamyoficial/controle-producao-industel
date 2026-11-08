@@ -532,14 +532,20 @@ class LogDetailDialog(_DetailDialog):
                 actions = [self.approve_item_button, self.reject_item_button, self.remove_item_button]
             for button in actions:
                 panel_layout.addWidget(button)
-            include, include_layout = make_panel("Incluir novos pedidos")
-            self.checklist = _Checklist(
-                "Nenhuma proposta elegível. Só entram propostas com inspeção finalizada (DOC BIM em PDF) que ainda não estejam em um LOG."
-            )
-            include_layout.addWidget(self.checklist)
-            include_layout.addWidget(self._make_button("Incluir no LOG", "new", "secondary", self._include))
-            layout.addWidget(include)
-            self._fill_checklist()
+            if self.in_load:
+                # A API recusa incluir proposta em LOG que ja esta numa carga.
+                note = QLabel("LOG em carga não recebe novos pedidos.")
+                note.setWordWrap(True)
+                layout.addWidget(note)
+            else:
+                include, include_layout = make_panel("Incluir novos pedidos")
+                self.checklist = _Checklist(
+                    "Nenhuma proposta elegível. Só entram propostas com inspeção finalizada (DOC BIM em PDF) que ainda não estejam em um LOG."
+                )
+                include_layout.addWidget(self.checklist)
+                include_layout.addWidget(self._make_button("Incluir no LOG", "new", "secondary", self._include))
+                layout.addWidget(include)
+                self._fill_checklist()
             layout.addWidget(self._notice_label())
         self._sync_item_buttons()
         return page

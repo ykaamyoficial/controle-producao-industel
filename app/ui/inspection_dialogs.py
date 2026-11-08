@@ -38,7 +38,7 @@ from app.ui.components.path_field import PathField, path_rows_panel
 from app.ui.components.status_badge import StatusBadge
 from app.ui.date_edit_dialog import DateEditDialog
 from app.ui.dialog_utils import style_dialog_from_parent
-from app.ui.inspection_progress import CatchUpDialog, RecordProgressDialog
+from app.ui.inspection_progress import STALE_ERROR_CODE, CatchUpDialog, RecordProgressDialog
 from app.ui.styles import STATUS_BADGE_COLORS, _contrast_text, _is_dark
 
 # Categoria de cor (STATUS_BADGE_COLORS) de cada etapa da inspecao.
@@ -213,6 +213,8 @@ class InspectionDetailDialog(QDialog):
         if self.error_label is not None:
             self.error_label.setText(str(exc))
             self.error_label.setVisible(True)
+        if getattr(exc, "error_code", None) == STALE_ERROR_CODE:
+            self._reload()
 
     def _after_action(self, detail: dict) -> None:
         self.changed = True
@@ -224,11 +226,15 @@ class InspectionDetailDialog(QDialog):
         dialog = RecordProgressDialog(self.service, self.data, self)
         if dialog.exec() and dialog.result_data is not None:
             self._after_action(dialog.result_data)
+        elif dialog.stale:
+            self._reload()
 
     def open_catch_up(self) -> None:
         dialog = CatchUpDialog(self.service, self.data, self)
         if dialog.exec() and dialog.result_data is not None:
             self._after_action(dialog.result_data)
+        elif dialog.stale:
+            self._reload()
 
     def open_reschedule(self) -> None:
         inspection_id = int(self.data["id"])
