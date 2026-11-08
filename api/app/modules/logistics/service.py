@@ -76,7 +76,9 @@ async def _active_counts(session: AsyncSession, log_ids: list[int]) -> dict[int,
 
 def _log_dict(row: LogisticsLog, count: int, today: date) -> dict:
     data = {c: getattr(row, c) for c in schemas.LogOut.model_fields if hasattr(row, c)}
-    data.update(days_in_stage=days_in_stage(row.stage_since, today), proposal_count=count, load_code=load_code(row.load_id) if row.load_id else None)
+    data.update(
+        days_in_stage=days_in_stage(row.stage_since, today), business_days_in_stage=calendar_rules.business_days_between(calendar_rules.local_date(row.stage_since), today),
+        proposal_count=count, load_code=load_code(row.load_id) if row.load_id else None)
     return data
 
 

@@ -50,7 +50,8 @@ def _since_sql():
 
 def _out(row: Inspection, numbers: list[str], today: date | None = None) -> dict:
     data = {c: getattr(row, c) for c in schemas.InspectionOut.model_fields if hasattr(row, c)}
-    data.update(proposal_numbers=numbers, stage_since_date=since_date(row), days_in_stage=days_in_stage(since_date(row), today), finished=row.stage == "fim")
+    data.update(proposal_numbers=numbers, stage_since_date=since_date(row), days_in_stage=days_in_stage(since_date(row), today),
+                business_days_in_stage=calendar_rules.business_days_between(since_date(row), today or calendar_rules.local_today()), finished=row.stage == "fim")
     return data
 
 

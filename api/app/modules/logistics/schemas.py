@@ -147,7 +147,8 @@ class LogOut(BaseModel):
     delivery_date: date
     stage: LogStage
     stage_since: datetime
-    days_in_stage: int
+    days_in_stage: int  # dias corridos
+    business_days_in_stage: int  # dias uteis da fabrica (seg-sex, sem feriado GO/Goiania)
     nf_link: str | None = None
     xml_link: str | None = None
     bim_link: str | None = None

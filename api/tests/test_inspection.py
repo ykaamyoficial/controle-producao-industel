@@ -296,6 +296,10 @@ class InspectionApiTests(unittest.TestCase):
         by_pd = {i["pd_code"]: i for i in listing["items"]}
         self.assertEqual(by_pd["PD-1180"]["days_in_stage"], 5)
         self.assertEqual(by_pd["PD-1195"]["days_in_stage"], 0)
+        today = calendar_rules.local_today()
+        self.assertEqual(by_pd["PD-1180"]["business_days_in_stage"], calendar_rules.business_days_between(today - timedelta(days=5), today))
+        self.assertLessEqual(by_pd["PD-1180"]["business_days_in_stage"], 5)
+        self.assertEqual(by_pd["PD-1195"]["business_days_in_stage"], 0)
         only = lambda **q: self.client.get("/api/v1/inspections", params=q, headers=self._h()).json()["items"]  # noqa: E731
         self.assertEqual([i["pd_code"] for i in only(stage="nqt")], ["PD-1180"])
         self.assertEqual([i["pd_code"] for i in only(search="nqt-04")], ["PD-1180"])

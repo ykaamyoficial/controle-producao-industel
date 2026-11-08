@@ -194,7 +194,8 @@ class InspectionOut(BaseModel):
     rejection_reason: str | None = None
     stage_since: datetime  # quando o andamento foi REGISTRADO
     stage_since_date: date  # "desde": dia em que a etapa aconteceu (occurred_on) ou, se nulo, a data local de stage_since
-    days_in_stage: int
+    days_in_stage: int  # dias corridos
+    business_days_in_stage: int  # dias uteis da fabrica (seg-sex, sem feriado GO/Goiania) depois do desde, ate hoje
     finished: bool
     created_at: datetime
     updated_at: datetime

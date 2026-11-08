@@ -25,6 +25,7 @@ from api.app.modules.auth.models import SecurityEvent
 from api.app.modules.auth.permissions import INSPECTION_EDIT, INSPECTION_VIEW, LOGISTICS_EDIT, LOGISTICS_VIEW
 from api.app.modules.inspection.models import Inspection
 from api.app.modules.logistics import schemas
+from api.app.modules.logistics import calendar_rules
 from api.app.modules.logistics.calendar_rules import local_today
 from api.app.modules.proposals.domain import INITIAL_AREA, INITIAL_STATUS
 from api.app.modules.proposals.models import Proposal
@@ -316,6 +317,9 @@ class LogisticsApiTests(unittest.TestCase):
         asyncio.run(age())
         get = lambda **q: self.client.get("/api/v1/logistics/logs", params=q, headers=self._h("viewer")).json()  # noqa: E731
         self.assertEqual({i["code"]: i["days_in_stage"] for i in get()["items"]}, {"LOG101": 4, "LOG102": 0})
+        today = local_today()
+        by_code = {i["code"]: i["business_days_in_stage"] for i in get()["items"]}
+        self.assertEqual(by_code, {"LOG101": calendar_rules.business_days_between(today - timedelta(days=4), today), "LOG102": 0})
         self.assertEqual([i["code"] for i in get(stage="aprovada")["items"]], ["LOG101"])
         self.assertEqual([i["code"] for i in get(search="CP 200")["items"]], ["LOG102"])
         self.assertEqual([i["code"] for i in get(in_load="false", stage="aprovada")["items"]], ["LOG101"])
