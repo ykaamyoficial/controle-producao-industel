@@ -67,6 +67,7 @@ class NqtPayload(BaseModel):
 class DecisionPayload(BaseModel):
     decision: Literal["dispensa", "inloco"]
     visit_date: date | None = None
+    confirm_dates: bool = False  # reenviar com true depois de um 409 DATE_CONFIRMATION_REQUIRED
 
 
 class PitPayload(BaseModel):

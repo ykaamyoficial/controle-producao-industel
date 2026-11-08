@@ -25,6 +25,7 @@ from api.app.modules.auth.models import SecurityEvent
 from api.app.modules.auth.permissions import INSPECTION_EDIT, INSPECTION_VIEW, LOGISTICS_EDIT, LOGISTICS_VIEW
 from api.app.modules.inspection.models import Inspection
 from api.app.modules.logistics import schemas
+from api.app.modules.logistics.calendar_rules import local_today
 from api.app.modules.proposals.models import Proposal
 
 TEST_DATABASE_URL = os.environ.get("POSTGRES_TEST_DATABASE_URL", "")
@@ -148,10 +149,11 @@ class LogisticsApiTests(unittest.TestCase):
         return {"Authorization": f"Bearer {self.tokens[who]}"}
 
     def _log(self, code="LOG101", cps=("CP 100", "CP 101"), who="editor", **extra):
-        today = date.today()
+        # Datas relativas a hoje (local); confirm_dates=True porque o dia pode cair em fim de semana/feriado (os avisos tem teste proprio).
+        today = local_today()
         body = {
             "code": code, "state": "EQT-MA", "requested_date": str(today + timedelta(20)), "loading_date": str(today + timedelta(19)),
-            "delivery_date": str(today + timedelta(20)), "proposal_ids": [self.ids[c] for c in cps], **extra,
+            "delivery_date": str(today + timedelta(20)), "proposal_ids": [self.ids[c] for c in cps], "confirm_dates": True, **extra,
         }
         return self.client.post("/api/v1/logistics/logs", json=body, headers=self._h(who))
 
@@ -163,7 +165,7 @@ class LogisticsApiTests(unittest.TestCase):
         return lid
 
     def _load(self, log_ids, who="editor"):
-        return self.client.post("/api/v1/logistics/loads", json={"departure_date": str(date.today() + timedelta(18)), "log_ids": log_ids}, headers=self._h(who))
+        return self.client.post("/api/v1/logistics/loads", json={"departure_date": str(local_today() + timedelta(18)), "log_ids": log_ids, "confirm_dates": True}, headers=self._h(who))
 
     def _err(self, resp, status, code):
         self.assertEqual((resp.status_code, resp.json()["error"]["code"]), (status, code), resp.text)
@@ -225,7 +227,7 @@ class LogisticsApiTests(unittest.TestCase):
         self._err(self._log("LOG101", ("CP 400",)), 409, "LOGISTICS_INSPECTION_NOT_FINISHED")
         # inexistente
         resp = self.client.post("/api/v1/logistics/logs", json={
-            "code": "LOG101", "state": "EQT-MA", "requested_date": "2026-11-01", "loading_date": "2026-11-01", "delivery_date": "2026-11-02", "proposal_ids": [9999],
+            "code": "LOG101", "state": "EQT-MA", "requested_date": "2030-11-01", "loading_date": "2030-11-01", "delivery_date": "2030-11-02", "proposal_ids": [9999],
         }, headers=self._h())
         self._err(resp, 404, "LOGISTICS_PROPOSAL_NOT_FOUND")
         # nada foi gravado pelas falhas
@@ -317,7 +319,7 @@ class LogisticsApiTests(unittest.TestCase):
         self._err(self._load([pending]), 409, "LOGISTICS_LOG_NOT_APPROVED")
         self._err(self._load([approved, pending]), 409, "LOGISTICS_LOG_NOT_APPROVED")
         self._err(self._load([9999]), 404, "LOGISTICS_LOG_NOT_FOUND")
-        self.assertEqual(self.client.post("/api/v1/logistics/loads", json={"departure_date": "2026-11-01", "log_ids": []}, headers=self._h()).status_code, 422)
+        self.assertEqual(self.client.post("/api/v1/logistics/loads", json={"departure_date": "2030-11-01", "log_ids": []}, headers=self._h()).status_code, 422)
         self.assertEqual(self.client.get("/api/v1/logistics/loads", headers=self._h()).json()["total"], 0)
 
         created = self._load([approved])
@@ -339,11 +341,11 @@ class LogisticsApiTests(unittest.TestCase):
         c = self._approved_log("LOG103", ("CP 201",))
         load_id = self._load([a]).json()["id"]
         base = f"/api/v1/logistics/loads/{load_id}"
-        two = self.client.post(f"{base}/logs", json={"log_id": b}, headers=self._h()).json()
+        two = self.client.post(f"{base}/logs", json={"log_id": b, "confirm_dates": True}, headers=self._h()).json()
         self.assertEqual((two["log_count"], two["proposal_count"]), (2, 2))
         self._err(self.client.post(f"{base}/logs", json={"log_id": b}, headers=self._h()), 409, "LOGISTICS_LOG_ALREADY_IN_LOAD")
-        new_date = str(date.today() + timedelta(30))
-        upd = self.client.patch(base, json={"departure_date": new_date}, headers=self._h()).json()
+        new_date = str(local_today() + timedelta(30))
+        upd = self.client.patch(base, json={"departure_date": new_date, "confirm_dates": True}, headers=self._h()).json()
         self.assertEqual(upd["departure_date"], new_date)
         self.assertIn("Data de saida alterada", upd["events"][0]["text"])
         # tirar um LOG
@@ -371,6 +373,82 @@ class LogisticsApiTests(unittest.TestCase):
         self.client.delete(f"/api/v1/logistics/loads/{load['id']}", headers=self._h())
         ok = self.client.post(f"/api/v1/logistics/logs/{lid}/items/{item['id']}/remove", json={"reason": "x"}, headers=self._h())
         self.assertEqual(ok.status_code, 200)
+
+    # --- avisos de data (nunca travam; 409 DATE_CONFIRMATION_REQUIRED ate confirmar) ----------
+
+    def _warnings(self, resp):
+        self._err(resp, 409, "DATE_CONFIRMATION_REQUIRED")
+        return {w["code"]: w for w in resp.json()["error"]["details"]["warnings"]}
+
+    def _raw_log(self, code="LOG101", cps=("CP 100",), **dates):
+        # 2030-03-12 e uma terca sem feriado: so os avisos pedidos aparecem.
+        base = {"requested_date": "2030-03-12", "loading_date": "2030-03-12", "delivery_date": "2030-03-13"}
+        body = {"code": code, "state": "EQT-MA", "proposal_ids": [self.ids[c] for c in cps], **base, **dates}
+        return self.client.post("/api/v1/logistics/logs", json=body, headers=self._h())
+
+    def test_clean_dates_need_no_confirmation(self):
+        self.assertEqual(self._raw_log().status_code, 201)
+
+    def test_log_warnings_block_until_confirmed_then_save(self):
+        # R3 entrega antes do carregamento + R2 (sabado 2030-03-16) + R7 (passado) juntos; nada gravado no 409.
+        resp = self._raw_log(requested_date="2020-01-07", loading_date="2030-03-14", delivery_date="2030-03-09")
+        warns = self._warnings(resp)
+        self.assertEqual(set(warns), {"DATE_IN_PAST", "NON_BUSINESS_DAY", "DELIVERY_BEFORE_LOADING"})
+        self.assertEqual((warns["DATE_IN_PAST"]["field"], warns["NON_BUSINESS_DAY"]["field"], warns["DELIVERY_BEFORE_LOADING"]["field"]),
+                         ("requested_date", "delivery_date", "delivery_date"))
+        self.assertIn("sábado", warns["NON_BUSINESS_DAY"]["message"])
+        self.assertEqual(self.client.get("/api/v1/logistics/logs", headers=self._h()).json()["total"], 0)
+        ok = self._raw_log(requested_date="2020-01-07", loading_date="2030-03-14", delivery_date="2030-03-09", confirm_dates=True)
+        self.assertEqual(ok.status_code, 201, ok.text)
+
+    def test_delivery_holiday_uses_cd_state_and_factory_uses_goiania(self):
+        # 2030-05-24 e sexta: feriado de Goiania (fabrica) mas nao do Maranhao (entrega no CD).
+        self.assertEqual(set(self._warnings(self._raw_log(loading_date="2030-05-24", delivery_date="2030-05-24"))), {"NON_BUSINESS_DAY"})
+        r = self._raw_log(loading_date="2030-05-23", delivery_date="2030-05-24")
+        self.assertEqual(r.status_code, 201, r.text)
+
+    def test_delivery_before_inspection_finished_warns(self):
+        async def finish_later():
+            async with get_engine().begin() as conn:
+                await conn.execute(text("UPDATE inspections SET stage_since = '2030-03-14T15:00:00+00' WHERE pd_code = 'PD-1'"))
+
+        asyncio.run(finish_later())
+        self.assertEqual(set(self._warnings(self._raw_log())), {"DELIVERY_BEFORE_INSPECTION_DONE"})
+
+    def test_agenda_conflict_visit_and_loading_both_ways(self):
+        async def visit():
+            async with get_engine().begin() as conn:
+                await conn.execute(text("UPDATE inspections SET stage = 'inloco', decision_type = 'inloco', visit_date = '2030-03-12' WHERE pd_code = 'PD-3'"))
+
+        asyncio.run(visit())
+        warns = self._warnings(self._raw_log())
+        self.assertEqual((set(warns), warns["AGENDA_CONFLICT"]["field"]), ({"AGENDA_CONFLICT"}, "loading_date"))
+        self.assertIn("PD-3", warns["AGENDA_CONFLICT"]["message"])
+        self.assertEqual(self._raw_log(confirm_dates=True).status_code, 201)
+        # inverso: agendar visita (PD-3 volta para 'nqt') no dia do carregamento
+        async def back_to_nqt():
+            async with get_engine().begin() as conn:
+                await conn.execute(text("UPDATE inspections SET stage = 'nqt', decision_type = NULL, visit_date = NULL WHERE pd_code = 'PD-3'"))
+
+        asyncio.run(back_to_nqt())
+        iid = self.client.get("/api/v1/inspections", params={"search": "PD-3"}, headers=self._h("none")).json()["items"][0]["id"]
+        url, body = f"/api/v1/inspections/{iid}/decision", {"decision": "inloco", "visit_date": "2030-03-12"}
+        warns = self._warnings(self.client.post(url, json=body, headers=self._h("none")))
+        self.assertEqual((set(warns), warns["AGENDA_CONFLICT"]["field"]), ({"AGENDA_CONFLICT"}, "visit_date"))
+        self.assertIn("LOG101", warns["AGENDA_CONFLICT"]["message"])
+        done = self.client.post(url, json={**body, "confirm_dates": True}, headers=self._h("none"))
+        self.assertEqual((done.status_code, done.json()["visit_date"]), (200, "2030-03-12"))
+
+    def test_load_departure_warnings(self):
+        a = self._approved_log("LOG101", ("CP 100",))
+        loading = self.client.get(f"/api/v1/logistics/logs/{a}", headers=self._h()).json()["loading_date"]
+        post = lambda dep, **kw: self.client.post("/api/v1/logistics/loads", json={"departure_date": dep, "log_ids": [a], **kw}, headers=self._h())  # noqa: E731
+        warns = self._warnings(post("2030-03-12"))
+        self.assertIn("DEPARTURE_DIFFERS_FROM_LOADING", warns)
+        self.assertNotIn("DATE_IN_PAST", warns)
+        self.assertIn(self.client.get(f"/api/v1/logistics/logs/{a}", headers=self._h()).json()["code"], warns["DEPARTURE_DIFFERS_FROM_LOADING"]["message"])
+        same = post(loading, confirm_dates=True)
+        self.assertEqual(same.status_code, 201, same.text)
 
     # --- permissoes ----------------------------------------------------------------------
 

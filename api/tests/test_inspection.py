@@ -195,8 +195,8 @@ class InspectionApiTests(unittest.TestCase):
     def test_in_loco_reject_then_new_attempt_then_approve(self):
         iid = self._to_nqt("PD-1195", "NQT-0418")
         self.assertEqual(self._post(iid, "decision", {"decision": "inloco"}).status_code, 422)  # sem data
-        visit = (date.today() + timedelta(days=3)).isoformat()
-        loco = self._post(iid, "decision", {"decision": "inloco", "visit_date": visit}).json()
+        visit = (date.today() + timedelta(days=3)).isoformat()  # pode cair em fim de semana: confirm_dates=True nos posts
+        loco = self._post(iid, "decision", {"decision": "inloco", "visit_date": visit, "confirm_dates": True}).json()
         self.assertEqual((loco["stage"], loco["visit_date"]), ("inloco", visit))
 
         self.assertEqual(self._post(iid, "reject", {"reason": "  "}).status_code, 422)
@@ -210,7 +210,7 @@ class InspectionApiTests(unittest.TestCase):
         self.assertEqual(self._post(iid, "nqt", {"nqt_code": "NQT-0418"}).status_code, 409)
         self.assertEqual(self._post(iid, "request", {"pd_registered": True}).json()["stage"], "solicitada")
         self.assertEqual(self._post(iid, "nqt", {"nqt_code": "NQT-0418"}).status_code, 200)
-        self._post(iid, "decision", {"decision": "inloco", "visit_date": visit})
+        self._post(iid, "decision", {"decision": "inloco", "visit_date": visit, "confirm_dates": True})
         self.assertEqual(self._post(iid, "approve").json()["stage"], "doc")
         self.assertEqual(self._post(iid, "doc", {"doc_link": "https://portal/doc.pdf"}).json()["stage"], "fim")
         # historico guarda a tentativa anterior

@@ -29,6 +29,7 @@ class LogCreate(BaseModel):
     loading_date: date
     delivery_date: date
     proposal_ids: list[int] = Field(min_length=1)
+    confirm_dates: bool = False  # reenviar com true depois de um 409 DATE_CONFIRMATION_REQUIRED
 
     @field_validator("code")
     @classmethod
@@ -78,14 +79,17 @@ class ResolveItemPayload(BaseModel):
 class LoadCreate(BaseModel):
     departure_date: date
     log_ids: list[int] = Field(min_length=1)
+    confirm_dates: bool = False
 
 
 class LoadUpdate(BaseModel):
     departure_date: date
+    confirm_dates: bool = False
 
 
 class LogIdPayload(BaseModel):
     log_id: int
+    confirm_dates: bool = False
 
 
 class EventOut(BaseModel):

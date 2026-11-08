@@ -18,6 +18,7 @@ from api.app.modules.auth.tokens import utcnow
 from api.app.modules.inspection import schemas
 from api.app.modules.inspection.models import Inspection, InspectionEvent
 from api.app.modules.inspection.pd_extraction import suggest_pd
+from api.app.modules.logistics import calendar_rules
 from api.app.modules.proposals.models import Proposal
 
 
@@ -30,14 +31,19 @@ def _pd_match():
     return func.lower(func.trim(Proposal.order_reference)) == func.lower(Inspection.pd_code)
 
 
-def days_in_stage(stage_since: datetime, today: date | None = None) -> int:
-    """Dias na etapa = hoje - etapa_desde (datas UTC), calculado na leitura."""
-    return max(0, ((today or utcnow().date()) - stage_since.date()).days)
+def days_in_stage(since: datetime | date, today: date | None = None) -> int:
+    """Dias na etapa = hoje - etapa_desde, em data LOCAL (America/Sao_Paulo), calculado na leitura."""
+    since_date = calendar_rules.local_date(since) if isinstance(since, datetime) else since
+    return max(0, ((today or calendar_rules.local_today()) - since_date).days)
+
+
+def since_date(row: Inspection) -> date:
+    return calendar_rules.local_date(row.stage_since)
 
 
 def _out(row: Inspection, numbers: list[str], today: date | None = None) -> dict:
     data = {c: getattr(row, c) for c in schemas.InspectionOut.model_fields if hasattr(row, c)}
-    data.update(proposal_numbers=numbers, days_in_stage=days_in_stage(row.stage_since, today), finished=row.stage == "fim")
+    data.update(proposal_numbers=numbers, days_in_stage=days_in_stage(since_date(row), today), finished=row.stage == "fim")
     return data
 
 
@@ -79,17 +85,21 @@ async def _audit(session: AsyncSession, row: Inspection, actor: User, event_type
     )
 
 
-async def _move(
-    session: AsyncSession, inspection_id: int, actor: User, request_id: str | None, *,
-    allowed: tuple[str, ...], to: str, text: str, reason: str | None = None, **fields,
-) -> schemas.InspectionDetail:
-    row = await _get(session, inspection_id, lock=True)
+def _ensure_stage(row: Inspection, allowed: tuple[str, ...]) -> None:
     if row.stage not in allowed:
         raise ApiError(
             error_codes.INSPECTION_INVALID_STAGE,
             f"Esta acao nao e permitida na etapa atual da inspecao ({row.stage}).",
             status_code=409, details={"current_stage": row.stage, "allowed_stages": list(allowed)},
         )
+
+
+async def _move(
+    session: AsyncSession, inspection_id: int, actor: User, request_id: str | None, *,
+    allowed: tuple[str, ...], to: str, text: str, reason: str | None = None, **fields,
+) -> schemas.InspectionDetail:
+    row = await _get(session, inspection_id, lock=True)
+    _ensure_stage(row, allowed)
     previous = row.stage
     for name, value in fields.items():
         setattr(row, name, value)
@@ -283,7 +293,7 @@ async def list_inspections(session: AsyncSession, *, stage: str | None, search: 
     numbers = await _numbers_by_pd(session, [r.pd_code for r in rows])
     finished = (await session.execute(select(func.count()).select_from(Inspection).where(Inspection.stage == "fim"))).scalar_one()
     everything = (await session.execute(select(func.count()).select_from(Inspection))).scalar_one()
-    today = utcnow().date()
+    today = calendar_rules.local_today()
     to_request = await _to_request_rows(session)
     shown = to_request if stage in (None, "open") else []
     if shown and search and search.strip():
@@ -343,6 +353,10 @@ async def register_decision(session, inspection_id, payload: schemas.DecisionPay
                            text="Equatorial dispensou a inspecao", decision_type="dispensa", visit_date=None)
     if payload.visit_date is None:
         raise ApiError(error_codes.VALIDATION_ERROR, "Informe a data da visita.", status_code=422)
+    _ensure_stage(await _get(session, inspection_id), ("nqt",))
+    calendar_rules.ensure_dates_confirmed(
+        await calendar_rules.schedule_warnings(session, "visit_date", payload.visit_date, exclude_inspection_id=inspection_id), payload.confirm_dates,
+    )
     return await _move(session, inspection_id, actor, request_id, allowed=("nqt",), to="inloco",
                        text=f"In loco: visita agendada para {payload.visit_date.strftime('%d/%m/%Y')}",
                        decision_type="inloco", visit_date=payload.visit_date)
@@ -372,6 +386,15 @@ async def register_doc(session, inspection_id, payload: schemas.DocPayload, acto
 
 
 # --- consulta para a Logistica ---------------------------------------------------------------
+
+
+async def finished_dates(session: AsyncSession, pd_codes: list[str]) -> dict[str, date]:
+    """Data (local) em que a inspecao de cada PD finalizou, por PD em minusculas."""
+    keys = [_pd_key(p) for p in pd_codes if p and p.strip()]
+    if not keys:
+        return {}
+    rows = (await session.execute(select(Inspection).where(func.lower(Inspection.pd_code).in_(keys), Inspection.stage == "fim"))).scalars().all()
+    return {_pd_key(r.pd_code): since_date(r) for r in rows}
 
 
 async def is_pd_inspection_finished(session: AsyncSession, pd_code: str | None) -> bool:

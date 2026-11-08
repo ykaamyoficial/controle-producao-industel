@@ -11,6 +11,10 @@ LOG_STAGES = ("reservada", "docs", "aprovada")
 ITEM_STATUSES = ("ok", "pendente", "reprovada")
 
 
+def load_code(load_id: int) -> str:
+    return f"CE-{load_id:02d}"
+
+
 class LogisticsLoad(Base):
     """Carga de entrega (CE-01...): codigo derivado do id. Nao confundir com galvanization_loads (CG-xxxx)."""
 

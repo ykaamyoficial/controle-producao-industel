@@ -14,15 +14,11 @@ from api.app.modules.auth import repository as auth_repository
 from api.app.modules.auth.models import User
 from api.app.modules.auth.tokens import utcnow
 from api.app.modules.inspection.models import Inspection
-from api.app.modules.inspection.service import days_in_stage, is_pd_inspection_finished
-from api.app.modules.logistics import schemas
-from api.app.modules.logistics.models import LogisticsEvent, LogisticsLoad, LogisticsLog, LogisticsLogItem
+from api.app.modules.inspection.service import days_in_stage, finished_dates, is_pd_inspection_finished
+from api.app.modules.logistics import calendar_rules, schemas
+from api.app.modules.logistics.models import LogisticsEvent, LogisticsLoad, LogisticsLog, LogisticsLogItem, load_code
 from api.app.modules.logistics.state_resolver import resolve_state
 from api.app.modules.proposals.models import Proposal
-
-
-def load_code(load_id: int) -> str:
-    return f"CE-{load_id:02d}"
 
 
 def _fmt(d: date) -> str:
@@ -127,7 +123,7 @@ async def get_log(session: AsyncSession, log_id: int) -> schemas.LogDetail:
     row = await _get_log(session, log_id)
     items = await _items_by_log(session, [row.id])
     removed = await _items_by_log(session, [row.id], removed=True)
-    data = _log_dict(row, len(items.get(row.id, [])), utcnow().date())
+    data = _log_dict(row, len(items.get(row.id, [])), calendar_rules.local_today())
     return schemas.LogDetail(**data, items=items.get(row.id, []), removed_items=removed.get(row.id, []), events=await _events(session, log_id=row.id))
 
 
@@ -151,7 +147,7 @@ async def list_logs(
     total = (await session.execute(select(func.count()).select_from(LogisticsLog).where(*cond))).scalar_one()
     rows = (await session.execute(select(LogisticsLog).where(*cond).order_by(LogisticsLog.stage_since, LogisticsLog.id).limit(limit).offset(offset))).scalars().all()
     counts = await _active_counts(session, [r.id for r in rows])
-    today = utcnow().date()
+    today = calendar_rules.local_today()
     return schemas.LogList(items=[_log_dict(r, counts.get(r.id, 0), today) for r in rows], total=total)
 
 
@@ -238,6 +234,35 @@ def _check_states(proposals: list[Proposal], current: str | None) -> str | None:
     return state
 
 
+# --- avisos de data (calendar_rules) -----------------------------------------------------------
+
+
+async def _log_warnings(
+    session: AsyncSession, state: str | None, proposals: list[Proposal], *,
+    requested=None, reserved=None, loading=None, delivery=None, exclude_log_id: int | None = None,
+) -> list[dict]:
+    """Avisos das datas informadas (None = campo nao alterado, nao avalia). R7, R2, R1/R6, R3 e R4."""
+    today = calendar_rules.local_today()
+    out = calendar_rules.warn_past("requested_date", requested, today)
+    if reserved != requested:
+        out += calendar_rules.warn_past("reserved_date", reserved, today)
+    out += await calendar_rules.schedule_warnings(session, "loading_date", loading, today=today, exclude_log_id=exclude_log_id)
+    out += await calendar_rules.schedule_warnings(session, "delivery_date", delivery, today=today, cd_state=state, exclude_log_id=exclude_log_id)
+    if delivery is not None and loading is not None:
+        out += calendar_rules.warn_delivery_before_loading(delivery, loading)
+    if delivery is not None and proposals:
+        done = await finished_dates(session, [p.order_reference for p in proposals])
+        out += calendar_rules.warn_delivery_before_inspection(
+            delivery, [(f"{p.proposal_number} (PD {_pd_of(p)})", done[_pd_of(p).lower()]) for p in proposals if _pd_of(p) and _pd_of(p).lower() in done],
+        )
+    return out
+
+
+async def _departure_warnings(session: AsyncSession, departure: date, logs: list[LogisticsLog], *, load_id: int | None = None) -> list[dict]:
+    out = await calendar_rules.schedule_warnings(session, "departure_date", departure, exclude_load_id=load_id)
+    return out + calendar_rules.warn_departure_vs_loading(departure, [(lg.code, lg.loading_date) for lg in logs])
+
+
 # --- LOG ----------------------------------------------------------------------------------------
 
 
@@ -247,6 +272,12 @@ async def create_log(session: AsyncSession, payload: schemas.LogCreate, actor: U
     proposals = await _eligible_proposals(session, payload.proposal_ids)
     state = _check_states(proposals, payload.state)
     reserved = payload.reserved_date or payload.requested_date
+    calendar_rules.ensure_dates_confirmed(
+        await _log_warnings(
+            session, state, proposals, requested=payload.requested_date, reserved=reserved, loading=payload.loading_date, delivery=payload.delivery_date,
+        ),
+        payload.confirm_dates,
+    )
     row = LogisticsLog(
         code=payload.code, state=state, requested_date=payload.requested_date, reserved_date=reserved,
         loading_date=payload.loading_date, delivery_date=payload.delivery_date, stage="reservada", created_by=actor.id,
@@ -420,13 +451,14 @@ async def get_load(session: AsyncSession, load_id: int) -> schemas.LoadDetail:
     logs = (await session.execute(select(LogisticsLog).where(LogisticsLog.load_id == load_id).order_by(LogisticsLog.code))).scalars().all()
     ids = [x.id for x in logs]
     items = await _items_by_log(session, ids)
-    today = utcnow().date()
+    today = calendar_rules.local_today()
     detail = [schemas.LoadLogOut(**_log_dict(lg, len(items.get(lg.id, [])), today), items=items.get(lg.id, [])) for lg in logs]
     return schemas.LoadDetail(**base, logs=detail, events=await _events(session, load_id=load_id))
 
 
 async def create_load(session: AsyncSession, payload: schemas.LoadCreate, actor: User, request_id: str | None = None) -> schemas.LoadDetail:
     logs = await _logs_for_load(session, payload.log_ids)
+    calendar_rules.ensure_dates_confirmed(await _departure_warnings(session, payload.departure_date, logs), payload.confirm_dates)
     load = LogisticsLoad(departure_date=payload.departure_date, created_by=actor.id)
     session.add(load)
     await session.flush()
@@ -443,6 +475,8 @@ async def create_load(session: AsyncSession, payload: schemas.LoadCreate, actor:
 async def update_load(session, load_id, payload: schemas.LoadUpdate, actor, request_id=None) -> schemas.LoadDetail:
     load = await _get_load(session, load_id, lock=True)
     old = load.departure_date
+    members = (await session.execute(select(LogisticsLog).where(LogisticsLog.load_id == load.id))).scalars().all()
+    calendar_rules.ensure_dates_confirmed(await _departure_warnings(session, payload.departure_date, list(members), load_id=load.id), payload.confirm_dates)
     load.departure_date, load.updated_at = payload.departure_date, utcnow()
     _event(session, actor, f"Data de saida alterada de {_fmt(old)} para {_fmt(payload.departure_date)}", load_id=load.id)
     await _audit(session, actor, "LOGISTICS_LOAD_UPDATED", request_id, load_id=load.id, load_code=load_code(load.id), departure_date=payload.departure_date.isoformat())
@@ -453,6 +487,9 @@ async def update_load(session, load_id, payload: schemas.LoadUpdate, actor, requ
 async def add_log_to_load(session, load_id, payload: schemas.LogIdPayload, actor, request_id=None) -> schemas.LoadDetail:
     load = await _get_load(session, load_id, lock=True)
     (log,) = await _logs_for_load(session, [payload.log_id])
+    calendar_rules.ensure_dates_confirmed(
+        calendar_rules.warn_departure_vs_loading(load.departure_date, [(log.code, log.loading_date)]), payload.confirm_dates,
+    )
     log.load_id, log.updated_at = load.id, utcnow()
     load.updated_at = utcnow()
     _event(session, actor, f"Incluido na carga {load_code(load.id)}", log_id=log.id)
