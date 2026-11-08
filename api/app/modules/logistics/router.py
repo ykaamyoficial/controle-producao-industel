@@ -52,6 +52,11 @@ async def create_log(payload: schemas.LogCreate, request: Request, session: Asyn
     return await service.create_log(session, payload, actor, _rid(request))
 
 
+@router.patch("/logs/{log_id}/dates", response_model=schemas.LogDetail)
+async def update_log_dates(log_id: int, payload: schemas.LogDatesPayload, request: Request, session: AsyncSession = Depends(get_db_session), actor: User = Depends(_edit)):
+    return await service.update_log_dates(session, log_id, payload, actor, _rid(request))
+
+
 @router.post("/logs/{log_id}/docs", response_model=schemas.LogDetail)
 async def send_docs(log_id: int, payload: schemas.DocsPayload, request: Request, session: AsyncSession = Depends(get_db_session), actor: User = Depends(_edit)):
     return await service.send_docs(session, log_id, payload, actor, _rid(request))

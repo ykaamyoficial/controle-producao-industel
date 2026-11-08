@@ -48,11 +48,24 @@ class InspectionFromProposal(BaseModel):
         return v
 
 
-class RequestPayload(BaseModel):
+class TransitionPayload(BaseModel):
+    """Campos comuns a toda transicao: quando aconteceu de fato (padrao hoje, local) e observacao livre."""
+
+    occurred_on: date | None = None
+    note: str | None = Field(default=None, max_length=1000)
+
+    @field_validator("note")
+    @classmethod
+    def _note(cls, v: str | None) -> str | None:
+        v = (v or "").strip()
+        return v or None
+
+
+class RequestPayload(TransitionPayload):
     pd_registered: bool  # True -> "solicitada"; False -> "cadastro"
 
 
-class NqtPayload(BaseModel):
+class NqtPayload(TransitionPayload):
     nqt_code: str = Field(min_length=1, max_length=40)
 
     @field_validator("nqt_code")
@@ -64,13 +77,13 @@ class NqtPayload(BaseModel):
         return v
 
 
-class DecisionPayload(BaseModel):
+class DecisionPayload(TransitionPayload):
     decision: Literal["dispensa", "inloco"]
     visit_date: date | None = None
     confirm_dates: bool = False  # reenviar com true depois de um 409 DATE_CONFIRMATION_REQUIRED
 
 
-class PitPayload(BaseModel):
+class PitPayload(TransitionPayload):
     pit_link: str = Field(min_length=1, max_length=500)
 
     @field_validator("pit_link")
@@ -79,7 +92,7 @@ class PitPayload(BaseModel):
         return _clean_link(v)
 
 
-class DocPayload(BaseModel):
+class DocPayload(TransitionPayload):
     doc_link: str = Field(min_length=1, max_length=500)
 
     @field_validator("doc_link")
@@ -88,7 +101,7 @@ class DocPayload(BaseModel):
         return _clean_link(v)
 
 
-class RejectPayload(BaseModel):
+class RejectPayload(TransitionPayload):
     reason: str = Field(min_length=1, max_length=1000)
 
     @field_validator("reason")
@@ -100,12 +113,68 @@ class RejectPayload(BaseModel):
         return v
 
 
+ACTION_MODELS = {
+    "request": RequestPayload, "register-pd": TransitionPayload, "nqt": NqtPayload, "decision": DecisionPayload,
+    "pit": PitPayload, "approve": TransitionPayload, "reject": RejectPayload, "doc": DocPayload,
+}
+
+
+class CatchUpStep(BaseModel):
+    """Um passo do "atualizar atrasado": `action` + os campos da transicao correspondente (mesmos nomes dos POSTs)."""
+
+    action: Literal["request", "register-pd", "nqt", "decision", "pit", "approve", "reject", "doc"]
+    pd_registered: bool | None = None
+    nqt_code: str | None = None
+    decision: Literal["dispensa", "inloco"] | None = None
+    visit_date: date | None = None
+    pit_link: str | None = None
+    doc_link: str | None = None
+    reason: str | None = None
+    occurred_on: date | None = None
+    note: str | None = None
+
+
+class CatchUpPayload(BaseModel):
+    steps: list[CatchUpStep] = Field(min_length=1, max_length=20)
+    confirm_dates: bool = False
+
+
+class RescheduleVisitPayload(BaseModel):
+    visit_date: date
+    reason: str = Field(min_length=1, max_length=1000)
+    confirm_dates: bool = False
+
+    @field_validator("reason")
+    @classmethod
+    def _reason(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("Informe o motivo.")
+        return v
+
+
+class CorrectOccurredOnPayload(BaseModel):
+    occurred_on: date
+    reason: str = Field(min_length=1, max_length=1000)
+
+    @field_validator("reason")
+    @classmethod
+    def _reason(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("Informe o motivo.")
+        return v
+
+
 class InspectionEventOut(BaseModel):
     id: int
     stage: str
     attempt: int
     text: str
     reason: str | None = None
+    kind: str = "transition"  # transition | note | visit_rescheduled | date_correction
+    occurred_on: date  # "aconteceu em"; created_at abaixo e o "registrado em"
+    note: str | None = None
     actor_user_id: int | None = None
     actor_name: str | None = None
     created_at: datetime
@@ -123,7 +192,8 @@ class InspectionOut(BaseModel):
     pit_link: str | None = None
     doc_link: str | None = None
     rejection_reason: str | None = None
-    stage_since: datetime
+    stage_since: datetime  # quando o andamento foi REGISTRADO
+    stage_since_date: date  # "desde": dia em que a etapa aconteceu (occurred_on) ou, se nulo, a data local de stage_since
     days_in_stage: int
     finished: bool
     created_at: datetime

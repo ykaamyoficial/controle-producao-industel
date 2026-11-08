@@ -34,6 +34,8 @@ class Inspection(Base):
     doc_link: Mapped[str | None] = mapped_column(String(500), nullable=True)
     rejection_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     stage_since: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    # Dia em que a etapa atual de fato aconteceu (pode ser anterior ao registro). Nulo: vale a data local de stage_since.
+    stage_occurred_on: Mapped[date | None] = mapped_column(Date(), nullable=True)
     created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
@@ -50,4 +52,9 @@ class InspectionEvent(Base):
     attempt: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
     text: Mapped[str] = mapped_column(Text, nullable=False)
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # "Aconteceu em" (created_at e o "registrado em"); nulo: vale a data local de created_at.
+    occurred_on: Mapped[date | None] = mapped_column(Date(), nullable=True)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # transition (nulo = antigo = transition) | note | visit_rescheduled | date_correction
+    kind: Mapped[str | None] = mapped_column(String(20), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)

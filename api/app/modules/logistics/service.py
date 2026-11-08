@@ -258,6 +258,45 @@ async def _log_warnings(
     return out
 
 
+_DATE_LABELS = {"requested_date": "Data pedida", "reserved_date": "Data reservada", "loading_date": "Dia de carregamento", "delivery_date": "Entrega no CD"}
+
+
+async def update_log_dates(session, log_id, payload: schemas.LogDatesPayload, actor, request_id=None) -> schemas.LogDetail:
+    """Edita datas do LOG com motivo obrigatorio e um evento 'de X para Y' por campo. Datas so geram avisos (confirm_dates)."""
+    row = await _get_log(session, log_id, lock=True)
+    changes = {
+        name: (getattr(row, name), new) for name in _DATE_LABELS
+        if (new := getattr(payload, name)) is not None and new != getattr(row, name)
+    }
+    if not changes:
+        raise ApiError(error_codes.VALIDATION_ERROR, "Nenhuma data foi alterada.", status_code=422)
+    items = await _items_by_log(session, [row.id])
+    ids = [i.proposal_id for i in items.get(row.id, [])]
+    proposals = list((await session.execute(select(Proposal).where(Proposal.id.in_(ids)))).scalars().all()) if ids else []
+    new = {name: pair[1] for name, pair in changes.items()}
+    loading, delivery = new.get("loading_date", row.loading_date), new.get("delivery_date", row.delivery_date)
+    warnings = await _log_warnings(
+        session, row.state, proposals if "delivery_date" in new else [], requested=new.get("requested_date"), reserved=new.get("reserved_date"),
+        loading=new.get("loading_date"), delivery=new.get("delivery_date"), exclude_log_id=row.id,
+    )
+    if ("loading_date" in new) != ("delivery_date" in new):  # com os dois, _log_warnings ja avaliou a R3
+        warnings += calendar_rules.warn_delivery_before_loading(delivery, loading)
+    if "loading_date" in new and row.load_id is not None:
+        load = await _get_load(session, row.load_id)
+        warnings += calendar_rules.warn_departure_vs_loading(load.departure_date, [(row.code, loading)], field="loading_date")
+    calendar_rules.ensure_dates_confirmed(warnings, payload.confirm_dates)
+    for name, (old, value) in changes.items():
+        setattr(row, name, value)
+        _event(session, actor, f"{_DATE_LABELS[name]}: de {_fmt(old)} para {_fmt(value)}", log_id=row.id, reason=payload.reason)
+    row.updated_at = utcnow()
+    await _audit(
+        session, actor, "LOGISTICS_LOG_DATES_UPDATED", request_id, log_id=row.id, code=row.code, reason=payload.reason,
+        changes={name: [old.isoformat(), value.isoformat()] for name, (old, value) in changes.items()},
+    )
+    await session.commit()
+    return await get_log(session, log_id)
+
+
 async def _departure_warnings(session: AsyncSession, departure: date, logs: list[LogisticsLog], *, load_id: int | None = None) -> list[dict]:
     out = await calendar_rules.schedule_warnings(session, "departure_date", departure, exclude_load_id=load_id)
     return out + calendar_rules.warn_departure_vs_loading(departure, [(lg.code, lg.loading_date) for lg in logs])
@@ -519,11 +558,13 @@ async def create_load(session: AsyncSession, payload: schemas.LoadCreate, actor:
 async def update_load(session, load_id, payload: schemas.LoadUpdate, actor, request_id=None) -> schemas.LoadDetail:
     load = await _get_load(session, load_id, lock=True)
     old = load.departure_date
+    if payload.departure_date == old:
+        raise ApiError(error_codes.VALIDATION_ERROR, "A data de saida nao mudou.", status_code=422)
     members = (await session.execute(select(LogisticsLog).where(LogisticsLog.load_id == load.id))).scalars().all()
     calendar_rules.ensure_dates_confirmed(await _departure_warnings(session, payload.departure_date, list(members), load_id=load.id), payload.confirm_dates)
     load.departure_date, load.updated_at = payload.departure_date, utcnow()
-    _event(session, actor, f"Data de saida alterada de {_fmt(old)} para {_fmt(payload.departure_date)}", load_id=load.id)
-    await _audit(session, actor, "LOGISTICS_LOAD_UPDATED", request_id, load_id=load.id, load_code=load_code(load.id), departure_date=payload.departure_date.isoformat())
+    _event(session, actor, f"Data de saida alterada de {_fmt(old)} para {_fmt(payload.departure_date)}", load_id=load.id, reason=payload.reason)
+    await _audit(session, actor, "LOGISTICS_LOAD_UPDATED", request_id, load_id=load.id, load_code=load_code(load.id), departure_date=payload.departure_date.isoformat(), reason=payload.reason)
     await session.commit()
     return await get_load(session, load_id)
 

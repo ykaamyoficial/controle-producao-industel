@@ -355,9 +355,13 @@ class LogisticsApiTests(unittest.TestCase):
         self.assertEqual((two["log_count"], two["proposal_count"]), (2, 2))
         self._err(self.client.post(f"{base}/logs", json={"log_id": b}, headers=self._h()), 409, "LOGISTICS_LOG_ALREADY_IN_LOAD")
         new_date = str(local_today() + timedelta(30))
-        upd = self.client.patch(base, json={"departure_date": new_date, "confirm_dates": True}, headers=self._h()).json()
+        upd = self.client.patch(base, json={"departure_date": new_date, "reason": "caminhao atrasou", "confirm_dates": True}, headers=self._h()).json()
         self.assertEqual(upd["departure_date"], new_date)
         self.assertIn("Data de saida alterada", upd["events"][0]["text"])
+        self.assertEqual(upd["events"][0]["reason"], "caminhao atrasou")
+        no_reason = self.client.patch(base, json={"departure_date": str(local_today() + timedelta(31)), "confirm_dates": True}, headers=self._h())
+        self.assertEqual(no_reason.status_code, 422)
+        self._err(self.client.patch(base, json={"departure_date": new_date, "reason": "x", "confirm_dates": True}, headers=self._h()), 422, "VALIDATION_ERROR")
         # tirar um LOG
         one = self.client.delete(f"{base}/logs/{b}", headers=self._h()).json()
         self.assertEqual(one["log_codes"], ["LOG101"])
@@ -537,6 +541,34 @@ class LogisticsApiTests(unittest.TestCase):
         # proposta sem inspecao nem LOG troca o Pedido sem confirmacao
         self.assertEqual(self._set_order("CP 400", "PD-400").status_code, 200)
 
+    # --- F3: editar datas do LOG e da carga com motivo --------------------------------------
+
+    def test_edit_log_dates_needs_reason_logs_each_field_and_warns_only(self):
+        lid = self._raw_log().json()["id"]
+        url = f"/api/v1/logistics/logs/{lid}/dates"
+        patch = lambda body, who="editor": self.client.patch(url, json=body, headers=self._h(who))  # noqa: E731
+        self.assertEqual(patch({"loading_date": "2030-03-14"}).status_code, 422)  # motivo obrigatorio
+        self._err(patch({"reason": "x"}), 422, "VALIDATION_ERROR")  # nada mudou
+        self._err(patch({"loading_date": "2030-03-12", "reason": "x"}), 422, "VALIDATION_ERROR")  # mesma data
+        # carregamento passa para depois da entrega (R3) num sabado (R2)
+        warns = self._warnings(patch({"loading_date": "2030-03-16", "reason": "caminhao quebrou"}))
+        self.assertEqual(set(warns), {"NON_BUSINESS_DAY", "DELIVERY_BEFORE_LOADING"})
+        self.assertEqual(self.client.get(url.removesuffix("/dates"), headers=self._h()).json()["loading_date"], "2030-03-12")
+        out = patch({"loading_date": "2030-03-16", "delivery_date": "2030-03-18", "reason": "caminhao quebrou", "confirm_dates": True})
+        self.assertEqual(out.status_code, 200, out.text)
+        log = out.json()
+        self.assertEqual((log["loading_date"], log["delivery_date"], log["requested_date"]), ("2030-03-16", "2030-03-18", "2030-03-12"))
+        texts = [e["text"] for e in log["events"][:2]]
+        self.assertEqual(sorted(texts), ["Dia de carregamento: de 12/03/2030 para 16/03/2030", "Entrega no CD: de 13/03/2030 para 18/03/2030"])
+        self.assertEqual({e["reason"] for e in log["events"][:2]}, {"caminhao quebrou"})
+        # LOG numa carga: mudar o carregamento para um dia diferente da saida avisa (R3b)
+        other = self._approved_log("LOG102", ("CP 200",))
+        load = self._load([other]).json()
+        dep = load["departure_date"]
+        w = self.client.patch(f"/api/v1/logistics/logs/{other}/dates", json={"loading_date": "2030-03-12", "reason": "x"}, headers=self._h())
+        self.assertIn("DEPARTURE_DIFFERS_FROM_LOADING", self._warnings(w))
+        self.assertNotEqual(dep, "2030-03-12")
+
     # --- permissoes ----------------------------------------------------------------------
 
     def test_permissions_are_enforced(self):
@@ -557,7 +589,8 @@ class LogisticsApiTests(unittest.TestCase):
             ("post", f"/logs/{lid}/items/{item_id}/resolve", {"result": "ok"}),
             ("post", f"/logs/{lid}/items/{item_id}/remove", {"reason": "x"}),
             ("post", "/loads", {"departure_date": "2026-11-01", "log_ids": [lid]}),
-            ("patch", f"/loads/{load_id}", {"departure_date": "2026-11-01"}),
+            ("patch", f"/loads/{load_id}", {"departure_date": "2026-11-01", "reason": "x"}),
+            ("patch", f"/logs/{lid}/dates", {"loading_date": "2026-11-01", "reason": "x"}),
             ("post", f"/loads/{load_id}/logs", {"log_id": lid}),
             ("delete", f"/loads/{load_id}/logs/{lid}", None),
             ("delete", f"/loads/{load_id}", None),

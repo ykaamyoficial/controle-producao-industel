@@ -223,5 +223,10 @@
     "classification": "DATA_MIGRATION",
     "summary": "Adiciona proposals.warehouse_stock_deducted_at e warehouse_stock_deducted_by_user_id (baixa no estoque do Almoxarifado) e preenche a data nas propostas ja em ALMOXARIFADO_ENTREGUE.",
     "justification": "Duas ADD COLUMN nullable (codigo antigo ignora) e uma FK nullable para users com ON DELETE SET NULL, mais um UPDATE de dados limitado a warehouse_status = 'ALMOXARIFADO_ENTREGUE' que grava a data da migration (usuario fica nulo) para que o historico ja entregue nao reapareca na aba Almoxarifado nem infle o contador de baixas pendentes (decisao D12 do Henrique). Nenhuma outra linha ou coluna e alterada; o UPDATE nao e reversivel linha a linha, mas o downgrade apenas remove FK e colunas, perdendo so a marcacao de baixa. Exige ciencia humana porque muda quais propostas a API nova mostra."
+  },
+  "20261108_0045": {
+    "classification": "ADDITIVE",
+    "summary": "Adiciona inspections.stage_occurred_on e inspection_events.occurred_on, note e kind (data em que o andamento aconteceu, observacao e tipo do evento).",
+    "justification": "Quatro ADD COLUMN nullable, sem default nem backfill: o codigo antigo ignora as colunas e o codigo novo cai para a data local de stage_since / created_at quando nulas. Nenhuma linha, tipo ou constraint existente e alterado. O downgrade so remove as colunas, perdendo apenas as datas/observacoes informadas pelo usuario."
   }
 }

@@ -84,7 +84,29 @@ class LoadCreate(BaseModel):
 
 class LoadUpdate(BaseModel):
     departure_date: date
+    reason: str = Field(min_length=1, max_length=1000)  # motivo da mudanca (obrigatorio)
     confirm_dates: bool = False
+
+    @field_validator("reason")
+    @classmethod
+    def _reason(cls, v: str) -> str:
+        return _required_text(v, "Informe o motivo.")
+
+
+class LogDatesPayload(BaseModel):
+    """Edita datas do LOG: so os campos enviados (e diferentes) mudam; um evento por campo."""
+
+    requested_date: date | None = None
+    reserved_date: date | None = None
+    loading_date: date | None = None
+    delivery_date: date | None = None
+    reason: str = Field(min_length=1, max_length=1000)
+    confirm_dates: bool = False
+
+    @field_validator("reason")
+    @classmethod
+    def _reason(cls, v: str) -> str:
+        return _required_text(v, "Informe o motivo.")
 
 
 class LogIdPayload(BaseModel):

@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
+from dataclasses import dataclass, field
 from datetime import date, datetime
 
-from sqlalchemy import func, or_, select
+from pydantic import BaseModel, ValidationError
+from sqlalchemy import Date, cast, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -38,12 +40,17 @@ def days_in_stage(since: datetime | date, today: date | None = None) -> int:
 
 
 def since_date(row: Inspection) -> date:
-    return calendar_rules.local_date(row.stage_since)
+    """"Desde": dia em que a etapa aconteceu (occurred_on); sem ele, a data local do registro."""
+    return row.stage_occurred_on or calendar_rules.local_date(row.stage_since)
+
+
+def _since_sql():
+    return func.coalesce(Inspection.stage_occurred_on, cast(func.timezone("America/Sao_Paulo", Inspection.stage_since), Date))
 
 
 def _out(row: Inspection, numbers: list[str], today: date | None = None) -> dict:
     data = {c: getattr(row, c) for c in schemas.InspectionOut.model_fields if hasattr(row, c)}
-    data.update(proposal_numbers=numbers, days_in_stage=days_in_stage(since_date(row), today), finished=row.stage == "fim")
+    data.update(proposal_numbers=numbers, stage_since_date=since_date(row), days_in_stage=days_in_stage(since_date(row), today), finished=row.stage == "fim")
     return data
 
 
@@ -74,13 +81,19 @@ async def _get(session: AsyncSession, inspection_id: int, *, lock: bool = False)
     return row
 
 
-def _event(session: AsyncSession, row: Inspection, actor: User, text: str, reason: str | None = None) -> None:
-    session.add(InspectionEvent(inspection_id=row.id, actor_user_id=actor.id, stage=row.stage, attempt=row.attempt, text=text, reason=reason))
+def _event(
+    session: AsyncSession, row: Inspection, actor: User, text: str, reason: str | None = None, *,
+    kind: str = "transition", occurred_on: date | None = None, note: str | None = None,
+) -> None:
+    session.add(InspectionEvent(
+        inspection_id=row.id, actor_user_id=actor.id, stage=row.stage, attempt=row.attempt, text=text, reason=reason,
+        kind=kind, occurred_on=occurred_on, note=note,
+    ))
 
 
 def add_note_event(session: AsyncSession, row: Inspection, actor: User, text: str, reason: str | None = None) -> None:
     """Anotacao no historico sem mudar de etapa (usada por cancelar/trocar Pedido da proposta)."""
-    _event(session, row, actor, text, reason)
+    _event(session, row, actor, text, reason, kind="note")
 
 
 async def _audit(session: AsyncSession, row: Inspection, actor: User, event_type: str, request_id: str | None, **extra) -> None:
@@ -99,24 +112,87 @@ def _ensure_stage(row: Inspection, allowed: tuple[str, ...]) -> None:
         )
 
 
-async def _move(
-    session: AsyncSession, inspection_id: int, actor: User, request_id: str | None, *,
-    allowed: tuple[str, ...], to: str, text: str, reason: str | None = None, **fields,
-) -> schemas.InspectionDetail:
-    row = await _get(session, inspection_id, lock=True)
-    _ensure_stage(row, allowed)
+@dataclass
+class _Plan:
+    allowed: tuple[str, ...]
+    to: str
+    text: str
+    reason: str | None = None
+    fields: dict = field(default_factory=dict)
+    visit_date: date | None = None  # visita agendada por este passo (gera avisos de agenda)
+
+
+async def _plan(session: AsyncSession, row: Inspection, action: str, p: BaseModel) -> _Plan:
+    """Valida o conteudo do passo e diz para onde ele leva; a ordem das etapas e conferida por quem chama."""
+    if action == "request":
+        to, text = ("solicitada", "Inspecao solicitada no portal") if p.pd_registered else ("cadastro", "Aguardando cadastro do PD no portal")
+        return _Plan(("pendente",), to, text)
+    if action == "register-pd":
+        return _Plan(("cadastro",), "solicitada", "PD cadastrado, inspecao solicitada no portal")
+    if action == "nqt":
+        dup = (await session.execute(select(Inspection.id).where(Inspection.nqt_code == p.nqt_code, Inspection.id != row.id))).first()
+        if dup:
+            raise ApiError(error_codes.INSPECTION_NQT_ALREADY_EXISTS, "Esse NQT ja esta em outro PD.", status_code=409)
+        return _Plan(("solicitada",), "nqt", f"{p.nqt_code} registrado", fields={"nqt_code": p.nqt_code})
+    if action == "decision":
+        if p.decision == "dispensa":
+            return _Plan(("nqt",), "dispensa", "Equatorial dispensou a inspecao", fields={"decision_type": "dispensa", "visit_date": None})
+        if p.visit_date is None:
+            raise ApiError(error_codes.VALIDATION_ERROR, "Informe a data da visita.", status_code=422)
+        return _Plan(("nqt",), "inloco", f"In loco: visita agendada para {calendar_rules.fmt(p.visit_date)}",
+                     fields={"decision_type": "inloco", "visit_date": p.visit_date}, visit_date=p.visit_date)
+    if action == "pit":
+        return _Plan(("dispensa",), "doc", "PIT anexado", fields={"pit_link": p.pit_link})
+    if action == "approve":
+        return _Plan(("inloco",), "doc", "In loco aprovada")
+    if action == "reject":
+        attempt = row.attempt + 1
+        # attempt sobe junto com a etapa: o evento "Reprovada..." ja pertence a nova tentativa, como no prototipo.
+        return _Plan(("inloco",), "pendente", f"Reprovada no in loco: {p.reason}. Nova tentativa {attempt}", reason=p.reason,
+                     fields={"attempt": attempt, "rejection_reason": p.reason, "decision_type": None, "visit_date": None, "pit_link": None})
+    if action == "doc":
+        return _Plan(("doc",), "fim", "Finalizada: DOC BIM em PDF registrado", fields={"doc_link": p.doc_link})
+    raise ApiError(error_codes.VALIDATION_ERROR, f"Acao desconhecida: {action}.", status_code=422)
+
+
+async def _apply(session: AsyncSession, row: Inspection, actor: User, request_id: str | None, plan: _Plan, occurred_on: date | None, note: str | None) -> None:
     previous = row.stage
-    for name, value in fields.items():
+    for name, value in plan.fields.items():
         setattr(row, name, value)
-    now = utcnow()
-    row.stage, row.stage_since, row.updated_at = to, now, now
+    now, occurred = utcnow(), occurred_on or calendar_rules.local_today()
+    row.stage, row.stage_since, row.stage_occurred_on, row.updated_at = plan.to, now, occurred, now
     try:
         await session.flush()
     except IntegrityError as exc:
         await session.rollback()
         raise ApiError(error_codes.INSPECTION_NQT_ALREADY_EXISTS, "Esse NQT ja esta em outro PD.", status_code=409) from exc
-    _event(session, row, actor, text, reason)
-    await _audit(session, row, actor, "INSPECTION_STAGE_CHANGED", request_id, from_stage=previous, to_stage=to)
+    _event(session, row, actor, plan.text, plan.reason, occurred_on=occurred, note=note)
+    await _audit(session, row, actor, "INSPECTION_STAGE_CHANGED", request_id, from_stage=previous, to_stage=plan.to, occurred_on=occurred.isoformat())
+
+
+async def _run(
+    session: AsyncSession, inspection_id: int, actor: User, request_id: str | None, steps: list[tuple[str, BaseModel]], *,
+    confirm_dates: bool = False, indexed: bool = False,
+) -> schemas.InspectionDetail:
+    """Aplica os passos em ordem, tudo ou nada. So a ordem das etapas e validada; datas so geram avisos (confirm_dates)."""
+    row = await _get(session, inspection_id, lock=True)
+    warnings: list[dict] = []
+    try:
+        for index, (action, payload) in enumerate(steps):
+            try:
+                plan = await _plan(session, row, action, payload)
+                _ensure_stage(row, plan.allowed)
+                if plan.visit_date is not None:
+                    warnings += await calendar_rules.schedule_warnings(session, "visit_date", plan.visit_date, exclude_inspection_id=row.id)
+                await _apply(session, row, actor, request_id, plan, payload.occurred_on, payload.note)
+            except ApiError as exc:
+                if indexed and isinstance(exc.details, dict):
+                    exc.details = {**exc.details, "step_index": index}
+                raise
+        calendar_rules.ensure_dates_confirmed(warnings, confirm_dates)
+    except Exception:
+        await session.rollback()
+        raise
     await session.commit()
     return await get_inspection(session, inspection_id)
 
@@ -139,14 +215,14 @@ async def create_inspection(session: AsyncSession, payload: schemas.InspectionCr
 
 
 async def _insert_inspection(session: AsyncSession, pd: str, actor: User, request_id: str | None, **audit_extra) -> Inspection:
-    row = Inspection(pd_code=pd, stage="pendente", attempt=1, created_by=actor.id)
+    row = Inspection(pd_code=pd, stage="pendente", attempt=1, created_by=actor.id, stage_occurred_on=calendar_rules.local_today())
     session.add(row)
     try:
         await session.flush()
     except IntegrityError as exc:
         await session.rollback()
         raise ApiError(error_codes.INSPECTION_ALREADY_EXISTS, "Ja existe inspecao para esse PD.", status_code=409) from exc
-    _event(session, row, actor, "Solicitacao pendente")
+    _event(session, row, actor, "Solicitacao pendente", occurred_on=calendar_rules.local_today())
     await _audit(session, row, actor, "INSPECTION_CREATED", request_id, **audit_extra)
     await session.commit()
     return row
@@ -294,7 +370,7 @@ async def list_inspections(session: AsyncSession, *, stage: str | None, search: 
             select(Proposal.id).where(_pd_match(), Proposal.active.is_(True), Proposal.proposal_number.ilike(like)).exists(),
         ))
     total = (await session.execute(select(func.count()).select_from(Inspection).where(*cond))).scalar_one()
-    rows = (await session.execute(select(Inspection).where(*cond).order_by(Inspection.stage_since, Inspection.id).limit(limit).offset(offset))).scalars().all()
+    rows = (await session.execute(select(Inspection).where(*cond).order_by(_since_sql(), Inspection.id).limit(limit).offset(offset))).scalars().all()
     numbers = await _numbers_by_pd(session, [r.pd_code for r in rows])
     finished = (await session.execute(select(func.count()).select_from(Inspection).where(Inspection.stage == "fim"))).scalar_one()
     everything = (await session.execute(select(func.count()).select_from(Inspection))).scalar_one()
@@ -324,7 +400,8 @@ async def get_inspection(session: AsyncSession, inspection_id: int) -> schemas.I
     ).all()
     data = _out(row, numbers)
     data["events"] = [
-        {"id": e.id, "stage": e.stage, "attempt": e.attempt, "text": e.text, "reason": e.reason,
+        {"id": e.id, "stage": e.stage, "attempt": e.attempt, "text": e.text, "reason": e.reason, "kind": e.kind or "transition",
+         "occurred_on": e.occurred_on or calendar_rules.local_date(e.created_at), "note": e.note,
          "actor_user_id": e.actor_user_id, "actor_name": name, "created_at": e.created_at}
         for e, name in events
     ]
@@ -334,60 +411,105 @@ async def get_inspection(session: AsyncSession, inspection_id: int) -> schemas.I
 # --- acoes (um passo do fluxo 5.1 da spec cada) ---------------------------------------------
 
 
+async def _single(session, inspection_id, actor, request_id, action: str, payload: BaseModel | None):
+    payload = payload if payload is not None else schemas.ACTION_MODELS[action]()
+    return await _run(session, inspection_id, actor, request_id, [(action, payload)], confirm_dates=getattr(payload, "confirm_dates", False))
+
+
 async def request_inspection(session, inspection_id, payload: schemas.RequestPayload, actor, request_id=None):
-    to, text = ("solicitada", "Inspecao solicitada no portal") if payload.pd_registered else ("cadastro", "Aguardando cadastro do PD no portal")
-    return await _move(session, inspection_id, actor, request_id, allowed=("pendente",), to=to, text=text)
+    return await _single(session, inspection_id, actor, request_id, "request", payload)
 
 
-async def register_pd(session, inspection_id, actor, request_id=None):
-    return await _move(session, inspection_id, actor, request_id, allowed=("cadastro",), to="solicitada",
-                       text="PD cadastrado, inspecao solicitada no portal")
+async def register_pd(session, inspection_id, actor, request_id=None, payload: schemas.TransitionPayload | None = None):
+    return await _single(session, inspection_id, actor, request_id, "register-pd", payload)
 
 
 async def register_nqt(session, inspection_id, payload: schemas.NqtPayload, actor, request_id=None):
-    dup = (await session.execute(select(Inspection.id).where(Inspection.nqt_code == payload.nqt_code, Inspection.id != inspection_id))).first()
-    if dup:
-        raise ApiError(error_codes.INSPECTION_NQT_ALREADY_EXISTS, "Esse NQT ja esta em outro PD.", status_code=409)
-    return await _move(session, inspection_id, actor, request_id, allowed=("solicitada",), to="nqt",
-                       text=f"{payload.nqt_code} registrado", nqt_code=payload.nqt_code)
+    return await _single(session, inspection_id, actor, request_id, "nqt", payload)
 
 
 async def register_decision(session, inspection_id, payload: schemas.DecisionPayload, actor, request_id=None):
-    if payload.decision == "dispensa":
-        return await _move(session, inspection_id, actor, request_id, allowed=("nqt",), to="dispensa",
-                           text="Equatorial dispensou a inspecao", decision_type="dispensa", visit_date=None)
-    if payload.visit_date is None:
-        raise ApiError(error_codes.VALIDATION_ERROR, "Informe a data da visita.", status_code=422)
-    _ensure_stage(await _get(session, inspection_id), ("nqt",))
-    calendar_rules.ensure_dates_confirmed(
-        await calendar_rules.schedule_warnings(session, "visit_date", payload.visit_date, exclude_inspection_id=inspection_id), payload.confirm_dates,
-    )
-    return await _move(session, inspection_id, actor, request_id, allowed=("nqt",), to="inloco",
-                       text=f"In loco: visita agendada para {payload.visit_date.strftime('%d/%m/%Y')}",
-                       decision_type="inloco", visit_date=payload.visit_date)
+    return await _single(session, inspection_id, actor, request_id, "decision", payload)
 
 
 async def register_pit(session, inspection_id, payload: schemas.PitPayload, actor, request_id=None):
-    return await _move(session, inspection_id, actor, request_id, allowed=("dispensa",), to="doc",
-                       text="PIT anexado", pit_link=payload.pit_link)
+    return await _single(session, inspection_id, actor, request_id, "pit", payload)
 
 
-async def approve(session, inspection_id, actor, request_id=None):
-    return await _move(session, inspection_id, actor, request_id, allowed=("inloco",), to="doc", text="In loco aprovada")
+async def approve(session, inspection_id, actor, request_id=None, payload: schemas.TransitionPayload | None = None):
+    return await _single(session, inspection_id, actor, request_id, "approve", payload)
 
 
 async def reject(session, inspection_id, payload: schemas.RejectPayload, actor, request_id=None):
-    row = await _get(session, inspection_id)
-    attempt = row.attempt + 1
-    # attempt sobe junto com a etapa: o evento "Reprovada..." ja pertence a nova tentativa, como no prototipo.
-    return await _move(session, inspection_id, actor, request_id, allowed=("inloco",), to="pendente",
-                       text=f"Reprovada no in loco: {payload.reason}. Nova tentativa {attempt}", reason=payload.reason,
-                       attempt=attempt, rejection_reason=payload.reason, decision_type=None, visit_date=None, pit_link=None)
+    return await _single(session, inspection_id, actor, request_id, "reject", payload)
 
 
 async def register_doc(session, inspection_id, payload: schemas.DocPayload, actor, request_id=None):
-    return await _move(session, inspection_id, actor, request_id, allowed=("doc",), to="fim",
-                       text="Finalizada: DOC BIM em PDF registrado", doc_link=payload.doc_link)
+    return await _single(session, inspection_id, actor, request_id, "doc", payload)
+
+
+async def catch_up(session, inspection_id, body: schemas.CatchUpPayload, actor, request_id=None):
+    """Atualizar atrasado: varios passos de uma vez, em ordem, atomico (tudo ou nada)."""
+    steps: list[tuple[str, BaseModel]] = []
+    for index, step in enumerate(body.steps):
+        data = step.model_dump(exclude_none=True)
+        action = data.pop("action")
+        try:
+            steps.append((action, schemas.ACTION_MODELS[action].model_validate(data)))
+        except ValidationError as exc:
+            errors = [{"field": ".".join(str(x) for x in e["loc"]), "message": e["msg"]} for e in exc.errors()]
+            raise ApiError(
+                error_codes.VALIDATION_ERROR, f"Passo {index + 1} ({action}) incompleto ou invalido: {errors[0]['field']}: {errors[0]['message']}",
+                status_code=422, details={"step_index": index, "errors": errors},
+            ) from exc
+    return await _run(session, inspection_id, actor, request_id, steps, confirm_dates=body.confirm_dates, indexed=True)
+
+
+async def reschedule_visit(session, inspection_id, payload: schemas.RescheduleVisitPayload, actor, request_id=None):
+    """Remarca a visita in loco (sem reprovar, sem nova tentativa)."""
+    row = await _get(session, inspection_id, lock=True)
+    _ensure_stage(row, ("inloco",))
+    old = row.visit_date
+    if old == payload.visit_date:
+        raise ApiError(error_codes.VALIDATION_ERROR, "A data da visita nao mudou.", status_code=422)
+    calendar_rules.ensure_dates_confirmed(
+        await calendar_rules.schedule_warnings(session, "visit_date", payload.visit_date, exclude_inspection_id=row.id), payload.confirm_dates,
+    )
+    row.visit_date, row.updated_at = payload.visit_date, utcnow()
+    before = calendar_rules.fmt(old) if old else "sem data"
+    _event(session, row, actor, f"Visita in loco remarcada de {before} para {calendar_rules.fmt(payload.visit_date)}", payload.reason, kind="visit_rescheduled")
+    await _audit(session, row, actor, "INSPECTION_VISIT_RESCHEDULED", request_id, from_date=old.isoformat() if old else None, to_date=payload.visit_date.isoformat())
+    await session.commit()
+    return await get_inspection(session, inspection_id)
+
+
+async def correct_occurred_on(session, inspection_id, event_id, payload: schemas.CorrectOccurredOnPayload, actor, request_id=None):
+    """Corrige o "aconteceu em" de um andamento ja gravado (qualquer etapa); se for o da etapa atual, recalcula o "desde"."""
+    row = await _get(session, inspection_id, lock=True)
+    event = (await session.execute(select(InspectionEvent).where(InspectionEvent.id == event_id, InspectionEvent.inspection_id == row.id))).scalars().first()
+    if event is None:
+        raise ApiError(error_codes.INSPECTION_EVENT_NOT_FOUND, "Andamento nao encontrado nesta inspecao.", status_code=404)
+    if event.kind not in (None, "transition"):
+        raise ApiError(error_codes.VALIDATION_ERROR, "So e possivel corrigir a data de um andamento (mudanca de etapa).", status_code=422)
+    old = event.occurred_on or calendar_rules.local_date(event.created_at)
+    if old == payload.occurred_on:
+        raise ApiError(error_codes.VALIDATION_ERROR, "A data do andamento nao mudou.", status_code=422)
+    latest = (
+        await session.execute(
+            select(func.max(InspectionEvent.id)).where(InspectionEvent.inspection_id == row.id, or_(InspectionEvent.kind.is_(None), InspectionEvent.kind == "transition"))
+        )
+    ).scalar_one()
+    event.occurred_on = payload.occurred_on
+    if event.id == latest:
+        row.stage_occurred_on = payload.occurred_on
+    row.updated_at = utcnow()
+    _event(
+        session, row, actor, f"Data do andamento '{event.text}' corrigida de {calendar_rules.fmt(old)} para {calendar_rules.fmt(payload.occurred_on)}",
+        payload.reason, kind="date_correction",
+    )
+    await _audit(session, row, actor, "INSPECTION_EVENT_DATE_CORRECTED", request_id, event_id=event.id, from_date=old.isoformat(), to_date=payload.occurred_on.isoformat())
+    await session.commit()
+    return await get_inspection(session, inspection_id)
 
 
 # --- consulta para a Logistica ---------------------------------------------------------------

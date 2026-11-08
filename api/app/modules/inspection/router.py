@@ -62,8 +62,8 @@ async def request_inspection(inspection_id: int, payload: schemas.RequestPayload
 
 
 @router.post("/{inspection_id}/register-pd", response_model=schemas.InspectionDetail)
-async def register_pd(inspection_id: int, request: Request, session: AsyncSession = Depends(get_db_session), actor: User = Depends(_edit)):
-    return await service.register_pd(session, inspection_id, actor, _rid(request))
+async def register_pd(inspection_id: int, request: Request, payload: schemas.TransitionPayload | None = None, session: AsyncSession = Depends(get_db_session), actor: User = Depends(_edit)):
+    return await service.register_pd(session, inspection_id, actor, _rid(request), payload)
 
 
 @router.post("/{inspection_id}/nqt", response_model=schemas.InspectionDetail)
@@ -82,8 +82,8 @@ async def register_pit(inspection_id: int, payload: schemas.PitPayload, request:
 
 
 @router.post("/{inspection_id}/approve", response_model=schemas.InspectionDetail)
-async def approve(inspection_id: int, request: Request, session: AsyncSession = Depends(get_db_session), actor: User = Depends(_edit)):
-    return await service.approve(session, inspection_id, actor, _rid(request))
+async def approve(inspection_id: int, request: Request, payload: schemas.TransitionPayload | None = None, session: AsyncSession = Depends(get_db_session), actor: User = Depends(_edit)):
+    return await service.approve(session, inspection_id, actor, _rid(request), payload)
 
 
 @router.post("/{inspection_id}/reject", response_model=schemas.InspectionDetail)
@@ -94,3 +94,18 @@ async def reject(inspection_id: int, payload: schemas.RejectPayload, request: Re
 @router.post("/{inspection_id}/doc", response_model=schemas.InspectionDetail)
 async def register_doc(inspection_id: int, payload: schemas.DocPayload, request: Request, session: AsyncSession = Depends(get_db_session), actor: User = Depends(_edit)):
     return await service.register_doc(session, inspection_id, payload, actor, _rid(request))
+
+
+@router.post("/{inspection_id}/catch-up", response_model=schemas.InspectionDetail)
+async def catch_up(inspection_id: int, payload: schemas.CatchUpPayload, request: Request, session: AsyncSession = Depends(get_db_session), actor: User = Depends(_edit)):
+    return await service.catch_up(session, inspection_id, payload, actor, _rid(request))
+
+
+@router.post("/{inspection_id}/reschedule-visit", response_model=schemas.InspectionDetail)
+async def reschedule_visit(inspection_id: int, payload: schemas.RescheduleVisitPayload, request: Request, session: AsyncSession = Depends(get_db_session), actor: User = Depends(_edit)):
+    return await service.reschedule_visit(session, inspection_id, payload, actor, _rid(request))
+
+
+@router.post("/{inspection_id}/events/{event_id}/occurred-on", response_model=schemas.InspectionDetail)
+async def correct_occurred_on(inspection_id: int, event_id: int, payload: schemas.CorrectOccurredOnPayload, request: Request, session: AsyncSession = Depends(get_db_session), actor: User = Depends(_edit)):
+    return await service.correct_occurred_on(session, inspection_id, event_id, payload, actor, _rid(request))

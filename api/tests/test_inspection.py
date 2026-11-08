@@ -25,6 +25,7 @@ from api.app.main import create_app
 from api.app.modules.auth.models import SecurityEvent
 from api.app.modules.auth.permissions import INSPECTION_EDIT, INSPECTION_VIEW
 from api.app.modules.inspection import schemas, service
+from api.app.modules.logistics import calendar_rules
 from api.app.modules.proposals.models import Proposal
 
 TEST_DATABASE_URL = os.environ.get("POSTGRES_TEST_DATABASE_URL", "")
@@ -307,7 +308,103 @@ class InspectionApiTests(unittest.TestCase):
 
     async def _age(self, iid: int, days: int):
         async with get_engine().begin() as conn:
-            await conn.execute(text("UPDATE inspections SET stage_since = now() - make_interval(days => :d) WHERE id = :i"), {"d": days, "i": iid})
+            await conn.execute(text("UPDATE inspections SET stage_since = now() - make_interval(days => :d), stage_occurred_on = NULL WHERE id = :i"), {"d": days, "i": iid})  # NULL = linha antiga: o desde cai para stage_since
+
+    # --- F3: andamento com data real, atualizar atrasado, remarcar e corrigir -----------------
+
+    def _ago(self, days: int) -> str:
+        return (calendar_rules.local_today() - timedelta(days=days)).isoformat()
+
+    def test_transitions_accept_occurred_on_and_note_and_never_block_on_date(self):
+        iid = self._create().json()["id"]
+        one = self._post(iid, "request", {"pd_registered": True, "occurred_on": self._ago(10), "note": "  pedido por e-mail  "}).json()
+        self.assertEqual((one["stage_since_date"], one["days_in_stage"]), (self._ago(10), 10))
+        top = one["events"][0]
+        self.assertEqual((top["occurred_on"], top["note"], top["kind"]), (self._ago(10), "pedido por e-mail", "transition"))
+        self.assertIsNotNone(top["created_at"])  # "registrado em" continua o instante real do registro
+        # sem occurred_on: hoje; data futura tambem e aceita (o sistema nunca trava por data)
+        two = self._post(iid, "nqt", {"nqt_code": "NQT-1"}).json()
+        self.assertEqual((two["stage_since_date"], two["days_in_stage"], two["events"][0]["occurred_on"]), (self._ago(0), 0, self._ago(0)))
+        future = (calendar_rules.local_today() + timedelta(days=5)).isoformat()
+        three = self._post(iid, "decision", {"decision": "dispensa", "occurred_on": future}).json()
+        self.assertEqual((three["stage"], three["stage_since_date"], three["days_in_stage"]), ("dispensa", future, 0))
+        self.assertEqual(self._post(iid, "pit", {"pit_link": "https://x/p.pdf", "occurred_on": "2020-02-30"}).status_code, 422)  # data inexistente
+
+    def test_catch_up_applies_ordered_steps_all_or_nothing(self):
+        iid = self._create().json()["id"]
+        steps = [
+            {"action": "request", "pd_registered": True, "occurred_on": self._ago(20), "note": "portal"},
+            {"action": "nqt", "nqt_code": "nqt-9", "occurred_on": self._ago(15)},
+            {"action": "decision", "decision": "dispensa", "occurred_on": self._ago(12)},
+            {"action": "pit", "pit_link": "https://x/pit.pdf", "occurred_on": self._ago(8)},
+            {"action": "doc", "doc_link": "https://x/doc.pdf", "occurred_on": self._ago(3)},
+        ]
+        # ordem errada no passo 3 (aprovar sem ter ido a in loco): nada e gravado
+        bad = [*steps[:2], {"action": "approve"}]
+        r = self._post(iid, "catch-up", {"steps": bad})
+        self.assertEqual((r.status_code, r.json()["error"]["code"], r.json()["error"]["details"]["step_index"]), (409, "INSPECTION_INVALID_STAGE", 2))
+        now = self._get(iid)
+        self.assertEqual((now["stage"], now["nqt_code"], len(now["events"])), ("pendente", None, 1))
+        # passo incompleto: 422 apontando o passo
+        r = self._post(iid, "catch-up", {"steps": [steps[0], {"action": "nqt"}]})
+        self.assertEqual((r.status_code, r.json()["error"]["details"]["step_index"]), (422, 1))
+        self.assertEqual(self._get(iid)["stage"], "pendente")
+        # sequencia valida: tudo de uma vez, cada evento com a sua data
+        done = self._post(iid, "catch-up", {"steps": steps})
+        self.assertEqual(done.status_code, 200, done.text)
+        body = done.json()
+        self.assertEqual((body["stage"], body["nqt_code"], body["finished"], body["days_in_stage"], body["stage_since_date"]), ("fim", "NQT-9", True, 3, self._ago(3)))
+        self.assertEqual([(e["stage"], e["occurred_on"]) for e in body["events"][:5]], [("fim", self._ago(3)), ("doc", self._ago(8)), ("dispensa", self._ago(12)), ("nqt", self._ago(15)), ("solicitada", self._ago(20))])
+
+    def test_catch_up_visit_date_only_warns_and_needs_confirmation(self):
+        iid = self._create().json()["id"]
+        steps = [
+            {"action": "request", "pd_registered": True}, {"action": "nqt", "nqt_code": "N-7"},
+            {"action": "decision", "decision": "inloco", "visit_date": self._ago(6)},
+            {"action": "approve", "occurred_on": self._ago(5)},
+        ]
+        r = self._post(iid, "catch-up", {"steps": steps})
+        self.assertEqual((r.status_code, r.json()["error"]["code"]), (409, "DATE_CONFIRMATION_REQUIRED"))
+        self.assertIn("DATE_IN_PAST", [w["code"] for w in r.json()["error"]["details"]["warnings"]])
+        self.assertEqual(self._get(iid)["stage"], "pendente")
+        ok = self._post(iid, "catch-up", {"steps": steps, "confirm_dates": True})
+        self.assertEqual((ok.status_code, ok.json()["stage"], ok.json()["visit_date"]), (200, "doc", self._ago(6)))
+
+    def test_reschedule_visit_keeps_attempt_and_logs_from_to(self):
+        iid = self._to_nqt("PD-1195", "NQT-0418")
+        self.assertEqual(self._post(iid, "reschedule-visit", {"visit_date": "2031-05-14", "reason": "x"}).status_code, 409)  # ainda nao esta in loco
+        self._post(iid, "decision", {"decision": "inloco", "visit_date": "2031-05-13"})
+        self.assertEqual(self._post(iid, "reschedule-visit", {"visit_date": "2031-05-14"}).status_code, 422)  # motivo obrigatorio
+        self.assertEqual(self._post(iid, "reschedule-visit", {"visit_date": "2031-05-13", "reason": "x"}).status_code, 422)  # nao mudou
+        past = self._post(iid, "reschedule-visit", {"visit_date": "2020-01-07", "reason": "x"})
+        self.assertEqual((past.status_code, past.json()["error"]["code"]), (409, "DATE_CONFIRMATION_REQUIRED"))
+        out = self._post(iid, "reschedule-visit", {"visit_date": "2031-05-14", "reason": "Equatorial pediu outro dia"}).json()
+        self.assertEqual((out["stage"], out["attempt"], out["visit_date"]), ("inloco", 1, "2031-05-14"))
+        top = out["events"][0]
+        self.assertEqual((top["kind"], top["reason"], top["text"]), ("visit_rescheduled", "Equatorial pediu outro dia", "Visita in loco remarcada de 13/05/2031 para 14/05/2031"))
+
+    def test_correct_occurred_on_recalculates_since_only_for_current_stage(self):
+        iid = self._create().json()["id"]
+        self._post(iid, "request", {"pd_registered": True, "occurred_on": self._ago(9)})
+        detail = self._post(iid, "nqt", {"nqt_code": "NQT-5", "occurred_on": self._ago(4)}).json()
+        nqt_event, request_event = detail["events"][0], detail["events"][1]
+        url = lambda e: f"events/{e['id']}/occurred-on"  # noqa: E731
+        self.assertEqual(self._post(iid, url(nqt_event), {"occurred_on": self._ago(2)}).status_code, 422)  # motivo obrigatorio
+        # evento de etapa anterior: o "desde" nao muda
+        older = self._post(iid, url(request_event), {"occurred_on": self._ago(11), "reason": "data errada"}).json()
+        self.assertEqual(older["stage_since_date"], self._ago(4))
+        self.assertEqual([e["occurred_on"] for e in older["events"] if e["kind"] == "transition"][:2], [self._ago(4), self._ago(11)])
+        self.assertIn(f"de {(calendar_rules.local_today() - timedelta(days=9)).strftime('%d/%m/%Y')} para", older["events"][0]["text"])
+        self.assertEqual((older["events"][0]["kind"], older["events"][0]["reason"]), ("date_correction", "data errada"))
+        # evento da etapa atual: recalcula o "desde" e os dias
+        cur = self._post(iid, url(nqt_event), {"occurred_on": self._ago(7), "reason": "registrado depois"}).json()
+        self.assertEqual((cur["stage_since_date"], cur["days_in_stage"]), (self._ago(7), 7))
+        # mesma data, anotacao/correcao e evento de outra inspecao nao podem ser corrigidos
+        self.assertEqual(self._post(iid, url(nqt_event), {"occurred_on": self._ago(7), "reason": "x"}).status_code, 422)
+        self.assertEqual(self._post(iid, url(cur["events"][0]), {"occurred_on": self._ago(1), "reason": "x"}).status_code, 422)
+        other = self._create("PD-1195").json()["id"]
+        r = self._post(other, url(nqt_event), {"occurred_on": self._ago(1), "reason": "x"})
+        self.assertEqual((r.status_code, r.json()["error"]["code"]), (404, "INSPECTION_EVENT_NOT_FOUND"))
 
     # --- permissoes ----------------------------------------------------------------------
 
@@ -328,6 +425,9 @@ class InspectionApiTests(unittest.TestCase):
         self.assertEqual(self._post(iid, "nqt", {"nqt_code": "N1"}, who="none").status_code, 403)
         self.assertEqual(self._get(iid)["stage"], "pendente")
         self.assertEqual(self._post(iid, "request", {"pd_registered": True}, who="viewer").status_code, 403)
+        for path, body in (("catch-up", {"steps": [{"action": "approve"}]}), ("reschedule-visit", {"visit_date": "2031-05-14", "reason": "x"}), ("events/1/occurred-on", {"occurred_on": "2031-05-14", "reason": "x"})):
+            for who in ("viewer", "none"):
+                self.assertEqual(self._post(iid, path, body, who=who).status_code, 403, (path, who))
 
     def test_unknown_inspection_is_404(self):
         resp = self.client.get("/api/v1/inspections/999", headers=self._h())
