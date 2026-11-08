@@ -40,6 +40,7 @@ from app.ui.components.dialog_shell import dialog_footer, dialog_header, dialog_
 from app.ui.components.modern_button import ModernButton
 from app.ui.components.path_field import PathField, PathValue
 from app.ui.components.status_badge import StatusBadge
+from app.ui.date_edit_dialog import DateEditDialog
 from app.ui.date_warnings import handle_date_warning
 from app.ui.dialog_utils import style_dialog_from_parent
 from app.ui.inspection_dialogs import _read_only_table, days_text, fit_to_screen, format_date, format_moment, scrolled
@@ -86,6 +87,11 @@ def parse_date(text: str, what: str) -> str:
 
 def date_text(value: date) -> str:
     return value.strftime(DATE_FORMAT)
+
+
+def as_date(value: Any) -> date | None:
+    """Data ISO da API (AAAA-MM-DD...) em date; vazio vira None."""
+    return date.fromisoformat(str(value)[:10]) if value else None
 
 
 def _scroll_body(root: QVBoxLayout) -> QVBoxLayout:
@@ -361,14 +367,20 @@ class LogDetailDialog(_DetailDialog):
 
         background, foreground = log_stage_colors(stage, palette)
         self.stage_badge = StatusBadge(log_stage_label(stage), background, foreground)
-        self.days_label = QLabel(days_text(data.get("days_in_stage"), long=True))
+        self.days_label = QLabel(days_text(data.get("days_in_stage"), long=True, business=data.get("business_days_in_stage")))
         close = ModernButton("Fechar", "close", variant="ghost")
         close.clicked.connect(self.accept)
-        buttons = []
+        primary = []
         if self.can_edit and stage == "reservada":
-            buttons.append(self._make_button("Documentação enviada", "check", "primary", self._send_docs))
+            primary.append(self._make_button("Documentação enviada", "check", "primary", self._send_docs))
         elif self.can_edit and stage == "docs":
-            buttons.append(self._make_button("Tudo ok: data aprovada", "check_double", "primary", self._approve))
+            primary.append(self._make_button("Tudo ok: data aprovada", "check_double", "primary", self._approve))
+        secondary = []
+        if self.can_edit:
+            self.edit_dates_button = self._make_button("Editar datas", "edit", "secondary", self.open_edit_dates)
+            self.delivery_button = self._make_button("Entregue no CD em", "check", "secondary", self.open_delivery)
+            secondary = [self.edit_dates_button, self.delivery_button]
+        buttons = [*secondary, *primary]
         layout.addWidget(
             dialog_header(
                 f"{data.get('code', '')} | {data.get('state', '')}",
@@ -436,9 +448,11 @@ class LogDetailDialog(_DetailDialog):
             kv_grid(
                 [
                     ("Etapa atual", StatusBadge(log_stage_label(data.get("stage") or ""), *log_stage_colors(data.get("stage") or "", self.service.palette))),
-                    ("Dias na etapa", days_text(data.get("days_in_stage"))),
+                    ("Dias na etapa", days_text(data.get("days_in_stage"), business=data.get("business_days_in_stage"))),
                     ("Propostas", str(data.get("proposal_count", len(data.get("items") or [])))),
                     ("Carga de entrega", data.get("load_code") or EM_DASH),
+                    ("Entregue no CD em", format_date(data.get("delivered_on"))),
+                    ("Comprovante da entrega", PathValue(data["delivery_proof_link"]) if data.get("delivery_proof_link") else EM_DASH),
                     ("NF", PathValue(data["nf_link"]) if data.get("nf_link") else EM_DASH),
                     ("XML", PathValue(data["xml_link"]) if data.get("xml_link") else EM_DASH),
                     ("BIM", PathValue(data["bim_link"]) if data.get("bim_link") else EM_DASH),
@@ -550,6 +564,44 @@ class LogDetailDialog(_DetailDialog):
     # ---- acoes -----------------------------------------------------------
     def _log_id(self) -> int:
         return int(self.data["id"])
+
+    def open_edit_dates(self) -> None:
+        """Editar datas do LOG: so as que mudaram vao para a API, com o motivo."""
+        data, log_id = self.data, self._log_id()
+        specs = [
+            ("requested_date", "Data pedida"),
+            ("reserved_date", "Data reservada"),
+            ("loading_date", "Carregamento no pátio"),
+            ("delivery_date", "Entrega no CD"),
+        ]
+        dialog = DateEditDialog(
+            self,
+            title="Editar datas do LOG",
+            subtitle=f"{data.get('code', '')} · altere só o que mudou e diga o motivo",
+            dates=[(key, caption, as_date(data.get(key))) for key, caption in specs],
+            send=lambda values, reason, _link, confirm: self.api.update_log_dates(log_id, values, reason, confirm),
+        )
+        if dialog.exec() and dialog.result_data is not None:
+            self._after_action(dialog.result_data)
+
+    def open_delivery(self) -> None:
+        """Entrega real no CD + link do comprovante (so texto). Motivo so ao mudar uma data ja gravada."""
+        data, log_id = self.data, self._log_id()
+        delivered = as_date(data.get("delivered_on"))
+        dialog = DateEditDialog(
+            self,
+            title="Entregue no CD em",
+            subtitle=f"{data.get('code', '')} · data em que a carga chegou no CD da Equatorial",
+            dates=[("delivered_on", "Entregue no CD em", delivered)],
+            send=lambda values, reason, link, _confirm: self.api.log_delivery(log_id, values["delivered_on"], link, reason or None),
+            ok_text="Registrar entrega",
+            only_changed=False,
+            shortcuts=True,
+            reason_needed=lambda values: delivered is not None and values["delivered_on"] != delivered.isoformat(),
+            link=("Link ou caminho do comprovante", data.get("delivery_proof_link") or ""),
+        )
+        if dialog.exec() and dialog.result_data is not None:
+            self._after_action(dialog.result_data)
 
     def _send_docs(self) -> None:
         links = check_links(*(self.doc_fields[key].text() for key in ("nf", "xml", "bim")))
@@ -827,11 +879,15 @@ class LoadDetailDialog(_DetailDialog):
         close.clicked.connect(self.accept)
         undo = []
         if self.can_edit:
-            undo.append(self._make_button("Desfazer carga", "close", "secondary", self._undo))
+            undo_button = self._make_button("Desfazer carga", "close", "secondary", self._undo)
+            self.departed_button = self._make_button("Saiu em", "check", "secondary", self.open_departed)
+            undo += [self.departed_button, undo_button]
+        departed = data.get("departed_on")
         layout.addWidget(
             dialog_header(
                 f"Carga de entrega {data.get('code', '')}",
-                f"Saída do pátio em {format_date(data.get('departure_date'))}",
+                f"Saída prevista do pátio em {format_date(data.get('departure_date'))}"
+                + (f" · saiu em {format_date(departed)}" if departed else ""),
                 actions=[*undo, close],
             )
         )
@@ -851,7 +907,9 @@ class LoadDetailDialog(_DetailDialog):
             (str(len(logs)), "LOGs na carga"),
             (str(data.get("proposal_count", 0)), "propostas"),
             (str(len(states)), "estados"),
-            (format_date(data.get("departure_date")), "saída do pátio"),
+            (format_date(data.get("departure_date")), "saída prevista"),
+            (format_date(departed), "saiu em"),
+            (f"{data.get('logs_delivered', 0)} de {data.get('logs_total', len(logs))}", "LOGs entregues"),
         ):
             row_layout.addLayout(stat_block(number, caption))
         stats_layout.addWidget(row)
@@ -880,6 +938,7 @@ class LoadDetailDialog(_DetailDialog):
                     [
                         ("Carregamento no pátio", format_date(log.get("loading_date"))),
                         ("Entrega no CD", format_date(log.get("delivery_date"))),
+                        ("Entregue no CD em", format_date(log.get("delivered_on"))),
                         ("Propostas", props),
                     ]
                 )
@@ -902,6 +961,24 @@ class LoadDetailDialog(_DetailDialog):
 
     def _load_id(self) -> int:
         return int(self.data["id"])
+
+    def open_departed(self) -> None:
+        """"Saiu em": saída REAL da carga. Motivo só ao mudar uma data já gravada."""
+        load_id = self._load_id()
+        departed = as_date(self.data.get("departed_on"))
+        dialog = DateEditDialog(
+            self,
+            title="Saiu em",
+            subtitle=f"Carga {self.data.get('code', '')} · data em que o caminhão saiu do pátio",
+            dates=[("departed_on", "Saiu do pátio em", departed)],
+            send=lambda values, reason, _link, _confirm: self.api.load_departed(load_id, values["departed_on"], reason or None),
+            ok_text="Registrar saída",
+            only_changed=False,
+            shortcuts=True,
+            reason_needed=lambda values: departed is not None and values["departed_on"] != departed.isoformat(),
+        )
+        if dialog.exec() and dialog.result_data is not None:
+            self._after_action(dialog.result_data)
 
     def _save_date(self) -> None:
         text = self.date_field.text() if self.date_field is not None else ""

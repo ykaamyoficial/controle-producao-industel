@@ -39,8 +39,16 @@ from app.ui.logistics_dialogs import (
 PAGE_SIZE = 100
 LOG_COLUMNS = ["LOG", "Estado", "Data reservada", "Carregamento", "Entrega no CD", "Etapa", "Dias na etapa", "Propostas", "Carga"]
 LOG_STAGE_COLUMN = 5
-LOAD_COLUMNS = ["Carga", "Saída do pátio", "LOGs", "Estados", "Propostas"]
+LOAD_COLUMNS = ["Carga", "Saída prevista", "LOGs", "Estados", "Propostas", "Andamento"]
 LOAD_LEFT_COLUMNS = (2, 3)
+
+
+def load_progress_text(load: dict) -> str:
+    """"saiu 05/12, 2 de 3 LOGs entregues"; sem saída registrada, só a contagem."""
+    total = int(load.get("logs_total", load.get("log_count", 0)) or 0)
+    count = f"{int(load.get('logs_delivered') or 0)} de {total} LOGs entregues"
+    departed = load.get("departed_on")
+    return f"saiu {format_date(departed)[:5]}, {count}" if departed else count
 
 
 class LogisticsPage(QWidget):
@@ -207,7 +215,7 @@ class LogisticsPage(QWidget):
                 format_date(log.get("loading_date")),
                 format_date(log.get("delivery_date")),
                 log_stage_label(stage),
-                days_text(log.get("days_in_stage")),
+                days_text(log.get("days_in_stage"), business=log.get("business_days_in_stage")),
                 str(log.get("proposal_count", 0)),
                 log.get("load_code") or EM_DASH,
             ]
@@ -242,6 +250,7 @@ class LogisticsPage(QWidget):
                 ", ".join(load.get("log_codes") or []) or EM_DASH,
                 ", ".join(load.get("states") or []) or EM_DASH,
                 str(load.get("proposal_count", 0)),
+                load_progress_text(load),
             ]
             self._fill_row(self.loads_table, row, values)
         self.count_label.setText(f"{self._total} cargas")

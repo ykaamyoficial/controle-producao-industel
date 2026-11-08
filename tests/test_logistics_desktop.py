@@ -2,17 +2,19 @@ from __future__ import annotations
 
 import os
 import unittest
+from datetime import date, timedelta
 from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
+from PySide6.QtWidgets import QApplication, QDialog, QLabel, QMessageBox
 
 from app.integrations.api.exceptions import ApiBusinessError
 from app.integrations.api.logistics_client import LogisticsApiClient
 from app.services.api_proposal_storage import api_permission_level, legacy_permissions_to_api_codes
 from app.services.backend_adapter import OFFICIAL_COLOR_PALETTES, AppError
 from app.services.logistics_service import ERROR_MESSAGES, LogisticsService
+from app.ui import date_edit_dialog as date_edit_module
 from app.ui import logistics_dialogs as dialogs_module
 from app.ui import logistics_page as page_module
 from app.ui.logistics_dialogs import (
@@ -40,7 +42,7 @@ def _log(**changes) -> dict:
     base = {
         "id": 1, "code": "LOG101", "state": "EQT-MA", "requested_date": "2026-11-10", "reserved_date": "2026-11-10",
         "loading_date": "2026-11-09", "delivery_date": "2026-11-10", "stage": "reservada", "stage_since": "2026-10-15T10:00:00Z",
-        "days_in_stage": 4, "nf_link": None, "xml_link": None, "bim_link": None, "load_id": None, "load_code": None,
+        "days_in_stage": 4, "business_days_in_stage": 2, "delivered_on": None, "delivery_proof_link": None, "nf_link": None, "xml_link": None, "bim_link": None, "load_id": None, "load_code": None,
         "proposal_count": 2, "created_at": "2026-10-15T10:00:00Z", "updated_at": "2026-10-15T10:00:00Z",
         "items": [
             {"id": 10, "proposal_id": 1, "proposal_number": "10480/B", "customer_name": "Torres Norte", "project_name": "X", "pd_code": "PD-1180",
@@ -55,7 +57,7 @@ def _log(**changes) -> dict:
 
 def _load(**changes) -> dict:
     base = {
-        "id": 5, "code": "CE-01", "departure_date": "2026-11-08", "log_count": 2, "proposal_count": 3, "log_codes": ["LOG101", "LOG102"],
+        "id": 5, "code": "CE-01", "departure_date": "2026-11-08", "departed_on": None, "logs_total": 2, "logs_delivered": 0, "log_count": 2, "proposal_count": 3, "log_codes": ["LOG101", "LOG102"],
         "states": ["EQT-MA", "EQT-PA"], "created_at": "2026-10-15T10:00:00Z", "updated_at": "2026-10-15T10:00:00Z",
         "logs": [_log(stage="aprovada"), _log(id=2, code="LOG102", state="EQT-PA", stage="aprovada")], "events": [],
     }
@@ -150,6 +152,16 @@ class FakeLogisticsApi:
         extra = (True,) if confirm_dates else ()
         return self._respond("create_load", departure_date, log_ids, *extra, default=_load())
 
+    def update_log_dates(self, log_id, dates, reason, confirm_dates=False):
+        extra = (True,) if confirm_dates else ()
+        return self._respond("update_log_dates", log_id, dict(dates), reason, *extra)
+
+    def log_delivery(self, log_id, delivered_on, proof_link=None, reason=None):
+        return self._respond("log_delivery", log_id, delivered_on, proof_link, reason)
+
+    def load_departed(self, load_id, departed_on, reason=None):
+        return self._respond("load_departed", load_id, departed_on, reason, default=_load())
+
     def update_load(self, load_id, departure_date, reason, confirm_dates=False):
         extra = (True,) if confirm_dates else ()
         return self._respond("update_load", load_id, departure_date, reason, *extra, default=_load())
@@ -186,7 +198,7 @@ class QtCase(unittest.TestCase):
         cls.app = QApplication.instance() or QApplication([])
 
     def setUp(self):
-        for module in (page_module, dialogs_module):
+        for module in (page_module, dialogs_module, date_edit_module):
             item = patch.object(module, "start_worker", _sync_worker)
             item.start()
             self.addCleanup(item.stop)
@@ -328,6 +340,7 @@ class PageTests(QtCase):
         self.assertEqual(page.logs_table.item(0, 0).text(), "LOG101")
         self.assertEqual(page.logs_table.item(0, 2).text(), "10/11/2026")
         self.assertEqual(page.logs_table.item(0, 5).text(), "Data reservada")
+        self.assertEqual(page.logs_table.item(0, 6).text(), "4 dias (2 úteis)")
         self.assertEqual(page.logs_table.item(0, 8).text(), "—")
         self.assertEqual(page.logs_table.item(1, 8).text(), "CE-01")
         self.assertEqual(page.tabs._options[0], ("logs", "LOGs", 2))
@@ -364,6 +377,14 @@ class PageTests(QtCase):
         api.error = AppError("servidor fora do ar")
         page.refresh()
         self.assertIs(page.stack.currentWidget(), page.error_state)
+
+    def test_loads_list_shows_departure_and_delivered_count(self):
+        self.assertEqual(page_module.load_progress_text({"logs_total": 3, "logs_delivered": 2, "departed_on": "2026-12-05"}), "saiu 05/12, 2 de 3 LOGs entregues")
+        self.assertEqual(page_module.load_progress_text({"logs_total": 3, "logs_delivered": 0}), "0 de 3 LOGs entregues")
+        api = FakeLogisticsApi(loads=[_load(departed_on="2026-12-05", logs_total=3, logs_delivered=2)])
+        page = LogisticsPage(FakeService(api))
+        page.tabs.set_current_key("loads")
+        self.assertEqual(page.loads_table.item(0, 5).text(), "saiu 05/12, 2 de 3 LOGs entregues")
 
     def test_empty_loads_tab_message(self):
         page = LogisticsPage(FakeService(FakeLogisticsApi(loads=[])))
@@ -498,6 +519,93 @@ class LogDetailDialogTests(QtCase):
         dialog.checklist.boxes[0][0].setChecked(True)
         dialog.action_buttons[-1].click()
         self.assertEqual(dialog.error_label.text(), message)
+
+    @staticmethod
+    def _script(fill):
+        """Troca o exec() da janela de datas por um script que preenche e envia."""
+        def run(dialog):
+            fill(dialog)
+            return 1
+
+        return patch.object(dialogs_module.DateEditDialog, "exec", run)
+
+    def test_header_shows_business_days_and_delivery_data(self):
+        dialog, _api = self._dialog(delivered_on="2026-11-11", delivery_proof_link="https://x.example/comprovante.pdf")
+        self.assertEqual(dialog.days_label.text(), "4 dias nesta etapa (2 úteis)")
+        texts = " ".join(label.text() for label in dialog.findChildren(QLabel))
+        self.assertIn("11/11/2026", texts)
+        self.assertIn("https://x.example/comprovante.pdf", texts)
+
+    def test_edit_dates_sends_only_changed_with_reason(self):
+        dialog, api = self._dialog()
+        seen = {}
+
+        def fill(d):
+            seen["initial"] = {k: f.text() for k, f in d.date_fields.items()}
+            d.submit()
+            seen["nothing"] = d.error_label.text()
+            d.date_fields["delivery_date"].line.setText("12/11/2026")
+            d.submit()
+            seen["reason"] = d.error_label.text()
+            d.reason_field.setText("cliente pediu")
+            d.submit()
+
+        with self._script(fill):
+            dialog.edit_dates_button.click()
+        self.assertEqual(seen["initial"]["reserved_date"], "10/11/2026")
+        self.assertEqual(seen["nothing"], "Nada foi alterado.")
+        self.assertEqual(seen["reason"], "Informe o motivo.")
+        self.assertEqual(api.calls[-1], ("update_log_dates", 1, {"delivery_date": "2026-11-12"}, "cliente pediu"))
+        self.assertTrue(dialog.changed)
+
+    def test_edit_dates_warning_confirm_resends_with_confirm_dates(self):
+        dialog, api = self._dialog()
+        api.error = AppError("Há avisos", error_code="DATE_CONFIRMATION_REQUIRED", details={"warnings": [{"message": "Domingo."}]})
+
+        def confirm(*_):
+            api.error = None
+            return True
+
+        def fill(d):
+            d.date_fields["delivery_date"].line.setText("15/11/2026")
+            d.reason_field.setText("cliente pediu")
+            with patch("app.ui.date_warnings.ask_date_confirmation", side_effect=confirm):
+                d.submit()
+
+        with self._script(fill):
+            dialog.edit_dates_button.click()
+        self.assertEqual([c[-1] for c in api.calls if c[0] == "update_log_dates"], ["cliente pediu", True])
+
+    def test_delivery_registers_date_and_proof_link_without_reason_the_first_time(self):
+        dialog, api = self._dialog()
+        api.result = _log(delivered_on="2026-11-11", delivery_proof_link="https://x.example/a.pdf")
+
+        def fill(d):
+            d.date_fields["delivered_on"].yesterday_button.click()
+            d.link_field.setText("https://x.example/a.pdf")
+            d.submit()
+
+        with self._script(fill):
+            dialog.delivery_button.click()
+        name, log_id, delivered, link, reason = api.calls[-1]
+        self.assertEqual((name, log_id, link, reason), ("log_delivery", 1, "https://x.example/a.pdf", None))
+        self.assertEqual(delivered, (date.today() - timedelta(days=1)).isoformat())
+
+    def test_delivery_changing_a_saved_date_needs_a_reason(self):
+        dialog, api = self._dialog(delivered_on="2026-11-11")
+        seen = {}
+
+        def fill(d):
+            d.date_fields["delivered_on"].line.setText("12/11/2026")
+            d.submit()
+            seen["error"] = d.error_label.text()
+            d.reason_field.setText("data errada")
+            d.submit()
+
+        with self._script(fill):
+            dialog.delivery_button.click()
+        self.assertEqual(seen["error"], "Informe o motivo.")
+        self.assertEqual(api.calls[-1], ("log_delivery", 1, "2026-11-12", None, "data errada"))
 
     def test_log_in_load_blocks_removal(self):
         dialog, _api = self._dialog(load_id=5, load_code="CE-01")
@@ -752,13 +860,13 @@ class LoadDialogTests(QtCase):
     def test_save_date_validates_and_calls_api(self):
         dialog, api = self._detail()
         dialog.date_field.setText("data")
-        dialog.action_buttons[1].click()
+        dialog.action_buttons[2].click()
         self.assertEqual(dialog.error_label.text(), "Data de saída inválida. Use DD/MM/AAAA.")
         dialog.date_field.setText("09/11/2026")
-        dialog.action_buttons[1].click()
+        dialog.action_buttons[2].click()
         self.assertEqual(dialog.error_label.text(), "Informe o motivo da mudança da saída.")
         dialog.reason_field.setText("chuva")
-        dialog.action_buttons[1].click()
+        dialog.action_buttons[2].click()
         self.assertEqual(api.calls[-1], ("update_load", 5, "2026-11-09", "chuva"))
 
     def test_save_date_warning_confirm_resends(self):
@@ -772,7 +880,7 @@ class LoadDialogTests(QtCase):
             return True
 
         with patch("app.ui.date_warnings.ask_date_confirmation", side_effect=clear_error):
-            dialog.action_buttons[1].click()
+            dialog.action_buttons[2].click()
         self.assertEqual(api.calls[-2:], [("update_load", 5, "2026-11-09", "chuva"), ("update_load", 5, "2026-11-09", "chuva", True)])
         self.assertTrue(dialog.changed)
 
@@ -797,6 +905,41 @@ class LoadDialogTests(QtCase):
         single.retire_buttons[0].click()
         self.assertIn("Desfazer carga", single.error_label.text())
         self.assertEqual(api.calls, [])
+
+    def test_departed_registers_real_departure_and_shows_counts(self):
+        dialog, api = self._detail()
+        api.result = _load(departed_on=None, logs_total=3, logs_delivered=2)
+        dialog._reload()
+        texts = " ".join(label.text() for label in dialog.findChildren(QLabel))
+        self.assertIn("2 de 3", texts)
+
+        def fill(d):
+            d.date_fields["departed_on"].line.setText("05/12/2026")
+            d.submit()
+
+        with patch.object(dialogs_module.DateEditDialog, "exec", lambda d: (fill(d), 1)[1]):
+            dialog.departed_button.click()
+        self.assertEqual(api.calls[-1], ("load_departed", 5, "2026-12-05", None))
+        self.assertTrue(dialog.changed)
+
+    def test_departed_change_needs_reason_and_header_shows_actual_date(self):
+        dialog, api = self._detail()
+        api.result = _load(departed_on="2026-12-05")
+        dialog._reload()
+        self.assertIn("saiu em 05/12/2026", dialog.findChild(QLabel, "FilterSubtitle").text())
+        seen = {}
+
+        def fill(d):
+            d.date_fields["departed_on"].line.setText("06/12/2026")
+            d.submit()
+            seen["error"] = d.error_label.text()
+            d.reason_field.setText("atrasou")
+            d.submit()
+
+        with patch.object(dialogs_module.DateEditDialog, "exec", lambda d: (fill(d), 1)[1]):
+            dialog.departed_button.click()
+        self.assertEqual(seen["error"], "Informe o motivo.")
+        self.assertEqual(api.calls[-1], ("load_departed", 5, "2026-12-06", "atrasou"))
 
     def test_view_only_has_no_actions(self):
         dialog, _api = self._detail(can_edit=False)
