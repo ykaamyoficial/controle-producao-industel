@@ -21,7 +21,8 @@ class FakeInspection:
             raise RuntimeError("403")
         return {"items": [
             {"id": 1, "pd_code": "PD-100", "proposal_numbers": ["CP 05389"], "nqt_code": "NQT-9", "stage": "doc",
-             "days_in_stage": 4, "doc_link": "https://doc.example/x", "finished": False},
+             "days_in_stage": 6, "business_days_in_stage": 4,
+             "visit_date": "2026-08-20", "doc_link": "https://doc.example/x", "finished": False},
             {"id": 2, "pd_code": "PD-200", "proposal_numbers": ["CP 053890"], "stage": "fim", "days_in_stage": 1, "finished": True},
         ]}
 
@@ -29,7 +30,8 @@ class FakeInspection:
 class FakeLogistics:
     def list_logs(self, **kw):
         return {"items": [{"id": 7, "code": "LOG7", "state": "SP", "stage": "aprovada", "loading_date": "2026-09-01",
-                           "delivery_date": "2026-09-03", "load_code": "CE-12", "proposal_count": 1},
+                           "delivery_date": "2026-09-03", "load_code": "CE-12", "proposal_count": 1,
+                           "days_in_stage": 2, "business_days_in_stage": 1, "delivered_on": "2026-09-04"},
                           {"id": 8, "code": "LOG8", "state": "RJ", "stage": "docs", "loading_date": "2026-09-01",
                            "delivery_date": "2026-09-03", "load_code": None, "proposal_count": 1}]}
 
@@ -95,7 +97,7 @@ class InspectionLogisticsTabTests(unittest.TestCase):
         dialog = self._open(Service())
         self.assertEqual(dialog.tabs.tabText(dialog.tabs.count() - 1), TAB)
         texts = self._texts(dialog)
-        for expected in ("PD-100", "NQT-9", "4 d", "LOG7", "CE-12", "01/09/2026", "03/09/2026"):
+        for expected in ("PD-100", "NQT-9", "6 dias (4 úteis)", "20/08/2026", "LOG7", "CE-12", "01/09/2026", "03/09/2026", "2 dias (1 útil)", "04/09/2026"):
             self.assertIn(expected, texts)
 
     def test_only_logistics_permission_has_no_inspection_section(self):

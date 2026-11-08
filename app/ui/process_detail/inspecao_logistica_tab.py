@@ -131,15 +131,15 @@ class InspecaoLogisticaTab(QWidget):
             doc.setOpenExternalLinks(True)
         else:
             doc = link
-        return kv_grid(
-            [
-                ("PD", item.get("pd_code") or ""),
-                ("NQT", item.get("nqt_code") or ""),
-                ("Etapa", badge),
-                ("Dias na etapa", days_text(item.get("days_in_stage"))),
-                ("DOC BIM", doc),
-            ]
-        )
+        rows = [
+            ("PD", item.get("pd_code") or ""),
+            ("NQT", item.get("nqt_code") or ""),
+            ("Etapa", badge),
+            ("Dias na etapa", days_text(item.get("days_in_stage"), business=item.get("business_days_in_stage"))),
+        ]
+        if item.get("visit_date"):
+            rows.append(("Visita in loco", format_date(item.get("visit_date"))))
+        return kv_grid([*rows, ("DOC BIM", doc)])
 
     def _log_block(self, item: dict):
         palette = self.service.palette
@@ -149,8 +149,10 @@ class InspecaoLogisticaTab(QWidget):
                 ("LOG", item.get("code") or ""),
                 ("Estado", item.get("state") or ""),
                 ("Etapa", badge),
+                ("Dias na etapa", days_text(item.get("days_in_stage"), business=item.get("business_days_in_stage"))),
                 ("Carregamento", format_date(item.get("loading_date"))),
                 ("Entrega no CD", format_date(item.get("delivery_date"))),
+                ("Entregue no CD em", format_date(item.get("delivered_on"))),
                 ("Carga de entrega", item.get("load_code") or ""),
             ]
         )
