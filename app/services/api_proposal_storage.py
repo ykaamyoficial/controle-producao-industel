@@ -497,12 +497,17 @@ class OfficialProposalApiStorage:
         finally:
             client.close()
 
-    def save_process(self, data: dict[str, Any], process_id: int | None = None, import_metadata: dict[str, Any] | None = None) -> int:
+    def save_process(
+        self, data: dict[str, Any], process_id: int | None = None, import_metadata: dict[str, Any] | None = None, confirm_inspection_logistics: bool = False
+    ) -> int:
         client, proposals, token = self._client()
         try:
             if process_id:
                 current = proposals.get_proposal(token, process_id)
-                updated = proposals.update_proposal(token, process_id, _proposal_update_payload(data, current))
+                payload = _proposal_update_payload(data, current)
+                if confirm_inspection_logistics:
+                    payload["confirm_inspection_logistics"] = True
+                updated = proposals.update_proposal(token, process_id, payload)
                 self._sync_items(proposals, token, process_id, data.get("itens") or [], current.get("items") or [])
                 return int(updated["id"])
             created = proposals.create_proposal(token, _proposal_create_payload(data, import_metadata))
@@ -510,10 +515,11 @@ class OfficialProposalApiStorage:
         finally:
             client.close()
 
-    def cancel_process(self, proposal_id: int, version: int, reason: str) -> dict[str, Any]:
+    def cancel_process(self, proposal_id: int, version: int, reason: str, confirm_inspection_logistics: bool = False) -> dict[str, Any]:
         client, proposals, token = self._client()
         try:
-            return _api_proposal_to_process(proposals.cancel_proposal(token, proposal_id, {"version": version, "reason": reason}))
+            payload = {"version": version, "reason": reason, **({"confirm_inspection_logistics": True} if confirm_inspection_logistics else {})}
+            return _api_proposal_to_process(proposals.cancel_proposal(token, proposal_id, payload))
         finally:
             client.close()
 

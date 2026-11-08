@@ -18,6 +18,7 @@ from app.ui.components.dialog_shell import dialog_header
 from app.ui.components.modern_button import ModernButton
 from app.ui.components.status_badge import area_badge, neutral_badge
 from app.ui.dialog_utils import style_dialog_from_parent
+from app.ui.inspection_logistics_confirm import ask_inspection_logistics_confirmation
 from app.ui.icons import AppIcons
 from app.ui.sidebar import NAV_LABELS
 
@@ -259,8 +260,11 @@ class ProposalActionCenter(QDialog):
             log.exception("Falha ao executar acao da proposta: id=%s", action.id)
             QMessageBox.warning(self, "Ação da proposta", str(exc))
 
-    def _run_background_action(self, operation, reload_on_success: bool = False):
+    def _run_background_action(self, operation, reload_on_success: bool = False, confirm_retry=None):
+        """`confirm_retry`: a mesma operacao com `confirm_inspection_logistics=True`, usada se a API
+        pedir confirmacao (409) por a proposta ter inspecao ou LOG e o usuario responder Sim."""
         self._reload_on_success = reload_on_success
+        self._confirm_retry = confirm_retry
         self._set_action_running(True)
         self._action_thread = start_worker(self, operation, self._action_success, self._action_error)
 
@@ -276,8 +280,15 @@ class ProposalActionCenter(QDialog):
         self.accept()
 
     def _action_error(self, exc):
-        self._reload_on_success = False
+        reload_on_success, self._reload_on_success = self._reload_on_success, False
+        retry, self._confirm_retry = getattr(self, "_confirm_retry", None), None
         self._set_action_running(False)
+        if retry is not None:
+            answer = ask_inspection_logistics_confirmation(self, exc)
+            if answer:
+                self._run_background_action(retry, reload_on_success)
+            if answer is not None:
+                return
         self.success_message = ""
         QMessageBox.warning(self, "Ação da proposta", str(exc))
         try:

@@ -15,6 +15,7 @@ from app.ui.components.dialog_shell import dialog_footer, dialog_header
 from app.ui.components.modern_button import ModernButton
 from app.ui.dialog_utils import apply_large_dialog_geometry, style_dialog_from_parent
 from app.ui.item_flow_dialog import FLOW_OPTIONS
+from app.ui.inspection_logistics_confirm import ask_inspection_logistics_confirmation
 from app.ui.nomus_api_import_dialog import NomusApiImportDialog
 from app.ui.nomus_batch_import_dialog import NomusBatchImportDialog
 from app.ui.nomus_batch_conference_dialog import NomusBatchConferenceDialog
@@ -732,12 +733,27 @@ class ProcessFormDialog(QDialog):
             if self._saving:
                 return
             self._set_saving(True)
-            self.service.save_process(data, self.process_id, self.import_metadata)
+            if self._save_confirming_inspection_logistics(data) is False:
+                return
             self.accept()
         except Exception as exc:
             QMessageBox.warning(self, "Salvar proposta", str(exc))
         finally:
             self._set_saving(False)
+
+    def _save_confirming_inspection_logistics(self, data: dict) -> bool:
+        """Grava; se a API pedir confirmacao (troca de Pedido com inspecao ou LOG), pergunta e reenvia.
+        False: o usuario respondeu Nao e a janela segue aberta."""
+        try:
+            self.service.save_process(data, self.process_id, self.import_metadata)
+        except Exception as exc:
+            answer = ask_inspection_logistics_confirmation(self, exc)
+            if answer is None:
+                raise
+            if not answer:
+                return False
+            self.service.save_process(data, self.process_id, self.import_metadata, confirm_inspection_logistics=True)
+        return True
 
     def _set_saving(self, saving: bool):
         self._saving = saving

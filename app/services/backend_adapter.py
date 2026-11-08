@@ -2387,7 +2387,7 @@ class BackendService:
             return 'Separado com pendencia'
         return labels.get(status, self.area_status_label(area, status))
 
-    def update_status(self, process_id: int, area: str, status: str, observation: str='', item_ids: list[int] | None=None, produced_weight: float | None=None):
+    def update_status(self, process_id: int, area: str, status: str, observation: str='', item_ids: list[int] | None=None, produced_weight: float | None=None, confirm_inspection_logistics: bool=False):
         if not self.user:
             raise legacy.AppError('Usuario nao autenticado.')
         self._invalidate_operational_cache()
@@ -2399,13 +2399,13 @@ class BackendService:
                     self.official_proposal_storage.release_to_production(process_id, version)
                     return
                 if status == 'CANCELADA':
-                    self.official_proposal_storage.cancel_process(process_id, version, observation)
+                    self.official_proposal_storage.cancel_process(process_id, version, observation, confirm_inspection_logistics)
                     return
                 raise legacy.AppError('Status do Controle Geral nao suportado no fluxo oficial.')
             except legacy.AppError:
                 raise
             except Exception as exc:
-                raise AppError(user_message_for_api_error(exc)) from exc
+                raise self._api_app_error(exc) from exc
         if area == 'PRODUCAO':
             try:
                 process = self.official_proposal_storage.get_production_process(process_id)
@@ -2465,13 +2465,15 @@ class BackendService:
                 raise AppError(user_message_for_api_error(exc)) from exc
         raise legacy.AppError('Area/status nao suportado no fluxo oficial.')
 
-    def save_process(self, data: dict[str, Any], process_id: int | None=None, import_metadata: dict[str, Any] | None=None) -> int:
+    def save_process(self, data: dict[str, Any], process_id: int | None=None, import_metadata: dict[str, Any] | None=None, confirm_inspection_logistics: bool=False) -> int:
         if not self.user:
             raise legacy.AppError('Usuario nao autenticado.')
         try:
+            if confirm_inspection_logistics:
+                return self.official_proposal_storage.save_process(data, process_id, import_metadata, confirm_inspection_logistics=True)
             return self.official_proposal_storage.save_process(data, process_id, import_metadata)
         except Exception as exc:
-            raise AppError(user_message_for_api_error(exc)) from exc
+            raise self._api_app_error(exc) from exc
 
     def proposal_exists(self, proposal_number: str) -> bool:
         try:
@@ -2489,11 +2491,11 @@ class BackendService:
         except Exception as exc:
             raise AppError(user_message_for_api_error(exc)) from exc
 
-    def cancel_official_proposal(self, process_id: int, version: int, reason: str) -> dict[str, Any]:
+    def cancel_official_proposal(self, process_id: int, version: int, reason: str, confirm_inspection_logistics: bool=False) -> dict[str, Any]:
         try:
-            return self.official_proposal_storage.cancel_process(process_id, version, reason)
+            return self.official_proposal_storage.cancel_process(process_id, version, reason, confirm_inspection_logistics)
         except Exception as exc:
-            raise AppError(user_message_for_api_error(exc)) from exc
+            raise self._api_app_error(exc) from exc
 
     def release_official_proposal_to_production(self, process_id: int, version: int) -> dict[str, Any]:
         try:

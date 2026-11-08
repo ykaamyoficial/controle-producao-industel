@@ -56,7 +56,11 @@ class ControlGeneralStatusHandler:
         )
         if answer != QMessageBox.Yes:
             return ActionResult(success=True, changed=False, close_action_center=False)
+        # Proposta com inspecao ou LOG: a API responde 409 e a tela pergunta; "Sim" reenvia com a flag.
         dialog._run_background_action(
-            lambda: dialog.service.update_status(context.proposal_id, action.area, "CANCELADA", observation)
+            lambda: dialog.service.update_status(context.proposal_id, action.area, "CANCELADA", observation),
+            confirm_retry=lambda: dialog.service.update_status(
+                context.proposal_id, action.area, "CANCELADA", observation, confirm_inspection_logistics=True
+            ),
         )
         return ActionResult(success=True, changed=True, refresh_required=True)

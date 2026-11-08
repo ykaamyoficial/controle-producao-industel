@@ -480,6 +480,25 @@ class LogDetailDialogTests(QtCase):
         self.assertTrue(dialog.changed)
         self.assertEqual(dialog.result(), QDialog.Accepted)
 
+    def test_rejected_inclusion_leaves_the_log_on_screen(self):
+        dialog, api = self._dialog()
+        self.assertEqual(dialog.items_table.rowCount(), 2)
+        rejected = _log()["items"][1]
+        api.result = _log(items=_log()["items"][:1], removed_items=[{**rejected, "status": "reprovada", "removal_reason": "inclusão reprovada"}], proposal_count=1)
+        dialog.items_table.selectRow(1)
+        dialog.reject_item_button.click()
+        self.assertEqual(api.calls, [("resolve_item", 1, 11, "reprovada")])
+        self.assertEqual(dialog.items_table.rowCount(), 1)
+        self.assertEqual(dialog.items_table.item(0, 0).text(), "10480/B")
+
+    def test_including_in_a_log_that_is_in_a_load_shows_the_api_message(self):
+        dialog, api = self._dialog()
+        message = "O LOG101 esta na carga CE-01. Tire o LOG da carga para incluir propostas."
+        api.error = AppError(message, error_code="LOGISTICS_LOG_IN_LOAD")
+        dialog.checklist.boxes[0][0].setChecked(True)
+        dialog.action_buttons[-1].click()
+        self.assertEqual(dialog.error_label.text(), message)
+
     def test_log_in_load_blocks_removal(self):
         dialog, _api = self._dialog(load_id=5, load_code="CE-01")
         self.assertIsNone(dialog.reason_field)
