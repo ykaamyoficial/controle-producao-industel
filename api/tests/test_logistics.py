@@ -26,6 +26,7 @@ from api.app.modules.auth.permissions import INSPECTION_EDIT, INSPECTION_VIEW, L
 from api.app.modules.inspection.models import Inspection
 from api.app.modules.logistics import schemas
 from api.app.modules.logistics.calendar_rules import local_today
+from api.app.modules.proposals.domain import INITIAL_AREA, INITIAL_STATUS
 from api.app.modules.proposals.models import Proposal
 
 TEST_DATABASE_URL = os.environ.get("POSTGRES_TEST_DATABASE_URL", "")
@@ -122,7 +123,7 @@ class LogisticsApiTests(unittest.TestCase):
                                   ("CP 500", "PD-5", "EQUATORIAL MARANHAO DISTRIBUIDORA DE ENERGIA S.A"), ("CP 501", "PD-5", "EQUATORIAL MARANHÃO"),
                                   ("CP 502", "PD-6", "EQUATORIAL PARÁ DISTRIBUIDORA DE ENERGIA S.A.")):
                 customer = rest[0] if rest else None
-                p = Proposal(proposal_number=number, customer_name=customer or "Cliente " + number, order_reference=pd)
+                p = Proposal(proposal_number=number, customer_name=customer or "Cliente " + number, order_reference=pd, current_area=INITIAL_AREA, current_status=INITIAL_STATUS)
                 session.add(p)
                 await session.flush()
                 ids[number] = p.id
@@ -135,6 +136,7 @@ class LogisticsApiTests(unittest.TestCase):
             for name, perms in (
                 ("editor", [LOGISTICS_VIEW, LOGISTICS_EDIT]), ("viewer", [LOGISTICS_VIEW]),
                 ("none", ["proposals.view", INSPECTION_VIEW, INSPECTION_EDIT]),
+                ("prop", ["proposals.view", "proposals.update", "proposals.cancel", INSPECTION_VIEW, LOGISTICS_VIEW]),
             ):
                 user = await users_service.create_user(
                     session, UserCreate(username=f"log.{name}", display_name=name.title(), password="senha-log-teste-123", permission_codes=perms), boot,
@@ -266,9 +268,17 @@ class LogisticsApiTests(unittest.TestCase):
         self.assertEqual(add["proposal_count"], 3)
         new = [i for i in add["items"] if i["proposal_number"] == "CP 200"][0]
         self.assertEqual(new["status"], "pendente")
-        res = self.client.post(f"/api/v1/logistics/logs/{lid}/items/{new['id']}/resolve", json={"result": "reprovada"}, headers=self._h()).json()
-        self.assertEqual([i["status"] for i in res["items"] if i["proposal_number"] == "CP 200"], ["reprovada"])
+        ok = self.client.post(f"/api/v1/logistics/logs/{lid}/items/{new['id']}/resolve", json={"result": "ok"}, headers=self._h()).json()
+        self.assertEqual([i["status"] for i in ok["items"] if i["proposal_number"] == "CP 200"], ["ok"])
         self._err(self.client.post(f"/api/v1/logistics/logs/{lid}/items/{new['id']}/resolve", json={"result": "ok"}, headers=self._h()), 409, "LOGISTICS_ITEM_NOT_PENDING")
+        # reprovada sai do LOG, fica no historico de removidas e a proposta fica livre para outro LOG
+        add2 = self.client.post(f"/api/v1/logistics/logs/{lid}/proposals", json={"proposal_ids": [self.ids["CP 201"]]}, headers=self._h()).json()
+        bad = [i for i in add2["items"] if i["proposal_number"] == "CP 201"][0]
+        res = self.client.post(f"/api/v1/logistics/logs/{lid}/items/{bad['id']}/resolve", json={"result": "reprovada"}, headers=self._h()).json()
+        self.assertEqual(([i["proposal_number"] for i in res["items"]], res["proposal_count"]), (["CP 100", "CP 101", "CP 200"], 3))
+        self.assertEqual([(i["proposal_number"], i["status"], i["removal_reason"]) for i in res["removed_items"]], [("CP 201", "reprovada", "Inclusao reprovada")])
+        self.assertIn("CP 201", [p["proposal_number"] for p in self.client.get("/api/v1/logistics/eligible-proposals", headers=self._h()).json()["items"]])
+        self._err(self.client.post(f"/api/v1/logistics/logs/{lid}/items/{bad['id']}/resolve", json={"result": "ok"}, headers=self._h()), 404, "LOGISTICS_ITEM_NOT_FOUND")
         # remocao exige motivo
         url = f"/api/v1/logistics/logs/{lid}/items/{new['id']}/remove"
         self.assertEqual(self.client.post(url, json={"reason": "  "}, headers=self._h()).status_code, 422)
@@ -277,8 +287,8 @@ class LogisticsApiTests(unittest.TestCase):
         self.assertFalse(out["log_deleted"])
         log = out["log"]
         self.assertEqual((log["proposal_count"], [i["proposal_number"] for i in log["items"]]), (2, ["CP 100", "CP 101"]))
-        gone = log["removed_items"][0]
-        self.assertEqual((gone["proposal_number"], gone["removal_reason"], gone["removed_by_name"]), ("CP 200", "cliente cancelou", "Editor"))
+        gone = [i for i in log["removed_items"] if i["proposal_number"] == "CP 200"][0]
+        self.assertEqual((gone["removal_reason"], gone["removed_by_name"]), ("cliente cancelou", "Editor"))
         self.assertIsNotNone(gone["removed_at"])
         self.assertEqual(log["events"][0]["reason"], "cliente cancelou")
         # volta a ficar disponivel e pode entrar em outro LOG
@@ -449,6 +459,83 @@ class LogisticsApiTests(unittest.TestCase):
         self.assertIn(self.client.get(f"/api/v1/logistics/logs/{a}", headers=self._h()).json()["code"], warns["DEPARTURE_DIFFERS_FROM_LOADING"]["message"])
         same = post(loading, confirm_dates=True)
         self.assertEqual(same.status_code, 201, same.text)
+
+    # --- F2: consertos ---------------------------------------------------------------------
+
+    def test_cannot_add_proposals_to_log_in_a_load(self):
+        lid = self._approved_log("LOG101", ("CP 100",))
+        self._load([lid])
+        r = self.client.post(f"/api/v1/logistics/logs/{lid}/proposals", json={"proposal_ids": [self.ids["CP 101"]]}, headers=self._h())
+        self._err(r, 409, "LOGISTICS_LOG_IN_LOAD")
+        self.assertIn("CE-01", r.json()["error"]["message"])
+
+    def _proposal(self, cp):
+        return self.client.get(f"/api/v1/proposals/{self.ids[cp]}", headers=self._h("prop")).json()
+
+    def _cancel(self, cp, **extra):
+        body = {"version": self._proposal(cp)["version"], "reason": "erro de cadastro", **extra}
+        return self.client.post(f"/api/v1/proposals/{self.ids[cp]}/cancel", json=body, headers=self._h("prop"))
+
+    def _set_order(self, cp, pd, **extra):
+        body = {"version": self._proposal(cp)["version"], "purchase_order": pd, **extra}
+        return self.client.patch(f"/api/v1/proposals/{self.ids[cp]}", json=body, headers=self._h("prop"))
+
+    def _history(self, pd):
+        iid = self.client.get("/api/v1/inspections", params={"search": pd}, headers=self._h("none")).json()["items"][0]["id"]
+        return [e["text"] for e in self.client.get(f"/api/v1/inspections/{iid}", headers=self._h("none")).json()["events"]]
+
+    def test_cancel_proposal_in_inspection_and_log_asks_confirmation_then_leaves_log(self):
+        lid = self._log("LOG101", ("CP 100", "CP 101")).json()["id"]
+        r = self._cancel("CP 100")
+        self._err(r, 409, "INSPECTION_LOGISTICS_CONFIRMATION_REQUIRED")
+        details = r.json()["error"]["details"]
+        self.assertEqual((details["action"], details["inspection"]["pd_code"], details["log"]["code"], details["leaves_log"]), ("cancel", "PD-1", "LOG101", True))
+        self.assertFalse(self._proposal("CP 100")["is_cancelled"])
+        self.assertEqual(self._cancel("CP 100", confirm_inspection_logistics=True).status_code, 200)
+        log = self.client.get(f"/api/v1/logistics/logs/{lid}", headers=self._h()).json()
+        self.assertEqual(([i["proposal_number"] for i in log["items"]], [i["removal_reason"] for i in log["removed_items"]]), (["CP 101"], ["Proposta cancelada: erro de cadastro"]))
+        self.assertTrue(any("CP 100 cancelada" in t for t in self._history("PD-1")))
+        # ultima proposta: o LOG deixa de existir, mas o historico fica na proposta e na auditoria
+        self.assertEqual(self._cancel("CP 101", confirm_inspection_logistics=True).status_code, 200)
+        self.assertEqual(self.client.get(f"/api/v1/logistics/logs/{lid}", headers=self._h()).status_code, 404)
+
+        async def kept():
+            async with get_sessionmaker()() as s:
+                events = (await s.execute(text("SELECT metadata->>'text' FROM proposal_events WHERE event_type = 'LOGISTICS_HISTORY' ORDER BY id"))).scalars().all()
+                audit = (await s.execute(select(SecurityEvent.details).where(SecurityEvent.event_type == "LOGISTICS_LOG_DELETED"))).scalars().all()
+                return events, audit
+
+        events, audit = asyncio.run(kept())
+        self.assertEqual(events, ["CP 100 saiu do LOG101", "CP 101 saiu do LOG101"])
+        self.assertTrue(audit[0]["history"])
+        # sem inspecao nem LOG: cancela direto
+        self.assertEqual(self._cancel("CP 400").status_code, 200)
+
+    def test_change_order_follows_inspection_when_sole_proposal_and_leaves_log_when_unfinished(self):
+        # CP 300 e a unica do PD-3 (inspecao aberta): a inspecao acompanha o novo PD.
+        r = self._set_order("CP 300", "PD-NOVO")
+        self._err(r, 409, "INSPECTION_LOGISTICS_CONFIRMATION_REQUIRED")
+        d = r.json()["error"]["details"]
+        self.assertEqual((d["inspection_follows_new_pd"], d["new_pd_has_inspection"]), (True, False))
+        self.assertEqual(self._proposal("CP 300")["order_reference"], "PD-3")
+        self.assertEqual(self._set_order("CP 300", "PD-NOVO", confirm_inspection_logistics=True).status_code, 200)
+        self.assertTrue(any("PD alterado de PD-3 para PD-NOVO" in t for t in self._history("PD-NOVO")))
+        self.assertEqual(self.client.get("/api/v1/inspections", params={"search": "PD-3"}, headers=self._h("none")).json()["total"], 0)
+        # CP 100 esta no LOG e divide o PD-1 com CP 101: a inspecao do PD-1 fica. PD-NOVO esta aberto -> CP 100 sai do LOG.
+        lid = self._log("LOG101", ("CP 100", "CP 101")).json()["id"]
+        r = self._set_order("CP 100", "PD-NOVO")
+        self._err(r, 409, "INSPECTION_LOGISTICS_CONFIRMATION_REQUIRED")
+        d = r.json()["error"]["details"]
+        self.assertEqual((d["inspection"]["pd_code"], d["inspection_follows_new_pd"], d["new_pd_has_inspection"], d["leaves_log"]), ("PD-1", False, True, True))
+        self.assertEqual(self._set_order("CP 100", "PD-NOVO", confirm_inspection_logistics=True).status_code, 200)
+        log = self.client.get(f"/api/v1/logistics/logs/{lid}", headers=self._h()).json()
+        self.assertEqual([i["proposal_number"] for i in log["items"]], ["CP 101"])
+        self.assertEqual(self.client.get("/api/v1/inspections", params={"search": "PD-1"}, headers=self._h("none")).json()["items"][0]["stage"], "fim")
+        # novo PD com inspecao finalizada: continua no LOG
+        self.assertEqual(self._set_order("CP 101", "PD-2", confirm_inspection_logistics=True).status_code, 200)
+        self.assertEqual(self.client.get(f"/api/v1/logistics/logs/{lid}", headers=self._h()).json()["proposal_count"], 1)
+        # proposta sem inspecao nem LOG troca o Pedido sem confirmacao
+        self.assertEqual(self._set_order("CP 400", "PD-400").status_code, 200)
 
     # --- permissoes ----------------------------------------------------------------------
 

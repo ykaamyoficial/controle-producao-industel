@@ -78,6 +78,11 @@ def _event(session: AsyncSession, row: Inspection, actor: User, text: str, reaso
     session.add(InspectionEvent(inspection_id=row.id, actor_user_id=actor.id, stage=row.stage, attempt=row.attempt, text=text, reason=reason))
 
 
+def add_note_event(session: AsyncSession, row: Inspection, actor: User, text: str, reason: str | None = None) -> None:
+    """Anotacao no historico sem mudar de etapa (usada por cancelar/trocar Pedido da proposta)."""
+    _event(session, row, actor, text, reason)
+
+
 async def _audit(session: AsyncSession, row: Inspection, actor: User, event_type: str, request_id: str | None, **extra) -> None:
     await auth_repository.create_security_event(
         session, event_type, actor_user_id=actor.id, request_id=request_id,

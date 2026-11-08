@@ -327,6 +327,11 @@ async def approve_log(session, log_id, actor, request_id=None):
 
 async def add_proposals(session, log_id, payload: schemas.AddProposalsPayload, actor, request_id=None) -> schemas.LogDetail:
     row = await _get_log(session, log_id, lock=True)
+    if row.load_id is not None:
+        raise ApiError(
+            error_codes.LOGISTICS_LOG_IN_LOAD, f"O {row.code} esta na carga {load_code(row.load_id)}. Tire o LOG da carga para incluir propostas.",
+            status_code=409, details={"load_id": row.load_id, "load_code": load_code(row.load_id)},
+        )
     proposals = await _eligible_proposals(session, payload.proposal_ids)
     _check_states(proposals, row.state)  # estado do LOG vale; proposta sem estado derivavel entra livremente num LOG manual
     try:
@@ -364,10 +369,50 @@ async def resolve_item(session, log_id, item_id, payload: schemas.ResolveItemPay
         raise ApiError(error_codes.LOGISTICS_ITEM_NOT_PENDING, "Esta inclusao ja foi resolvida.", status_code=409, details={"status": item.status})
     item.status = payload.result
     row.updated_at = utcnow()
-    _event(session, actor, f"Inclusao de {proposal.proposal_number} {'aprovada' if payload.result == 'ok' else 'reprovada'}", log_id=row.id)
+    if payload.result == "reprovada":
+        # Reprovada sai do LOG (fica no historico de removidas) e a proposta fica livre para outro LOG.
+        item.removed_at, item.removed_by, item.removal_reason = utcnow(), actor.id, "Inclusao reprovada"
+        _event(session, actor, f"Inclusao de {proposal.proposal_number} reprovada: saiu do LOG", log_id=row.id, reason="Inclusao reprovada")
+    else:
+        _event(session, actor, f"Inclusao de {proposal.proposal_number} aprovada", log_id=row.id)
     await _audit(session, actor, "LOGISTICS_INCLUSION_RESOLVED", request_id, log_id=row.id, code=row.code, proposal_id=proposal.id, result=payload.result)
     await session.commit()
     return await get_log(session, log_id)
+
+
+async def _proposal_history(session: AsyncSession, proposal: Proposal, actor: User, request_id: str | None, text: str, **extra) -> None:
+    """Registra no historico da proposta (sobrevive a exclusao do LOG/carga)."""
+    from api.app.modules.proposals.service import _record_event
+
+    await _record_event(session, proposal, "LOGISTICS_HISTORY", actor, request_id=request_id, metadata={"text": text, **{k: v for k, v in extra.items() if v}})
+
+
+async def _events_dump(session: AsyncSession, *, log_id: int | None = None, load_id: int | None = None) -> list[dict]:
+    """Historico em texto, gravado na auditoria antes de excluir LOG/carga (os eventos somem em cascata)."""
+    return [{"at": e.created_at.isoformat(), "text": e.text, "reason": e.reason, "actor": e.actor_name} for e in reversed(await _events(session, log_id=log_id, load_id=load_id))]
+
+
+async def detach_item(
+    session: AsyncSession, row: LogisticsLog, item: LogisticsLogItem, proposal: Proposal, actor: User, request_id: str | None, reason: str,
+) -> bool:
+    """Tira a proposta do LOG (sem commit). Se era a ultima, o LOG deixa de existir, mas o historico vai para a auditoria e para a proposta.
+    Retorna True se o LOG foi excluido."""
+    item.removed_at, item.removed_by, item.removal_reason = utcnow(), actor.id, reason
+    row.updated_at = utcnow()
+    await session.flush()
+    remaining = (
+        await session.execute(select(func.count()).select_from(LogisticsLogItem).where(LogisticsLogItem.log_id == row.id, LogisticsLogItem.removed_at.is_(None)))
+    ).scalar_one()
+    await _audit(session, actor, "LOGISTICS_PROPOSAL_REMOVED", request_id, log_id=row.id, code=row.code, proposal_id=proposal.id, reason=reason)
+    await _proposal_history(session, proposal, actor, request_id, f"{proposal.proposal_number} saiu do {row.code}", reason=reason, log_code=row.code)
+    if remaining == 0:
+        # Como no prototipo: LOG sem propostas deixa de existir (o codigo volta a ficar livre).
+        history = await _events_dump(session, log_id=row.id)
+        await _audit(session, actor, "LOGISTICS_LOG_DELETED", request_id, log_id=row.id, code=row.code, reason=f"Ultima proposta removida: {reason}", history=history)
+        await session.delete(row)
+        return True
+    _event(session, actor, f"{proposal.proposal_number} removida: {reason}", log_id=row.id, reason=reason)
+    return False
 
 
 async def remove_item(session, log_id, item_id, payload: schemas.ReasonPayload, actor, request_id=None) -> schemas.RemoveResult:
@@ -378,22 +423,21 @@ async def remove_item(session, log_id, item_id, payload: schemas.ReasonPayload, 
             status_code=409, details={"load_id": row.load_id, "load_code": load_code(row.load_id)},
         )
     item, proposal = await _active_item(session, log_id, item_id)
-    item.removed_at, item.removed_by, item.removal_reason = utcnow(), actor.id, payload.reason
-    row.updated_at = utcnow()
-    await session.flush()
-    remaining = (
-        await session.execute(select(func.count()).select_from(LogisticsLogItem).where(LogisticsLogItem.log_id == log_id, LogisticsLogItem.removed_at.is_(None)))
-    ).scalar_one()
-    await _audit(session, actor, "LOGISTICS_PROPOSAL_REMOVED", request_id, log_id=row.id, code=row.code, proposal_id=proposal.id, reason=payload.reason)
-    if remaining == 0:
-        # Como no prototipo: LOG sem propostas deixa de existir (o codigo volta a ficar livre).
-        await _audit(session, actor, "LOGISTICS_LOG_DELETED", request_id, log_id=row.id, code=row.code, reason=f"Ultima proposta removida: {payload.reason}")
-        await session.delete(row)
-        await session.commit()
-        return schemas.RemoveResult(log_deleted=True, log=None)
-    _event(session, actor, f"{proposal.proposal_number} removida: {payload.reason}", log_id=row.id, reason=payload.reason)
+    deleted = await detach_item(session, row, item, proposal, actor, request_id, payload.reason)
     await session.commit()
-    return schemas.RemoveResult(log_deleted=False, log=await get_log(session, log_id))
+    return schemas.RemoveResult(log_deleted=True, log=None) if deleted else schemas.RemoveResult(log_deleted=False, log=await get_log(session, log_id))
+
+
+async def active_log_item_of(session: AsyncSession, proposal_id: int) -> tuple[LogisticsLog, LogisticsLogItem] | None:
+    found = (
+        await session.execute(
+            select(LogisticsLog, LogisticsLogItem)
+            .join(LogisticsLogItem, LogisticsLogItem.log_id == LogisticsLog.id)
+            .where(LogisticsLogItem.proposal_id == proposal_id, LogisticsLogItem.removed_at.is_(None))
+            .with_for_update(of=LogisticsLog)
+        )
+    ).first()
+    return (found[0], found[1]) if found else None
 
 
 # --- carga de entrega ---------------------------------------------------------------------------
@@ -517,14 +561,15 @@ async def remove_log_from_load(session, load_id, log_id, actor, request_id=None)
 
 
 async def delete_load(session, load_id, actor, request_id=None) -> None:
-    """Desfazer carga: os LOGs ficam livres; o historico da carga some, os eventos dos LOGs e a auditoria ficam."""
+    """Desfazer carga: os LOGs ficam livres; os eventos dos LOGs ficam e o historico da carga vai para a auditoria."""
     load = await _get_load(session, load_id, lock=True)
     logs = (await session.execute(select(LogisticsLog).where(LogisticsLog.load_id == load.id).with_for_update())).scalars().all()
     code = load_code(load.id)
+    history = await _events_dump(session, load_id=load.id)  # os eventos da carga somem com ela: ficam na auditoria
     for log in logs:
         log.load_id, log.updated_at = None, utcnow()
         _event(session, actor, f"Carga {code} desfeita", log_id=log.id)
-    await _audit(session, actor, "LOGISTICS_LOAD_DELETED", request_id, load_id=load.id, load_code=code, log_ids=[lg.id for lg in logs])
+    await _audit(session, actor, "LOGISTICS_LOAD_DELETED", request_id, load_id=load.id, load_code=code, log_ids=[lg.id for lg in logs], history=history)
     await session.flush()
     await session.delete(load)
     await session.commit()

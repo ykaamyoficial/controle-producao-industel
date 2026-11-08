@@ -4720,6 +4720,7 @@ ACTIVITY_TEMPLATES = {
     "PROPOSAL_UPDATED": lambda who, md: f"{who} editou os dados da proposta.",
     "PROPOSAL_CANCELLED": lambda who, md: f"{who} cancelou a proposta{_reason_suffix(md)}.",
     "PROPOSAL_STATUS_CHANGED": lambda who, md: f"{who} atualizou o status da proposta.",
+    "LOGISTICS_HISTORY": lambda who, md: f"Logistica: {md['text']}{_reason_suffix(md)}.",
     "PROPOSAL_REACTIVATED": lambda who, md: f"{who} reativou a proposta.",
     "PROPOSAL_DEACTIVATED": lambda who, md: f"{who} desativou a proposta.",
     "PROPOSAL_ITEM_UPDATED": lambda who, md: f"{who} editou um item da proposta.",
@@ -5057,8 +5058,15 @@ async def update_proposal(session: AsyncSession, proposal_id: int, payload: Prop
     }
     data = payload.model_dump(exclude_unset=True)
     data.pop("version", None)
+    confirmed_links = bool(data.pop("confirm_inspection_logistics", False))
     if data.get("requires_inspection", True) is None:
         data.pop("requires_inspection")
+    old_order = proposal.order_reference
+    order_changed = "purchase_order" in data and (old_order or "").strip().lower() != (data["purchase_order"] or "").strip().lower()
+    if order_changed:
+        from api.app.modules.logistics import proposal_links
+
+        await proposal_links.require_confirmation(session, proposal, old_pd=old_order, new_pd=data["purchase_order"], confirmed=confirmed_links)
     if "warehouse_status" in data:
         data["warehouse_status"] = _normalize_warehouse_status(data["warehouse_status"])
     for input_name, model_name in field_map.items():
@@ -5069,6 +5077,8 @@ async def update_proposal(session: AsyncSession, proposal_id: int, payload: Prop
         from api.app.modules.inspection.service import ensure_can_unmark_inspection
 
         await ensure_can_unmark_inspection(session, proposal.order_reference)
+    if order_changed:
+        await proposal_links.apply_order_change(session, proposal, old_order, proposal.order_reference, actor, request_id)
     if changed:
         _touch(proposal, actor)
         await _record_event(session, proposal, "PROPOSAL_UPDATED", actor, request_id=request_id, metadata={"fields": changed, "version": proposal.version})
@@ -5096,6 +5106,9 @@ async def cancel_proposal(session: AsyncSession, proposal_id: int, payload: Prop
             "warehouse_status": proposal.warehouse_status,
             "is_completed": proposal.is_completed,
         }
+        from api.app.modules.logistics import proposal_links
+
+        await proposal_links.require_confirmation(session, proposal, old_pd=proposal.order_reference, cancelling=True, confirmed=payload.confirm_inspection_logistics)
         to_area, to_status = ProposalStateMachine.cancel_state()
         proposal.current_area = to_area
         proposal.current_status = to_status
@@ -5106,6 +5119,7 @@ async def cancel_proposal(session: AsyncSession, proposal_id: int, payload: Prop
         proposal.cancellation_reason = payload.reason
         _touch(proposal, actor)
         await _record_event(session, proposal, "PROPOSAL_CANCELLED", actor, request_id=request_id, from_area=from_area, from_status=from_status, to_area=to_area, to_status=to_status, metadata={"reason": payload.reason, "cancelled_at": proposal.cancelled_at.isoformat(), "previous_state": previous_state, "version": proposal.version})
+        await proposal_links.apply_cancel(session, proposal, actor, request_id, payload.reason)
         await session.commit()
     except Exception:
         await session.rollback()

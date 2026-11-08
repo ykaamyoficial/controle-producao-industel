@@ -337,6 +337,7 @@ class ProposalUpdate(BaseModel):
     warehouse_status: str | None = Field(default=None, max_length=120)
     requires_inspection: bool | None = None
     notes: str | None = None
+    confirm_inspection_logistics: bool = False  # reenviar com true depois do 409 INSPECTION_LOGISTICS_CONFIRMATION_REQUIRED
 
 
 class WarehouseEnterRequest(BaseModel):
@@ -418,6 +419,7 @@ class ProposalCancelRequest(BaseModel):
 
     version: int = Field(ge=1)
     reason: str = Field(min_length=1, max_length=1000)
+    confirm_inspection_logistics: bool = False  # reenviar com true depois do 409 INSPECTION_LOGISTICS_CONFIRMATION_REQUIRED
 
     @field_validator("reason", mode="before")
     @classmethod
