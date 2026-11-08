@@ -77,7 +77,7 @@ async def add_proposals(log_id: int, payload: schemas.AddProposalsPayload, reque
     return await service.add_proposals(session, log_id, payload, actor, _rid(request))
 
 
-@router.post("/logs/{log_id}/items/{item_id}/resolve", response_model=schemas.LogDetail)
+@router.post("/logs/{log_id}/items/{item_id}/resolve", response_model=schemas.LogDetail | schemas.RemoveResult)
 async def resolve_item(log_id: int, item_id: int, payload: schemas.ResolveItemPayload, request: Request, session: AsyncSession = Depends(get_db_session), actor: User = Depends(_edit)):
     return await service.resolve_item(session, log_id, item_id, payload, actor, _rid(request))
 

@@ -252,6 +252,7 @@ async def _log_warnings(
     out += await calendar_rules.schedule_warnings(session, "delivery_date", delivery, today=today, cd_state=state, exclude_log_id=exclude_log_id)
     if delivery is not None and loading is not None:
         out += calendar_rules.warn_delivery_before_loading(delivery, loading)
+    out += calendar_rules.warn_reserved_vs_delivery(reserved, delivery)
     if delivery is not None and proposals:
         done = await finished_dates(session, [p.order_reference for p in proposals])
         out += calendar_rules.warn_delivery_before_inspection(
@@ -283,6 +284,8 @@ async def update_log_dates(session, log_id, payload: schemas.LogDatesPayload, ac
     )
     if ("loading_date" in new) != ("delivery_date" in new):  # com os dois, _log_warnings ja avaliou a R3
         warnings += calendar_rules.warn_delivery_before_loading(delivery, loading)
+    if ("reserved_date" in new) != ("delivery_date" in new):  # com os dois, _log_warnings ja avaliou
+        warnings += calendar_rules.warn_reserved_vs_delivery(new.get("reserved_date", row.reserved_date), delivery)
     if "loading_date" in new and row.load_id is not None:
         load = await _get_load(session, row.load_id)
         warnings += calendar_rules.warn_departure_vs_loading(load.departure_date, [(row.code, loading)], field="loading_date")
@@ -403,22 +406,23 @@ async def _active_item(session: AsyncSession, log_id: int, item_id: int) -> tupl
     return found[0], found[1]
 
 
-async def resolve_item(session, log_id, item_id, payload: schemas.ResolveItemPayload, actor, request_id=None) -> schemas.LogDetail:
+async def resolve_item(session, log_id, item_id, payload: schemas.ResolveItemPayload, actor, request_id=None) -> schemas.LogDetail | schemas.RemoveResult:
     row = await _get_log(session, log_id, lock=True)
     item, proposal = await _active_item(session, log_id, item_id)
     if item.status != "pendente":
         raise ApiError(error_codes.LOGISTICS_ITEM_NOT_PENDING, "Esta inclusao ja foi resolvida.", status_code=409, details={"status": item.status})
     item.status = payload.result
     row.updated_at = utcnow()
+    deleted = False
     if payload.result == "reprovada":
-        # Reprovada sai do LOG (fica no historico de removidas) e a proposta fica livre para outro LOG.
-        item.removed_at, item.removed_by, item.removal_reason = utcnow(), actor.id, "Inclusao reprovada"
-        _event(session, actor, f"Inclusao de {proposal.proposal_number} reprovada: saiu do LOG", log_id=row.id, reason="Inclusao reprovada")
+        # Reprovada sai do LOG (fica no historico de removidas e da proposta) e a proposta fica livre para outro LOG. Nao sofre a regra de carga:
+        # o item pendente nunca fez parte da carga.
+        deleted = await detach_item(session, row, item, proposal, actor, request_id, "Inclusao reprovada", load_event=False)
     else:
         _event(session, actor, f"Inclusao de {proposal.proposal_number} aprovada", log_id=row.id)
-    await _audit(session, actor, "LOGISTICS_INCLUSION_RESOLVED", request_id, log_id=row.id, code=row.code, proposal_id=proposal.id, result=payload.result)
+    await _audit(session, actor, "LOGISTICS_INCLUSION_RESOLVED", request_id, log_id=log_id, code=row.code, proposal_id=proposal.id, result=payload.result)
     await session.commit()
-    return await get_log(session, log_id)
+    return schemas.RemoveResult(log_deleted=True) if deleted else await get_log(session, log_id)
 
 
 async def _proposal_history(session: AsyncSession, proposal: Proposal, actor: User, request_id: str | None, text: str, **extra) -> None:
@@ -434,10 +438,10 @@ async def _events_dump(session: AsyncSession, *, log_id: int | None = None, load
 
 
 async def detach_item(
-    session: AsyncSession, row: LogisticsLog, item: LogisticsLogItem, proposal: Proposal, actor: User, request_id: str | None, reason: str,
+    session: AsyncSession, row: LogisticsLog, item: LogisticsLogItem, proposal: Proposal, actor: User, request_id: str | None, reason: str, *, load_event: bool = True,
 ) -> bool:
-    """Tira a proposta do LOG (sem commit). Se era a ultima, o LOG deixa de existir, mas o historico vai para a auditoria e para a proposta.
-    Retorna True se o LOG foi excluido."""
+    """Tira a proposta do LOG (sem commit). Se era a ultima e o LOG nao esta numa carga, o LOG deixa de existir, mas o historico vai para a auditoria
+    e para a proposta; numa carga ele fica vazio (com evento na carga). Retorna True se o LOG foi excluido."""
     item.removed_at, item.removed_by, item.removal_reason = utcnow(), actor.id, reason
     row.updated_at = utcnow()
     await session.flush()
@@ -446,8 +450,10 @@ async def detach_item(
     ).scalar_one()
     await _audit(session, actor, "LOGISTICS_PROPOSAL_REMOVED", request_id, log_id=row.id, code=row.code, proposal_id=proposal.id, reason=reason)
     await _proposal_history(session, proposal, actor, request_id, f"{proposal.proposal_number} saiu do {row.code}", reason=reason, log_code=row.code)
-    if remaining == 0:
-        # Como no prototipo: LOG sem propostas deixa de existir (o codigo volta a ficar livre).
+    if row.load_id is not None and load_event:
+        _event(session, actor, f"{proposal.proposal_number} saiu do {row.code}: {reason}" + ("; o LOG ficou sem propostas" if remaining == 0 else ""), load_id=row.load_id, reason=reason)
+    if remaining == 0 and row.load_id is None:
+        # Como no prototipo: LOG sem propostas deixa de existir (o codigo volta a ficar livre). Numa carga ele fica vazio.
         history = await _events_dump(session, log_id=row.id)
         await _audit(session, actor, "LOGISTICS_LOG_DELETED", request_id, log_id=row.id, code=row.code, reason=f"Ultima proposta removida: {reason}", history=history)
         await session.delete(row)

@@ -184,7 +184,10 @@ async def _run(
                 plan = await _plan(session, row, action, payload)
                 _ensure_stage(row, plan.allowed)
                 if plan.visit_date is not None:
-                    warnings += await calendar_rules.schedule_warnings(session, "visit_date", plan.visit_date, exclude_inspection_id=row.id)
+                    found = await calendar_rules.schedule_warnings(session, "visit_date", plan.visit_date, exclude_inspection_id=row.id)
+                    if any(a in ("approve", "reject") for a, _ in steps[index + 1:]):  # catch-up: a visita ja aconteceu, nao e "data no passado"
+                        found = [w for w in found if w["code"] != "DATE_IN_PAST"]
+                    warnings += found
                 await _apply(session, row, actor, request_id, plan, payload.occurred_on, payload.note)
             except ApiError as exc:
                 if indexed and isinstance(exc.details, dict):

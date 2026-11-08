@@ -402,6 +402,7 @@ class LogisticsApiTests(unittest.TestCase):
         # 2030-03-12 e uma terca sem feriado: so os avisos pedidos aparecem.
         base = {"requested_date": "2030-03-12", "loading_date": "2030-03-12", "delivery_date": "2030-03-13"}
         body = {"code": code, "state": "EQT-MA", "proposal_ids": [self.ids[c] for c in cps], **base, **dates}
+        body.setdefault("reserved_date", body["delivery_date"])  # reservada == entrega: sem o aviso RESERVED_DIFFERS_FROM_DELIVERY
         return self.client.post("/api/v1/logistics/logs", json=body, headers=self._h())
 
     def test_clean_dates_need_no_confirmation(self):
@@ -544,6 +545,58 @@ class LogisticsApiTests(unittest.TestCase):
         self.assertEqual(self.client.get(f"/api/v1/logistics/logs/{lid}", headers=self._h()).json()["proposal_count"], 1)
         # proposta sem inspecao nem LOG troca o Pedido sem confirmacao
         self.assertEqual(self._set_order("CP 400", "PD-400").status_code, 200)
+
+    def test_cancel_in_load_keeps_empty_log_and_flags_orphaned_inspection(self):
+        lid = self._approved_log("LOG101", ("CP 100",))
+        load_id = self._load([lid]).json()["id"]
+        r = self._cancel("CP 100")
+        self._err(r, 409, "INSPECTION_LOGISTICS_CONFIRMATION_REQUIRED")
+        d = r.json()["error"]["details"]
+        self.assertEqual((d["log_stays_empty_in_load"], d["inspection_orphaned"]), (True, False))  # CP 101 ainda usa o PD-1
+        self.assertEqual(self._cancel("CP 100", confirm_inspection_logistics=True).status_code, 200)
+        log = self.client.get(f"/api/v1/logistics/logs/{lid}", headers=self._h())
+        self.assertEqual((log.status_code, log.json()["proposal_count"], log.json()["load_id"]), (200, 0, load_id))
+        load_events = [e["text"] for e in self.client.get(f"/api/v1/logistics/loads/{load_id}", headers=self._h()).json()["events"]]
+        self.assertTrue(any("CP 100 saiu do LOG101" in t and "sem propostas" in t for t in load_events), load_events)
+        # CP 101 e a ultima proposta viva do PD-1: a inspecao fica sem proposta ativa (so avisa, nao bloqueia)
+        d = self._cancel("CP 101").json()["error"]["details"]
+        self.assertEqual((d["inspection_orphaned"], d["log_stays_empty_in_load"]), (True, False))
+        self.assertEqual(self._cancel("CP 101", confirm_inspection_logistics=True).status_code, 200)
+        self.assertTrue(any("CP 101 cancelada: inspeção sem proposta ativa" in t for t in self._history("PD-1")))
+
+    def test_change_order_to_pd_with_inspection_orphans_old_inspection(self):
+        d = self._set_order("CP 300", "PD-2").json()["error"]["details"]  # PD-2 ja tem inspecao: a do PD-3 nao pode acompanhar
+        self.assertEqual((d["inspection_orphaned"], d["inspection_follows_new_pd"], d["log_stays_empty_in_load"]), (True, False, False))
+        self.assertEqual(self._set_order("CP 300", "PD-2", confirm_inspection_logistics=True).status_code, 200)
+        self.assertTrue(any("mudou o Pedido de PD-3 para PD-2: inspeção sem proposta ativa" in t for t in self._history("PD-3")))
+        # PD-1 ainda tem CP 101: trocar so a CP 100 nao deixa a inspecao orfa
+        self.assertFalse(self._set_order("CP 100", "PD-2").json()["error"]["details"]["inspection_orphaned"])
+
+    def test_reject_inclusion_detaches_with_proposal_history_and_drops_empty_log(self):
+        lid = self._log("LOG101", ("CP 100",)).json()["id"]
+        add = self.client.post(f"/api/v1/logistics/logs/{lid}/proposals", json={"proposal_ids": [self.ids["CP 200"]]}, headers=self._h()).json()
+        ids = {i["proposal_number"]: i["id"] for i in add["items"]}
+        self.client.post(f"/api/v1/logistics/logs/{lid}/items/{ids['CP 100']}/remove", json={"reason": "saiu"}, headers=self._h())
+        res = self.client.post(f"/api/v1/logistics/logs/{lid}/items/{ids['CP 200']}/resolve", json={"result": "reprovada"}, headers=self._h())
+        self.assertEqual((res.status_code, res.json()["log_deleted"]), (200, True))
+        self.assertEqual(self.client.get(f"/api/v1/logistics/logs/{lid}", headers=self._h()).status_code, 404)
+
+        async def history():
+            async with get_sessionmaker()() as s:
+                return (await s.execute(text("SELECT metadata->>'text' FROM proposal_events WHERE event_type = 'LOGISTICS_HISTORY' ORDER BY id"))).scalars().all()
+
+        self.assertIn("CP 200 saiu do LOG101", asyncio.run(history()))
+
+    def test_reserved_date_differing_from_delivery_only_warns(self):
+        warns = self._warnings(self._raw_log(reserved_date="2030-03-11"))  # entrega 2030-03-13
+        self.assertEqual((set(warns), warns["RESERVED_DIFFERS_FROM_DELIVERY"]["field"]), ({"RESERVED_DIFFERS_FROM_DELIVERY"}, "reserved_date"))
+        lid = self._raw_log(reserved_date="2030-03-11", confirm_dates=True).json()["id"]
+        url = f"/api/v1/logistics/logs/{lid}/dates"
+        patch = lambda body: self.client.patch(url, json={**body, "reason": "x"}, headers=self._h())  # noqa: E731
+        self.assertEqual(patch({"reserved_date": "2030-03-13"}).status_code, 200)  # igual a entrega: sem aviso
+        warns = self._warnings(patch({"delivery_date": "2030-03-14"}))
+        self.assertEqual((set(warns), warns["RESERVED_DIFFERS_FROM_DELIVERY"]["field"]), ({"RESERVED_DIFFERS_FROM_DELIVERY"}, "reserved_date"))
+        self.assertEqual(patch({"delivery_date": "2030-03-14", "confirm_dates": True}).status_code, 200)
 
     # --- F3: editar datas do LOG e da carga com motivo --------------------------------------
 

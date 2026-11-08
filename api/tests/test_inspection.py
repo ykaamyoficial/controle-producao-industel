@@ -367,9 +367,18 @@ class InspectionApiTests(unittest.TestCase):
             {"action": "decision", "decision": "inloco", "visit_date": self._ago(6)},
             {"action": "approve", "occurred_on": self._ago(5)},
         ]
-        r = self._post(iid, "catch-up", {"steps": steps})
+        # sem passo posterior a visita no passado avisa
+        r = self._post(iid, "catch-up", {"steps": steps[:3]})
         self.assertEqual((r.status_code, r.json()["error"]["code"]), (409, "DATE_CONFIRMATION_REQUIRED"))
         self.assertIn("DATE_IN_PAST", [w["code"] for w in r.json()["error"]["details"]["warnings"]])
+        # com approve/reject depois a visita ja aconteceu: a data passada nao e aviso (outros avisos, ex. fim de semana, continuam possiveis)
+        r = self._post(iid, "catch-up", {"steps": steps})
+        codes = [w["code"] for w in r.json()["error"]["details"]["warnings"]] if r.status_code == 409 else []
+        self.assertIn(r.status_code, (200, 409))
+        self.assertNotIn("DATE_IN_PAST", codes)
+        if r.status_code == 200:
+            self.assertEqual(r.json()["stage"], "doc")
+            return
         self.assertEqual(self._get(iid)["stage"], "pendente")
         ok = self._post(iid, "catch-up", {"steps": steps, "confirm_dates": True})
         self.assertEqual((ok.status_code, ok.json()["stage"], ok.json()["visit_date"]), (200, "doc", self._ago(6)))

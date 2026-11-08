@@ -128,6 +128,13 @@ def warn_delivery_before_loading(delivery: date | None, loading: date | None) ->
     return []
 
 
+def warn_reserved_vs_delivery(reserved: date | None, delivery: date | None) -> list[dict]:
+    """Data reservada diferente da entrega no CD."""
+    if reserved and delivery and reserved != delivery:
+        return [warning("RESERVED_DIFFERS_FROM_DELIVERY", "reserved_date", f"A data reservada ({fmt(reserved)}) é diferente da entrega no CD ({fmt(delivery)}).")]
+    return []
+
+
 def warn_departure_vs_loading(departure: date | None, loadings: list[tuple[str, date]], field: str = "departure_date") -> list[dict]:
     """R3b: saida da carga diferente do carregamento dos LOGs dela."""
     if departure is None:
