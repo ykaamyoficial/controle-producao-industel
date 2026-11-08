@@ -228,5 +228,10 @@
     "classification": "ADDITIVE",
     "summary": "Adiciona inspections.stage_occurred_on e inspection_events.occurred_on, note e kind (data em que o andamento aconteceu, observacao e tipo do evento).",
     "justification": "Quatro ADD COLUMN nullable, sem default nem backfill: o codigo antigo ignora as colunas e o codigo novo cai para a data local de stage_since / created_at quando nulas. Nenhuma linha, tipo ou constraint existente e alterado. O downgrade so remove as colunas, perdendo apenas as datas/observacoes informadas pelo usuario."
+  },
+  "20261108_0046": {
+    "classification": "ADDITIVE",
+    "summary": "Adiciona logistics_loads.departed_on (saiu em, data real) e logistics_logs.delivered_on e delivery_proof_link (entregue no CD em e link/caminho do comprovante).",
+    "justification": "Tres ADD COLUMN nullable, sem default nem backfill: o codigo antigo ignora as colunas e o novo trata nulo como nao informado. Nenhuma linha, tipo ou constraint existente e alterado. O downgrade so remove as colunas, perdendo apenas as datas e links de comprovante informados."
   }
 }

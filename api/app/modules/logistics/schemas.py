@@ -93,6 +93,26 @@ class LoadUpdate(BaseModel):
         return _required_text(v, "Informe o motivo.")
 
 
+class LoadDepartedPayload(BaseModel):
+    """Saida REAL da carga ("Saiu em"). O motivo e obrigatorio so ao mudar uma data ja registrada."""
+
+    departed_on: date
+    reason: str | None = Field(default=None, max_length=1000)
+
+
+class LogDeliveryPayload(BaseModel):
+    """Entrega REAL no CD. `delivery_proof_link` so muda se vier no corpo (null apaga). Motivo obrigatorio so ao mudar delivered_on ja registrada."""
+
+    delivered_on: date
+    delivery_proof_link: str | None = Field(default=None, max_length=500)
+    reason: str | None = Field(default=None, max_length=1000)
+
+    @field_validator("delivery_proof_link")
+    @classmethod
+    def _link(cls, v: str | None) -> str | None:
+        return _clean_link(v) if v is not None and v.strip() else None
+
+
 class LogDatesPayload(BaseModel):
     """Edita datas do LOG: so os campos enviados (e diferentes) mudam; um evento por campo."""
 
@@ -152,6 +172,8 @@ class LogOut(BaseModel):
     nf_link: str | None = None
     xml_link: str | None = None
     bim_link: str | None = None
+    delivered_on: date | None = None
+    delivery_proof_link: str | None = None
     load_id: int | None = None
     load_code: str | None = None
     proposal_count: int
@@ -199,8 +221,11 @@ class LoadLogOut(LogOut):
 class LoadOut(BaseModel):
     id: int
     code: str
-    departure_date: date
+    departure_date: date  # prevista
+    departed_on: date | None = None  # real ("Saiu em")
     log_count: int
+    logs_total: int
+    logs_delivered: int  # LOGs da carga com delivered_on preenchida
     proposal_count: int
     log_codes: list[str]
     states: list[str]

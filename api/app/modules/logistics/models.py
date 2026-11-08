@@ -21,7 +21,8 @@ class LogisticsLoad(Base):
     __tablename__ = "logistics_loads"
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
-    departure_date: Mapped[date] = mapped_column(Date(), nullable=False)
+    departure_date: Mapped[date] = mapped_column(Date(), nullable=False)  # saida PREVISTA
+    departed_on: Mapped[date | None] = mapped_column(Date(), nullable=True)  # "Saiu em": data real
     created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
@@ -49,6 +50,8 @@ class LogisticsLog(Base):
     nf_link: Mapped[str | None] = mapped_column(String(500), nullable=True)
     xml_link: Mapped[str | None] = mapped_column(String(500), nullable=True)
     bim_link: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    delivered_on: Mapped[date | None] = mapped_column(Date(), nullable=True)  # "Entregue no CD em": data real
+    delivery_proof_link: Mapped[str | None] = mapped_column(String(500), nullable=True)  # so link/caminho (D9)
     # Um LOG so pode estar em uma carga: a propria coluna garante.
     load_id: Mapped[int | None] = mapped_column(ForeignKey("logistics_loads.id", ondelete="SET NULL"), nullable=True)
     created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)

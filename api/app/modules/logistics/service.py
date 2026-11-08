@@ -516,8 +516,9 @@ async def _loads_out(session: AsyncSession, loads: list[LogisticsLoad]) -> list[
             logs_by_load[log.load_id].append(log)
     return [
         {
-            "id": x.id, "code": load_code(x.id), "departure_date": x.departure_date, "created_at": x.created_at, "updated_at": x.updated_at,
-            "log_count": len(logs_by_load[x.id]), "proposal_count": sum(counts.get(lg.id, 0) for lg in logs_by_load[x.id]),
+            "id": x.id, "code": load_code(x.id), "departure_date": x.departure_date, "departed_on": x.departed_on, "created_at": x.created_at, "updated_at": x.updated_at,
+            "log_count": len(logs_by_load[x.id]), "logs_total": len(logs_by_load[x.id]),
+            "logs_delivered": sum(1 for lg in logs_by_load[x.id] if lg.delivered_on is not None), "proposal_count": sum(counts.get(lg.id, 0) for lg in logs_by_load[x.id]),
             "log_codes": [lg.code for lg in logs_by_load[x.id]], "states": sorted({lg.state for lg in logs_by_load[x.id]}),
         }
         for x in loads
@@ -569,6 +570,44 @@ async def update_load(session, load_id, payload: schemas.LoadUpdate, actor, requ
     await _audit(session, actor, "LOGISTICS_LOAD_UPDATED", request_id, load_id=load.id, load_code=load_code(load.id), departure_date=payload.departure_date.isoformat(), reason=payload.reason)
     await session.commit()
     return await get_load(session, load_id)
+
+
+async def set_departed(session, load_id, payload: schemas.LoadDepartedPayload, actor, request_id=None) -> schemas.LoadDetail:
+    """Registra/edita a saida real da carga ("Saiu em"), com historico."""
+    load = await _get_load(session, load_id, lock=True)
+    old, new = load.departed_on, payload.departed_on
+    if old == new:
+        raise ApiError(error_codes.VALIDATION_ERROR, "A data de saida real nao mudou.", status_code=422)
+    reason = (payload.reason or "").strip() or None
+    if old is not None and reason is None:
+        raise ApiError(error_codes.VALIDATION_ERROR, "Informe o motivo para mudar a data em que a carga saiu.", status_code=422)
+    load.departed_on, load.updated_at = new, utcnow()
+    text = f"Saiu em {_fmt(new)}" if old is None else f"Saida real alterada de {_fmt(old)} para {_fmt(new)}"
+    _event(session, actor, text, load_id=load.id, reason=reason)
+    await _audit(session, actor, "LOGISTICS_LOAD_DEPARTED", request_id, load_id=load.id, load_code=load_code(load.id), departed_on=new.isoformat(), reason=reason)
+    await session.commit()
+    return await get_load(session, load_id)
+
+
+async def set_delivery(session, log_id, payload: schemas.LogDeliveryPayload, actor, request_id=None) -> schemas.LogDetail:
+    """Registra/edita a entrega real no CD e o link do comprovante (so texto), com historico."""
+    row = await _get_log(session, log_id, lock=True)
+    old_date, old_link = row.delivered_on, row.delivery_proof_link
+    new_link = payload.delivery_proof_link if "delivery_proof_link" in payload.model_fields_set else old_link
+    reason = (payload.reason or "").strip() or None
+    if old_date == payload.delivered_on and old_link == new_link:
+        raise ApiError(error_codes.VALIDATION_ERROR, "Nada mudou na entrega.", status_code=422)
+    if old_date is not None and old_date != payload.delivered_on and reason is None:
+        raise ApiError(error_codes.VALIDATION_ERROR, "Informe o motivo para mudar a data em que o LOG foi entregue.", status_code=422)
+    if old_date != payload.delivered_on:
+        text = f"Entregue no CD em {_fmt(payload.delivered_on)}" if old_date is None else f"Entrega no CD (real): de {_fmt(old_date)} para {_fmt(payload.delivered_on)}"
+        _event(session, actor, text, log_id=row.id, reason=reason)
+    if old_link != new_link:
+        _event(session, actor, "Comprovante de entrega " + ("removido" if new_link is None else "registrado" if old_link is None else "atualizado"), log_id=row.id)
+    row.delivered_on, row.delivery_proof_link, row.updated_at = payload.delivered_on, new_link, utcnow()
+    await _audit(session, actor, "LOGISTICS_LOG_DELIVERED", request_id, log_id=row.id, code=row.code, delivered_on=payload.delivered_on.isoformat(), reason=reason)
+    await session.commit()
+    return await get_log(session, log_id)
 
 
 async def add_log_to_load(session, load_id, payload: schemas.LogIdPayload, actor, request_id=None) -> schemas.LoadDetail:

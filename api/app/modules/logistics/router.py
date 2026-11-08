@@ -57,6 +57,11 @@ async def update_log_dates(log_id: int, payload: schemas.LogDatesPayload, reques
     return await service.update_log_dates(session, log_id, payload, actor, _rid(request))
 
 
+@router.post("/logs/{log_id}/delivery", response_model=schemas.LogDetail)
+async def set_delivery(log_id: int, payload: schemas.LogDeliveryPayload, request: Request, session: AsyncSession = Depends(get_db_session), actor: User = Depends(_edit)):
+    return await service.set_delivery(session, log_id, payload, actor, _rid(request))
+
+
 @router.post("/logs/{log_id}/docs", response_model=schemas.LogDetail)
 async def send_docs(log_id: int, payload: schemas.DocsPayload, request: Request, session: AsyncSession = Depends(get_db_session), actor: User = Depends(_edit)):
     return await service.send_docs(session, log_id, payload, actor, _rid(request))
@@ -103,6 +108,11 @@ async def create_load(payload: schemas.LoadCreate, request: Request, session: As
 @router.patch("/loads/{load_id}", response_model=schemas.LoadDetail)
 async def update_load(load_id: int, payload: schemas.LoadUpdate, request: Request, session: AsyncSession = Depends(get_db_session), actor: User = Depends(_edit)):
     return await service.update_load(session, load_id, payload, actor, _rid(request))
+
+
+@router.post("/loads/{load_id}/departed", response_model=schemas.LoadDetail)
+async def set_departed(load_id: int, payload: schemas.LoadDepartedPayload, request: Request, session: AsyncSession = Depends(get_db_session), actor: User = Depends(_edit)):
+    return await service.set_departed(session, load_id, payload, actor, _rid(request))
 
 
 @router.post("/loads/{load_id}/logs", response_model=schemas.LoadDetail)

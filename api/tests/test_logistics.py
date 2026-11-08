@@ -573,6 +573,43 @@ class LogisticsApiTests(unittest.TestCase):
         self.assertIn("DEPARTURE_DIFFERS_FROM_LOADING", self._warnings(w))
         self.assertNotEqual(dep, "2030-03-12")
 
+    # --- F5: saida real da carga e entrega real no CD ---------------------------------------
+
+    def test_departed_and_delivered_are_real_dates_with_history_and_never_warn(self):
+        a = self._approved_log("LOG101", ("CP 100",))
+        b = self._approved_log("LOG102", ("CP 200",))
+        load = self._load([a, b]).json()
+        base = f"/api/v1/logistics/loads/{load['id']}"
+        self.assertEqual((load["departed_on"], load["logs_total"], load["logs_delivered"]), (None, 2, 0))
+        dep = lambda body: self.client.post(f"{base}/departed", json=body, headers=self._h())  # noqa: E731
+        first = dep({"departed_on": "2020-01-04"})  # sabado no passado: data real nunca gera aviso
+        self.assertEqual((first.status_code, first.json()["departed_on"], first.json()["events"][0]["text"]), (200, "2020-01-04", "Saiu em 04/01/2020"))
+        self._err(dep({"departed_on": "2020-01-04"}), 422, "VALIDATION_ERROR")
+        self._err(dep({"departed_on": "2020-01-06"}), 422, "VALIDATION_ERROR")  # mudar exige motivo
+        second = dep({"departed_on": "2020-01-06", "reason": "digitei errado"}).json()
+        self.assertEqual((second["departed_on"], second["events"][0]["text"], second["events"][0]["reason"]), ("2020-01-06", "Saida real alterada de 04/01/2020 para 06/01/2020", "digitei errado"))
+        self.assertEqual(second["departure_date"], load["departure_date"])  # a prevista nao muda
+
+        url = f"/api/v1/logistics/logs/{a}/delivery"
+        post = lambda body: self.client.post(url, json=body, headers=self._h())  # noqa: E731
+        self.assertEqual(post({"delivered_on": "2020-01-10", "delivery_proof_link": "javascript:x"}).status_code, 422)
+        got = post({"delivered_on": "2020-01-11", "delivery_proof_link": "https://srv/comprovantes/log101.pdf"})
+        self.assertEqual(got.status_code, 200, got.text)
+        log = got.json()
+        self.assertEqual((log["delivered_on"], log["delivery_proof_link"]), ("2020-01-11", "https://srv/comprovantes/log101.pdf"))
+        self.assertEqual({e["text"] for e in log["events"][:2]}, {"Entregue no CD em 11/01/2020", "Comprovante de entrega registrado"})
+        self._err(post({"delivered_on": "2020-01-12"}), 422, "VALIDATION_ERROR")  # mudar a data exige motivo
+        moved = post({"delivered_on": "2020-01-12", "reason": "NF carimbada no dia seguinte"}).json()
+        self.assertEqual((moved["delivered_on"], moved["delivery_proof_link"]), ("2020-01-12", "https://srv/comprovantes/log101.pdf"))  # link mantido
+        self.assertEqual(moved["events"][0]["text"], "Entrega no CD (real): de 11/01/2020 para 12/01/2020")
+        self._err(post({"delivered_on": "2020-01-12"}), 422, "VALIDATION_ERROR")  # nada mudou
+        cleared = post({"delivered_on": "2020-01-12", "delivery_proof_link": None}).json()
+        self.assertIsNone(cleared["delivery_proof_link"])
+        listed = self.client.get("/api/v1/logistics/loads", headers=self._h("viewer")).json()["items"][0]
+        self.assertEqual((listed["logs_total"], listed["logs_delivered"], listed["departed_on"]), (2, 1, "2020-01-06"))
+        detail_log = [lg for lg in self.client.get(base, headers=self._h()).json()["logs"] if lg["id"] == a][0]
+        self.assertEqual(detail_log["delivered_on"], "2020-01-12")
+
     # --- permissoes ----------------------------------------------------------------------
 
     def test_permissions_are_enforced(self):
@@ -595,6 +632,8 @@ class LogisticsApiTests(unittest.TestCase):
             ("post", "/loads", {"departure_date": "2026-11-01", "log_ids": [lid]}),
             ("patch", f"/loads/{load_id}", {"departure_date": "2026-11-01", "reason": "x"}),
             ("patch", f"/logs/{lid}/dates", {"loading_date": "2026-11-01", "reason": "x"}),
+            ("post", f"/logs/{lid}/delivery", {"delivered_on": "2026-11-01"}),
+            ("post", f"/loads/{load_id}/departed", {"departed_on": "2026-11-01"}),
             ("post", f"/loads/{load_id}/logs", {"log_id": lid}),
             ("delete", f"/loads/{load_id}/logs/{lid}", None),
             ("delete", f"/loads/{load_id}", None),
