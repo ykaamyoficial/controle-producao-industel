@@ -117,7 +117,7 @@ class FakeLogisticsApi:
         return self._respond("get_log", log_id)
 
     def create_log(self, payload):
-        return self._respond("create_log", payload)
+        return self._respond("create_log", dict(payload))
 
     def send_docs(self, log_id, nf, xml, bim):
         return self._respond("send_docs", log_id, nf, xml, bim)
@@ -146,11 +146,13 @@ class FakeLogisticsApi:
     def get_load(self, load_id):
         return self._respond("get_load", load_id, default=_load())
 
-    def create_load(self, departure_date, log_ids):
-        return self._respond("create_load", departure_date, log_ids, default=_load())
+    def create_load(self, departure_date, log_ids, confirm_dates=False):
+        extra = (True,) if confirm_dates else ()
+        return self._respond("create_load", departure_date, log_ids, *extra, default=_load())
 
-    def update_load(self, load_id, departure_date):
-        return self._respond("update_load", load_id, departure_date, default=_load())
+    def update_load(self, load_id, departure_date, reason, confirm_dates=False):
+        extra = (True,) if confirm_dates else ()
+        return self._respond("update_load", load_id, departure_date, reason, *extra, default=_load())
 
     def remove_log_from_load(self, load_id, log_id):
         return self._respond("remove_log_from_load", load_id, log_id, default=_load())
@@ -200,7 +202,7 @@ class ClientAndServiceTests(unittest.TestCase):
         client.log_action("t", 3, "items/9/resolve", {"result": "ok"})
         client.list_loads("t")
         client.create_load("t", departure_date="2026-11-08", log_ids=[1, 2])
-        client.update_load("t", 5, departure_date="2026-11-09")
+        client.update_load("t", 5, departure_date="2026-11-09", reason="chuva")
         client.add_log_to_load("t", 5, 4)
         client.remove_log_from_load("t", 5, 4)
         client.delete_load("t", 5)
@@ -211,7 +213,7 @@ class ClientAndServiceTests(unittest.TestCase):
         self.assertEqual(paths[3], ("POST", "/api/v1/logistics/logs/3/items/9/resolve", {"result": "ok"}))
         self.assertEqual(paths[4], ("GET", "/api/v1/logistics/loads?limit=100&offset=0", None))
         self.assertEqual(paths[5], ("POST", "/api/v1/logistics/loads", {"departure_date": "2026-11-08", "log_ids": [1, 2]}))
-        self.assertEqual(paths[6], ("PATCH", "/api/v1/logistics/loads/5", {"departure_date": "2026-11-09"}))
+        self.assertEqual(paths[6], ("PATCH", "/api/v1/logistics/loads/5", {"departure_date": "2026-11-09", "reason": "chuva"}))
         self.assertEqual(paths[7], ("POST", "/api/v1/logistics/loads/5/logs", {"log_id": 4}))
         self.assertEqual(paths[8], ("DELETE", "/api/v1/logistics/loads/5/logs/4", None))
         self.assertEqual(paths[9], ("DELETE", "/api/v1/logistics/loads/5", None))
@@ -247,10 +249,48 @@ class ClientAndServiceTests(unittest.TestCase):
         for code in (
             "LOGISTICS_LOG_NOT_FOUND", "LOGISTICS_LOG_CODE_ALREADY_EXISTS", "LOGISTICS_INVALID_STAGE", "LOGISTICS_PROPOSAL_NOT_FOUND",
             "LOGISTICS_INSPECTION_NOT_FINISHED", "LOGISTICS_PROPOSAL_ALREADY_IN_LOG", "LOGISTICS_ITEM_NOT_FOUND", "LOGISTICS_ITEM_NOT_PENDING",
-            "LOGISTICS_LOG_IN_LOAD", "LOGISTICS_LOAD_NOT_FOUND", "LOGISTICS_LOG_NOT_APPROVED", "LOGISTICS_LOG_ALREADY_IN_LOAD",
+            "LOGISTICS_LOAD_NOT_FOUND", "LOGISTICS_LOG_NOT_APPROVED", "LOGISTICS_LOG_ALREADY_IN_LOAD",
             "LOGISTICS_LOG_NOT_IN_THIS_LOAD", "LOGISTICS_LOAD_LAST_LOG", "VALIDATION_ERROR", "PERMISSION_DENIED",
         ):
             self.assertIn(code, ERROR_MESSAGES)
+
+    def test_log_in_load_keeps_the_api_message_and_details_survive(self):
+        class Client:
+            def close(self):
+                pass
+
+        class Api:
+            def add_proposals(self, token, log_id, ids):
+                raise ApiBusinessError("LOGISTICS_LOG_IN_LOAD", "técnico", status_code=409)
+
+            def get_log(self, token, log_id):
+                raise ApiBusinessError("DATE_CONFIRMATION_REQUIRED", "Há avisos", status_code=409, details={"warnings": [{"message": "x"}]})
+
+        class Storage:
+            def logistics_api(self):
+                return Client(), Api(), "tok"
+
+        def wrap(exc):
+            return AppError("O LOG101 esta na carga CE-01.", error_code=exc.error_code, details=getattr(exc, "details", None))
+
+        service = LogisticsService(Storage(), wrap)
+        self.assertNotIn("LOGISTICS_LOG_IN_LOAD", ERROR_MESSAGES)
+        with self.assertRaises(AppError) as caught:
+            service.get_log(1)
+        self.assertEqual(caught.exception.details, {"warnings": [{"message": "x"}]})
+
+    def test_new_endpoints_build_paths_and_payloads(self):
+        http = FakeHttp()
+        client = LogisticsApiClient(http)
+        client.update_log_dates("t", 3, {"delivery_date": "2026-12-01", "reason": "r"})
+        client.log_delivery("t", 3, {"delivered_on": "2026-12-02"})
+        client.load_departed("t", 5, {"departed_on": "2026-12-05"})
+        client.create_load("t", departure_date="2026-11-08", log_ids=[1], confirm_dates=True)
+        paths = [(c[0], c[1], c[2]) for c in http.calls]
+        self.assertEqual(paths[0], ("PATCH", "/api/v1/logistics/logs/3/dates", {"delivery_date": "2026-12-01", "reason": "r"}))
+        self.assertEqual(paths[1], ("POST", "/api/v1/logistics/logs/3/delivery", {"delivered_on": "2026-12-02"}))
+        self.assertEqual(paths[2], ("POST", "/api/v1/logistics/loads/5/departed", {"departed_on": "2026-12-05"}))
+        self.assertEqual(paths[3][2], {"departure_date": "2026-11-08", "log_ids": [1], "confirm_dates": True})
 
     def test_helpers(self):
         self.assertEqual(parse_date("03/11/2026", "data"), "2026-11-03")
@@ -523,6 +563,54 @@ class NewLogDialogTests(QtCase):
         dialog.submit()
         self.assertEqual(api.calls[-1][1]["reserved_date"], "2026-11-13")
 
+    def test_suggested_dates_are_coherent(self):
+        dialog, _api = self._dialog()
+        self.assertEqual(dialog.reserved_field.text(), dialog.delivery_field.text())
+        dialog.delivery_field.textEdited.emit("12/12/2026")  # digitar na entrega leva a reservada junto
+        dialog.delivery_field.setText("12/12/2026")
+        self.assertEqual(dialog.reserved_field.text(), "12/12/2026")
+        dialog.reserved_field.textEdited.emit("13/12/2026")
+        dialog.reserved_field.setText("13/12/2026")
+        dialog.delivery_field.textEdited.emit("14/12/2026")
+        self.assertEqual(dialog.reserved_field.text(), "13/12/2026")
+
+    def test_date_warning_confirm_resends_same_payload_with_confirm_dates(self):
+        dialog, api = self._dialog()
+        self._fill(dialog)
+        dialog.checklist.boxes[0][0].setChecked(True)
+        warning = AppError("Há avisos", error_code="DATE_CONFIRMATION_REQUIRED", details={"warnings": [{"code": "WEEKEND", "field": "delivery_date", "message": "Cai num domingo."}]})
+        results = [warning]
+        original = api.create_log
+
+        def create_log(payload):
+            if results:
+                api.calls.append(("create_log", dict(payload)))
+                raise results.pop()
+            return original(payload)
+
+        api.create_log = create_log
+        with patch("app.ui.date_warnings.ask_date_confirmation", return_value=True) as ask:
+            dialog.submit()
+        ask.assert_called_once()
+        self.assertEqual(ask.call_args.args[1], ["Cai num domingo."])
+        sent = [c for c in api.calls if c[0] == "create_log"]
+        self.assertNotIn("confirm_dates", sent[0][1])
+        self.assertTrue(sent[1][1]["confirm_dates"])
+        self.assertEqual({k: v for k, v in sent[1][1].items() if k != "confirm_dates"}, sent[0][1])
+        self.assertIsNotNone(dialog.created)
+
+    def test_date_warning_declined_keeps_data_and_reenables(self):
+        dialog, api = self._dialog()
+        self._fill(dialog)
+        dialog.checklist.boxes[0][0].setChecked(True)
+        api.error = AppError("Há avisos", error_code="DATE_CONFIRMATION_REQUIRED", details={"warnings": [{"message": "Domingo."}]})
+        with patch("app.ui.date_warnings.ask_date_confirmation", return_value=False):
+            dialog.submit()
+        self.assertIsNone(dialog.created)
+        self.assertEqual(len([c for c in api.calls if c[0] == "create_log"]), 1)
+        self.assertTrue(dialog.create_button.isEnabled())
+        self.assertEqual(dialog.delivery_field.text(), "10/11/2026")
+
     def test_api_error_keeps_dialog_open(self):
         dialog, api = self._dialog()
         self._fill(dialog)
@@ -602,6 +690,34 @@ class LoadDialogTests(QtCase):
         self.assertEqual(api.calls[-1], ("create_load", "2026-11-08", [1]))
         self.assertIsNotNone(dialog.created)
 
+    def test_new_load_departure_follows_loading_date_of_checked_logs(self):
+        api = FakeLogisticsApi(logs=[_log(stage="aprovada", loading_date="2026-12-03"), _log(id=2, code="LOG102", stage="aprovada", loading_date="2026-12-05")])
+        dialog = NewLoadDialog(FakeService(api))
+        dialog.checklist.boxes[0][0].setChecked(True)
+        self.assertEqual(dialog.date_field.text(), "03/12/2026")
+        dialog.checklist.boxes[1][0].setChecked(True)
+        self.assertEqual(dialog.date_field.text(), "05/12/2026")
+        dialog.date_field.textEdited.emit("01/12/2026")
+        dialog.date_field.setText("01/12/2026")
+        dialog.checklist.boxes[0][0].setChecked(False)
+        self.assertEqual(dialog.date_field.text(), "01/12/2026")
+
+    def test_new_load_date_warning_confirm_resends_with_confirm_dates(self):
+        api = FakeLogisticsApi(logs=[_log(stage="aprovada")])
+        dialog = NewLoadDialog(FakeService(api))
+        dialog.checklist.boxes[0][0].setChecked(True)
+        dialog.date_field.setText("08/11/2026")
+        api.error = AppError("Há avisos", error_code="DATE_CONFIRMATION_REQUIRED", details={"warnings": [{"message": "Domingo."}]})
+
+        def clear_error(*_):
+            api.error = None
+            return True
+
+        with patch("app.ui.date_warnings.ask_date_confirmation", side_effect=clear_error):
+            dialog.submit()
+        self.assertEqual(api.calls[-2:], [("create_load", "2026-11-08", [1]), ("create_load", "2026-11-08", [1], True)])
+        self.assertIsNotNone(dialog.created)
+
     def test_new_load_without_free_logs_shows_hint(self):
         dialog = NewLoadDialog(FakeService(FakeLogisticsApi(logs=[])))
         self.assertEqual(dialog.checklist.boxes, [])
@@ -621,7 +737,25 @@ class LoadDialogTests(QtCase):
         self.assertEqual(dialog.error_label.text(), "Data de saída inválida. Use DD/MM/AAAA.")
         dialog.date_field.setText("09/11/2026")
         dialog.action_buttons[1].click()
-        self.assertEqual(api.calls[-1], ("update_load", 5, "2026-11-09"))
+        self.assertEqual(dialog.error_label.text(), "Informe o motivo da mudança da saída.")
+        dialog.reason_field.setText("chuva")
+        dialog.action_buttons[1].click()
+        self.assertEqual(api.calls[-1], ("update_load", 5, "2026-11-09", "chuva"))
+
+    def test_save_date_warning_confirm_resends(self):
+        dialog, api = self._detail()
+        dialog.date_field.setText("09/11/2026")
+        dialog.reason_field.setText("chuva")
+        api.error = AppError("Há avisos", error_code="DATE_CONFIRMATION_REQUIRED", details={"warnings": [{"message": "Feriado."}]})
+
+        def clear_error(*_):
+            api.error = None
+            return True
+
+        with patch("app.ui.date_warnings.ask_date_confirmation", side_effect=clear_error):
+            dialog.action_buttons[1].click()
+        self.assertEqual(api.calls[-2:], [("update_load", 5, "2026-11-09", "chuva"), ("update_load", 5, "2026-11-09", "chuva", True)])
+        self.assertTrue(dialog.changed)
 
     def test_undo_load_confirms_then_deletes(self):
         dialog, api = self._detail()

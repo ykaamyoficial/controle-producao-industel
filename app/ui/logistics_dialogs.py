@@ -40,6 +40,7 @@ from app.ui.components.dialog_shell import dialog_footer, dialog_header, dialog_
 from app.ui.components.modern_button import ModernButton
 from app.ui.components.path_field import PathField, PathValue
 from app.ui.components.status_badge import StatusBadge
+from app.ui.date_warnings import handle_date_warning
 from app.ui.dialog_utils import style_dialog_from_parent
 from app.ui.inspection_dialogs import _read_only_table, days_text, fit_to_screen, format_date, format_moment, scrolled
 from app.ui.styles import STATUS_BADGE_COLORS, _contrast_text, _is_dark
@@ -211,14 +212,32 @@ class _DetailDialog(QDialog):
             label.setText(message)
             label.setVisible(bool(message))
 
-    def _run(self, operation: Callable[[], Any], on_done: Callable[[Any], None] | None = None) -> None:
+    def _run(
+        self,
+        operation: Callable[[], Any],
+        on_done: Callable[[Any], None] | None = None,
+        *,
+        confirmed: Callable[[], Any] | None = None,
+    ) -> None:
+        """`confirmed`: a mesma chamada com confirm_dates=true, usada se a API devolver avisos de data
+        e o usuario escolher "Marcar mesmo assim"."""
         if self._busy:
             return
         self._busy = True
         self._set_notice("")
         for button in self.action_buttons:
             button.setEnabled(False)
-        start_worker(self, operation, on_done or self._after_action, self._show_error)
+
+        def failed(exc: Exception) -> None:
+            if confirmed is not None:
+                self._busy = False
+                for button in self.action_buttons:
+                    button.setEnabled(True)
+                if handle_date_warning(self, exc, lambda: self._run(confirmed, on_done)):
+                    return
+            self._show_error(exc)
+
+        start_worker(self, operation, on_done or self._after_action, failed)
 
     def _after_action(self, detail: dict) -> None:
         self.changed = True
@@ -621,16 +640,21 @@ class NewLogDialog(QDialog):
         _, self.state_field = self._field(grid, 0, 0, "Estado da Equatorial", "Definido pela proposta escolhida")
         self.state_field.setReadOnly(True)  # automatico; so editavel se a proposta escolhida nao tem estado
         _, self.code_field = self._field(grid, 0, 1, "Código LOG (gerado no portal)", "LOG103")
-        _, self.requested_field = self._field(grid, 1, 0, "Data pedida", "DD/MM/AAAA", date_text(today + timedelta(days=25)))
+        delivery_default = date_text(today + timedelta(days=25))
+        _, self.requested_field = self._field(grid, 1, 0, "Data pedida", "DD/MM/AAAA", delivery_default)
         self.available = QCheckBox("A data pedida estava disponível (ficou reservada)")
         self.available.setChecked(True)
         self.available.toggled.connect(self._toggle_reserved)
         grid.addWidget(self.available, 1, 1, Qt.AlignBottom)
         self.reserved_caption, self.reserved_field = self._field(
-            grid, 2, 0, "Data mais próxima (reservada)", "DD/MM/AAAA", date_text(today + timedelta(days=28))
+            grid, 2, 0, "Data mais próxima (reservada)", "DD/MM/AAAA", delivery_default
         )
         _, self.loading_field = self._field(grid, 3, 0, "Carregamento no pátio Industel", "DD/MM/AAAA", date_text(today + timedelta(days=24)))
-        _, self.delivery_field = self._field(grid, 3, 1, "Entrega no CD da Equatorial", "DD/MM/AAAA", date_text(today + timedelta(days=25)))
+        _, self.delivery_field = self._field(grid, 3, 1, "Entrega no CD da Equatorial", "DD/MM/AAAA", delivery_default)
+        # A data reservada é a da entrega no CD: acompanha a entrega até o usuário digitar outra.
+        self._reserved_edited = False
+        self.reserved_field.textEdited.connect(lambda _text: setattr(self, "_reserved_edited", True))
+        self.delivery_field.textEdited.connect(self._follow_delivery)
         layout.addLayout(grid)
         self._toggle_reserved(True)
         body.addWidget(panel)
@@ -675,6 +699,10 @@ class NewLogDialog(QDialog):
         box.addWidget(field)
         grid.addWidget(cell, row, column)
         return label, field
+
+    def _follow_delivery(self, text: str) -> None:
+        if not self._reserved_edited:
+            self.reserved_field.setText(text)
 
     def _toggle_reserved(self, available: bool) -> None:
         self.reserved_caption.setVisible(not available)
@@ -748,17 +776,23 @@ class NewLogDialog(QDialog):
         except ValueError as exc:
             self._fail(str(exc))
             return
+        self._send(payload)
+
+    def _send(self, payload: dict[str, Any], confirm_dates: bool = False) -> None:
+        body = {**payload, "confirm_dates": True} if confirm_dates else payload
         self._busy = True
         self.create_button.setEnabled(False)
-        start_worker(self, lambda: self.api.create_log(payload), self._done, self._error)
+        start_worker(self, lambda: self.api.create_log(body), self._done, lambda exc: self._error(exc, payload))
 
     def _done(self, detail: dict) -> None:
         self.created = detail
         self.accept()
 
-    def _error(self, exc: Exception) -> None:
+    def _error(self, exc: Exception, payload: dict[str, Any] | None = None) -> None:
         self._busy = False
         self.create_button.setEnabled(True)
+        if payload is not None and handle_date_warning(self, exc, lambda: self._send(payload, True)):
+            return
         self._fail(str(exc))
 
     def _fail(self, message: str) -> None:
@@ -774,6 +808,7 @@ class LoadDetailDialog(_DetailDialog):
         super().__init__(service, load, parent, can_edit=can_edit)
         self.deleted = False
         self.date_field: QLineEdit | None = None
+        self.reason_field: QLineEdit | None = None
         self.setWindowTitle(f"Carga de entrega {self.data.get('code', '')}")
         self._render()
         self._reload()
@@ -823,11 +858,16 @@ class LoadDetailDialog(_DetailDialog):
         summary_layout.addWidget(stats)
 
         if self.can_edit:
-            edit, edit_layout = make_panel("Saída do pátio")
+            edit, edit_layout = make_panel("Saída prevista do pátio")
             self.date_field = QLineEdit(format_date(data.get("departure_date")))
             self.date_field.setMinimumHeight(34)
-            self.date_field.setAccessibleName("Data de saída do pátio")
+            self.date_field.setAccessibleName("Data de saída prevista do pátio")
             edit_layout.addWidget(self.date_field)
+            self.reason_field = QLineEdit()
+            self.reason_field.setMinimumHeight(34)
+            self.reason_field.setPlaceholderText("Motivo da mudança (obrigatório)")
+            self.reason_field.setAccessibleName("Motivo da mudança da saída")
+            edit_layout.addWidget(self.reason_field)
             edit_layout.addWidget(self._make_button("Salvar data", "save", "secondary", self._save_date))
             summary_layout.addWidget(edit)
 
@@ -866,7 +906,13 @@ class LoadDetailDialog(_DetailDialog):
     def _save_date(self) -> None:
         text = self.date_field.text() if self.date_field is not None else ""
         departure = parse_date(text, "data de saída")
-        self._run(lambda: self.api.update_load(self._load_id(), departure))
+        reason = self.reason_field.text().strip() if self.reason_field is not None else ""
+        if not reason:
+            raise ValueError("Informe o motivo da mudança da saída.")
+        self._run(
+            lambda: self.api.update_load(self._load_id(), departure, reason),
+            confirmed=lambda: self.api.update_load(self._load_id(), departure, reason, True),
+        )
 
     def _retire(self, log: dict) -> None:
         if len(self.data.get("logs") or []) <= 1:
@@ -914,6 +960,8 @@ class NewLoadDialog(QDialog):
         panel, layout = make_panel("Dados da carga")
         layout.addWidget(QLabel("Data de saída do pátio"))
         self.date_field = QLineEdit(date_text(date.today() + timedelta(days=23)))
+        self._date_edited = False  # a saída acompanha o carregamento dos LOGs marcados até o usuário digitar outra
+        self.date_field.textEdited.connect(lambda _text: setattr(self, "_date_edited", True))
         self.date_field.setPlaceholderText("DD/MM/AAAA")
         self.date_field.setMinimumHeight(34)
         self.date_field.setAccessibleName("Data de saída do pátio")
@@ -925,6 +973,7 @@ class NewLoadDialog(QDialog):
         hint.setWordWrap(True)
         logs_layout.addWidget(hint)
         self.checklist = _Checklist("Nenhum LOG aprovado e livre. Aprove um LOG na aba LOGs primeiro.")
+        self.checklist.selection_changed.connect(self._follow_loading)
         logs_layout.addWidget(self.checklist)
         body.addWidget(logs_panel, 1)
 
@@ -956,6 +1005,15 @@ class NewLoadDialog(QDialog):
             ]
         )
 
+    def _follow_loading(self) -> None:
+        """Saída da carga = carregamento dos LOGs marcados (o mais tarde, se forem diferentes)."""
+        if self._date_edited:
+            return
+        checked = set(self.checklist.checked_ids())
+        dates = [str(log["loading_date"])[:10] for log in self._free_logs if log["id"] in checked and log.get("loading_date")]
+        if dates:
+            self.date_field.setText(format_date(max(dates)))
+
     def submit(self) -> None:
         if self._busy:
             return
@@ -970,17 +1028,27 @@ class NewLoadDialog(QDialog):
             self._fail(str(exc))
             set_validation_state(self.date_field, "error")
             return
+        self._send(departure, ids)
+
+    def _send(self, departure: str, ids: list[int], confirm_dates: bool = False) -> None:
         self._busy = True
         self.create_button.setEnabled(False)
-        start_worker(self, lambda: self.api.create_load(departure, ids), self._done, self._error)
+        start_worker(
+            self,
+            lambda: self.api.create_load(departure, ids, True) if confirm_dates else self.api.create_load(departure, ids),
+            self._done,
+            lambda exc: self._error(exc, departure, ids),
+        )
 
     def _done(self, detail: dict) -> None:
         self.created = detail
         self.accept()
 
-    def _error(self, exc: Exception) -> None:
+    def _error(self, exc: Exception, departure: str | None = None, ids: list[int] | None = None) -> None:
         self._busy = False
         self.create_button.setEnabled(True)
+        if departure is not None and handle_date_warning(self, exc, lambda: self._send(departure, ids or [], True)):
+            return
         self._fail(str(exc))
 
     def _fail(self, message: str) -> None:
