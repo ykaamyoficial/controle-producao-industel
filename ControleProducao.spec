@@ -21,6 +21,7 @@ hiddenimports += collect_submodules('pdfplumber')
 hiddenimports += collect_submodules('pdfminer')
 hiddenimports += collect_submodules('PIL')
 hiddenimports += collect_submodules('certifi')
+hiddenimports += collect_submodules('openpyxl')
 certifi_datas = collect_data_files('certifi')
 # Windows nao tem base de fusos: ZoneInfo("America/Sao_Paulo") precisa do pacote tzdata
 tzdata_datas = collect_data_files('tzdata')
