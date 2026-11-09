@@ -3,11 +3,14 @@ from __future__ import annotations
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QComboBox,
+    QFileDialog,
     QFrame,
     QHBoxLayout,
     QHeaderView,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QStackedLayout,
     QTableWidget,
     QTableWidgetItem,
@@ -15,6 +18,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.services.log_report import stage_text
+from app.services.xlsx_export import write_logs_xlsx
 from app.ui.background_worker import start_worker
 from app.ui.components.badge_delegate import BADGE_ROLE, BadgeColumnDelegate
 from app.ui.components.detail_widgets import EM_DASH
@@ -32,15 +37,36 @@ from app.ui.logistics_dialogs import (
     LogDetailDialog,
     NewLoadDialog,
     NewLogDialog,
+    category_colors,
     log_stage_colors,
-    log_stage_label,
 )
+from app.ui.report_actions import open_file
 
 PAGE_SIZE = 100
+EXPORT_PAGE_SIZE = 500  # maximo aceito pela API
 LOG_COLUMNS = ["LOG", "Estado", "Data reservada", "Carregamento", "Entrega no CD", "Etapa", "Dias na etapa", "Propostas", "Carga"]
 LOG_STAGE_COLUMN = 5
+LOG_STAGE_FILTERS = ("reservada", "docs", "aprovada", "entregue")
 LOAD_COLUMNS = ["Carga", "Saída prevista", "LOGs", "Estados", "Propostas", "Andamento"]
 LOAD_LEFT_COLUMNS = (2, 3)
+
+
+def log_row_colors(stage: str, palette: dict) -> tuple[str, str]:
+    """"Entregue" tem selo proprio (token final_done); as outras etapas seguem o LOG."""
+    return category_colors("final_done", palette) if stage == "entregue" else log_stage_colors(stage, palette)
+
+
+def fetch_all_logs(api, filters: dict) -> list[dict]:
+    """Todas as paginas do filtro, para o XLSX: a API devolve no maximo EXPORT_PAGE_SIZE por vez."""
+    rows: list[dict] = []
+    offset = 0
+    while True:
+        page = api.list_logs(**filters, limit=EXPORT_PAGE_SIZE, offset=offset)
+        items = page.get("items") or []
+        rows.extend(items)
+        offset += len(items)
+        if not items or offset >= int(page.get("total") or 0):
+            return rows
 
 
 def load_progress_text(load: dict) -> str:
@@ -105,13 +131,22 @@ class LogisticsPage(QWidget):
         self.search.setMinimumHeight(34)
         self.search.setMinimumWidth(260)
         self.search.textChanged.connect(lambda _text: self._debounce.start())
+        self.stage_filter = self._filter_combo("Etapa", [(None, "Todas as etapas"), *((stage, stage_text(stage)) for stage in LOG_STAGE_FILTERS)])
+        self.state_filter = self._filter_combo("Estado", [(None, "Todos os estados")])
+        self.load_filter = self._filter_combo("Carga", [(None, "Com e sem carga"), (True, "Com carga"), (False, "Sem carga")])
+        self._states_known = False
+        self.export_button = ModernButton("Exportar", "excel")
+        self.export_button.clicked.connect(self.export_logs)
         self.refresh_button = ModernButton("Atualizar", "refresh", variant="ghost")
         self.refresh_button.clicked.connect(self.refresh)
         filters = QHBoxLayout()
         filters.setSpacing(8)
         filters.addWidget(self.tabs)
         filters.addWidget(self.search)
+        for combo in (self.stage_filter, self.state_filter, self.load_filter):
+            filters.addWidget(combo)
         filters.addStretch(1)
+        filters.addWidget(self.export_button)
         filters.addWidget(self.refresh_button)
         header.body_layout.addLayout(filters)
         root.addWidget(header)
@@ -175,21 +210,34 @@ class LogisticsPage(QWidget):
     def _set_tab_options(self) -> None:
         self.tabs.set_options([("logs", "LOGs", self._totals["logs"]), ("loads", "Cargas de entrega", self._totals["loads"])])
 
+    def _filter_combo(self, name: str, options: list[tuple]) -> QComboBox:
+        combo = QComboBox()
+        combo.setAccessibleName(name)
+        combo.setMinimumHeight(34)
+        for value, label in options:
+            combo.addItem(label, value)
+        combo.currentIndexChanged.connect(lambda _index: self._filters_changed())
+        return combo
+
     def _sync_tab_widgets(self) -> None:
         logs = self.tab == "logs"
         self.search.setPlaceholderText("Pesquisar LOG, estado, proposta..." if logs else "Pesquisar carga ou LOG...")
         self.new_log_button.setVisible(logs)
         self.new_load_button.setVisible(not logs)
+        for widget in (self.stage_filter, self.state_filter, self.load_filter, self.export_button):
+            widget.setVisible(logs)
         self._sync_buttons()
 
     # ---- carga -----------------------------------------------------------
     def refresh(self) -> None:
         self._generation += 1
         generation = self._generation
-        search, offset = self.search.text().strip(), self._offset
         self.stack.setCurrentWidget(self.skeleton)
         if self.tab == "logs":
-            operation = lambda: self.api.list_logs(search=search, limit=PAGE_SIZE, offset=offset)  # noqa: E731
+            if not self._states_known:
+                self._load_states()
+            filters, offset = self._log_filters(), self._offset
+            operation = lambda: self.api.list_logs(**filters, limit=PAGE_SIZE, offset=offset)  # noqa: E731
             on_success = lambda result: self._logs_loaded(result, generation)  # noqa: E731
         else:
             operation = lambda: self.api.list_loads(limit=200, offset=0)  # noqa: E731
@@ -201,25 +249,25 @@ class LogisticsPage(QWidget):
             return
         self._log_rows = list(result.get("items") or [])
         self._total = int(result.get("total") or 0)
-        if not self.search.text().strip():
+        if not self._filters_active():
             self._totals["logs"] = self._total
             self._set_tab_options()
         palette = self.service.palette
         self.logs_table.setRowCount(len(self._log_rows))
         for row, log in enumerate(self._log_rows):
-            stage = log.get("stage") or ""
+            stage = log.get("display_stage") or log.get("stage") or ""
             values = [
                 log.get("code") or EM_DASH,
                 log.get("state") or EM_DASH,
                 format_date(log.get("reserved_date")),
                 format_date(log.get("loading_date")),
                 format_date(log.get("delivery_date")),
-                log_stage_label(stage),
+                stage_text(stage),
                 days_text(log.get("days_in_stage"), business=log.get("business_days_in_stage")),
                 str(log.get("proposal_count", 0)),
                 log.get("load_code") or EM_DASH,
             ]
-            self._fill_row(self.logs_table, row, values, LOG_STAGE_COLUMN, log_stage_colors(stage, palette))
+            self._fill_row(self.logs_table, row, values, LOG_STAGE_COLUMN, log_row_colors(stage, palette))
         start = self._offset + 1 if self._log_rows else 0
         end = self._offset + len(self._log_rows)
         total = self._total
@@ -290,8 +338,48 @@ class LogisticsPage(QWidget):
         self._sync_buttons()
 
     # ---- filtros e paginas -----------------------------------------------
+    def _log_filters(self) -> dict:
+        """Filtros da aba LOGs, no formato de `LogisticsService.list_logs`."""
+        return {
+            "search": self.search.text().strip(),
+            "stage": self.stage_filter.currentData(),
+            "state": self.state_filter.currentData(),
+            "in_load": self.load_filter.currentData(),
+        }
+
     def _filters_active(self) -> bool:
-        return bool(self.search.text().strip())
+        if self.tab == "loads":
+            return bool(self.search.text().strip())
+        filters = self._log_filters()
+        return bool(filters["search"] or filters["stage"] or filters["state"] or filters["in_load"] is not None)
+
+    def _load_states(self) -> None:
+        start_worker(self, self.api.list_log_states, self._states_loaded, lambda _exc: None)
+
+    def _states_loaded(self, states: list[str]) -> None:
+        current = self.state_filter.currentData()
+        self.state_filter.blockSignals(True)
+        self.state_filter.clear()
+        self.state_filter.addItem("Todos os estados", None)
+        for state in states:
+            self.state_filter.addItem(state, state)
+        self.state_filter.setCurrentIndex(max(0, self.state_filter.findData(current)))
+        self.state_filter.blockSignals(False)
+        self._states_known = True
+
+    def export_logs(self) -> None:
+        filters = self._log_filters()
+        path, _ = QFileDialog.getSaveFileName(self, "Salvar como", "LOGs.xlsx", "Planilha Excel (*.xlsx)")
+        if not path:
+            return
+        if not path.lower().endswith(".xlsx"):
+            path += ".xlsx"
+        start_worker(
+            self,
+            lambda: write_logs_xlsx(path, fetch_all_logs(self.api, filters)),
+            lambda _result: open_file(self, path),
+            lambda exc: QMessageBox.warning(self, "Exportar LOGs", f"Não foi possível exportar: {exc}"),
+        )
 
     def _tab_changed(self) -> None:
         self._offset = 0
@@ -309,6 +397,10 @@ class LogisticsPage(QWidget):
         self.search.blockSignals(True)
         self.search.clear()
         self.search.blockSignals(False)
+        for combo in (self.stage_filter, self.state_filter, self.load_filter):
+            combo.blockSignals(True)
+            combo.setCurrentIndex(0)
+            combo.blockSignals(False)
         self._filters_changed()
 
     def _move(self, delta: int) -> None:
