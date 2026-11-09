@@ -22,7 +22,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from app.services.logistics_service import LINK_MAX_LENGTH, LOG_STAGE_LABELS, STALE_ERROR_CODES
+from app.services.inspection_service import STAGE_LABELS as INSPECTION_STAGE_LABELS
+from app.services.logistics_service import LOG_STAGE_LABELS, STALE_ERROR_CODES, inspection_confirmation_proposals
 from app.ui.background_worker import start_worker
 from app.ui.components.badge_delegate import BADGE_ROLE, BadgeColumnDelegate
 from app.ui.components.date_quick_field import local_today
@@ -39,12 +40,13 @@ from app.ui.components.detail_widgets import (
 )
 from app.ui.components.dialog_shell import dialog_footer, dialog_header, dialog_layout, set_notice_kind, set_validation_state
 from app.ui.components.modern_button import ModernButton
-from app.ui.components.path_field import PathField, PathValue
+from app.ui.components.path_field import open_path
 from app.ui.components.status_badge import StatusBadge
 from app.ui.date_edit_dialog import DateEditDialog
 from app.ui.date_warnings import handle_date_warning
 from app.ui.dialog_utils import style_dialog_from_parent
 from app.ui.inspection_dialogs import _read_only_table, days_text, fit_to_screen, format_date, format_moment, scrolled
+from app.ui.logistics_progress import RecordLogProgressDialog
 from app.ui.styles import STATUS_BADGE_COLORS, _contrast_text, _is_dark
 
 # Categoria de cor (STATUS_BADGE_COLORS) de cada etapa do LOG e de cada situacao de proposta.
@@ -58,6 +60,7 @@ TRAIL_NODES = ("Data reservada", "Documentação enviada", "Aprovada para entreg
 TRAIL_POSITION = {"reservada": 1, "docs": 2, "aprovada": 3}
 DATE_FORMAT = "%d/%m/%Y"
 LOG_CODE_RE = re.compile(r"^LOG\d+$")
+ELIGIBLE_EMPTY_TEXT = "Nenhuma proposta elegível no momento. Ela precisa estar fora de outro LOG."
 
 
 def category_colors(category: str, palette: dict) -> tuple[str, str]:
@@ -109,18 +112,58 @@ def _scroll_body(root: QVBoxLayout) -> QVBoxLayout:
     return layout
 
 
-def check_links(nf: str, xml: str, bim: str) -> tuple[str, str, str]:
-    links = (nf.strip(), xml.strip(), bim.strip())
-    if not all(links):
-        raise ValueError("Informe os links de NF, XML e BIM.")
-    if any(len(link) > LINK_MAX_LENGTH for link in links):
-        raise ValueError(f"Cada link pode ter até {LINK_MAX_LENGTH} caracteres.")
-    return links
+def inspection_text(p: dict) -> str:
+    """Situação da inspeção de um pedido: "DOC BIM em mãos" ou "Inspeção: <etapa>"."""
+    if p.get("inspection_finished"):
+        return "DOC BIM em mãos"
+    stage = p.get("inspection_stage")
+    return f"Inspeção: {INSPECTION_STAGE_LABELS.get(stage, stage)}" if stage else "Sem inspeção"
 
 
 def proposal_entry_text(p: dict) -> str:
     text = f"{p.get('proposal_number', '')}  {p.get('customer_name', '')}  ({p.get('pd_code') or EM_DASH})"
-    return f"{text}  {p['state']}" if p.get("state") else text
+    if p.get("state"):
+        text = f"{text}  {p['state']}"
+    return f"{text}  ·  {inspection_text(p)}"
+
+
+def without_doc_text(count: int) -> str:
+    return f"{count} {'pedido' if count == 1 else 'pedidos'} ainda sem DOC BIM."
+
+
+def ask_inspection_confirmation(parent, proposals: list[dict]) -> bool:
+    """Pergunta com os pedidos sem DOC BIM do 409. True se "Incluir mesmo assim"; cancelar não faz nada."""
+    lines = "\n".join(f"• {p.get('proposal_number') or EM_DASH} ({p.get('customer_name') or EM_DASH}): {inspection_text(p)}" for p in proposals)
+    box = QMessageBox(parent)
+    box.setIcon(QMessageBox.Question)
+    box.setWindowTitle("Pedidos sem DOC BIM")
+    box.setText("Estes pedidos ainda não têm DOC BIM em mãos. Incluir no LOG mesmo assim?")
+    box.setInformativeText(lines)
+    confirm = box.addButton("Incluir mesmo assim", QMessageBox.AcceptRole)
+    cancel = box.addButton("Cancelar", QMessageBox.RejectRole)
+    box.setDefaultButton(cancel)
+    box.exec()
+    return box.clickedButton() is confirm
+
+
+def path_value(path: str) -> QWidget:
+    """Caminho salvo: só o nome do arquivo ou da pasta, "Abrir" ao lado; o caminho inteiro fica na dica."""
+    box = QWidget()
+    row = QHBoxLayout(box)
+    row.setContentsMargins(0, 0, 0, 0)
+    row.setSpacing(8)
+    name = re.split(r"[\\/]+", path.strip().rstrip("\\/"))[-1] or path
+    label = QLabel(name)
+    label.setObjectName("ValueLabel")
+    label.setToolTip(path)
+    label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+    row.addWidget(label)
+    open_button = ModernButton("Abrir", None, variant="ghost")
+    open_button.setToolTip("Abrir o arquivo ou a pasta")
+    open_button.clicked.connect(lambda _=False: open_path(path, box))
+    row.addWidget(open_button)
+    row.addStretch(1)
+    return box
 
 
 class _Checklist(QScrollArea):
@@ -225,9 +268,11 @@ class _DetailDialog(QDialog):
         on_done: Callable[[Any], None] | None = None,
         *,
         confirmed: Callable[[], Any] | None = None,
+        inspection: Callable[[], Any] | None = None,
     ) -> None:
         """`confirmed`: a mesma chamada com confirm_dates=true, usada se a API devolver avisos de data
-        e o usuario escolher "Marcar mesmo assim"."""
+        e o usuario escolher "Marcar mesmo assim". `inspection`: a mesma chamada com
+        confirm_inspection=true, usada se a API pedir confirmação de pedidos sem DOC BIM."""
         if self._busy:
             return
         self._busy = True
@@ -236,12 +281,17 @@ class _DetailDialog(QDialog):
             button.setEnabled(False)
 
         def failed(exc: Exception) -> None:
-            if confirmed is not None:
+            if confirmed is not None or inspection is not None:
                 self._busy = False
                 for button in self.action_buttons:
                     button.setEnabled(True)
-                if handle_date_warning(self, exc, lambda: self._run(confirmed, on_done)):
-                    return
+            if confirmed is not None and handle_date_warning(self, exc, lambda: self._run(confirmed, on_done)):
+                return
+            proposals = inspection_confirmation_proposals(exc) if inspection is not None else None
+            if proposals:
+                if ask_inspection_confirmation(self, proposals):
+                    self._run(inspection, on_done)
+                return
             self._show_error(exc)
 
         start_worker(self, operation, on_done or self._after_action, failed)
@@ -301,9 +351,14 @@ class _DetailDialog(QDialog):
         self.history_table = _read_only_table(["Quando", "Quem", "Registro"])
         self.history_table.setRowCount(len(events))
         for row, event in enumerate(events):
-            text = event.get("text") or ""
+            parts = [event.get("text") or ""]
+            if event.get("occurred_on"):
+                parts.append(f"Aconteceu em {format_date(event['occurred_on'])}.")
             if event.get("reason"):
-                text = f"{text} Motivo: {event['reason']}" if text else f"Motivo: {event['reason']}"
+                parts.append(f"Motivo: {event['reason']}")
+            if event.get("note"):
+                parts.append(f"Observação: {event['note']}")
+            text = " ".join(part for part in parts if part)
             values = [format_moment(event.get("created_at")), event.get("actor_name") or EM_DASH, text]
             for column, value in enumerate(values):
                 cell = QTableWidgetItem(value)
@@ -324,7 +379,6 @@ class LogDetailDialog(_DetailDialog):
     def __init__(self, service, log: dict, parent=None, *, can_edit: bool | None = None):
         super().__init__(service, log, parent, can_edit=can_edit)
         self._eligible: list[dict] = []
-        self.doc_fields: dict[str, QLineEdit] = {}
         self.reason_field: QLineEdit | None = None
         self.items_table = None
         self.checklist: _Checklist | None = None
@@ -371,23 +425,25 @@ class LogDetailDialog(_DetailDialog):
         self.days_label = QLabel(days_text(data.get("days_in_stage"), long=True, business=data.get("business_days_in_stage")))
         close = ModernButton("Fechar", "close", variant="ghost")
         close.clicked.connect(self.accept)
+        report = ModernButton("Gerar relatório", "reports", variant="secondary")
+        report.clicked.connect(lambda _=False: self.generate_report())
+        secondary = [report]
         primary = []
-        if self.can_edit and stage == "reservada":
-            primary.append(self._make_button("Documentação enviada", "check", "primary", self._send_docs))
-        elif self.can_edit and stage == "docs":
-            primary.append(self._make_button("Tudo ok: data aprovada", "check_double", "primary", self._approve))
-        secondary = []
         if self.can_edit:
             self.edit_dates_button = self._make_button("Editar datas", "edit", "secondary", self.open_edit_dates)
-            self.delivery_button = self._make_button("Entregue no CD em", "check", "secondary", self.open_delivery)
-            secondary = [self.edit_dates_button, self.delivery_button]
-        buttons = [*secondary, *primary]
+            secondary.insert(0, self.edit_dates_button)
+            if not data.get("delivered_on"):
+                primary.append(self._make_button("Registrar andamento", "check", "primary", self.open_progress))
+        status = [self.stage_badge, self.days_label]
+        missing = int(data.get("without_doc_count") or 0)
+        if missing:
+            status.append(set_notice_kind(QLabel(without_doc_text(missing)), "warning"))
         layout.addWidget(
             dialog_header(
                 f"{data.get('code', '')} | {data.get('state', '')}",
                 f"Entrega no CD em {format_date(data.get('delivery_date'))} · carregamento em {format_date(data.get('loading_date'))}",
-                status=[self.stage_badge, self.days_label],
-                actions=[*buttons, close],
+                status=status,
+                actions=[*secondary, *primary, close],
             )
         )
 
@@ -430,6 +486,9 @@ class LogDetailDialog(_DetailDialog):
         self.trail.set_steps(steps)
         flow_layout.addWidget(self.trail)
         layout.addWidget(flow_panel)
+        missing = int(data.get("without_doc_count") or 0)
+        if missing:
+            layout.addWidget(set_notice_kind(QLabel(without_doc_text(missing)), "warning"))
 
         info, info_layout = make_panel("Dados do LOG")
         info_layout.addLayout(
@@ -453,10 +512,10 @@ class LogDetailDialog(_DetailDialog):
                     ("Propostas", str(data.get("proposal_count", len(data.get("items") or [])))),
                     ("Carga de entrega", data.get("load_code") or EM_DASH),
                     ("Entregue no CD em", format_date(data.get("delivered_on"))),
-                    ("Comprovante da entrega", PathValue(data["delivery_proof_link"]) if data.get("delivery_proof_link") else EM_DASH),
-                    ("NF", PathValue(data["nf_link"]) if data.get("nf_link") else EM_DASH),
-                    ("XML", PathValue(data["xml_link"]) if data.get("xml_link") else EM_DASH),
-                    ("BIM", PathValue(data["bim_link"]) if data.get("bim_link") else EM_DASH),
+                    ("Comprovante da entrega", path_value(data["delivery_proof_link"]) if data.get("delivery_proof_link") else EM_DASH),
+                    ("NF", path_value(data["nf_link"]) if data.get("nf_link") else EM_DASH),
+                    ("XML", path_value(data["xml_link"]) if data.get("xml_link") else EM_DASH),
+                    ("BIM", path_value(data["bim_link"]) if data.get("bim_link") else EM_DASH),
                 ]
             )
         )
@@ -464,19 +523,10 @@ class LogDetailDialog(_DetailDialog):
         row_layout = QHBoxLayout(row)
         row_layout.setContentsMargins(0, 0, 0, 0)
         row_layout.setSpacing(12)
-        row_layout.addWidget(info, 1)
-        row_layout.addWidget(status, 1)
+        # AlignTop: sem isso o painel mais baixo e esticado pelo vizinho e o titulo sobra no meio.
+        row_layout.addWidget(info, 1, Qt.AlignTop)
+        row_layout.addWidget(status, 1, Qt.AlignTop)
         layout.addWidget(row)
-
-        self.doc_fields = {}
-        if self.can_edit and data.get("stage") == "reservada":
-            docs, docs_layout = make_panel("Enviar documentação ao portal")
-            for key, caption in (("nf", "NF (arquivo ou pasta)"), ("xml", "XML (arquivo ou pasta)"), ("bim", "BIM (arquivo ou pasta)")):
-                docs_layout.addWidget(QLabel(caption))
-                path_field = PathField("Escolha o arquivo ou a pasta", caption)
-                docs_layout.addWidget(path_field)
-                self.doc_fields[key] = path_field.line
-            layout.addWidget(docs)
         layout.addWidget(self._notice_label())
         layout.addStretch(1)
         return page
@@ -490,23 +540,23 @@ class LogDetailDialog(_DetailDialog):
         layout.setSpacing(12)
 
         panel, panel_layout = make_panel("Propostas do LOG")
-        table = _read_only_table(["Proposta", "Cliente", "PD", "Situação"])
+        table = _read_only_table(["Proposta", "Cliente", "PD", "Inspeção", "Situação"])
         table.setSelectionMode(QAbstractItemView.SingleSelection)
-        table.setItemDelegateForColumn(3, BadgeColumnDelegate(table))
+        table.setItemDelegateForColumn(4, BadgeColumnDelegate(table))
         table.setRowCount(len(items))
         for row, item in enumerate(items):
             label, category = ITEM_STATUS.get(item.get("status"), (item.get("status") or EM_DASH, "neutral"))
-            values = [item.get("proposal_number") or EM_DASH, item.get("customer_name") or EM_DASH, item.get("pd_code") or EM_DASH, label]
+            values = [item.get("proposal_number") or EM_DASH, item.get("customer_name") or EM_DASH, item.get("pd_code") or EM_DASH, inspection_text(item), label]
             for column, value in enumerate(values):
                 cell = QTableWidgetItem(value)
-                cell.setTextAlignment(Qt.AlignVCenter | (Qt.AlignCenter if column == 3 else Qt.AlignLeft))
-                if column == 3:
+                cell.setTextAlignment(Qt.AlignVCenter | (Qt.AlignCenter if column == 4 else Qt.AlignLeft))
+                if column == 4:
                     cell.setData(BADGE_ROLE, category_colors(category, palette))
                 table.setItem(row, column, cell)
         header = table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.Stretch)
-        header.setSectionResizeMode(3, QHeaderView.Fixed)
-        table.setColumnWidth(3, 190)
+        header.setSectionResizeMode(4, QHeaderView.Fixed)
+        table.setColumnWidth(4, 190)
         table.itemSelectionChanged.connect(self._sync_item_buttons)
         self.items_table = table
         panel_layout.addWidget(table, 1)
@@ -540,9 +590,7 @@ class LogDetailDialog(_DetailDialog):
                 layout.addWidget(note)
             else:
                 include, include_layout = make_panel("Incluir novos pedidos")
-                self.checklist = _Checklist(
-                    "Nenhuma proposta elegível. Só entram propostas com inspeção finalizada (DOC BIM em PDF) que ainda não estejam em um LOG."
-                )
+                self.checklist = _Checklist(ELIGIBLE_EMPTY_TEXT)
                 include_layout.addWidget(self.checklist)
                 include_layout.addWidget(self._make_button("Incluir no LOG", "new", "secondary", self._include))
                 layout.addWidget(include)
@@ -591,31 +639,18 @@ class LogDetailDialog(_DetailDialog):
         if dialog.exec() and dialog.result_data is not None:
             self._after_action(dialog.result_data)
 
-    def open_delivery(self) -> None:
-        """Entrega real no CD + link do comprovante (so texto). Motivo so ao mudar uma data ja gravada."""
-        data, log_id = self.data, self._log_id()
-        delivered = as_date(data.get("delivered_on"))
-        dialog = DateEditDialog(
-            self,
-            title="Entregue no CD em",
-            subtitle=f"{data.get('code', '')} · data em que a carga chegou no CD da Equatorial",
-            dates=[("delivered_on", "Entregue no CD em", delivered)],
-            send=lambda values, reason, link, _confirm: self.api.log_delivery(log_id, values["delivered_on"], link, reason or None),
-            ok_text="Registrar entrega",
-            only_changed=False,
-            shortcuts=True,
-            reason_needed=lambda values: delivered is not None and values["delivered_on"] != delivered.isoformat(),
-            link=("Link ou caminho do comprovante", data.get("delivery_proof_link") or ""),
-        )
+    def open_progress(self) -> None:
+        """"Registrar andamento": a etapa atual decide os resultados (documentação, aprovação, entrega)."""
+        dialog = RecordLogProgressDialog(self.service, self.data, self)
         if dialog.exec() and dialog.result_data is not None:
             self._after_action(dialog.result_data)
+        elif dialog.reloaded:  # a etapa mudou enquanto a janela estava aberta: mostra o LOG atual
+            self._apply(dialog.log)
 
-    def _send_docs(self) -> None:
-        links = check_links(*(self.doc_fields[key].text() for key in ("nf", "xml", "bim")))
-        self._run(lambda: self.api.send_docs(self._log_id(), *links))
+    def generate_report(self) -> None:
+        from app.ui import report_actions  # import tardio: o modulo de relatorios e opcional nesta tela
 
-    def _approve(self) -> None:
-        self._run(lambda: self.api.approve_log(self._log_id()))
+        report_actions.save_log_report(self, self.data)
 
     def _resolve(self, result: str) -> None:
         item = self.selected_item()
@@ -651,7 +686,11 @@ class LogDetailDialog(_DetailDialog):
             self._load_eligible()
             self._after_action(detail)
 
-        self._run(lambda: self.api.add_proposals(self._log_id(), ids), done)
+        self._run(
+            lambda: self.api.add_proposals(self._log_id(), ids),
+            done,
+            inspection=lambda: self.api.add_proposals(self._log_id(), ids, confirm_inspection=True),
+        )
 
     def _remove(self) -> None:
         item = self.selected_item()
@@ -725,9 +764,7 @@ class NewLogDialog(QDialog):
         self.search.setMinimumHeight(34)
         self.search.textChanged.connect(self._apply_filter)
         proposals_layout.addWidget(self.search)
-        self.checklist = _Checklist(
-            "Nenhuma proposta elegível. Só entram propostas com inspeção finalizada (DOC BIM em PDF) que ainda não estejam em um LOG."
-        )
+        self.checklist = _Checklist(ELIGIBLE_EMPTY_TEXT)
         self.checklist.selection_changed.connect(self._sync_state)
         proposals_layout.addWidget(self.checklist)
         body.addWidget(proposals, 1)
@@ -837,20 +874,30 @@ class NewLogDialog(QDialog):
             return
         self._send(payload)
 
-    def _send(self, payload: dict[str, Any], confirm_dates: bool = False) -> None:
+    def _send(self, payload: dict[str, Any], confirm_dates: bool = False, confirm_inspection: bool = False) -> None:
         body = {**payload, "confirm_dates": True} if confirm_dates else payload
         self._busy = True
         self.create_button.setEnabled(False)
-        start_worker(self, lambda: self.api.create_log(body), self._done, lambda exc: self._error(exc, payload))
+        start_worker(
+            self,
+            lambda: self.api.create_log(body, confirm_inspection=confirm_inspection),
+            self._done,
+            lambda exc: self._error(exc, payload, confirm_dates, confirm_inspection),
+        )
 
     def _done(self, detail: dict) -> None:
         self.created = detail
         self.accept()
 
-    def _error(self, exc: Exception, payload: dict[str, Any] | None = None) -> None:
+    def _error(self, exc: Exception, payload: dict[str, Any] | None = None, confirm_dates: bool = False, confirm_inspection: bool = False) -> None:
         self._busy = False
         self.create_button.setEnabled(True)
-        if payload is not None and handle_date_warning(self, exc, lambda: self._send(payload, True)):
+        if payload is not None and handle_date_warning(self, exc, lambda: self._send(payload, True, confirm_inspection)):
+            return
+        proposals = inspection_confirmation_proposals(exc) if payload is not None else None
+        if proposals:  # "Cancelar" nao faz nada: a janela segue com os dados
+            if ask_inspection_confirmation(self, proposals):
+                self._send(payload, confirm_dates, True)
             return
         self._fail(str(exc))
 
@@ -884,7 +931,9 @@ class LoadDetailDialog(_DetailDialog):
         layout.setSpacing(12)
         close = ModernButton("Fechar", "close", variant="ghost")
         close.clicked.connect(self.accept)
-        undo = []
+        report = ModernButton("Gerar relatório", "reports", variant="secondary")
+        report.clicked.connect(lambda _=False: self.generate_report())
+        undo = [report]
         if self.can_edit:
             undo_button = self._make_button("Desfazer carga", "close", "secondary", self._undo)
             self.departed_button = self._make_button("Saiu em", "check", "secondary", self.open_departed)
@@ -968,6 +1017,11 @@ class LoadDetailDialog(_DetailDialog):
 
     def _load_id(self) -> int:
         return int(self.data["id"])
+
+    def generate_report(self) -> None:
+        from app.ui import report_actions  # import tardio: o modulo de relatorios e opcional nesta tela
+
+        report_actions.save_load_report(self, self.data)
 
     def open_departed(self) -> None:
         """"Saiu em": saída REAL da carga. Motivo só ao mudar uma data já gravada."""

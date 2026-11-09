@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import os
+import sys
 import unittest
-from datetime import date, timedelta
+from datetime import date
 from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication, QDialog, QLabel, QMessageBox
+from PySide6.QtWidgets import QApplication, QDialog, QFrame, QLabel, QMessageBox
 
 from app.integrations.api.exceptions import ApiBusinessError
 from app.integrations.api.logistics_client import LogisticsApiClient
@@ -18,14 +19,16 @@ from app.ui import date_edit_dialog as date_edit_module
 from app.ui.components import date_quick_field as date_quick_field_module
 from app.ui import logistics_dialogs as dialogs_module
 from app.ui import logistics_page as page_module
+from app.ui import logistics_progress as progress_module
 from app.ui.logistics_dialogs import (
     LoadDetailDialog,
     LogDetailDialog,
     NewLoadDialog,
     NewLogDialog,
-    check_links,
     parse_date,
 )
+from app.ui.logistics_progress import check_links
+from app.ui.components.modern_button import ModernButton
 from app.ui.logistics_page import LogisticsPage
 from app.ui.sidebar import NAV_LABELS, Sidebar
 
@@ -86,6 +89,12 @@ class FakeHttp:
         return self._ok("DELETE", path)
 
 
+def _stage_opts(occurred_on, note, confirm_dates):
+    """Opcoes de andamento so entram na chamada registrada quando foram dadas."""
+    opts = {k: v for k, v in (("occurred_on", occurred_on), ("note", note), ("confirm_dates", confirm_dates or None)) if v}
+    return (opts,) if opts else ()
+
+
 class FakeLogisticsApi:
     """Servico de logistica falso: cada chamada vai para `calls`; `error` e levantado se definido."""
 
@@ -112,6 +121,12 @@ class FakeLogisticsApi:
             raise self.error
         return {"items": self.logs, "total": len(self.logs)}
 
+    def list_log_states(self):
+        self.calls.append(("list_log_states",))
+        if self.error is not None:
+            raise self.error
+        return ["EQT-MA", "EQT-PA"]
+
     def eligible_proposals(self, **kwargs):
         self.calls.append(("eligible", kwargs))
         return {"items": self.eligible, "total": len(self.eligible)}
@@ -119,17 +134,17 @@ class FakeLogisticsApi:
     def get_log(self, log_id):
         return self._respond("get_log", log_id)
 
-    def create_log(self, payload):
-        return self._respond("create_log", dict(payload))
+    def create_log(self, payload, confirm_inspection=False):
+        return self._respond("create_log", dict(payload), *((True,) if confirm_inspection else ()))
 
-    def send_docs(self, log_id, nf, xml, bim):
-        return self._respond("send_docs", log_id, nf, xml, bim)
+    def send_docs(self, log_id, nf, xml, bim, occurred_on=None, note=None, confirm_dates=False):
+        return self._respond("send_docs", log_id, nf, xml, bim, *_stage_opts(occurred_on, note, confirm_dates))
 
-    def approve_log(self, log_id):
-        return self._respond("approve_log", log_id)
+    def approve_log(self, log_id, occurred_on=None, note=None, confirm_dates=False):
+        return self._respond("approve_log", log_id, *_stage_opts(occurred_on, note, confirm_dates))
 
-    def add_proposals(self, log_id, ids):
-        return self._respond("add_proposals", log_id, ids)
+    def add_proposals(self, log_id, ids, confirm_inspection=False):
+        return self._respond("add_proposals", log_id, ids, *((True,) if confirm_inspection else ()))
 
     def resolve_item(self, log_id, item_id, result):
         return self._respond("resolve_item", log_id, item_id, result)
@@ -157,8 +172,8 @@ class FakeLogisticsApi:
         extra = (True,) if confirm_dates else ()
         return self._respond("update_log_dates", log_id, dict(dates), reason, *extra)
 
-    def log_delivery(self, log_id, delivered_on, proof_link=None, reason=None):
-        return self._respond("log_delivery", log_id, delivered_on, proof_link, reason)
+    def log_delivery(self, log_id, delivered_on, proof_link=None, reason=None, note=None, confirm_dates=False):
+        return self._respond("log_delivery", log_id, delivered_on, proof_link, reason, *_stage_opts(None, note, confirm_dates))
 
     def load_departed(self, load_id, departed_on, reason=None):
         return self._respond("load_departed", load_id, departed_on, reason, default=_load())
@@ -202,7 +217,7 @@ class QtCase(unittest.TestCase):
         cls.app = QApplication.instance() or QApplication([])
 
     def setUp(self):
-        for module in (page_module, dialogs_module, date_edit_module):
+        for module in (page_module, dialogs_module, progress_module, date_edit_module):
             item = patch.object(module, "start_worker", _sync_worker)
             item.start()
             self.addCleanup(item.stop)
@@ -568,31 +583,37 @@ class LogDetailDialogTests(QtCase):
         api.calls.clear()
         return dialog, api
 
-    def test_docs_need_all_three_links(self):
-        dialog, api = self._dialog()
-        dialog.action_buttons[0].click()
-        self.assertEqual(dialog.error_label.text(), "Informe os links de NF, XML e BIM.")
-        self.assertEqual(api.calls, [])
-        api.result = _log(stage="docs", nf_link="a", xml_link="b", bim_link="c")
-        for key, value in (("nf", "NF-1.pdf"), ("xml", "NF-1.xml"), ("bim", "PD.pdf")):
-            dialog.doc_fields[key].setText(value)
-        dialog.action_buttons[0].click()
-        self.assertEqual(api.calls, [("send_docs", 1, "NF-1.pdf", "NF-1.xml", "PD.pdf")])
-        self.assertEqual(dialog.stage_badge.text(), "Documentação enviada")
-        self.assertTrue(dialog.changed)
+    def test_primary_is_register_progress_and_only_one(self):
+        dialog, _api = self._dialog(stage="docs")
+        primary = [b for b in dialog.action_buttons if b.text() == "Registrar andamento"]
+        self.assertEqual(len(primary), 1)
+        for gone in ("Documentação enviada", "Tudo ok: data aprovada", "Entregue no CD em"):
+            self.assertNotIn(gone, [b.text() for b in dialog.action_buttons])
 
-    def test_approve_in_docs_stage(self):
-        dialog, api = self._dialog(stage="docs", nf_link="a", xml_link="b", bim_link="c")
-        self.assertEqual(dialog.doc_fields, {})
-        api.result = _log(stage="aprovada")
-        dialog.action_buttons[0].click()
-        self.assertEqual(api.calls, [("approve_log", 1)])
-        self.assertEqual(dialog.stage_badge.text(), "Aprovada para entrega")
+    def test_progress_button_hidden_when_delivered(self):
+        dialog, _api = self._dialog(stage="aprovada", delivered_on="2026-11-11")
+        self.assertNotIn("Registrar andamento", [b.text() for b in dialog.action_buttons])
+
+    def test_progress_button_hidden_without_edit_permission(self):
+        dialog, _api = self._dialog(can_edit=False)
+        self.assertNotIn("Registrar andamento", [b.text() for b in dialog.action_buttons])
+
+    def test_report_button_is_secondary_and_calls_report_module(self):
+        dialog, _api = self._dialog(can_edit=False)
+        calls = []
+        fake = type(sys)("app.ui.report_actions")
+        fake.save_log_report = lambda parent, log: calls.append((parent, log["code"]))
+        import app.ui
+
+        # `from app.ui import report_actions` olha o atributo do pacote primeiro: troca os dois.
+        with patch.dict(sys.modules, {"app.ui.report_actions": fake}), patch.object(app.ui, "report_actions", fake, create=True):
+            button = next(b for b in dialog.findChildren(ModernButton) if b.text() == "Gerar relatório")
+            button.click()
+        self.assertEqual(calls, [(dialog, "LOG101")])
 
     def test_view_only_has_no_actions(self):
         dialog, _api = self._dialog(can_edit=False)
         self.assertEqual(dialog.action_buttons, [])
-        self.assertEqual(dialog.doc_fields, {})
         self.assertIsNone(dialog.checklist)
 
     def test_resolve_pending_item(self):
@@ -683,7 +704,10 @@ class LogDetailDialogTests(QtCase):
         self.assertEqual(dialog.days_label.text(), "4 dias nesta etapa (2 úteis)")
         texts = " ".join(label.text() for label in dialog.findChildren(QLabel))
         self.assertIn("11/11/2026", texts)
-        self.assertIn("https://x.example/comprovante.pdf", texts)
+        self.assertIn("comprovante.pdf", texts)
+        self.assertNotIn("https://x.example/comprovante.pdf", texts)
+        tips = [label.toolTip() for label in dialog.findChildren(QLabel)]
+        self.assertIn("https://x.example/comprovante.pdf", tips)
 
     def test_edit_dates_sends_only_changed_with_reason(self):
         dialog, api = self._dialog()
@@ -725,37 +749,6 @@ class LogDetailDialogTests(QtCase):
             dialog.edit_dates_button.click()
         self.assertEqual([c[-1] for c in api.calls if c[0] == "update_log_dates"], ["cliente pediu", True])
 
-    def test_delivery_registers_date_and_proof_link_without_reason_the_first_time(self):
-        dialog, api = self._dialog()
-        api.result = _log(delivered_on="2026-11-11", delivery_proof_link="https://x.example/a.pdf")
-
-        def fill(d):
-            d.date_fields["delivered_on"].yesterday_button.click()
-            d.link_field.setText("https://x.example/a.pdf")
-            d.submit()
-
-        with self._script(fill):
-            dialog.delivery_button.click()
-        name, log_id, delivered, link, reason = api.calls[-1]
-        self.assertEqual((name, log_id, link, reason), ("log_delivery", 1, "https://x.example/a.pdf", None))
-        self.assertEqual(delivered, (FIXED_TODAY - timedelta(days=1)).isoformat())
-
-    def test_delivery_changing_a_saved_date_needs_a_reason(self):
-        dialog, api = self._dialog(delivered_on="2026-11-11")
-        seen = {}
-
-        def fill(d):
-            d.date_fields["delivered_on"].line.setText("12/11/2026")
-            d.submit()
-            seen["error"] = d.error_label.text()
-            d.reason_field.setText("data errada")
-            d.submit()
-
-        with self._script(fill):
-            dialog.delivery_button.click()
-        self.assertEqual(seen["error"], "Informe o motivo.")
-        self.assertEqual(api.calls[-1], ("log_delivery", 1, "2026-11-12", None, "data errada"))
-
     def test_log_in_load_blocks_removal(self):
         dialog, _api = self._dialog(load_id=5, load_code="CE-01")
         self.assertIsNone(dialog.reason_field)
@@ -783,8 +776,9 @@ class LogDetailDialogTests(QtCase):
 
     def test_api_error_is_shown_and_invalid_stage_reloads(self):
         dialog, api = self._dialog(stage="docs")
+        dialog.checklist.boxes[0][0].setChecked(True)
         api.error = AppError("O LOG mudou de etapa.", error_code="LOGISTICS_INVALID_STAGE")
-        dialog.action_buttons[0].click()
+        dialog.action_buttons[-1].click()
         self.assertEqual(api.calls[-1], ("get_log", 1))
         self.assertEqual(dialog.error_label.text(), "O LOG mudou de etapa.")
         self.assertTrue(all(b.isEnabled() for b in dialog.action_buttons))
@@ -796,6 +790,88 @@ class LogDetailDialogTests(QtCase):
         self.assertEqual(dialog.history_table.rowCount(), 1)
         self.assertEqual(dialog.history_table.item(0, 1).text(), "Ana")
         self.assertIn("Motivo: cliente cancelou", dialog.history_table.item(0, 2).text())
+
+
+    def test_items_show_inspection_column_and_without_doc_notice(self):
+        items = [
+            {**_log()["items"][0], "inspection_stage": "doc", "inspection_finished": False},
+            {**_log()["items"][1], "inspection_stage": "fim", "inspection_finished": True},
+        ]
+        dialog, _api = self._dialog(items=items, without_doc_count=1)
+        self.assertEqual(dialog.items_table.horizontalHeaderItem(3).text(), "Inspeção")
+        self.assertEqual(dialog.items_table.item(0, 3).text(), "Inspeção: Aguardando DOC BIM")
+        self.assertEqual(dialog.items_table.item(1, 3).text(), "DOC BIM em mãos")
+        texts = [label.text() for label in dialog.findChildren(QLabel)]
+        self.assertEqual(texts.count("1 pedido ainda sem DOC BIM."), 2)  # cabecalho e aba Resumo
+
+    def test_without_doc_notice_hidden_when_zero(self):
+        dialog, _api = self._dialog(without_doc_count=0)
+        self.assertFalse(any("sem DOC BIM" in label.text() for label in dialog.findChildren(QLabel)))
+
+    def test_include_without_doc_asks_and_resends_only_when_confirmed(self):
+        dialog, api = self._dialog()
+        dialog.checklist.boxes[0][0].setChecked(True)
+        calls = []
+        pending = AppError(
+            "Há pedidos sem DOC.",
+            error_code="LOGISTICS_INSPECTION_CONFIRMATION_REQUIRED",
+            details={"proposals": [{"proposal_number": "10489/C", "pd_code": "PD-1195", "inspection_stage": "nqt"}]},
+        )
+
+        def add(log_id, ids, confirm_inspection=False):
+            calls.append(confirm_inspection)
+            if not confirm_inspection:
+                raise pending
+            return _log()
+
+        api.add_proposals = add
+        with patch("app.ui.logistics_dialogs.ask_inspection_confirmation", return_value=False) as ask:
+            dialog.action_buttons[-1].click()
+        self.assertEqual(calls, [False])
+        self.assertEqual(ask.call_args.args[1][0]["proposal_number"], "10489/C")
+        self.assertEqual(dialog.error_label.text(), "")
+        self.assertTrue(all(b.isEnabled() for b in dialog.action_buttons))
+        with patch("app.ui.logistics_dialogs.ask_inspection_confirmation", return_value=True):
+            dialog.action_buttons[-1].click()
+        self.assertEqual(calls, [False, False, True])
+        self.assertTrue(dialog.changed)
+
+    def test_paths_show_short_name_with_full_path_in_tooltip(self):
+        full = "C:/Rede/NF/2026/NF-10480-B.pdf"
+        dialog, _api = self._dialog(nf_link=full, xml_link="C:/Rede/NF/2026/NF-10480-B.xml", bim_link="C:/Rede/BIM/PD-1180/")
+        labels = {label.text(): label for label in dialog.findChildren(QLabel) if label.toolTip()}
+        self.assertIn("NF-10480-B.pdf", labels)
+        self.assertEqual(labels["NF-10480-B.pdf"].toolTip(), full)
+        self.assertIn("PD-1180", labels)
+        self.assertNotIn(full, [label.text() for label in dialog.findChildren(QLabel)])
+
+    def test_data_panel_is_not_stretched_by_the_status_panel(self):
+        dialog, _api = self._dialog(nf_link="C:/Rede/NF/2026/NF-10480-B.pdf", xml_link="C:/Rede/NF/2026/NF-10480-B.xml", bim_link="C:/Rede/BIM/x.pdf")
+        dialog.resize(1040, 640)
+        dialog.show()
+        self.app.processEvents()
+        titles = [p for p in dialog.findChildren(QFrame, "DetailPanel") if p.findChild(QLabel, "PanelTitle")]
+        info = next(p for p in titles if p.findChild(QLabel, "PanelTitle").text() == "Dados do LOG")
+        self.assertLessEqual(info.height(), info.sizeHint().height() + 4)
+        dialog.close()
+
+    def test_history_shows_action_date_and_note(self):
+        events = [{"id": 1, "text": "LOG101 docs.", "occurred_on": "2026-11-09", "note": "NF por e-mail", "actor_name": "Ana", "created_at": "2026-11-10T12:00:00Z"}]
+        dialog, _api = self._dialog(events=events)
+        registro = dialog.history_table.item(0, 2).text()
+        self.assertIn("Aconteceu em 09/11/2026.", registro)
+        self.assertIn("Observação: NF por e-mail", registro)
+
+    def test_report_button_calls_save_log_report(self):
+        dialog, _api = self._dialog(can_edit=False)
+        calls = []
+        fake = type(sys)("app.ui.report_actions")
+        fake.save_log_report = lambda parent, log: calls.append((parent, log["code"]))
+        import app.ui
+
+        with patch.dict(sys.modules, {"app.ui.report_actions": fake}), patch.object(app.ui, "report_actions", fake, create=True):
+            next(b for b in dialog.findChildren(ModernButton) if b.text() == "Gerar relatório").click()
+        self.assertEqual(calls, [(dialog, "LOG101")])
 
 
 class NewLogDialogTests(QtCase):
@@ -870,7 +946,7 @@ class NewLogDialogTests(QtCase):
         results = [warning]
         original = api.create_log
 
-        def create_log(payload):
+        def create_log(payload, confirm_inspection=False):
             if results:
                 api.calls.append(("create_log", dict(payload)))
                 raise results.pop()
@@ -908,6 +984,47 @@ class NewLogDialogTests(QtCase):
         self.assertIsNone(dialog.created)
         self.assertEqual(dialog.error_label.text(), "Esse código LOG já existe.")
         self.assertTrue(dialog.create_button.isEnabled())
+
+
+    def test_pending_doc_asks_before_creating_and_resends_when_confirmed(self):
+        dialog, api = self._dialog()
+        self._fill(dialog)
+        dialog.checklist.boxes[0][0].setChecked(True)
+        pending = AppError(
+            "Há pedidos sem DOC.",
+            error_code="LOGISTICS_INSPECTION_CONFIRMATION_REQUIRED",
+            details={"proposals": [{"proposal_number": "10489/C", "pd_code": "PD-1195", "inspection_stage": "nqt"}]},
+        )
+        sent = []
+
+        def create(payload, confirm_inspection=False):
+            sent.append(confirm_inspection)
+            if not confirm_inspection:
+                raise pending
+            return _log()
+
+        api.create_log = create
+        with patch("app.ui.logistics_dialogs.ask_inspection_confirmation", return_value=False):
+            dialog.submit()
+        self.assertEqual(sent, [False])
+        self.assertIsNone(dialog.created)
+        self.assertEqual(dialog.error_label.text(), "")
+        self.assertTrue(dialog.create_button.isEnabled())
+        with patch("app.ui.logistics_dialogs.ask_inspection_confirmation", return_value=True):
+            dialog.submit()
+        self.assertEqual(sent, [False, False, True])
+        self.assertIsNotNone(dialog.created)
+
+    def test_checklist_labels_inspection_or_doc_in_hand(self):
+        api = FakeLogisticsApi(eligible=[
+            {"id": 1, "proposal_number": "CP 1", "customer_name": "A", "pd_code": "PD-1", "state": "EQT-MA", "inspection_stage": "nqt", "inspection_finished": False},
+            {"id": 2, "proposal_number": "CP 2", "customer_name": "B", "pd_code": "PD-2", "state": "EQT-MA", "inspection_stage": "fim", "inspection_finished": True},
+        ])
+        dialog = NewLogDialog(FakeService(api))
+        texts = [box.text() for box, _ in dialog.checklist.boxes]
+        self.assertIn("Inspeção: NQT gerado", texts[0])
+        self.assertIn("DOC BIM em mãos", texts[1])
+        self.assertNotIn("inspeção finalizada", " ".join(texts))
 
 
 class NewLogStateTests(QtCase):
@@ -1106,6 +1223,18 @@ class LoadDialogTests(QtCase):
         dialog, _api = self._detail(can_edit=False)
         self.assertEqual(dialog.action_buttons, [])
         self.assertIsNone(dialog.date_field)
+
+
+    def test_report_button_calls_save_load_report(self):
+        dialog, _api = self._detail(can_edit=False)
+        calls = []
+        fake = type(sys)("app.ui.report_actions")
+        fake.save_load_report = lambda parent, load: calls.append((parent, load["code"]))
+        import app.ui
+
+        with patch.dict(sys.modules, {"app.ui.report_actions": fake}), patch.object(app.ui, "report_actions", fake, create=True):
+            next(b for b in dialog.findChildren(ModernButton) if b.text() == "Gerar relatório").click()
+        self.assertEqual(calls, [(dialog, "CE-01")])
 
 
 if __name__ == "__main__":
