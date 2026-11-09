@@ -13,7 +13,7 @@ from app.integrations.api.exceptions import ApiBusinessError
 from app.integrations.api.logistics_client import LogisticsApiClient
 from app.services.api_proposal_storage import api_permission_level, legacy_permissions_to_api_codes
 from app.services.backend_adapter import OFFICIAL_COLOR_PALETTES, AppError
-from app.services.logistics_service import ERROR_MESSAGES, LogisticsService
+from app.services.logistics_service import ERROR_MESSAGES, STALE_ERROR_CODES, LogisticsService, inspection_confirmation_proposals
 from app.ui import date_edit_dialog as date_edit_module
 from app.ui.components import date_quick_field as date_quick_field_module
 from app.ui import logistics_dialogs as dialogs_module
@@ -267,7 +267,7 @@ class ClientAndServiceTests(unittest.TestCase):
         self.assertTrue(client.closed)
         for code in (
             "LOGISTICS_LOG_NOT_FOUND", "LOGISTICS_LOG_CODE_ALREADY_EXISTS", "LOGISTICS_INVALID_STAGE", "LOGISTICS_PROPOSAL_NOT_FOUND",
-            "LOGISTICS_INSPECTION_NOT_FINISHED", "LOGISTICS_PROPOSAL_ALREADY_IN_LOG", "LOGISTICS_ITEM_NOT_FOUND", "LOGISTICS_ITEM_NOT_PENDING",
+            "LOGISTICS_PROPOSAL_ALREADY_IN_LOG", "LOGISTICS_ITEM_NOT_FOUND", "LOGISTICS_ITEM_NOT_PENDING",
             "LOGISTICS_LOAD_NOT_FOUND", "LOGISTICS_LOG_NOT_APPROVED", "LOGISTICS_LOG_ALREADY_IN_LOAD",
             "LOGISTICS_LOG_NOT_IN_THIS_LOAD", "LOGISTICS_LOAD_LAST_LOG", "VALIDATION_ERROR", "PERMISSION_DENIED",
         ):
@@ -311,6 +311,14 @@ class ClientAndServiceTests(unittest.TestCase):
         self.assertEqual(paths[2], ("POST", "/api/v1/logistics/loads/5/departed", {"departed_on": "2026-12-05"}))
         self.assertEqual(paths[3][2], {"departure_date": "2026-11-08", "log_ids": [1], "confirm_dates": True})
 
+    def test_client_sends_state_load_and_log_states_path(self):
+        http = FakeHttp()
+        client = LogisticsApiClient(http)
+        client.list_logs("t", state="EQT-MA", load_id=5)
+        client.list_log_states("t")
+        self.assertEqual(http.calls[0][1], "/api/v1/logistics/logs?state=EQT-MA&load_id=5&limit=100&offset=0")
+        self.assertEqual(http.calls[1][1], "/api/v1/logistics/log-states")
+
     def test_helpers(self):
         self.assertEqual(parse_date("03/11/2026", "data"), "2026-11-03")
         with self.assertRaises(ValueError) as caught:
@@ -323,6 +331,125 @@ class ClientAndServiceTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             check_links("a", "b", "x" * 501)
         self.assertEqual(check_links(" a ", "b", "c"), ("a", "b", "c"))
+
+
+class FakeLogisticsClient:
+    """Fake completo do LogisticsApiClient: todo metodo publico precisa existir aqui (ver test_fake_client_covers_every_public_method)."""
+
+    def __init__(self):
+        self.calls: list[tuple[str, tuple, dict]] = []
+        self.error: Exception | None = None
+
+    def _record(self, name, *args, **kwargs):
+        self.calls.append((name, args, kwargs))
+        if self.error is not None:
+            raise self.error
+        return {"ok": True}
+
+    def list_logs(self, *args, **kwargs): return self._record("list_logs", *args, **kwargs)
+    def list_log_states(self, *args, **kwargs):
+        self._record("list_log_states", *args, **kwargs)
+        return ["reservada", "docs", "aprovada", "entregue"]
+    def eligible_proposals(self, *args, **kwargs): return self._record("eligible_proposals", *args, **kwargs)
+    def get_log(self, *args, **kwargs): return self._record("get_log", *args, **kwargs)
+    def create_log(self, *args, **kwargs): return self._record("create_log", *args, **kwargs)
+    def log_action(self, *args, **kwargs): return self._record("log_action", *args, **kwargs)
+    def update_log_dates(self, *args, **kwargs): return self._record("update_log_dates", *args, **kwargs)
+    def log_delivery(self, *args, **kwargs): return self._record("log_delivery", *args, **kwargs)
+    def list_loads(self, *args, **kwargs): return self._record("list_loads", *args, **kwargs)
+    def get_load(self, *args, **kwargs): return self._record("get_load", *args, **kwargs)
+    def create_load(self, *args, **kwargs): return self._record("create_load", *args, **kwargs)
+    def update_load(self, *args, **kwargs): return self._record("update_load", *args, **kwargs)
+    def load_departed(self, *args, **kwargs): return self._record("load_departed", *args, **kwargs)
+    def add_log_to_load(self, *args, **kwargs): return self._record("add_log_to_load", *args, **kwargs)
+    def remove_log_from_load(self, *args, **kwargs): return self._record("remove_log_from_load", *args, **kwargs)
+    def delete_load(self, *args, **kwargs): return self._record("delete_load", *args, **kwargs)
+
+
+class _ApiHandle:
+    def close(self):
+        pass
+
+
+class _Storage:
+    def __init__(self, api):
+        self.api = api
+
+    def logistics_api(self):
+        return _ApiHandle(), self.api, "tok"
+
+
+def _wrap(exc):
+    return AppError(str(exc), error_code=getattr(exc, "error_code", None), technical_message=getattr(exc, "technical_message", None), details=getattr(exc, "details", None))
+
+
+class LogisticsContractServiceTests(unittest.TestCase):
+    def setUp(self):
+        self.api = FakeLogisticsClient()
+        self.service = LogisticsService(_Storage(self.api), _wrap)
+
+    def last_args(self):
+        return self.api.calls[-1][1]
+
+    def test_fake_client_covers_every_public_method(self):
+        public = {name for name, member in vars(LogisticsApiClient).items() if not name.startswith("_") and callable(member)}
+        self.assertLessEqual(public, set(vars(FakeLogisticsClient)))
+
+    def test_stage_actions_send_date_note_and_confirmation_only_when_given(self):
+        self.service.send_docs(3, "a", "b", "c")
+        self.assertEqual(self.last_args(), ("tok", 3, "docs", {"nf_link": "a", "xml_link": "b", "bim_link": "c"}))
+        self.service.send_docs(3, "a", "b", "c", occurred_on="2026-11-05", note="NF emitida", confirm_dates=True)
+        self.assertEqual(self.last_args()[3], {"nf_link": "a", "xml_link": "b", "bim_link": "c", "occurred_on": "2026-11-05", "note": "NF emitida", "confirm_dates": True})
+        self.service.approve_log(3)
+        self.assertEqual(self.last_args(), ("tok", 3, "approve", {}))
+        self.service.approve_log(3, occurred_on="2026-11-05", note="ok")
+        self.assertEqual(self.last_args(), ("tok", 3, "approve", {"occurred_on": "2026-11-05", "note": "ok"}))
+
+    def test_log_delivery_keeps_delivered_on_and_accepts_note_and_confirmation(self):
+        self.service.log_delivery(3, "2026-11-06")
+        self.assertEqual(self.last_args(), ("tok", 3, {"delivered_on": "2026-11-06"}))
+        self.service.log_delivery(3, "2026-11-06", proof_link="", note="Recebido", confirm_dates=True)
+        self.assertEqual(self.last_args(), ("tok", 3, {"delivered_on": "2026-11-06", "delivery_proof_link": "", "note": "Recebido", "confirm_dates": True}))
+
+    def test_inspection_confirmation_flag_reaches_add_proposals_and_create_log(self):
+        self.service.add_proposals(3, [1, 2], confirm_inspection=True)
+        self.assertEqual(self.last_args(), ("tok", 3, "proposals", {"proposal_ids": [1, 2], "confirm_inspection": True}))
+        self.service.add_proposals(3, [1])
+        self.assertEqual(self.last_args(), ("tok", 3, "proposals", {"proposal_ids": [1]}))
+        self.service.create_log({"code": "LOG103"}, confirm_inspection=True)
+        self.assertEqual(self.last_args(), ("tok", {"code": "LOG103", "confirm_inspection": True}))
+        self.service.create_log({"code": "LOG104"})
+        self.assertEqual(self.last_args(), ("tok", {"code": "LOG104"}))
+
+    def test_list_logs_passes_state_load_and_entregue_stage(self):
+        self.service.list_logs(stage="entregue", state="EQT-MA", load_id=5)
+        self.assertEqual(self.api.calls[-1][2], {"stage": "entregue", "search": "", "in_load": None, "state": "EQT-MA", "load_id": 5, "limit": 100, "offset": 0})
+        self.assertEqual(self.service.list_log_states(), ["reservada", "docs", "aprovada", "entregue"])
+        self.assertEqual(self.api.calls[-1][0], "list_log_states")
+
+    def test_inspection_409_keeps_code_message_and_proposals(self):
+        proposals = [{"proposal_number": "10480/B", "pd_code": "PD-1180", "inspection_stage": "Montagem"}]
+        self.api.error = ApiBusinessError(
+            "LOGISTICS_INSPECTION_CONFIRMATION_REQUIRED", "Propostas sem DOC BIM.", status_code=409, details={"proposals": proposals},
+        )
+        with self.assertRaises(AppError) as caught:
+            self.service.add_proposals(3, [1])
+        self.assertEqual(caught.exception.error_code, "LOGISTICS_INSPECTION_CONFIRMATION_REQUIRED")
+        self.assertEqual(str(caught.exception), "Propostas sem DOC BIM.")
+        self.assertEqual(inspection_confirmation_proposals(caught.exception), proposals)
+        self.assertEqual(inspection_confirmation_proposals(AppError("x", error_code="DATE_CONFIRMATION_REQUIRED")), None)
+        self.assertEqual(inspection_confirmation_proposals(AppError("x", error_code="LOGISTICS_INSPECTION_CONFIRMATION_REQUIRED")), [])
+
+    def test_invalid_stage_409_stays_distinguishable(self):
+        self.api.error = ApiBusinessError("LOGISTICS_INVALID_STAGE", "tecnico", status_code=409)
+        with self.assertRaises(AppError) as caught:
+            self.service.approve_log(3)
+        self.assertEqual(caught.exception.error_code, "LOGISTICS_INVALID_STAGE")
+        self.assertEqual(str(caught.exception), ERROR_MESSAGES["LOGISTICS_INVALID_STAGE"])
+        self.assertIn(caught.exception.error_code, STALE_ERROR_CODES)
+
+    def test_old_inspection_not_finished_code_is_gone(self):
+        self.assertNotIn("LOGISTICS_INSPECTION_NOT_FINISHED", ERROR_MESSAGES)
 
 
 class PermissionTests(unittest.TestCase):

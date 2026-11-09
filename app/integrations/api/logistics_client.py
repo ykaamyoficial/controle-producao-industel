@@ -31,6 +31,8 @@ class LogisticsApiClient:
         stage: str | None = None,
         search: str | None = None,
         in_load: bool | None = None,
+        state: str | None = None,
+        load_id: int | None = None,
         limit: int = 100,
         offset: int = 0,
     ) -> dict[str, Any]:
@@ -38,10 +40,15 @@ class LogisticsApiClient:
             stage=stage,
             search=(search or "").strip() or None,
             in_load=None if in_load is None else str(bool(in_load)).lower(),
+            state=state,
+            load_id=load_id,
             limit=limit,
             offset=offset,
         )
         return self.client.get(f"{_BASE}/logs?{query}", access_token=access_token).data
+
+    def list_log_states(self, access_token: str) -> list[str]:
+        return self.client.get(f"{_BASE}/log-states", access_token=access_token).data
 
     def eligible_proposals(self, access_token: str, *, search: str | None = None, limit: int = 200, offset: int = 0) -> dict[str, Any]:
         query = _query(search=(search or "").strip() or None, limit=limit, offset=offset)

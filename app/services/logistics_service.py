@@ -15,7 +15,6 @@ ERROR_MESSAGES = {
     "LOGISTICS_LOG_CODE_ALREADY_EXISTS": "Esse código LOG já existe.",
     "LOGISTICS_INVALID_STAGE": "O LOG mudou de etapa. Os dados foram atualizados.",
     "LOGISTICS_PROPOSAL_NOT_FOUND": "Proposta não encontrada. Atualize a lista.",
-    "LOGISTICS_INSPECTION_NOT_FINISHED": "A inspeção dessa proposta ainda não foi finalizada.",
     "LOGISTICS_PROPOSAL_ALREADY_IN_LOG": "Essa proposta já está em outro LOG.",
     "LOGISTICS_ITEM_NOT_FOUND": "Proposta não encontrada neste LOG. Atualize os dados.",
     "LOGISTICS_ITEM_NOT_PENDING": "Essa inclusão já foi resolvida. Os dados foram atualizados.",
@@ -30,6 +29,31 @@ ERROR_MESSAGES = {
 
 # Erros em que os dados mostrados ficaram velhos: a tela recarrega sozinha.
 STALE_ERROR_CODES = frozenset({"LOGISTICS_INVALID_STAGE", "LOGISTICS_ITEM_NOT_PENDING", "LOGISTICS_LOG_NOT_IN_THIS_LOAD"})
+INSPECTION_CONFIRMATION_CODE = "LOGISTICS_INSPECTION_CONFIRMATION_REQUIRED"
+
+
+def inspection_confirmation_proposals(exc: Exception) -> list[dict[str, Any]] | None:
+    """Propostas sem DOC BIM do 409 LOGISTICS_INSPECTION_CONFIRMATION_REQUIRED (`proposal_number`, `pd_code`, `inspection_stage`).
+    None: não é esse 409. Lista vazia: 409 sem detalhes, mostre a mensagem da API."""
+    if getattr(exc, "error_code", None) != INSPECTION_CONFIRMATION_CODE:
+        return None
+    details = getattr(exc, "details", None)
+    proposals = details.get("proposals") if isinstance(details, dict) else None
+    return [p for p in proposals or [] if isinstance(p, dict)]
+
+
+def _flag(name: str, on: bool) -> dict[str, bool]:
+    """Campo booleano só vai no corpo quando é True (ausente vale False na API)."""
+    return {name: True} if on else {}
+
+
+def _stage_fields(occurred_on: str | None = None, note: str | None = None, confirm_dates: bool = False) -> dict[str, Any]:
+    """Andamento com data real: sem occurred_on a API usa hoje. `occurred_on` em AAAA-MM-DD."""
+    return {
+        **({"occurred_on": occurred_on} if occurred_on else {}),
+        **({"note": note} if note else {}),
+        **_flag("confirm_dates", confirm_dates),
+    }
 
 
 class LogisticsService:
@@ -54,8 +78,14 @@ class LogisticsService:
             client.close()
 
     # ---- LOGs ------------------------------------------------------------
-    def list_logs(self, *, stage: str | None = None, search: str = "", in_load: bool | None = None, limit: int = 100, offset: int = 0) -> dict[str, Any]:
-        return self._call(lambda api, token: api.list_logs(token, stage=stage, search=search, in_load=in_load, limit=limit, offset=offset))
+    def list_logs(
+        self, *, stage: str | None = None, search: str = "", in_load: bool | None = None, state: str | None = None,
+        load_id: int | None = None, limit: int = 100, offset: int = 0,
+    ) -> dict[str, Any]:
+        return self._call(lambda api, token: api.list_logs(token, stage=stage, search=search, in_load=in_load, state=state, load_id=load_id, limit=limit, offset=offset))
+
+    def list_log_states(self) -> list[str]:
+        return self._call(lambda api, token: api.list_log_states(token))
 
     def eligible_proposals(self, *, search: str = "", limit: int = 200, offset: int = 0) -> dict[str, Any]:
         return self._call(lambda api, token: api.eligible_proposals(token, search=search, limit=limit, offset=offset))
@@ -63,32 +93,43 @@ class LogisticsService:
     def get_log(self, log_id: int) -> dict[str, Any]:
         return self._call(lambda api, token: api.get_log(token, log_id))
 
-    def create_log(self, payload: dict[str, Any]) -> dict[str, Any]:
-        return self._call(lambda api, token: api.create_log(token, payload))
+    def create_log(self, payload: dict[str, Any], confirm_inspection: bool = False) -> dict[str, Any]:
+        """`confirm_inspection` reenviado depois de um 409 LOGISTICS_INSPECTION_CONFIRMATION_REQUIRED."""
+        body = {**payload, **_flag("confirm_inspection", confirm_inspection)}
+        return self._call(lambda api, token: api.create_log(token, body))
 
     def update_log_dates(self, log_id: int, dates: dict[str, str], reason: str, confirm_dates: bool = False) -> dict[str, Any]:
         """`dates`: so as chaves que mudam (requested_date, reserved_date, loading_date, delivery_date), em AAAA-MM-DD."""
         payload = {**dates, "reason": reason, **({"confirm_dates": True} if confirm_dates else {})}
         return self._call(lambda api, token: api.update_log_dates(token, log_id, payload))
 
-    def log_delivery(self, log_id: int, delivered_on: str, proof_link: str | None = None, reason: str | None = None) -> dict[str, Any]:
-        """`proof_link` None nao mexe no comprovante; "" apaga."""
-        payload: dict[str, Any] = {"delivered_on": delivered_on}
+    def log_delivery(
+        self, log_id: int, delivered_on: str, proof_link: str | None = None, reason: str | None = None,
+        note: str | None = None, confirm_dates: bool = False,
+    ) -> dict[str, Any]:
+        """`proof_link` None nao mexe no comprovante; "" apaga. `delivered_on` é a data da entrega (sem occurred_on)."""
+        payload: dict[str, Any] = {"delivered_on": delivered_on, **_stage_fields(note=note, confirm_dates=confirm_dates)}
         if proof_link is not None:
             payload["delivery_proof_link"] = proof_link
         if reason:
             payload["reason"] = reason
         return self._call(lambda api, token: api.log_delivery(token, log_id, payload))
 
-    def send_docs(self, log_id: int, nf_link: str, xml_link: str, bim_link: str) -> dict[str, Any]:
-        payload = {"nf_link": nf_link, "xml_link": xml_link, "bim_link": bim_link}
+    def send_docs(
+        self, log_id: int, nf_link: str, xml_link: str, bim_link: str,
+        occurred_on: str | None = None, note: str | None = None, confirm_dates: bool = False,
+    ) -> dict[str, Any]:
+        payload = {"nf_link": nf_link, "xml_link": xml_link, "bim_link": bim_link, **_stage_fields(occurred_on, note, confirm_dates)}
         return self._call(lambda api, token: api.log_action(token, log_id, "docs", payload))
 
-    def approve_log(self, log_id: int) -> dict[str, Any]:
-        return self._call(lambda api, token: api.log_action(token, log_id, "approve"))
+    def approve_log(self, log_id: int, occurred_on: str | None = None, note: str | None = None, confirm_dates: bool = False) -> dict[str, Any]:
+        payload = _stage_fields(occurred_on, note, confirm_dates)
+        return self._call(lambda api, token: api.log_action(token, log_id, "approve", payload))
 
-    def add_proposals(self, log_id: int, proposal_ids: list[int]) -> dict[str, Any]:
-        return self._call(lambda api, token: api.log_action(token, log_id, "proposals", {"proposal_ids": list(proposal_ids)}))
+    def add_proposals(self, log_id: int, proposal_ids: list[int], confirm_inspection: bool = False) -> dict[str, Any]:
+        """`confirm_inspection` reenviado depois de um 409 LOGISTICS_INSPECTION_CONFIRMATION_REQUIRED."""
+        payload = {"proposal_ids": list(proposal_ids), **_flag("confirm_inspection", confirm_inspection)}
+        return self._call(lambda api, token: api.log_action(token, log_id, "proposals", payload))
 
     def resolve_item(self, log_id: int, item_id: int, result: str) -> dict[str, Any]:
         return self._call(lambda api, token: api.log_action(token, log_id, f"items/{int(item_id)}/resolve", {"result": result}))
