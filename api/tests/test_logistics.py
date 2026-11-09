@@ -379,10 +379,10 @@ class LogisticsApiTests(unittest.TestCase):
         # CE nunca reaproveita numero
         self.assertEqual(self._load([a]).json()["code"], "CE-02")
 
-    def _deleted_audit(self):
+    def _deleted_audit(self, event_type="LOGISTICS_LOG_DELETED"):
         async def get():
             async with get_sessionmaker()() as s:
-                return (await s.execute(select(SecurityEvent.details).where(SecurityEvent.event_type == "LOGISTICS_LOG_DELETED"))).scalars().all()
+                return (await s.execute(select(SecurityEvent.details).where(SecurityEvent.event_type == event_type))).scalars().all()
 
         return asyncio.run(get())
 
@@ -400,11 +400,14 @@ class LogisticsApiTests(unittest.TestCase):
         self.assertEqual(self.client.get(f"/api/v1/logistics/logs/{b}", headers=self._h()).status_code, 404)
         self.assertIn("excluido", out["events"][0]["text"])
         self.assertEqual([d["code"] for d in self._deleted_audit()], ["LOG102"])
+        self.assertTrue(any("CP 200 removida" in e["text"] for e in self._deleted_audit()[0]["history"]))
         # desfazer a carga tambem exclui o LOG vazio e preserva o que tem propostas
         self.assertEqual(self.client.delete(base, headers=self._h()).status_code, 204)
         self.assertEqual(self.client.get(f"/api/v1/logistics/logs/{c}", headers=self._h()).status_code, 404)
         self.assertEqual(self.client.get(f"/api/v1/logistics/logs/{a}", headers=self._h()).json()["load_id"], None)
-        self.assertEqual(sorted(d["code"] for d in self._deleted_audit()), ["LOG102", "LOG103"])
+        deleted = {d["code"]: d for d in self._deleted_audit()}
+        self.assertEqual(sorted(deleted), ["LOG102", "LOG103"])
+        self.assertTrue(any("CP 201 removida" in e["text"] for e in deleted["LOG103"]["history"]))
         # LOG sem itens ativos (dado legado) e recusado na carga
         async def empty():
             async with get_engine().begin() as conn:
@@ -412,6 +415,25 @@ class LogisticsApiTests(unittest.TestCase):
 
         asyncio.run(empty())
         self._err(self._load([a]), 409, "LOGISTICS_LOG_EMPTY")
+
+    def test_delete_load_with_log_inside_keeps_log_events_and_audits_load_history(self):
+        a = self._approved_log("LOG101", ("CP 100",))
+        b = self._approved_log("LOG102", ("CP 200",))
+        load = self._load([a, b]).json()
+        self.assertEqual(self._cancel("CP 200", confirm_inspection_logistics=True).status_code, 200)  # LOG102 fica vazio dentro da carga
+        self.assertEqual(self.client.delete(f"/api/v1/logistics/loads/{load['id']}", headers=self._h()).status_code, 204)
+        # LOG com propostas sobrevive com os eventos; o vazio some
+        self.assertEqual(self.client.get(f"/api/v1/logistics/logs/{b}", headers=self._h()).status_code, 404)
+        texts = [e["text"] for e in self.client.get(f"/api/v1/logistics/logs/{a}", headers=self._h()).json()["events"]]
+        self.assertIn(f"Carga {load['code']} desfeita", texts)
+        self.assertTrue(any("LOG101 gerado" in t for t in texts), texts)
+        # auditoria da carga guarda o historico dela; a do LOG vazio guarda o historico do LOG
+        [load_audit] = self._deleted_audit("LOGISTICS_LOAD_DELETED")
+        self.assertEqual(load_audit["load_code"], load["code"])
+        self.assertTrue(any(e["text"].startswith("Carga criada com") for e in load_audit["history"]), load_audit["history"])
+        deleted = {d["code"]: d for d in self._deleted_audit()}
+        self.assertEqual(deleted["LOG102"]["reason"], f"Vazio ao desfazer a carga {load['code']}")
+        self.assertTrue(any("CP 200 removida" in e["text"] for e in deleted["LOG102"]["history"]))
 
     def test_reproving_last_inclusion_of_log_in_load_records_event_in_load(self):
         a = self._approved_log("LOG101", ("CP 100",))
