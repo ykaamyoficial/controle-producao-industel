@@ -252,6 +252,13 @@ class PdSuggestionOut(BaseModel):
     conflicting_proposals: list[PdConflictProposalOut] = []  # outras propostas com esse PD e cliente diferente
 
 
+class ProposalLookupOut(BaseModel):
+    proposal_id: int
+    proposal_number: str
+    customer_name: str
+    is_cancelled: bool
+
+
 class InspectionList(BaseModel):
     items: list[InspectionOut]
     total: int

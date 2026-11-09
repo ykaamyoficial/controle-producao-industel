@@ -273,6 +273,24 @@ def _is_cancelled(proposal: Proposal) -> bool:
     return _proposal_is_cancelled(proposal)
 
 
+async def proposal_lookup(session: AsyncSession, number: str) -> schemas.ProposalLookupOut:
+    """Acha a proposta ativa pelo numero, ignorando caixa e espacos ("CP 05610" == "cp05610")."""
+    key = re.sub(r"\s+", "", number).lower()
+    proposal = None
+    if key:
+        normalized = func.lower(func.regexp_replace(Proposal.proposal_number, r"\s+", "", "g"))
+        proposal = (
+            await session.execute(
+                select(Proposal).where(normalized == key, Proposal.active.is_(True)).order_by(Proposal.id).limit(1)
+            )
+        ).scalars().first()
+    if proposal is None:
+        raise ApiError(error_codes.INSPECTION_PROPOSAL_NOT_FOUND, "Nenhuma proposta ativa tem esse numero.", status_code=404)
+    return schemas.ProposalLookupOut(
+        proposal_id=proposal.id, proposal_number=proposal.proposal_number, customer_name=proposal.customer_name, is_cancelled=_is_cancelled(proposal),
+    )
+
+
 async def pd_suggestion(session: AsyncSession, proposal_id: int) -> schemas.PdSuggestionOut:
     proposal = (await session.execute(select(Proposal).where(Proposal.id == proposal_id, Proposal.active.is_(True)))).scalars().first()
     if proposal is None:

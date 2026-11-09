@@ -34,6 +34,11 @@ async def list_finished(pd_code: str | None = Query(None, max_length=120), sessi
     return await service.list_finished(session, pd_code)
 
 
+@router.get("/proposal-lookup", response_model=schemas.ProposalLookupOut)  # antes de /{inspection_id}
+async def proposal_lookup(number: str = Query(..., max_length=120), session: AsyncSession = Depends(get_db_session), _actor: User = Depends(_view)):
+    return await service.proposal_lookup(session, number)
+
+
 @router.get("/proposals/{proposal_id}/pd-suggestion", response_model=schemas.PdSuggestionOut)
 async def pd_suggestion(proposal_id: int, session: AsyncSession = Depends(get_db_session), _actor: User = Depends(_view)):
     return await service.pd_suggestion(session, proposal_id)

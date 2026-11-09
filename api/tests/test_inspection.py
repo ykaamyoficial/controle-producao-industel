@@ -18,7 +18,7 @@ from alembic import command
 from alembic.config import Config
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
-from sqlalchemy import select, text
+from sqlalchemy import select, text, update
 
 from api.app.core.config import get_settings
 from api.app.database.session import dispose_engine, get_engine, get_sessionmaker
@@ -452,6 +452,42 @@ class InspectionApiTests(unittest.TestCase):
     def test_unknown_inspection_is_404(self):
         resp = self.client.get("/api/v1/inspections/999", headers=self._h())
         self.assertEqual((resp.status_code, resp.json()["error"]["code"]), (404, "INSPECTION_NOT_FOUND"))
+
+    # --- busca de proposta por numero ----------------------------------------------------
+
+    def _lookup(self, number: str, who: str = "viewer"):
+        return self.client.get("/api/v1/inspections/proposal-lookup", params={"number": number}, headers=self._h(who))
+
+    async def _proposal_fields(self, number: str, **fields):
+        """Insere (sem fields) ou atualiza (com fields) uma proposta de teste."""
+        async with get_sessionmaker()() as session:
+            if fields:
+                await session.execute(update(Proposal).where(Proposal.proposal_number == number).values(**fields))
+            else:
+                session.add(Proposal(proposal_number=number, customer_name="Cliente " + number))
+            await session.commit()
+
+    def test_proposal_lookup_ignores_case_and_spaces_and_skips_inactive(self):
+        asyncio.run(self._proposal_fields("CP 05610"))
+        found = self._lookup("cp05610")
+        self.assertEqual(found.status_code, 200)
+        body = found.json()
+        self.assertEqual(set(body), {"proposal_id", "proposal_number", "customer_name", "is_cancelled"})
+        self.assertEqual((body["proposal_number"], body["customer_name"], body["is_cancelled"]), ("CP 05610", "Cliente CP 05610", False))
+        for variant in ("CP05610", " cp 05610 ", "CP\t05610"):
+            self.assertEqual(self._lookup(variant).json()["proposal_number"], "CP 05610", variant)
+        for missing in ("CP 99999", "   ", ""):
+            resp = self._lookup(missing)
+            self.assertEqual((resp.status_code, resp.json()["error"]["code"]), (404, "INSPECTION_PROPOSAL_NOT_FOUND"), missing)
+        # proposta inativa nao e achada
+        asyncio.run(self._proposal_fields("CP 05610", active=False))
+        self.assertEqual(self._lookup("CP05610").status_code, 404)
+
+    def test_proposal_lookup_reflects_cancellation_and_permissions(self):
+        asyncio.run(self._proposal_fields("CP 200", is_cancelled=True))
+        self.assertTrue(self._lookup("cp200").json()["is_cancelled"])
+        self.assertEqual(self.client.get("/api/v1/inspections/proposal-lookup", params={"number": "CP 200"}).status_code, 401)
+        self.assertEqual(self._lookup("CP 200", who="none").status_code, 403)
 
 
 if __name__ == "__main__":
