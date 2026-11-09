@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import Any
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import QTimer, Signal
 from PySide6.QtWidgets import (
     QButtonGroup,
     QHBoxLayout,
@@ -38,6 +38,7 @@ from app.ui.dialog_utils import style_dialog_from_parent
 MAX_CATCH_UP_STEPS = 20
 NOTE_MAX_LENGTH = 1000
 STALE_ERROR_CODE = "INSPECTION_INVALID_STAGE"
+STALE_NOTICE = "A inspeção mudou de etapa; os dados foram atualizados."
 
 
 @dataclass(frozen=True)
@@ -147,6 +148,11 @@ class OutcomeForm(QFrame):
             line = widget.line if isinstance(widget, (DateQuickField, PathField)) else widget
             line.textChanged.connect(lambda *_: self.changed.emit())
 
+    def focus_line(self) -> QLineEdit:
+        """Campo de data a focar: a da visita, se aparece; senao "Aconteceu em"."""
+        visit = self.field_widgets["visit_date"]
+        return (visit if not visit.isHidden() else self.occurred).line
+
     def outcome(self) -> Outcome | None:
         return next((o for o in self.outcomes if self.radios[o.key].isChecked()), None)
 
@@ -196,6 +202,11 @@ class OutcomeForm(QFrame):
         return {"action": chosen.action, **body}  # type: ignore[union-attr]
 
 
+def _parents(widget: QWidget):
+    while (widget := widget.parentWidget()) is not None:
+        yield widget
+
+
 class DateWarningPanel(QFrame):
     """Avisos de data da API dentro da propria janela (sem QMessageBox). "Marcar mesmo assim" chama
     `on_confirm`; "Escolher outra data" fecha o painel e devolve o foco a `focus_target()`."""
@@ -223,6 +234,9 @@ class DateWarningPanel(QFrame):
     def show_messages(self, messages: list[str]) -> None:
         self.label.setText("\n\n".join(messages))
         self.setVisible(True)
+        area = next((p for p in _parents(self) if isinstance(p, QScrollArea)), None)
+        if area is not None:  # o layout so se ajusta no proximo ciclo
+            QTimer.singleShot(0, self, lambda: area.ensureWidgetVisible(self))
 
     def dismiss(self, focus: bool = False) -> None:
         self.setVisible(False)
@@ -274,7 +288,7 @@ class RecordProgressDialog(QDialog):
         self.error_label.setWordWrap(True)
         self.error_label.setVisible(False)
         layout.addWidget(self.error_label)
-        self.warning_panel = DateWarningPanel(lambda: self.submit(True), lambda: self.form.occurred.line)
+        self.warning_panel = DateWarningPanel(lambda: self.submit(True), lambda: self.form.focus_line())
         self.form.changed.connect(lambda: self.warning_panel.dismiss())
         layout.addWidget(self.warning_panel)
         scroll = QScrollArea()
@@ -392,7 +406,7 @@ class CatchUpDialog(QDialog):
         self.error_label.setWordWrap(True)
         self.error_label.setVisible(False)
         root.addWidget(self.error_label)
-        self.warning_panel = DateWarningPanel(lambda: self.submit(True), lambda: self.rows[0].occurred.line)
+        self.warning_panel = DateWarningPanel(lambda: self.submit(True), lambda: next((r for r in self.rows if not r.field_widgets["visit_date"].isHidden()), self.rows[0]).focus_line())
         root.addWidget(self.warning_panel)
         cancel = ModernButton("Cancelar", "close", variant="ghost")
         cancel.clicked.connect(self.reject)
@@ -474,12 +488,13 @@ class CatchUpDialog(QDialog):
         self.register_button.setEnabled(True)
         if _show_date_warning(self, exc):
             return
-        if getattr(exc, "error_code", None) == STALE_ERROR_CODE:
+        details = getattr(exc, "details", None)
+        index = details.get("step_index") if isinstance(details, dict) else None
+        # Etapa trocada so se o 1o passo falhou; nos seguintes a janela fica aberta com o erro no passo.
+        if getattr(exc, "error_code", None) == STALE_ERROR_CODE and not index:
             self.stale = True
             self.reject()
             return
-        details = getattr(exc, "details", None)
-        index = details.get("step_index") if isinstance(details, dict) else None
         # A API ja manda "Passo N" na mensagem; so prefixa quando nao veio.
         prefix = f"Etapa {int(index) + 1}: " if isinstance(index, int) and "Passo" not in str(exc) else ""
         self._fail(f"{prefix}{exc}")

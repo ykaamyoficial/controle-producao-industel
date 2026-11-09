@@ -620,7 +620,26 @@ class LogDetailDialog(_DetailDialog):
         item = self.selected_item()
         if item is None or item.get("status") != "pendente":
             raise ValueError("Selecione uma proposta com inclusão pendente.")
-        self._run(lambda: self.api.resolve_item(self._log_id(), int(item["id"]), result))
+        if result == "reprovada" and len(self._items) == 1 and not self._confirm_last_removal("Reprovar a última proposta apaga o LOG. Continuar?"):
+            return
+        self._run(lambda: self.api.resolve_item(self._log_id(), int(item["id"]), result), lambda res: self._after_removal(res, reload_eligible=False))
+
+    def _confirm_last_removal(self, text: str) -> bool:
+        answer = QMessageBox.question(self, "Remover última proposta", text, QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        return answer == QMessageBox.Yes
+
+    def _after_removal(self, result: dict, *, reload_eligible: bool = True) -> None:
+        """Remover ou reprovar a ultima inclusao apaga o LOG (`log_deleted`): a janela fecha."""
+        self.changed = True
+        self.changed_signal.emit()
+        if reload_eligible:
+            self._load_eligible()
+        if result.get("log_deleted"):
+            self.accept()
+            return
+        self._notice = ""
+        log = result.get("log") if "log_deleted" in result else result  # sem a chave: o proprio LOG
+        self._apply(log or self.data)
 
     def _include(self) -> None:
         ids = self.checklist.checked_ids() if self.checklist is not None else []
@@ -640,28 +659,9 @@ class LogDetailDialog(_DetailDialog):
         reason = self.reason_field.text().strip() if self.reason_field is not None else ""
         if not reason:
             raise ValueError("Informe o motivo da remoção.")
-        if len(self._items) == 1:
-            answer = QMessageBox.question(
-                self,
-                "Remover última proposta",
-                "Esta é a última proposta do LOG. Remover apaga o LOG. Continuar?",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No,
-            )
-            if answer != QMessageBox.Yes:
-                return
-
-        def done(result: dict) -> None:
-            self.changed = True
-            self.changed_signal.emit()
-            self._load_eligible()
-            if result.get("log_deleted"):
-                self.accept()
-                return
-            self._notice = ""
-            self._apply(result.get("log") or self.data)
-
-        self._run(lambda: self.api.remove_item(self._log_id(), int(item["id"]), reason), done)
+        if len(self._items) == 1 and not self._confirm_last_removal("Esta é a última proposta do LOG. Remover apaga o LOG. Continuar?"):
+            return
+        self._run(lambda: self.api.remove_item(self._log_id(), int(item["id"]), reason), self._after_removal)
 
 
 class NewLogDialog(QDialog):

@@ -38,7 +38,7 @@ from app.ui.components.path_field import PathField, path_rows_panel
 from app.ui.components.status_badge import StatusBadge
 from app.ui.date_edit_dialog import DateEditDialog
 from app.ui.dialog_utils import style_dialog_from_parent
-from app.ui.inspection_progress import STALE_ERROR_CODE, CatchUpDialog, RecordProgressDialog
+from app.ui.inspection_progress import STALE_ERROR_CODE, STALE_NOTICE, CatchUpDialog, RecordProgressDialog
 from app.ui.styles import STATUS_BADGE_COLORS, _contrast_text, _is_dark
 
 # Categoria de cor (STATUS_BADGE_COLORS) de cada etapa da inspecao.
@@ -188,6 +188,7 @@ class InspectionDetailDialog(QDialog):
         self.can_edit = bool(service.can_edit("inspection")) if can_edit is None else bool(can_edit)
         self.changed = False
         self._tab_index = 0
+        self._notice = ""  # aviso que sobrevive ao _render (ex.: etapa trocada)
         self._content: QWidget | None = None
         self.error_label: QLabel | None = None
         self.action_buttons: list[ModernButton] = []
@@ -201,7 +202,8 @@ class InspectionDetailDialog(QDialog):
         self._reload()
 
     # ---- dados -----------------------------------------------------------
-    def _reload(self) -> None:
+    def _reload(self, notice: str = "") -> None:
+        self._notice = notice
         inspection_id = int(self.data["id"])
         start_worker(self, lambda: self.api.get(inspection_id), self._apply, self._show_error)
 
@@ -214,10 +216,11 @@ class InspectionDetailDialog(QDialog):
             self.error_label.setText(str(exc))
             self.error_label.setVisible(True)
         if getattr(exc, "error_code", None) == STALE_ERROR_CODE:
-            self._reload()
+            self._reload(STALE_NOTICE)
 
     def _after_action(self, detail: dict) -> None:
         self.changed = True
+        self._notice = ""
         self.changed_signal.emit()
         self._apply(detail)
 
@@ -227,14 +230,14 @@ class InspectionDetailDialog(QDialog):
         if dialog.exec() and dialog.result_data is not None:
             self._after_action(dialog.result_data)
         elif dialog.stale:
-            self._reload()
+            self._reload(STALE_NOTICE)
 
     def open_catch_up(self) -> None:
         dialog = CatchUpDialog(self.service, self.data, self)
         if dialog.exec() and dialog.result_data is not None:
             self._after_action(dialog.result_data)
         elif dialog.stale:
-            self._reload()
+            self._reload(STALE_NOTICE)
 
     def open_reschedule(self) -> None:
         inspection_id = int(self.data["id"])
@@ -389,7 +392,8 @@ class InspectionDetailDialog(QDialog):
             panel_layout.addWidget(QLabel("Você pode consultar, mas não registrar andamento nesta área."))
         self.error_label = set_notice_kind(QLabel(""), "danger")
         self.error_label.setWordWrap(True)
-        self.error_label.setVisible(False)
+        self.error_label.setText(self._notice)
+        self.error_label.setVisible(bool(self._notice))
         panel_layout.addWidget(self.error_label)
         layout.addWidget(panel)
         saved = [("PIT", data.get("pit_link") or ""), ("DOC BIM em PDF", data.get("doc_link") or "")]

@@ -516,6 +516,21 @@ class LogDetailDialogTests(QtCase):
         self.assertTrue(dialog.changed)
         self.assertEqual(dialog.result(), QDialog.Accepted)
 
+    def test_rejecting_last_inclusion_confirms_and_closes_when_log_is_deleted(self):
+        pending = [{**_log()["items"][1]}]
+        dialog, api = self._dialog(items=pending, proposal_count=1)
+        api.result = {"log_deleted": True, "log": None}
+        dialog.items_table.selectRow(0)
+        with patch("app.ui.logistics_dialogs.QMessageBox.question", return_value=QMessageBox.No) as question:
+            dialog.reject_item_button.click()
+        self.assertTrue(question.called)
+        self.assertEqual(api.calls, [])
+        with patch("app.ui.logistics_dialogs.QMessageBox.question", return_value=QMessageBox.Yes):
+            dialog.reject_item_button.click()
+        self.assertEqual(api.calls[0], ("resolve_item", 1, 11, "reprovada"))
+        self.assertTrue(dialog.changed)
+        self.assertEqual(dialog.result(), QDialog.Accepted)
+
     def test_rejected_inclusion_leaves_the_log_on_screen(self):
         dialog, api = self._dialog()
         self.assertEqual(dialog.items_table.rowCount(), 2)

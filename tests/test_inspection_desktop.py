@@ -432,6 +432,8 @@ class DetailDialogTests(QtCase):
             dialog.record_button.click()
         self.assertEqual(api.calls, [("get", 1)])
         self.assertFalse(dialog.changed)
+        self.assertEqual(dialog.error_label.text(), "A inspeção mudou de etapa; os dados foram atualizados.")
+        self.assertFalse(dialog.error_label.isHidden())
 
     def test_catch_up_button_opens_catch_up_window(self):
         dialog, _api = self._dialog("solicitada")
@@ -675,14 +677,24 @@ class RecordProgressTests(QtCase):
         with patch("app.ui.date_warnings.ask_date_confirmation", side_effect=AssertionError("sem QMessageBox")):
             dialog.submit()
             self.assertFalse(dialog.warning_panel.isHidden())
-            with patch.object(dialog.form.occurred.line, "setFocus") as focus:
+            with patch.object(dialog.form.field_widgets["visit_date"].line, "setFocus") as visit_focus, patch.object(
+                dialog.form.occurred.line, "setFocus"
+            ) as occurred_focus:
                 dialog.warning_panel.choose_button.click()
-            focus.assert_called_once()
+            visit_focus.assert_called_once()
+            occurred_focus.assert_not_called()
         self.assertTrue(dialog.warning_panel.isHidden())
         self.assertIsNone(dialog.result_data)
         self.assertTrue(dialog.register_button.isEnabled())
         self.assertEqual(dialog.form.field_widgets["visit_date"].text(), "22/11/2026")
         self.assertEqual(len([c for c in api.calls if c[0] == "transition"]), 1)
+
+    def test_date_warning_panel_is_scrolled_into_view(self):
+        dialog, _api = self._dialog("cadastro")
+        with patch("app.ui.inspection_progress.QScrollArea.ensureWidgetVisible") as ensure:
+            dialog.warning_panel.show_messages(["Domingo."])
+            QApplication.processEvents()
+        ensure.assert_called_once_with(dialog.warning_panel)
 
     def test_changing_any_field_hides_the_date_warning_panel(self):
         dialog, api = self._dialog("cadastro")
@@ -819,6 +831,26 @@ class CatchUpTests(QtCase):
         calls = [c for c in api.calls if c[0] == "catch_up"]
         self.assertEqual([c[3] for c in calls], [False, False, False, False, True])
         self.assertIsNotNone(dialog.result_data)
+
+    def test_catch_up_invalid_stage_after_first_step_keeps_window_with_error(self):
+        dialog, api = self._dialog("solicitada")
+        dialog.rows[0].field_widgets["nqt_code"].setText("NQT-1")
+        api.error = AppError("Passo 2: mudou", error_code="INSPECTION_INVALID_STAGE", details={"step_index": 1})
+        dialog.submit()
+        self.assertFalse(dialog.stale)
+        self.assertEqual(dialog.error_label.text(), "Passo 2: mudou")
+
+    def test_catch_up_choose_another_date_focuses_the_row_with_visit_date(self):
+        dialog, api = self._dialog("nqt")
+        dialog.rows[0].radios["on_site"].setChecked(True)
+        dialog.rows[0].field_widgets["visit_date"].line.setText("22/11/2026")
+        api.error = AppError("Há avisos", error_code="DATE_CONFIRMATION_REQUIRED", details={"warnings": [{"message": "Domingo."}]})
+        dialog.submit()
+        with patch.object(dialog.rows[0].field_widgets["visit_date"].line, "setFocus") as focus:
+            dialog.warning_panel.choose_button.click()
+        focus.assert_called_once()
+        dialog.rows[0].radios["dispensed"].setChecked(True)
+        self.assertIs(dialog.rows[0].focus_line(), dialog.rows[0].occurred.line)
 
     def test_invalid_stage_closes_catch_up_and_flags_reload(self):
         dialog, api = self._dialog("solicitada")
