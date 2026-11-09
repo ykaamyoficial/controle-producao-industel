@@ -374,12 +374,17 @@ class LogisticsPage(QWidget):
             return
         if not path.lower().endswith(".xlsx"):
             path += ".xlsx"
-        start_worker(
-            self,
-            lambda: write_logs_xlsx(path, fetch_all_logs(self.api, filters)),
-            lambda _result: open_file(self, path),
-            lambda exc: QMessageBox.warning(self, "Exportar LOGs", f"Não foi possível exportar: {exc}"),
-        )
+        self.export_button.setEnabled(False)  # evita um segundo XLSX enquanto o primeiro é gerado
+
+        def done(_result) -> None:
+            self.export_button.setEnabled(True)
+            open_file(self, path)
+
+        def failed(exc: Exception) -> None:
+            self.export_button.setEnabled(True)
+            QMessageBox.warning(self, "Exportar LOGs", f"Não foi possível exportar: {exc}")
+
+        start_worker(self, lambda: write_logs_xlsx(path, fetch_all_logs(self.api, filters)), done, failed)
 
     def _tab_changed(self) -> None:
         self._offset = 0
