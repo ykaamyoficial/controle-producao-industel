@@ -24,13 +24,22 @@ def _rid(request: Request) -> str | None:
 
 @router.get("/logs", response_model=schemas.LogList)
 async def list_logs(
-    stage: str | None = Query(None, pattern="^(reservada|docs|aprovada)$"),
+    stage: str | None = Query(None, pattern="^(reservada|docs|aprovada|entregue)$"),
     search: str | None = Query(None, max_length=120),
     in_load: bool | None = Query(None),
+    state: str | None = Query(None, max_length=40),
+    load_id: int | None = Query(None, ge=1),
     limit: int = Query(100, ge=1, le=500), offset: int = Query(0, ge=0),
     session: AsyncSession = Depends(get_db_session), _actor: User = Depends(_view),
 ):
-    return await service.list_logs(session, stage=stage, search=search, in_load=in_load, limit=limit, offset=offset)
+    return await service.list_logs(
+        session, stage=stage, search=search, in_load=in_load, state=state, load_id=load_id, limit=limit, offset=offset,
+    )
+
+
+@router.get("/log-states", response_model=list[str])  # antes de /logs/{log_id}
+async def list_log_states(session: AsyncSession = Depends(get_db_session), _actor: User = Depends(_view)):
+    return await service.list_states(session)
 
 
 @router.get("/eligible-proposals", response_model=schemas.EligibleProposalList)

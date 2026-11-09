@@ -121,8 +121,10 @@ async def _without_doc_counts(session: AsyncSession, log_ids: list[int]) -> dict
 def _log_dict(row: LogisticsLog, count: int, today: date, without_doc: int = 0) -> dict:
     data = {c: getattr(row, c) for c in schemas.LogOut.model_fields if hasattr(row, c)}
     since = _since(row)
+    end = row.delivered_on or today  # LOG entregue para de contar na entrega; entrega antes da etapa da 0 (funcoes nao vao negativo)
     data.update(
-        stage_since_date=since, days_in_stage=days_in_stage(since, today), business_days_in_stage=calendar_rules.business_days_between(since, today),
+        display_stage="entregue" if row.delivered_on else row.stage,
+        stage_since_date=since, days_in_stage=days_in_stage(since, end), business_days_in_stage=calendar_rules.business_days_between(since, end),
         proposal_count=count, without_doc_count=without_doc, load_code=load_code(row.load_id) if row.load_id else None)
     return data
 
@@ -182,12 +184,26 @@ async def get_log(session: AsyncSession, log_id: int) -> schemas.LogDetail:
     return schemas.LogDetail(**data, items=items.get(row.id, []), removed_items=removed.get(row.id, []), events=await _events(session, log_id=row.id))
 
 
+async def list_states(session: AsyncSession) -> list[str]:
+    """Estados distintos dos LOGs (ordenados), para o filtro de Estado do Desktop."""
+    rows = (await session.execute(select(LogisticsLog.state).distinct().order_by(LogisticsLog.state))).scalars().all()
+    return list(rows)
+
+
 async def list_logs(
     session: AsyncSession, *, stage: str | None, search: str | None, in_load: bool | None, limit: int, offset: int,
+    state: str | None = None, load_id: int | None = None,
 ) -> schemas.LogList:
     cond = []
-    if stage:
+    if stage == "entregue":
+        cond.append(LogisticsLog.delivered_on.is_not(None))
+    elif stage:  # etapas gravadas: LOG entregue sai delas
         cond.append(LogisticsLog.stage == stage)
+        cond.append(LogisticsLog.delivered_on.is_(None))
+    if state and state.strip():
+        cond.append(func.lower(LogisticsLog.state) == state.strip().lower())
+    if load_id is not None:
+        cond.append(LogisticsLog.load_id == load_id)
     if in_load is not None:
         cond.append(LogisticsLog.load_id.is_not(None) if in_load else LogisticsLog.load_id.is_(None))
     if search and search.strip():

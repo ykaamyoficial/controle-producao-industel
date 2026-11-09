@@ -10,13 +10,14 @@ import os
 import unittest
 from datetime import date, timedelta
 from pathlib import Path
+from unittest.mock import patch
 from urllib.parse import urlparse
 
 from alembic import command
 from alembic.config import Config
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
-from sqlalchemy import select, text
+from sqlalchemy import bindparam, select, text
 
 from api.app.core.config import get_settings
 from api.app.database.session import dispose_engine, get_engine, get_sessionmaker
@@ -329,6 +330,75 @@ class LogisticsApiTests(unittest.TestCase):
         self.assertEqual([i["code"] for i in get(search="CP 200")["items"]], ["LOG102"])
         self.assertEqual([i["code"] for i in get(in_load="false", stage="aprovada")["items"]], ["LOG101"])
         self.assertEqual(self.client.get("/api/v1/logistics/logs?stage=bogus", headers=self._h()).status_code, 422)
+
+    def _age_logs(self, *ids, days: int):
+        async def age():  # "desde" (stage_since e stage_occurred_on) recuado N dias
+            async with get_engine().begin() as conn:
+                await conn.execute(text(
+                    "UPDATE logistics_logs SET stage_since = now() - make_interval(days => :d), "
+                    "stage_occurred_on = (now() AT TIME ZONE 'America/Sao_Paulo')::date - :d WHERE id IN :ids"
+                ).bindparams(bindparam("ids", expanding=True)), {"d": days, "ids": list(ids)})
+
+        asyncio.run(age())
+
+    def _list(self, days_ahead: int = 0, **q) -> list[dict]:
+        """Lista de LOGs com "hoje" simulado (local_today mockado)."""
+        with patch("api.app.modules.logistics.calendar_rules.local_today", return_value=local_today() + timedelta(days_ahead)):
+            return self.client.get("/api/v1/logistics/logs", params=q, headers=self._h("viewer")).json()["items"]
+
+    def test_delivered_log_counter_stops_at_delivery_and_never_negative(self):
+        a = self._approved_log("LOG101", ("CP 100",))
+        b = self._approved_log("LOG102", ("CP 200",))
+        self._age_logs(a, b, days=9)  # etapa ha 9 dias
+        today = local_today()
+        post = lambda body: self.client.post(f"/api/v1/logistics/logs/{a}/delivery", json=body, headers=self._h())  # noqa: E731
+        self.assertEqual(post({"delivered_on": str(today - timedelta(5))}).status_code, 200)  # entregue ha 5 dias
+        bd = calendar_rules.business_days_between
+
+        def counters(days_ahead=0):
+            return {i["code"]: (i["days_in_stage"], i["business_days_in_stage"]) for i in self._list(days_ahead)}
+
+        expected_a = (4, bd(today - timedelta(9), today - timedelta(5)))  # de "desde" ate a entrega, nao ate hoje
+        self.assertEqual(counters(0), {"LOG101": expected_a, "LOG102": (9, bd(today - timedelta(9), today))})
+        self.assertEqual(counters(10), {"LOG101": expected_a, "LOG102": (19, bd(today - timedelta(9), today + timedelta(10)))})
+        self.assertEqual({i["code"]: i["display_stage"] for i in self._list()}, {"LOG101": "entregue", "LOG102": "aprovada"})
+        # corrigir a entrega (com motivo): antes da etapa da 0; depois volta a contar ate a nova data
+        self._err(post({"delivered_on": str(today - timedelta(12))}), 422, "VALIDATION_ERROR")
+        self.assertEqual(post({"delivered_on": str(today - timedelta(12)), "reason": "NF carimbada antes"}).status_code, 200)
+        self.assertEqual(counters(10)["LOG101"], (0, 0))
+        self.assertEqual(post({"delivered_on": str(today - timedelta(7)), "reason": "data certa"}).status_code, 200)
+        self.assertEqual(counters(10)["LOG101"], (2, bd(today - timedelta(9), today - timedelta(7))))
+
+    def test_list_stage_entregue_separates_delivered_from_other_stages(self):
+        a = self._approved_log("LOG101", ("CP 100",))
+        self._approved_log("LOG102", ("CP 200",))
+        self.assertEqual(self.client.post(f"/api/v1/logistics/logs/{a}/delivery", json={"delivered_on": str(local_today())}, headers=self._h()).status_code, 200)
+        get = lambda **q: self.client.get("/api/v1/logistics/logs", params=q, headers=self._h("viewer")).json()  # noqa: E731
+        self.assertEqual([i["code"] for i in get(stage="entregue")["items"]], ["LOG101"])
+        self.assertEqual([i["code"] for i in get(stage="aprovada")["items"]], ["LOG102"])
+        self.assertEqual(get(stage="reservada")["total"], 0)
+
+    def test_list_state_search_load_and_log_states_combine(self):
+        a = self._approved_log("LOG101", ("CP 100",))  # EQT-MA, aprovada, na carga
+        b = self._approved_log("LOG102", ("CP 200",))  # EQT-MA, entregue
+        self._log("LOG103", ("CP 502",), state="EQT-PA")  # reservada
+        self.assertEqual(self.client.post(f"/api/v1/logistics/logs/{b}/delivery", json={"delivered_on": str(local_today())}, headers=self._h()).status_code, 200)
+        load_id = self._load([a]).json()["id"]
+        get = lambda **q: self.client.get("/api/v1/logistics/logs", params=q, headers=self._h("viewer")).json()  # noqa: E731
+        codes = lambda **q: sorted(i["code"] for i in get(**q)["items"])  # noqa: E731
+        self.assertEqual(get()["total"], 3)
+        self.assertEqual(codes(state="eqt-ma"), ["LOG101", "LOG102"])  # sem diferenca de caixa
+        self.assertEqual(get(stage="aprovada", state="EQT-MA")["total"], 1)
+        self.assertEqual(codes(stage="entregue", state="eqt-ma"), ["LOG102"])
+        self.assertEqual(get(stage="aprovada", state="eqt-ma", search="CP 200")["total"], 0)  # entregue sai de "aprovada"
+        self.assertEqual(codes(state="eqt-ma", search="CP 100"), ["LOG101"])
+        self.assertEqual(codes(state="eqt-pa", search="CP 100"), [])
+        self.assertEqual(codes(stage="reservada", state="eqt-pa", search="502"), ["LOG103"])
+        self.assertEqual(codes(load_id=load_id), ["LOG101"])
+        self.assertEqual(get(load_id=999999)["total"], 0)
+        self.assertEqual(codes(in_load="false", state="eqt-ma"), ["LOG102"])
+        states = self.client.get("/api/v1/logistics/log-states", headers=self._h("viewer"))
+        self.assertEqual((states.status_code, states.json()), (200, ["EQT-MA", "EQT-PA"]))
 
     # --- cargas --------------------------------------------------------------------------
 

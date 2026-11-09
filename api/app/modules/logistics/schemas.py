@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field, field_validator
 from api.app.modules.inspection.schemas import _CONTROL_RE, _clean_link
 
 LogStage = Literal["reservada", "docs", "aprovada"]
+DisplayStage = Literal["reservada", "docs", "aprovada", "entregue"]  # "entregue" e derivado de delivered_on, nao e etapa gravada
 ItemStatus = Literal["ok", "pendente", "reprovada"]
 
 _LOG_RE = re.compile(r"^LOG\d+$")
@@ -199,10 +200,11 @@ class LogOut(BaseModel):
     loading_date: date
     delivery_date: date
     stage: LogStage
+    display_stage: DisplayStage  # "entregue" quando delivered_on existe; senao igual a stage
     stage_since: datetime
     stage_since_date: date  # "desde": dia em que a etapa aconteceu
-    days_in_stage: int  # dias corridos
-    business_days_in_stage: int  # dias uteis da fabrica (seg-sex, sem feriado GO/Goiania)
+    days_in_stage: int  # dias corridos; LOG entregue para em delivered_on
+    business_days_in_stage: int  # dias uteis da fabrica (seg-sex, sem feriado GO/Goiania); LOG entregue para em delivered_on
     nf_link: str | None = None
     xml_link: str | None = None
     bim_link: str | None = None
