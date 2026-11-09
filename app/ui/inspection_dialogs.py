@@ -449,18 +449,21 @@ class NewInspectionDialog(QDialog):
         self.service = service
         self.api = service.inspection_service()
         self.created: dict | None = None
+        # Texto "CP ..." vira proposta: o diálogo só acha a proposta e a página abre o "Iniciar inspeção".
+        self.proposal_id: int | None = None
+        self.proposal_label = ""
         self._busy = False
         self.setWindowTitle("Nova inspeção")
         self.setMinimumWidth(480)
         style_dialog_from_parent(self, parent)
         root = dialog_layout(self)
-        root.addWidget(dialog_header("Nova inspeção", "Informe o PD principal do pedido."))
+        root.addWidget(dialog_header("Nova inspeção", "PD principal ou número da proposta (ex.: CP 05610)."))
         panel, layout = make_panel()
-        layout.addWidget(QLabel("PD principal"))
+        layout.addWidget(QLabel("PD principal ou número da proposta (ex.: CP 05610)"))
         self.pd_field = QLineEdit()
-        self.pd_field.setPlaceholderText("Número do PD")
+        self.pd_field.setPlaceholderText("PD ou CP 05610")
         self.pd_field.setMinimumHeight(34)
-        self.pd_field.setAccessibleName("PD principal")
+        self.pd_field.setAccessibleName("PD principal ou número da proposta")
         self.pd_field.returnPressed.connect(self.submit)
         layout.addWidget(self.pd_field)
         self.error_label = set_notice_kind(QLabel(""), "danger")
@@ -478,16 +481,24 @@ class NewInspectionDialog(QDialog):
     def submit(self) -> None:
         if self._busy:
             return
-        pd_code = self.pd_field.text().strip()
-        if not pd_code:
+        text = self.pd_field.text().strip()
+        if not text:
             self._fail("Informe o PD principal.")
             return
         self._busy = True
         self.create_button.setEnabled(False)
-        start_worker(self, lambda: self.api.create(pd_code), self._done, self._error)
+        if text[:2].upper() == "CP":
+            start_worker(self, lambda: self.api.proposal_lookup(text), self._found, self._error)
+        else:
+            start_worker(self, lambda: self.api.create(text), self._done, self._error)
 
     def _done(self, detail: dict) -> None:
         self.created = detail
+        self.accept()
+
+    def _found(self, data: dict) -> None:
+        self.proposal_id = int(data["proposal_id"])
+        self.proposal_label = str(data.get("proposal_number") or "")
         self.accept()
 
     def _error(self, exc: Exception) -> None:

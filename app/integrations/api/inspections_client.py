@@ -32,6 +32,9 @@ class InspectionsApiClient:
         payload = {"pd_code": pd_code}
         return self.client.post(_BASE, json_payload=payload, access_token=access_token).data
 
+    def proposal_lookup(self, access_token: str, number: str) -> dict[str, Any]:
+        return self.client.get(f"{_BASE}/proposal-lookup?{urlencode({'number': number})}", access_token=access_token).data
+
     def pd_suggestion(self, access_token: str, proposal_id: int) -> dict[str, Any]:
         return self.client.get(f"{_BASE}/proposals/{int(proposal_id)}/pd-suggestion", access_token=access_token).data
 

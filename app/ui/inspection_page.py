@@ -314,5 +314,10 @@ class InspectionPage(QWidget):
 
     def open_new(self) -> None:
         dialog = NewInspectionDialog(self.service, self)
-        if dialog.exec() and dialog.created:
+        if not dialog.exec():
+            return
+        if dialog.proposal_id is not None:
+            if start_inspection_for_proposal(self.service, dialog.proposal_id, self, proposal_label=f"Proposta {dialog.proposal_label}"):
+                self.refresh()
+        elif dialog.created:
             self.refresh()

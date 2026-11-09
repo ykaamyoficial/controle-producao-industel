@@ -20,6 +20,7 @@ LINK_MAX_LENGTH = 500
 ERROR_MESSAGES = {
     "INSPECTION_NOT_FOUND": "Inspeção não encontrada. Atualize a lista.",
     "INSPECTION_PD_NOT_FOUND": "Esse PD não existe nas propostas ativas. Confira o número do pedido.",
+    "INSPECTION_PROPOSAL_NOT_FOUND": "Não achei proposta ativa com esse número. Confira o número (ex.: CP 05610).",
     "INSPECTION_ALREADY_EXISTS": "Já existe uma inspeção para esse PD.",
     "INSPECTION_NQT_ALREADY_EXISTS": "Esse NQT já está registrado em outro PD.",
     "INSPECTION_INVALID_STAGE": "A inspeção mudou de etapa. Os dados foram atualizados.",
@@ -59,6 +60,9 @@ class InspectionService:
 
     def create(self, pd_code: str) -> dict[str, Any]:
         return self._call(lambda api, token: api.create(token, pd_code=pd_code))
+
+    def proposal_lookup(self, number: str) -> dict[str, Any]:
+        return self._call(lambda api, token: api.proposal_lookup(token, number))
 
     def pd_suggestion(self, proposal_id: int) -> dict[str, Any]:
         return self._call(lambda api, token: api.pd_suggestion(token, proposal_id))

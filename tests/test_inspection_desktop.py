@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication, QLabel
+from PySide6.QtWidgets import QApplication, QDialog, QLabel
 
 from app.integrations.api.exceptions import ApiBusinessError
 from app.integrations.api.inspections_client import InspectionsApiClient
@@ -79,6 +79,7 @@ class FakeInspectionApi:
         self.calls: list[tuple] = []
         self.error: Exception | None = None
         self.result: dict | None = None
+        self.lookup_result: dict = {"proposal_id": 7, "proposal_number": "CP 05610", "customer_name": "Cliente", "is_cancelled": False}
 
     def _respond(self, name, *args):
         self.calls.append((name, *args))
@@ -98,6 +99,12 @@ class FakeInspectionApi:
 
     def create(self, pd_code):
         return self._respond("create", pd_code)
+
+    def proposal_lookup(self, number):
+        self.calls.append(("proposal_lookup", number))
+        if self.error is not None:
+            raise self.error
+        return self.lookup_result
 
     def transition(self, inspection_id, action, payload=None):
         return self._respond("transition", inspection_id, action, dict(payload or {}))
@@ -164,6 +171,27 @@ class ClientAndServiceTests(unittest.TestCase):
         self.assertEqual(http.calls[3], ("POST", "/api/v1/inspections/7/request", {"pd_registered": False}))
         self.assertEqual(http.calls[4], ("POST", "/api/v1/inspections/7/decision", {"decision": "inloco", "visit_date": "2026-11-03"}))
         self.assertEqual(http.calls[5], ("POST", "/api/v1/inspections/7/approve", {}))
+
+    def test_client_and_service_proposal_lookup(self):
+        http = FakeHttp()
+        InspectionsApiClient(http).proposal_lookup("t", "cp 05610")
+        self.assertEqual(http.calls[0], ("GET", "/api/v1/inspections/proposal-lookup?number=cp+05610", None))
+
+        class Client:
+            def close(self):
+                pass
+
+        class Api:
+            def proposal_lookup(self, token, number):
+                raise AppError("cru", error_code="INSPECTION_PROPOSAL_NOT_FOUND")
+
+        class Storage:
+            def inspections_api(self):
+                return Client(), Api(), "t"
+
+        with self.assertRaises(AppError) as ctx:
+            InspectionService(Storage(), lambda exc: exc).proposal_lookup("CP 99999")
+        self.assertIn("Confira o número (ex.: CP 05610)", str(ctx.exception))
 
     def test_client_and_service_new_endpoints(self):
         http = FakeHttp()
@@ -875,6 +903,73 @@ class NewInspectionDialogTests(QtCase):
         self.assertIsNone(dialog.created)
         self.assertIn("não existe", dialog.error_label.text())
         self.assertTrue(dialog.create_button.isEnabled())
+
+    def test_pd_number_still_creates_inspection(self):
+        api = FakeInspectionApi()
+        dialog = NewInspectionDialog(FakeService(api))
+        dialog.pd_field.setText("PD-9")
+        dialog.submit()
+        self.assertEqual(api.calls, [("create", "PD-9")])
+        self.assertIsNone(dialog.proposal_id)
+        self.assertEqual(dialog.created["stage"], "solicitada")
+
+    def test_cp_number_looks_up_proposal_without_creating_inspection(self):
+        api = FakeInspectionApi()
+        dialog = NewInspectionDialog(FakeService(api))
+        dialog.pd_field.setText(" cp 05610 ")
+        dialog.submit()
+        self.assertEqual(api.calls, [("proposal_lookup", "cp 05610")])
+        self.assertEqual(dialog.proposal_id, 7)
+        self.assertEqual(dialog.proposal_label, "CP 05610")
+        self.assertIsNone(dialog.created)
+        self.assertEqual(dialog.result(), QDialog.Accepted)
+
+    def test_proposal_not_found_shows_error_in_field(self):
+        api = FakeInspectionApi()
+        api.error = AppError("Não achei proposta ativa com esse número.", error_code="INSPECTION_PROPOSAL_NOT_FOUND")
+        dialog = NewInspectionDialog(FakeService(api))
+        dialog.pd_field.setText("CP 99999")
+        dialog.submit()
+        self.assertIsNone(dialog.proposal_id)
+        self.assertIn("Não achei proposta", dialog.error_label.text())
+        self.assertTrue(dialog.create_button.isEnabled())
+
+
+class NewInspectionPageFlowTests(QtCase):
+    def _fake_dialog(self, *, accepted: bool, proposal_id=None):
+        class FakeNew:
+            def __init__(self, service, parent=None):
+                self.proposal_id = proposal_id
+                self.proposal_label = "CP 05610"
+                self.created = None
+
+            def exec(self):
+                return 1 if accepted else 0
+
+        return FakeNew
+
+    def test_open_new_with_proposal_starts_inspection_flow(self):
+        api = FakeInspectionApi()
+        page = InspectionPage(FakeService(api))
+        page.refresh()
+        lists_before = sum(1 for call in api.calls if call[0] == "list")
+        with patch.object(page_module, "NewInspectionDialog", self._fake_dialog(accepted=True, proposal_id=7)), patch.object(
+            page_module, "start_inspection_for_proposal", return_value=True
+        ) as start:
+            page.open_new()
+        start.assert_called_once()
+        self.assertEqual(start.call_args.args[1], 7)
+        self.assertEqual(start.call_args.kwargs["proposal_label"], "Proposta CP 05610")
+        self.assertEqual(sum(1 for call in api.calls if call[0] == "list"), lists_before + 1)
+
+    def test_open_new_with_cancelled_dialog_does_nothing(self):
+        api = FakeInspectionApi()
+        page = InspectionPage(FakeService(api))
+        with patch.object(page_module, "NewInspectionDialog", self._fake_dialog(accepted=False)), patch.object(
+            page_module, "start_inspection_for_proposal"
+        ) as start:
+            page.open_new()
+        start.assert_not_called()
 
 
 if __name__ == "__main__":
