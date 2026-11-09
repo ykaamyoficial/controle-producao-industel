@@ -14,7 +14,7 @@ from api.app.modules.auth import repository as auth_repository
 from api.app.modules.auth.models import User
 from api.app.modules.auth.tokens import utcnow
 from api.app.modules.inspection.models import Inspection
-from api.app.modules.inspection.service import days_in_stage, finished_dates, is_pd_inspection_finished
+from api.app.modules.inspection.service import days_in_stage, finished_dates
 from api.app.modules.logistics import calendar_rules, schemas
 from api.app.modules.logistics.models import LogisticsEvent, LogisticsLoad, LogisticsLog, LogisticsLogItem, load_code
 from api.app.modules.logistics.state_resolver import resolve_state
@@ -30,8 +30,25 @@ def _pd_of(proposal: Proposal) -> str | None:
     return value or None
 
 
-def _event(session: AsyncSession, actor: User, text: str, *, log_id: int | None = None, load_id: int | None = None, reason: str | None = None) -> None:
-    session.add(LogisticsEvent(log_id=log_id, load_id=load_id, actor_user_id=actor.id, text=text, reason=reason))
+def _pd_key(pd: str | None) -> str:
+    return (pd or "").strip().lower()
+
+
+def _since(row: LogisticsLog) -> date:
+    """"Desde": dia em que a etapa aconteceu (stage_occurred_on); sem ele, a data local de stage_since."""
+    return row.stage_occurred_on or calendar_rules.local_date(row.stage_since)
+
+
+def _event(
+    session: AsyncSession, actor: User, text: str, *, log_id: int | None = None, load_id: int | None = None, reason: str | None = None,
+    occurred_on: date | None = None, note: str | None = None,
+) -> None:
+    session.add(LogisticsEvent(log_id=log_id, load_id=load_id, actor_user_id=actor.id, text=text, reason=reason, occurred_on=occurred_on, note=note))
+
+
+def add_log_event(session: AsyncSession, row: LogisticsLog, actor: User, text: str) -> None:
+    """Anotacao no historico do LOG sem mudar nada (sem commit): usada quando o PD de uma proposta muda."""
+    _event(session, actor, text, log_id=row.id)
 
 
 async def _audit(session: AsyncSession, actor: User, event_type: str, request_id: str | None, **details) -> None:
@@ -74,11 +91,39 @@ async def _active_counts(session: AsyncSession, log_ids: list[int]) -> dict[int,
     return {log_id: n for log_id, n in rows}
 
 
-def _log_dict(row: LogisticsLog, count: int, today: date) -> dict:
+async def _inspection_stages(session: AsyncSession, pd_codes: list[str | None]) -> dict[str, str]:
+    """Etapa da inspecao de cada PD (chave minuscula). PD sem inspecao nao aparece no dict."""
+    keys = {k for k in (_pd_key(p) for p in pd_codes) if k}
+    if not keys:
+        return {}
+    rows = (await session.execute(select(Inspection.pd_code, Inspection.stage).where(func.lower(Inspection.pd_code).in_(keys)))).all()
+    return {_pd_key(pd): stage for pd, stage in rows}
+
+
+async def _without_doc_counts(session: AsyncSession, log_ids: list[int]) -> dict[int, int]:
+    """Propostas ativas do LOG cuja inspecao do PD nao esta finalizada (sem DOC BIM)."""
+    if not log_ids:
+        return {}
+    finished = select(Inspection.id).where(
+        func.lower(Inspection.pd_code) == func.lower(func.trim(Proposal.order_reference)), Inspection.stage == "fim",
+    ).exists()
+    rows = (
+        await session.execute(
+            select(LogisticsLogItem.log_id, func.count())
+            .join(Proposal, Proposal.id == LogisticsLogItem.proposal_id)
+            .where(LogisticsLogItem.log_id.in_(log_ids), LogisticsLogItem.removed_at.is_(None), ~finished)
+            .group_by(LogisticsLogItem.log_id)
+        )
+    ).all()
+    return {log_id: n for log_id, n in rows}
+
+
+def _log_dict(row: LogisticsLog, count: int, today: date, without_doc: int = 0) -> dict:
     data = {c: getattr(row, c) for c in schemas.LogOut.model_fields if hasattr(row, c)}
+    since = _since(row)
     data.update(
-        days_in_stage=days_in_stage(row.stage_since, today), business_days_in_stage=calendar_rules.business_days_between(calendar_rules.local_date(row.stage_since), today),
-        proposal_count=count, load_code=load_code(row.load_id) if row.load_id else None)
+        stage_since_date=since, days_in_stage=days_in_stage(since, today), business_days_in_stage=calendar_rules.business_days_between(since, today),
+        proposal_count=count, without_doc_count=without_doc, load_code=load_code(row.load_id) if row.load_id else None)
     return data
 
 
@@ -93,13 +138,17 @@ async def _items_by_log(session: AsyncSession, log_ids: list[int], *, removed: b
         .where(LogisticsLogItem.log_id.in_(log_ids), LogisticsLogItem.removed_at.is_not(None) if removed else LogisticsLogItem.removed_at.is_(None))
         .order_by(LogisticsLogItem.id)
     )
+    rows = (await session.execute(stmt)).all()
+    stages = await _inspection_stages(session, [_pd_of(proposal) for _, proposal, _ in rows])
     out: dict[int, list[schemas.LogItemOut]] = defaultdict(list)
-    for item, proposal, remover_name in (await session.execute(stmt)).all():
+    for item, proposal, remover_name in rows:
+        stage = stages.get(_pd_key(_pd_of(proposal)))
         out[item.log_id].append(
             schemas.LogItemOut(
                 id=item.id, proposal_id=proposal.id, proposal_number=proposal.proposal_number, customer_name=proposal.customer_name,
                 project_name=proposal.project_name, pd_code=_pd_of(proposal), status=item.status, added_at=item.added_at,
                 removed_at=item.removed_at, removal_reason=item.removal_reason, removed_by_name=remover_name,
+                inspection_stage=stage, inspection_finished=stage == "fim",
             )
         )
     return out
@@ -116,7 +165,10 @@ async def _events(session: AsyncSession, *, log_id: int | None = None, load_id: 
         )
     ).all()
     return [
-        schemas.EventOut(id=e.id, text=e.text, reason=e.reason, actor_user_id=e.actor_user_id, actor_name=name, created_at=e.created_at)
+        schemas.EventOut(
+            id=e.id, text=e.text, reason=e.reason, occurred_on=e.occurred_on or calendar_rules.local_date(e.created_at), note=e.note,
+            actor_user_id=e.actor_user_id, actor_name=name, created_at=e.created_at,
+        )
         for e, name in rows
     ]
 
@@ -125,7 +177,8 @@ async def get_log(session: AsyncSession, log_id: int) -> schemas.LogDetail:
     row = await _get_log(session, log_id)
     items = await _items_by_log(session, [row.id])
     removed = await _items_by_log(session, [row.id], removed=True)
-    data = _log_dict(row, len(items.get(row.id, [])), calendar_rules.local_today())
+    mine = items.get(row.id, [])
+    data = _log_dict(row, len(mine), calendar_rules.local_today(), without_doc=sum(not i.inspection_finished for i in mine))
     return schemas.LogDetail(**data, items=items.get(row.id, []), removed_items=removed.get(row.id, []), events=await _events(session, log_id=row.id))
 
 
@@ -149,17 +202,15 @@ async def list_logs(
     total = (await session.execute(select(func.count()).select_from(LogisticsLog).where(*cond))).scalar_one()
     rows = (await session.execute(select(LogisticsLog).where(*cond).order_by(LogisticsLog.stage_since, LogisticsLog.id).limit(limit).offset(offset))).scalars().all()
     counts = await _active_counts(session, [r.id for r in rows])
+    without = await _without_doc_counts(session, [r.id for r in rows])
     today = calendar_rules.local_today()
-    return schemas.LogList(items=[_log_dict(r, counts.get(r.id, 0), today) for r in rows], total=total)
+    return schemas.LogList(items=[_log_dict(r, counts.get(r.id, 0), today, without.get(r.id, 0)) for r in rows], total=total)
 
 
 async def list_eligible(session: AsyncSession, *, search: str | None, limit: int, offset: int) -> schemas.EligibleProposalList:
-    """Propostas ativas, com PD de inspecao finalizada (DOC BIM em PDF) e fora de qualquer LOG ativo."""
+    """Propostas ativas com PD que tem inspecao (em qualquer etapa) e fora de qualquer LOG ativo. Sem DOC BIM entra com confirmacao."""
     in_log = select(LogisticsLogItem.id).where(LogisticsLogItem.proposal_id == Proposal.id, LogisticsLogItem.removed_at.is_(None)).exists()
-    cond = [
-        Proposal.active.is_(True), Proposal.is_cancelled.is_(False), Proposal.order_reference.is_not(None),
-        Inspection.stage == "fim", ~in_log,
-    ]
+    cond = [Proposal.active.is_(True), Proposal.is_cancelled.is_(False), Proposal.order_reference.is_not(None), ~in_log]
     if search and search.strip():
         like = f"%{search.strip()}%"
         cond.append(or_(Proposal.proposal_number.ilike(like), Proposal.customer_name.ilike(like), Proposal.order_reference.ilike(like)))
@@ -170,6 +221,7 @@ async def list_eligible(session: AsyncSession, *, search: str | None, limit: int
         schemas.EligibleProposalOut(
             id=p.id, proposal_number=p.proposal_number, customer_name=p.customer_name, project_name=p.project_name,
             pd_code=i.pd_code, nqt_code=i.nqt_code, state=resolve_state(p.customer_name),
+            inspection_stage=i.stage, inspection_finished=i.stage == "fim",
         )
         for p, i in rows
     ]
@@ -179,24 +231,22 @@ async def list_eligible(session: AsyncSession, *, search: str | None, limit: int
 # --- elegibilidade (D5) ------------------------------------------------------------------------
 
 
-async def _eligible_proposals(session: AsyncSession, proposal_ids: list[int]) -> list[Proposal]:
+async def _eligible_proposals(session: AsyncSession, proposal_ids: list[int], *, confirm_inspection: bool) -> list[Proposal]:
     ids = list(dict.fromkeys(proposal_ids))
     found = {
         p.id: p
         for p in (await session.execute(select(Proposal).where(Proposal.id.in_(ids), Proposal.active.is_(True), Proposal.is_cancelled.is_(False)))).scalars().all()
     }
-    out = []
+    stages = await _inspection_stages(session, [_pd_of(p) for p in found.values()])
+    out, pending = [], []
     for pid in ids:
         proposal = found.get(pid)
         if proposal is None:
             raise ApiError(error_codes.LOGISTICS_PROPOSAL_NOT_FOUND, f"Proposta {pid} nao encontrada ou inativa.", status_code=404, details={"proposal_id": pid})
         pd = _pd_of(proposal)
-        if not await is_pd_inspection_finished(session, pd):
-            raise ApiError(
-                error_codes.LOGISTICS_INSPECTION_NOT_FINISHED,
-                f"A proposta {proposal.proposal_number} nao pode entrar em LOG: a inspecao do PD {pd or '(sem PD)'} nao esta finalizada (falta o DOC BIM em PDF).",
-                status_code=409, details={"proposal_id": pid, "proposal_number": proposal.proposal_number, "pd_code": pd},
-            )
+        stage = stages.get(_pd_key(pd))
+        if stage != "fim":  # sem DOC BIM: entra so com confirmacao
+            pending.append({"proposal_number": proposal.proposal_number, "pd_code": pd, "inspection_stage": stage})
         current = (
             await session.execute(
                 select(LogisticsLog.code)
@@ -211,6 +261,13 @@ async def _eligible_proposals(session: AsyncSession, proposal_ids: list[int]) ->
                 status_code=409, details={"proposal_id": pid, "proposal_number": proposal.proposal_number, "log_code": current},
             )
         out.append(proposal)
+    if pending and not confirm_inspection:
+        names = "; ".join(f"{p['proposal_number']} (PD {p['pd_code'] or 'sem PD'}, inspecao {p['inspection_stage'] or 'nao cadastrada'})" for p in pending)
+        raise ApiError(
+            error_codes.LOGISTICS_INSPECTION_CONFIRMATION_REQUIRED,
+            f"Propostas sem DOC BIM (inspecao nao finalizada): {names}. Confirme para entrarem no LOG assim mesmo.",
+            status_code=409, details={"proposals": pending},
+        )
     return out
 
 
@@ -313,7 +370,7 @@ async def _departure_warnings(session: AsyncSession, departure: date, logs: list
 async def create_log(session: AsyncSession, payload: schemas.LogCreate, actor: User, request_id: str | None = None) -> schemas.LogDetail:
     if (await session.execute(select(LogisticsLog.id).where(LogisticsLog.code == payload.code))).first():
         raise ApiError(error_codes.LOGISTICS_LOG_CODE_ALREADY_EXISTS, f"O codigo {payload.code} ja existe.", status_code=409)
-    proposals = await _eligible_proposals(session, payload.proposal_ids)
+    proposals = await _eligible_proposals(session, payload.proposal_ids, confirm_inspection=payload.confirm_inspection)
     state = _check_states(proposals, payload.state)
     reserved = payload.reserved_date or payload.requested_date
     calendar_rules.ensure_dates_confirmed(
@@ -342,31 +399,47 @@ async def create_log(session: AsyncSession, payload: schemas.LogCreate, actor: U
     return await get_log(session, row.id)
 
 
-async def _move(session, log_id, actor, request_id, *, allowed: str, to: str, text: str, **fields) -> schemas.LogDetail:
+def _stage_date_warnings(row: LogisticsLog, occurred: date, today: date) -> list[dict]:
+    """Avisos do andamento (nunca bloqueiam): data futura, antes da etapa anterior e dia nao util."""
+    out = []
+    if occurred > today:
+        out.append(calendar_rules.warning("DATE_IN_FUTURE", "stage_occurred_on", f"A data do andamento ({_fmt(occurred)}) é uma data futura."))
+    since = _since(row)
+    if occurred < since:
+        out.append(calendar_rules.warning("DATE_BEFORE_PREVIOUS_STAGE", "stage_occurred_on", f"A data do andamento ({_fmt(occurred)}) é antes de a etapa anterior começar ({_fmt(since)})."))
+    return out + calendar_rules.warn_non_business("stage_occurred_on", occurred)
+
+
+async def _move(session, log_id, actor, request_id, *, allowed: str, to: str, text: str, dates: schemas.StageDatePayload, **fields) -> schemas.LogDetail:
     row = await _get_log(session, log_id, lock=True)
     if row.stage != allowed:
         raise ApiError(
             error_codes.LOGISTICS_INVALID_STAGE, f"Esta acao nao e permitida na etapa atual do LOG ({row.stage}).",
             status_code=409, details={"current_stage": row.stage, "allowed_stages": [allowed]},
         )
+    today = calendar_rules.local_today()
+    occurred = dates.occurred_on or today
+    if dates.occurred_on is not None:  # sem data informada nao ha aviso: o andamento de hoje segue como antes
+        calendar_rules.ensure_dates_confirmed(_stage_date_warnings(row, occurred, today), dates.confirm_dates)
     previous = row.stage
     for name, value in fields.items():
         setattr(row, name, value)
     now = utcnow()
-    row.stage, row.stage_since, row.updated_at = to, now, now
-    _event(session, actor, text, log_id=row.id)
+    row.stage, row.stage_since, row.stage_occurred_on, row.updated_at = to, now, occurred, now
+    _event(session, actor, text, log_id=row.id, occurred_on=occurred, note=dates.note)
     await _audit(session, actor, "LOGISTICS_LOG_STAGE_CHANGED", request_id, log_id=row.id, code=row.code, from_stage=previous, to_stage=to)
     await session.commit()
     return await get_log(session, log_id)
 
 
 async def send_docs(session, log_id, payload: schemas.DocsPayload, actor, request_id=None):
-    return await _move(session, log_id, actor, request_id, allowed="reservada", to="docs", text="Documentacao enviada (NF, XML, BIM)",
+    return await _move(session, log_id, actor, request_id, allowed="reservada", to="docs", text="Documentacao enviada (NF, XML, BIM)", dates=payload,
                        nf_link=payload.nf_link, xml_link=payload.xml_link, bim_link=payload.bim_link)
 
 
-async def approve_log(session, log_id, actor, request_id=None):
-    return await _move(session, log_id, actor, request_id, allowed="docs", to="aprovada", text="Data aprovada para entrega")
+async def approve_log(session, log_id, actor, request_id=None, payload: schemas.ApprovePayload | None = None):
+    return await _move(session, log_id, actor, request_id, allowed="docs", to="aprovada", text="Data aprovada para entrega",
+                       dates=payload or schemas.ApprovePayload())
 
 
 async def add_proposals(session, log_id, payload: schemas.AddProposalsPayload, actor, request_id=None) -> schemas.LogDetail:
@@ -376,7 +449,7 @@ async def add_proposals(session, log_id, payload: schemas.AddProposalsPayload, a
             error_codes.LOGISTICS_LOG_IN_LOAD, f"O {row.code} esta na carga {load_code(row.load_id)}. Tire o LOG da carga para incluir propostas.",
             status_code=409, details={"load_id": row.load_id, "load_code": load_code(row.load_id)},
         )
-    proposals = await _eligible_proposals(session, payload.proposal_ids)
+    proposals = await _eligible_proposals(session, payload.proposal_ids, confirm_inspection=payload.confirm_inspection)
     _check_states(proposals, row.state)  # estado do LOG vale; proposta sem estado derivavel entra livremente num LOG manual
     try:
         for proposal in proposals:
@@ -557,7 +630,11 @@ async def get_load(session: AsyncSession, load_id: int) -> schemas.LoadDetail:
     ids = [x.id for x in logs]
     items = await _items_by_log(session, ids)
     today = calendar_rules.local_today()
-    detail = [schemas.LoadLogOut(**_log_dict(lg, len(items.get(lg.id, [])), today), items=items.get(lg.id, [])) for lg in logs]
+    detail = [
+        schemas.LoadLogOut(**_log_dict(lg, len(items.get(lg.id, [])), today, without_doc=sum(not i.inspection_finished for i in items.get(lg.id, []))),
+                           items=items.get(lg.id, []))
+        for lg in logs
+    ]
     return schemas.LoadDetail(**base, logs=detail, events=await _events(session, load_id=load_id))
 
 
@@ -618,11 +695,13 @@ async def set_delivery(session, log_id, payload: schemas.LogDeliveryPayload, act
         raise ApiError(error_codes.VALIDATION_ERROR, "Nada mudou na entrega.", status_code=422)
     if old_date is not None and old_date != payload.delivered_on and reason is None:
         raise ApiError(error_codes.VALIDATION_ERROR, "Informe o motivo para mudar a data em que o LOG foi entregue.", status_code=422)
+    note = payload.note  # vai no primeiro evento gravado (data, se mudou; senao o comprovante)
     if old_date != payload.delivered_on:
         text = f"Entregue no CD em {_fmt(payload.delivered_on)}" if old_date is None else f"Entrega no CD (real): de {_fmt(old_date)} para {_fmt(payload.delivered_on)}"
-        _event(session, actor, text, log_id=row.id, reason=reason)
+        _event(session, actor, text, log_id=row.id, reason=reason, occurred_on=payload.delivered_on, note=note)
+        note = None
     if old_link != new_link:
-        _event(session, actor, "Comprovante de entrega " + ("removido" if new_link is None else "registrado" if old_link is None else "atualizado"), log_id=row.id)
+        _event(session, actor, "Comprovante de entrega " + ("removido" if new_link is None else "registrado" if old_link is None else "atualizado"), log_id=row.id, note=note)
     row.delivered_on, row.delivery_proof_link, row.updated_at = payload.delivered_on, new_link, utcnow()
     await _audit(session, actor, "LOGISTICS_LOG_DELIVERED", request_id, log_id=row.id, code=row.code, delivered_on=payload.delivered_on.isoformat(), reason=reason)
     await session.commit()

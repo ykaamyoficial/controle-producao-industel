@@ -30,6 +30,7 @@ class LogCreate(BaseModel):
     delivery_date: date
     proposal_ids: list[int] = Field(min_length=1)
     confirm_dates: bool = False  # reenviar com true depois de um 409 DATE_CONFIRMATION_REQUIRED
+    confirm_inspection: bool = False  # reenviar com true depois de um 409 LOGISTICS_INSPECTION_CONFIRMATION_REQUIRED
 
     @field_validator("code")
     @classmethod
@@ -48,7 +49,28 @@ class LogCreate(BaseModel):
         return v
 
 
-class DocsPayload(BaseModel):
+def _clean_note(v: str | None) -> str | None:
+    return (v or "").strip() or None
+
+
+class StageDatePayload(BaseModel):
+    """Andamento com data real: sem occurred_on vale hoje. Avisos de data pedem confirm_dates (409 DATE_CONFIRMATION_REQUIRED)."""
+
+    occurred_on: date | None = None
+    note: str | None = Field(default=None, max_length=1000)
+    confirm_dates: bool = False
+
+    @field_validator("note")
+    @classmethod
+    def _note(cls, v: str | None) -> str | None:
+        return _clean_note(v)
+
+
+class ApprovePayload(StageDatePayload):
+    pass
+
+
+class DocsPayload(StageDatePayload):
     nf_link: str = Field(min_length=1, max_length=500)
     xml_link: str = Field(min_length=1, max_length=500)
     bim_link: str = Field(min_length=1, max_length=500)
@@ -61,6 +83,7 @@ class DocsPayload(BaseModel):
 
 class AddProposalsPayload(BaseModel):
     proposal_ids: list[int] = Field(min_length=1)
+    confirm_inspection: bool = False  # reenviar com true depois de um 409 LOGISTICS_INSPECTION_CONFIRMATION_REQUIRED
 
 
 class ReasonPayload(BaseModel):
@@ -106,11 +129,17 @@ class LogDeliveryPayload(BaseModel):
     delivered_on: date
     delivery_proof_link: str | None = Field(default=None, max_length=500)
     reason: str | None = Field(default=None, max_length=1000)
+    note: str | None = Field(default=None, max_length=1000)
 
     @field_validator("delivery_proof_link")
     @classmethod
     def _link(cls, v: str | None) -> str | None:
         return _clean_link(v) if v is not None and v.strip() else None
+
+    @field_validator("note")
+    @classmethod
+    def _note(cls, v: str | None) -> str | None:
+        return _clean_note(v)
 
 
 class LogDatesPayload(BaseModel):
@@ -138,6 +167,8 @@ class EventOut(BaseModel):
     id: int
     text: str
     reason: str | None = None
+    occurred_on: date  # dia do andamento (sem data gravada: dia do registro)
+    note: str | None = None
     actor_user_id: int | None = None
     actor_name: str | None = None
     created_at: datetime
@@ -155,6 +186,8 @@ class LogItemOut(BaseModel):
     removed_at: datetime | None = None
     removal_reason: str | None = None
     removed_by_name: str | None = None
+    inspection_stage: str | None = None  # etapa da inspecao do PD; None: PD sem inspecao
+    inspection_finished: bool
 
 
 class LogOut(BaseModel):
@@ -167,6 +200,7 @@ class LogOut(BaseModel):
     delivery_date: date
     stage: LogStage
     stage_since: datetime
+    stage_since_date: date  # "desde": dia em que a etapa aconteceu
     days_in_stage: int  # dias corridos
     business_days_in_stage: int  # dias uteis da fabrica (seg-sex, sem feriado GO/Goiania)
     nf_link: str | None = None
@@ -177,6 +211,7 @@ class LogOut(BaseModel):
     load_id: int | None = None
     load_code: str | None = None
     proposal_count: int
+    without_doc_count: int  # propostas ativas cuja inspecao do PD ainda nao esta finalizada (sem DOC BIM)
     created_at: datetime
     updated_at: datetime
 
@@ -205,6 +240,8 @@ class EligibleProposalOut(BaseModel):
     pd_code: str
     nqt_code: str | None = None
     state: str | None = None  # derivado do cliente (ex.: EQT-MA); None se nao for deduzivel
+    inspection_stage: str
+    inspection_finished: bool
 
 
 class EligibleProposalList(BaseModel):

@@ -68,8 +68,11 @@ async def send_docs(log_id: int, payload: schemas.DocsPayload, request: Request,
 
 
 @router.post("/logs/{log_id}/approve", response_model=schemas.LogDetail)
-async def approve_log(log_id: int, request: Request, session: AsyncSession = Depends(get_db_session), actor: User = Depends(_edit)):
-    return await service.approve_log(session, log_id, actor, _rid(request))
+async def approve_log(
+    log_id: int, request: Request, payload: schemas.ApprovePayload | None = None,
+    session: AsyncSession = Depends(get_db_session), actor: User = Depends(_edit),
+):
+    return await service.approve_log(session, log_id, actor, _rid(request), payload)
 
 
 @router.post("/logs/{log_id}/proposals", response_model=schemas.LogDetail)

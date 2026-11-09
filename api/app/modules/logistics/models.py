@@ -47,6 +47,7 @@ class LogisticsLog(Base):
     delivery_date: Mapped[date] = mapped_column(Date(), nullable=False)
     stage: Mapped[str] = mapped_column(String(20), nullable=False)
     stage_since: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    stage_occurred_on: Mapped[date | None] = mapped_column(Date(), nullable=True)  # dia em que a etapa de fato aconteceu; nulo: vale a data local de stage_since
     nf_link: Mapped[str | None] = mapped_column(String(500), nullable=True)
     xml_link: Mapped[str | None] = mapped_column(String(500), nullable=True)
     bim_link: Mapped[str | None] = mapped_column(String(500), nullable=True)
@@ -96,4 +97,6 @@ class LogisticsEvent(Base):
     actor_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     text: Mapped[str] = mapped_column(Text, nullable=False)
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    occurred_on: Mapped[date | None] = mapped_column(Date(), nullable=True)  # dia do andamento; nulo: vale a data local de created_at
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)

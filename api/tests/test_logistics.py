@@ -217,17 +217,19 @@ class LogisticsApiTests(unittest.TestCase):
         self.assertEqual(self._log("XYZ1", ("CP 200",)).status_code, 422)
         self.assertEqual(self.client.get("/api/v1/logistics/logs", headers=self._h()).json()["total"], 1)
 
-    def test_eligibility_requires_finished_inspection_and_free_proposal(self):
+    def test_eligibility_lists_any_inspection_and_free_proposal(self):
         elig = self.client.get("/api/v1/logistics/eligible-proposals", headers=self._h("viewer")).json()
-        self.assertEqual([p["proposal_number"] for p in elig["items"]], ["CP 100", "CP 101", "CP 200", "CP 201", "CP 500", "CP 501", "CP 502"])
+        self.assertEqual([p["proposal_number"] for p in elig["items"]], ["CP 100", "CP 101", "CP 200", "CP 201", "CP 300", "CP 500", "CP 501", "CP 502"])
         self.assertEqual((elig["items"][0]["pd_code"], elig["items"][0]["nqt_code"]), ("PD-1", "N1"))
-        self.assertEqual([p["state"] for p in elig["items"]], [None] * 4 + ["EQT-MA", "EQT-MA", "EQT-PA"])
-        # inspecao nao finalizada
-        r = self._log("LOG101", ("CP 300",))
-        self._err(r, 409, "LOGISTICS_INSPECTION_NOT_FINISHED")
-        self.assertIn("CP 300", r.json()["error"]["message"])
-        # sem PD
-        self._err(self._log("LOG101", ("CP 400",)), 409, "LOGISTICS_INSPECTION_NOT_FINISHED")
+        self.assertEqual([p["state"] for p in elig["items"]], [None] * 5 + ["EQT-MA", "EQT-MA", "EQT-PA"])
+        self.assertEqual([(p["inspection_stage"], p["inspection_finished"]) for p in elig["items"][:5]],
+                         [("fim", True), ("fim", True), ("fim", True), ("fim", True), ("doc", False)])
+        # sem PD nao aparece na lista (nao ha inspecao para vincular)
+        self.assertNotIn("CP 400", [p["proposal_number"] for p in elig["items"]])
+        # sem PD no envio: entra so com confirmacao
+        r = self._log("LOG101", ("CP 400",))
+        self._err(r, 409, "LOGISTICS_INSPECTION_CONFIRMATION_REQUIRED")
+        self.assertEqual(r.json()["error"]["details"]["proposals"], [{"proposal_number": "CP 400", "pd_code": None, "inspection_stage": None}])
         # inexistente
         resp = self.client.post("/api/v1/logistics/logs", json={
             "code": "LOG101", "state": "EQT-MA", "requested_date": "2030-11-01", "loading_date": "2030-11-01", "delivery_date": "2030-11-02", "proposal_ids": [9999],
@@ -310,9 +312,12 @@ class LogisticsApiTests(unittest.TestCase):
         a = self._approved_log("LOG101", ("CP 100",))
         self._log("LOG102", ("CP 200",))
 
-        async def age():
+        async def age():  # "desde" e stage_occurred_on (dia do andamento, gravado pela aprovacao)
             async with get_engine().begin() as conn:
-                await conn.execute(text("UPDATE logistics_logs SET stage_since = now() - interval '4 days' WHERE id = :i"), {"i": a})
+                await conn.execute(text(
+                    "UPDATE logistics_logs SET stage_since = now() - interval '4 days', "
+                    "stage_occurred_on = (now() AT TIME ZONE 'America/Sao_Paulo')::date - 4 WHERE id = :i"
+                ), {"i": a})
 
         asyncio.run(age())
         get = lambda **q: self.client.get("/api/v1/logistics/logs", params=q, headers=self._h("viewer")).json()  # noqa: E731
@@ -343,6 +348,7 @@ class LogisticsApiTests(unittest.TestCase):
         self.assertEqual(load["logs"][0]["load_code"], "CE-01")
         self.assertEqual([i["proposal_number"] for i in load["logs"][0]["items"]], ["CP 100", "CP 101"])
         self.assertEqual((load["logs"][0]["loading_date"] is not None, load["logs"][0]["stage"]), (True, "aprovada"))
+        self.assertEqual((load["logs"][0]["without_doc_count"], load["logs"][0]["stage_since_date"]), (0, str(local_today())))
         # LOG ja esta em uma carga
         self._err(self._load([approved]), 409, "LOGISTICS_LOG_ALREADY_IN_LOAD")
         second = self._approved_log("LOG103", ("CP 201",))
@@ -602,19 +608,20 @@ class LogisticsApiTests(unittest.TestCase):
         self.assertEqual(self._set_order("CP 300", "PD-NOVO", confirm_inspection_logistics=True).status_code, 200)
         self.assertTrue(any("PD alterado de PD-3 para PD-NOVO" in t for t in self._history("PD-NOVO")))
         self.assertEqual(self.client.get("/api/v1/inspections", params={"search": "PD-3"}, headers=self._h("none")).json()["total"], 0)
-        # CP 100 esta no LOG e divide o PD-1 com CP 101: a inspecao do PD-1 fica. PD-NOVO esta aberto -> CP 100 sai do LOG.
+        # CP 100 esta no LOG e divide o PD-1 com CP 101: a inspecao do PD-1 fica. PD-NOVO ja tem inspecao (CP 300) -> CP 100 fica no LOG com evento.
         lid = self._log("LOG101", ("CP 100", "CP 101")).json()["id"]
         r = self._set_order("CP 100", "PD-NOVO")
         self._err(r, 409, "INSPECTION_LOGISTICS_CONFIRMATION_REQUIRED")
         d = r.json()["error"]["details"]
-        self.assertEqual((d["inspection"]["pd_code"], d["inspection_follows_new_pd"], d["new_pd_has_inspection"], d["leaves_log"]), ("PD-1", False, True, True))
+        self.assertEqual((d["inspection"]["pd_code"], d["inspection_follows_new_pd"], d["new_pd_has_inspection"], d["leaves_log"]), ("PD-1", False, True, False))
         self.assertEqual(self._set_order("CP 100", "PD-NOVO", confirm_inspection_logistics=True).status_code, 200)
         log = self.client.get(f"/api/v1/logistics/logs/{lid}", headers=self._h()).json()
-        self.assertEqual([i["proposal_number"] for i in log["items"]], ["CP 101"])
+        self.assertEqual([i["proposal_number"] for i in log["items"]], ["CP 100", "CP 101"])
+        self.assertIn("CP 100: PD alterado, inspeção em doc", [e["text"] for e in log["events"]])
         self.assertEqual(self.client.get("/api/v1/inspections", params={"search": "PD-1"}, headers=self._h("none")).json()["items"][0]["stage"], "fim")
         # novo PD com inspecao finalizada: continua no LOG
         self.assertEqual(self._set_order("CP 101", "PD-2", confirm_inspection_logistics=True).status_code, 200)
-        self.assertEqual(self.client.get(f"/api/v1/logistics/logs/{lid}", headers=self._h()).json()["proposal_count"], 1)
+        self.assertEqual(self.client.get(f"/api/v1/logistics/logs/{lid}", headers=self._h()).json()["proposal_count"], 2)
         # proposta sem inspecao nem LOG troca o Pedido sem confirmacao
         self.assertEqual(self._set_order("CP 400", "PD-400").status_code, 200)
 
@@ -734,6 +741,83 @@ class LogisticsApiTests(unittest.TestCase):
         self.assertEqual((listed["logs_total"], listed["logs_delivered"], listed["departed_on"]), (2, 1, "2020-01-06"))
         detail_log = [lg for lg in self.client.get(base, headers=self._h()).json()["logs"] if lg["id"] == a][0]
         self.assertEqual(detail_log["delivered_on"], "2020-01-12")
+
+    # --- T1: pedido em inspecao entra no LOG com confirmacao; PD alterado nao tira do LOG ----
+
+    def test_pending_inspection_needs_confirmation_then_enters_log_counted_without_doc(self):
+        r = self._log("LOG101", ("CP 100", "CP 300"))
+        self._err(r, 409, "LOGISTICS_INSPECTION_CONFIRMATION_REQUIRED")
+        self.assertEqual(r.json()["error"]["details"]["proposals"], [{"proposal_number": "CP 300", "pd_code": "PD-3", "inspection_stage": "doc"}])
+        self.assertEqual(self.client.get("/api/v1/logistics/logs", headers=self._h()).json()["total"], 0)
+        ok = self._log("LOG101", ("CP 100", "CP 300"), confirm_inspection=True)
+        self.assertEqual(ok.status_code, 201, ok.text)
+        log = ok.json()
+        self.assertEqual((log["proposal_count"], log["without_doc_count"]), (2, 1))
+        items = {i["proposal_number"]: i for i in log["items"]}
+        self.assertEqual((items["CP 300"]["inspection_stage"], items["CP 300"]["inspection_finished"]), ("doc", False))
+        self.assertEqual((items["CP 100"]["inspection_stage"], items["CP 100"]["inspection_finished"]), ("fim", True))
+        listed = self.client.get("/api/v1/logistics/logs", headers=self._h()).json()["items"][0]
+        self.assertEqual(listed["without_doc_count"], 1)
+
+    def test_pd_change_keeps_proposal_in_log_and_cancel_still_removes(self):
+        lid = self._log("LOG101", ("CP 100", "CP 101", "CP 300"), confirm_inspection=True).json()["id"]
+        # CP 101 muda para um PD sem inspecao: continua no LOG e so ganha evento
+        self._err(self._set_order("CP 101", "PD-SEM"), 409, "INSPECTION_LOGISTICS_CONFIRMATION_REQUIRED")
+        self.assertEqual(self._set_order("CP 101", "PD-SEM", confirm_inspection_logistics=True).status_code, 200)
+        log = self.client.get(f"/api/v1/logistics/logs/{lid}", headers=self._h()).json()
+        self.assertEqual([i["proposal_number"] for i in log["items"]], ["CP 100", "CP 101", "CP 300"])
+        self.assertIn("CP 101: PD alterado, inspeção em sem inspeção", [e["text"] for e in log["events"]])
+        # cancelar continua tirando do LOG (CP 100 some; CP 101 e CP 300 ficam)
+        self.assertEqual(self._cancel("CP 100", confirm_inspection_logistics=True).status_code, 200)
+        log = self.client.get(f"/api/v1/logistics/logs/{lid}", headers=self._h()).json()
+        self.assertEqual([i["proposal_number"] for i in log["items"]], ["CP 101", "CP 300"])
+        self.assertEqual([i["proposal_number"] for i in log["removed_items"]], ["CP 100"])
+        self.assertEqual(log["without_doc_count"], 2)  # CP 101 (PD-SEM, sem inspecao) e CP 300 (doc) seguem sem DOC BIM
+
+    # --- T2: andamento com data real (warn-only, 422 para data inexistente) ----------------------
+
+    def test_stage_moves_take_real_date_warn_only_and_validate(self):
+        lid = self._log("LOG101", ("CP 100",)).json()["id"]
+        url = f"/api/v1/logistics/logs/{lid}"
+        docs = {"nf_link": "https://x/nf.pdf", "xml_link": "https://x/nf.xml", "bim_link": "https://x/b.pdf"}
+        asyncio.run(self._age_stage("LOG101", 3))  # reservada comecou ha 3 dias
+        today = local_today()
+        yesterday = str(today - timedelta(1))
+        self._err(self.client.post(f"{url}/docs", json={**docs, "occurred_on": "2026-02-31"}, headers=self._h()), 422, "VALIDATION_ERROR")
+        # antes da etapa anterior: so avisa e nada e gravado
+        warns = self._warnings(self.client.post(f"{url}/docs", json={**docs, "occurred_on": str(today - timedelta(4))}, headers=self._h()))
+        self.assertIn("DATE_BEFORE_PREVIOUS_STAGE", warns)
+        self.assertEqual(self.client.get(url, headers=self._h()).json()["stage"], "reservada")
+        # ontem (confirmado, como nos outros testes de data: o dia pode cair no fim de semana)
+        ok = self.client.post(f"{url}/docs", json={**docs, "occurred_on": yesterday, "note": "  NF saiu cedo  ", "confirm_dates": True}, headers=self._h())
+        self.assertEqual(ok.status_code, 200, ok.text)
+        log = ok.json()
+        self.assertEqual((log["stage"], log["stage_since_date"], log["days_in_stage"]), ("docs", yesterday, 1))
+        self.assertEqual((log["events"][0]["occurred_on"], log["events"][0]["note"]), (yesterday, "NF saiu cedo"))
+        # etapa ja avancada por outro usuario: 409 LOGISTICS_INVALID_STAGE, mesmo com data
+        self._err(self.client.post(f"{url}/docs", json={**docs, "occurred_on": yesterday, "confirm_dates": True}, headers=self._h()), 409, "LOGISTICS_INVALID_STAGE")
+        # futura: aviso, nada gravado; reenviar confirmado grava
+        future = str(today + timedelta(2))
+        warns = self._warnings(self.client.post(f"{url}/approve", json={"occurred_on": future}, headers=self._h()))
+        self.assertIn("DATE_IN_FUTURE", warns)
+        self.assertEqual(self.client.get(url, headers=self._h()).json()["stage"], "docs")
+        done = self.client.post(f"{url}/approve", json={"occurred_on": future, "confirm_dates": True}, headers=self._h())
+        self.assertEqual((done.status_code, done.json()["stage"], done.json()["stage_since_date"]), (200, "aprovada", future), done.text)
+        # data de entrega real tambem guarda a observacao no historico
+        dl = self.client.post(f"{url}/delivery", json={"delivered_on": yesterday, "note": "canhoto no balcao"}, headers=self._h())
+        self.assertEqual((dl.status_code, dl.json()["events"][0]["note"], dl.json()["events"][0]["occurred_on"]), (200, "canhoto no balcao", yesterday))
+
+    def test_approve_without_body_still_works_and_takes_today(self):
+        lid = self._log("LOG102", ("CP 200",)).json()["id"]
+        docs = {"nf_link": "https://x/nf.pdf", "xml_link": "https://x/nf.xml", "bim_link": "https://x/b.pdf"}
+        self.assertEqual(self.client.post(f"/api/v1/logistics/logs/{lid}/docs", json=docs, headers=self._h()).status_code, 200)
+        r = self.client.post(f"/api/v1/logistics/logs/{lid}/approve", headers=self._h())
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual((r.json()["stage"], r.json()["stage_since_date"], r.json()["days_in_stage"]), ("aprovada", str(local_today()), 0))
+
+    async def _age_stage(self, code, days):
+        async with get_engine().begin() as conn:
+            await conn.execute(text("UPDATE logistics_logs SET stage_since = now() - make_interval(days => :d) WHERE code = :c"), {"d": days, "c": code})
 
     # --- permissoes ----------------------------------------------------------------------
 

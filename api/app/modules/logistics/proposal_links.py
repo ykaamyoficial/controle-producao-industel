@@ -50,14 +50,7 @@ async def impact(session: AsyncSession, proposal: Proposal, *, old_pd: str | Non
     others = await _other_live_proposals(session, proposal, old_pd) if insp else 0
     new_insp = None if cancelling else await _inspection_of(session, new_pd)
     follows = bool(insp and not cancelling and others == 0 and _key(new_pd) and new_insp is None)
-    if log is None:
-        leaves_log = False
-    elif cancelling:
-        leaves_log = True
-    elif follows:
-        leaves_log = insp.stage != "fim"
-    else:
-        leaves_log = not await inspection_service.is_pd_inspection_finished(session, new_pd)
+    leaves_log = bool(log and cancelling)  # so cancelar tira do LOG; mudar o PD so grava evento
     in_log_items = 0
     if leaves_log and log.load_id is not None:
         in_log_items = (await session.execute(
@@ -95,10 +88,8 @@ def _message(info: dict, proposal: Proposal) -> str:
             parts.append(f"A inspeção do PD {insp['pd_code']} fica como está.")
         if insp and info["inspection_orphaned"]:
             parts.append("Ela fica sem proposta ativa até outra proposta usar o PD.")
-        if log and info["leaves_log"]:
-            parts.append(f"A proposta sai do {log['code']}, porque a inspeção do novo PD não está finalizada (o histórico fica registrado).")
-        elif log:
-            parts.append(f"A proposta continua no {log['code']}.")
+        if log:
+            parts.append(f"A proposta continua no {log['code']}; a troca de PD fica registrada no histórico do LOG.")
     if log and info["log_stays_empty_in_load"]:
         parts.append(f"O {log['code']} está numa carga e fica sem propostas.")
     return "Esta proposta tem inspeção ou LOG. " + " ".join(parts) + " Confirme para continuar."
@@ -139,5 +130,7 @@ async def apply_order_change(session: AsyncSession, proposal: Proposal, old_pd: 
         else:
             orphaned = ": inspeção sem proposta ativa" if others == 0 else ""
             inspection_service.add_note_event(session, insp, actor, f"Proposta {proposal.proposal_number} mudou o Pedido de {insp.pd_code} para {new_pd or '(vazio)'}{orphaned}")
-    if not await inspection_service.is_pd_inspection_finished(session, new_pd):
-        await _leave_log(session, proposal, actor, request_id, f"Pedido da proposta alterado de {old_pd or '(vazio)'} para {new_pd or '(vazio)'}; a inspeção do novo PD não está finalizada")
+    found = await logistics_service.active_log_item_of(session, proposal.id)
+    if found:  # PD novo nao tira a proposta do LOG (L10); so registra no historico em que etapa esta o novo PD
+        new_insp = await _inspection_of(session, new_pd)
+        logistics_service.add_log_event(session, found[0], actor, f"{proposal.proposal_number}: PD alterado, inspeção em {new_insp.stage if new_insp else 'sem inspeção'}")

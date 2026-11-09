@@ -32,6 +32,7 @@ _WEEKDAYS = ("segunda-feira", "terça-feira", "quarta-feira", "quinta-feira", "s
 LABELS = {
     "visit_date": "A visita da Equatorial", "requested_date": "A data pedida", "reserved_date": "A data reservada",
     "loading_date": "O dia de carregamento", "delivery_date": "A entrega no CD", "departure_date": "A saída da carga",
+    "stage_occurred_on": "A data do andamento",
 }
 
 
