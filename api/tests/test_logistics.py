@@ -421,6 +421,7 @@ class LogisticsApiTests(unittest.TestCase):
         b = self._approved_log("LOG102", ("CP 200",))
         load = self._load([a, b]).json()
         self.assertEqual(self._cancel("CP 200", confirm_inspection_logistics=True).status_code, 200)  # LOG102 fica vazio dentro da carga
+        before = self.client.get(f"/api/v1/logistics/logs/{b}", headers=self._h()).json()
         self.assertEqual(self.client.delete(f"/api/v1/logistics/loads/{load['id']}", headers=self._h()).status_code, 204)
         # LOG com propostas sobrevive com os eventos; o vazio some
         self.assertEqual(self.client.get(f"/api/v1/logistics/logs/{b}", headers=self._h()).status_code, 404)
@@ -433,6 +434,8 @@ class LogisticsApiTests(unittest.TestCase):
         self.assertTrue(any(e["text"].startswith("Carga criada com") for e in load_audit["history"]), load_audit["history"])
         deleted = {d["code"]: d for d in self._deleted_audit()}
         self.assertEqual(deleted["LOG102"]["reason"], f"Vazio ao desfazer a carga {load['code']}")
+        fields = ("requested_date", "reserved_date", "loading_date", "delivery_date", "nf_link", "xml_link", "bim_link")
+        self.assertEqual({k: deleted["LOG102"][k] for k in fields}, {k: before[k] for k in fields})
         self.assertTrue(any("CP 200 removida" in e["text"] for e in deleted["LOG102"]["history"]))
 
     def test_reproving_last_inclusion_of_log_in_load_records_event_in_load(self):

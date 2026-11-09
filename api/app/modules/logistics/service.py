@@ -440,7 +440,12 @@ async def _events_dump(session: AsyncSession, *, log_id: int | None = None, load
 async def _delete_log(session: AsyncSession, row: LogisticsLog, actor: User, request_id: str | None, reason: str) -> None:
     """Exclui o LOG (sem commit) gravando o historico na auditoria, pois os eventos somem em cascata."""
     history = await _events_dump(session, log_id=row.id)
-    await _audit(session, actor, "LOGISTICS_LOG_DELETED", request_id, log_id=row.id, code=row.code, reason=reason, history=history)
+    await _audit(
+        session, actor, "LOGISTICS_LOG_DELETED", request_id, log_id=row.id, code=row.code, reason=reason, history=history,
+        requested_date=row.requested_date.isoformat(), reserved_date=row.reserved_date.isoformat(), loading_date=row.loading_date.isoformat(),
+        delivery_date=row.delivery_date.isoformat(), delivered_on=row.delivered_on.isoformat() if row.delivered_on else None,
+        nf_link=row.nf_link, xml_link=row.xml_link, bim_link=row.bim_link, delivery_proof_link=row.delivery_proof_link,
+    )
     await session.delete(row)
 
 
