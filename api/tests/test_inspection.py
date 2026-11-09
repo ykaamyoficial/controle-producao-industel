@@ -11,6 +11,7 @@ import os
 import unittest
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from unittest.mock import patch
 from urllib.parse import urlparse
 
 from alembic import command
@@ -361,27 +362,27 @@ class InspectionApiTests(unittest.TestCase):
         self.assertEqual([(e["stage"], e["occurred_on"]) for e in body["events"][:5]], [("fim", self._ago(3)), ("doc", self._ago(8)), ("dispensa", self._ago(12)), ("nqt", self._ago(15)), ("solicitada", self._ago(20))])
 
     def test_catch_up_visit_date_only_warns_and_needs_confirmation(self):
-        iid = self._create().json()["id"]
+        # "hoje" fixo (quinta 2030-03-14) e visita/aprovacao em dias uteis passados: o resultado nao depende do dia em que o teste roda
+        visit, approved = "2030-03-12", "2030-03-13"
         steps = [
             {"action": "request", "pd_registered": True}, {"action": "nqt", "nqt_code": "N-7"},
-            {"action": "decision", "decision": "inloco", "visit_date": self._ago(6)},
-            {"action": "approve", "occurred_on": self._ago(5)},
+            {"action": "decision", "decision": "inloco", "visit_date": visit},
+            {"action": "approve", "occurred_on": approved},
         ]
-        # sem passo posterior a visita no passado avisa
-        r = self._post(iid, "catch-up", {"steps": steps[:3]})
-        self.assertEqual((r.status_code, r.json()["error"]["code"]), (409, "DATE_CONFIRMATION_REQUIRED"))
-        self.assertIn("DATE_IN_PAST", [w["code"] for w in r.json()["error"]["details"]["warnings"]])
-        # com approve/reject depois a visita ja aconteceu: a data passada nao e aviso (outros avisos, ex. fim de semana, continuam possiveis)
-        r = self._post(iid, "catch-up", {"steps": steps})
-        codes = [w["code"] for w in r.json()["error"]["details"]["warnings"]] if r.status_code == 409 else []
-        self.assertIn(r.status_code, (200, 409))
-        self.assertNotIn("DATE_IN_PAST", codes)
-        if r.status_code == 200:
-            self.assertEqual(r.json()["stage"], "doc")
-            return
-        self.assertEqual(self._get(iid)["stage"], "pendente")
-        ok = self._post(iid, "catch-up", {"steps": steps, "confirm_dates": True})
-        self.assertEqual((ok.status_code, ok.json()["stage"], ok.json()["visit_date"]), (200, "doc", self._ago(6)))
+        with patch.object(calendar_rules, "local_today", return_value=date(2030, 3, 14)):
+            iid = self._create().json()["id"]
+            # sem passo posterior a visita no passado avisa
+            r = self._post(iid, "catch-up", {"steps": steps[:3]})
+            self.assertEqual((r.status_code, r.json()["error"]["code"]), (409, "DATE_CONFIRMATION_REQUIRED"))
+            self.assertEqual([w["code"] for w in r.json()["error"]["details"]["warnings"]], ["DATE_IN_PAST"])
+            self.assertEqual(self._get(iid)["stage"], "pendente")
+            # confirmando, grava
+            ok = self._post(iid, "catch-up", {"steps": steps[:3], "confirm_dates": True})
+            self.assertEqual((ok.status_code, ok.json()["stage"], ok.json()["visit_date"]), (200, "inloco", visit))
+            # com approve depois a visita ja aconteceu: a data passada nao e aviso e nao precisa confirmar
+            other = self._create("PD-1181").json()["id"]
+            done = self._post(other, "catch-up", {"steps": steps})
+            self.assertEqual((done.status_code, done.json()["stage"], done.json()["visit_date"]), (200, "doc", visit), done.text)
 
     def test_reschedule_visit_keeps_attempt_and_logs_from_to(self):
         iid = self._to_nqt("PD-1195", "NQT-0418")

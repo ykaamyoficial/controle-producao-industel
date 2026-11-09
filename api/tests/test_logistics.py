@@ -379,6 +379,51 @@ class LogisticsApiTests(unittest.TestCase):
         # CE nunca reaproveita numero
         self.assertEqual(self._load([a]).json()["code"], "CE-02")
 
+    def _deleted_audit(self):
+        async def get():
+            async with get_sessionmaker()() as s:
+                return (await s.execute(select(SecurityEvent.details).where(SecurityEvent.event_type == "LOGISTICS_LOG_DELETED"))).scalars().all()
+
+        return asyncio.run(get())
+
+    def test_empty_log_is_deleted_when_leaving_load_and_never_enters_one(self):
+        a = self._approved_log("LOG101", ("CP 100",))
+        b = self._approved_log("LOG102", ("CP 200",))
+        c = self._approved_log("LOG103", ("CP 201",))
+        load_id = self._load([a, b, c]).json()["id"]
+        base = f"/api/v1/logistics/loads/{load_id}"
+        self.assertEqual(self._cancel("CP 200", confirm_inspection_logistics=True).status_code, 200)  # LOG102 fica vazio dentro da carga
+        self.assertEqual(self._cancel("CP 201", confirm_inspection_logistics=True).status_code, 200)  # LOG103 tambem
+        self.assertEqual(self.client.get(f"/api/v1/logistics/logs/{b}", headers=self._h()).status_code, 200)
+        out = self.client.delete(f"{base}/logs/{b}", headers=self._h()).json()
+        self.assertEqual(out["log_codes"], ["LOG101", "LOG103"])
+        self.assertEqual(self.client.get(f"/api/v1/logistics/logs/{b}", headers=self._h()).status_code, 404)
+        self.assertIn("excluido", out["events"][0]["text"])
+        self.assertEqual([d["code"] for d in self._deleted_audit()], ["LOG102"])
+        # desfazer a carga tambem exclui o LOG vazio e preserva o que tem propostas
+        self.assertEqual(self.client.delete(base, headers=self._h()).status_code, 204)
+        self.assertEqual(self.client.get(f"/api/v1/logistics/logs/{c}", headers=self._h()).status_code, 404)
+        self.assertEqual(self.client.get(f"/api/v1/logistics/logs/{a}", headers=self._h()).json()["load_id"], None)
+        self.assertEqual(sorted(d["code"] for d in self._deleted_audit()), ["LOG102", "LOG103"])
+        # LOG sem itens ativos (dado legado) e recusado na carga
+        async def empty():
+            async with get_engine().begin() as conn:
+                await conn.execute(text("UPDATE logistics_log_items SET removed_at = now() WHERE log_id = :i"), {"i": a})
+
+        asyncio.run(empty())
+        self._err(self._load([a]), 409, "LOGISTICS_LOG_EMPTY")
+
+    def test_reproving_last_inclusion_of_log_in_load_records_event_in_load(self):
+        a = self._approved_log("LOG101", ("CP 100",))
+        added = self.client.post(f"/api/v1/logistics/logs/{a}/proposals", json={"proposal_ids": [self.ids["CP 200"]]}, headers=self._h()).json()
+        pending = next(i for i in added["items"] if i["proposal_number"] == "CP 200")
+        load_id = self._load([a]).json()["id"]
+        self.assertEqual(self._cancel("CP 100", confirm_inspection_logistics=True).status_code, 200)
+        res = self.client.post(f"/api/v1/logistics/logs/{a}/items/{pending['id']}/resolve", json={"result": "reprovada"}, headers=self._h())
+        self.assertEqual(res.status_code, 200, res.text)
+        texts = [e["text"] for e in self.client.get(f"/api/v1/logistics/loads/{load_id}", headers=self._h()).json()["events"]]
+        self.assertTrue(any("CP 200 saiu do LOG101" in t and "sem propostas" in t for t in texts), texts)
+
     def test_cannot_remove_proposal_from_log_in_a_load(self):
         lid = self._approved_log("LOG101", ("CP 100", "CP 101"))
         load = self._load([lid]).json()
