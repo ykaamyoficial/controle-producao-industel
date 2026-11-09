@@ -29,8 +29,8 @@ from app.ui.components.modern_table import TABLE_HEADER_HEIGHT, TABLE_ROW_HEIGHT
 from app.ui.components.operational_layout import OPERATIONAL_PAGE_MARGINS, OPERATIONAL_PAGE_SPACING
 from app.ui.components.operational_table import configure_operational_table
 from app.ui.components.page_header import page_header
-from app.ui.components.segmented_control import SegmentedControl
 from app.ui.components.skeleton import SkeletonRows
+from app.ui.components.top_tabs import OperationalTabSwitch
 from app.ui.inspection_dialogs import days_text, format_date
 from app.ui.logistics_dialogs import (
     LoadDetailDialog,
@@ -121,7 +121,7 @@ class LogisticsPage(QWidget):
         header = page_header("Logística", "Agendamento de entrega (LOG) e cargas de entrega.", actions=actions)
         self.header = header
 
-        self.tabs = SegmentedControl()
+        self.tabs = OperationalTabSwitch("LOGISTICA", self.service.palette)
         self.tabs.setAccessibleName("Visão")
         self._set_tab_options()
         self.tabs.changed.connect(lambda _key: self._tab_changed())
@@ -141,7 +141,6 @@ class LogisticsPage(QWidget):
         self.refresh_button.clicked.connect(self.refresh)
         filters = QHBoxLayout()
         filters.setSpacing(8)
-        filters.addWidget(self.tabs)
         filters.addWidget(self.search)
         for combo in (self.stage_filter, self.state_filter, self.load_filter):
             filters.addWidget(combo)
@@ -149,6 +148,7 @@ class LogisticsPage(QWidget):
         filters.addWidget(self.export_button)
         filters.addWidget(self.refresh_button)
         header.body_layout.addLayout(filters)
+        root.addWidget(self.tabs)  # abas no topo, igual a Produção
         root.addWidget(header)
 
         self.logs_table = self._make_table(LOG_COLUMNS, badge_column=LOG_STAGE_COLUMN, left_columns=(0, 1))

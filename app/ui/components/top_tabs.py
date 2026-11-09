@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QTabWidget
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtWidgets import QSizePolicy, QTabBar, QTabWidget
 
 from app.ui.components.operational_layout import (
     OPERATIONAL_TAB_GAP,
@@ -59,6 +59,53 @@ def style_operational_tab_bar(tab_bar, area: str | None, palette: dict | None) -
             "border-bottom: 2px solid transparent;"
             "}"
         )
+
+
+class OperationalTabSwitch(QTabBar):
+    """Abas no topo (mesmo visual de `configure_operational_tabs`) sem QTabWidget: a pagina troca
+    o conteudo sozinha. Mesma API do SegmentedControl: `set_options`, `current_key`, `set_current_key`, `changed`."""
+
+    changed = Signal(str)
+
+    def __init__(self, area: str | None = None, palette: dict | None = None, parent=None):
+        super().__init__(parent)
+        self._options: list[tuple[str, str, int | None]] = []
+        self.setObjectName("OperationalTabBar")
+        self.setDrawBase(False)
+        self.setExpanding(False)
+        self.setElideMode(Qt.ElideRight)
+        self.setMinimumHeight(OPERATIONAL_TAB_MIN_HEIGHT)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)  # a linha de baixo vai de ponta a ponta
+        style_operational_tab_bar(self, area or "", palette)
+        self.currentChanged.connect(lambda index: self.changed.emit(self.current_key()) if index >= 0 else None)
+
+    def set_options(self, options: list[tuple[str, str, int | None]]) -> None:
+        key = self.current_key()
+        self._options = list(options)
+        keys = [option[0] for option in self._options]
+        self.blockSignals(True)
+        while self.count() > len(self._options):
+            self.removeTab(self.count() - 1)
+        for index, (_key, label, count) in enumerate(self._options):
+            text = label if count is None else f"{label}  {count}"
+            if index < self.count():
+                self.setTabText(index, text)
+            else:
+                self.addTab(text)
+        self.setCurrentIndex(keys.index(key) if key in keys else 0)
+        self.blockSignals(False)
+
+    def current_key(self) -> str:
+        index = self.currentIndex()
+        return self._options[index][0] if 0 <= index < len(self._options) else ""
+
+    def set_current_key(self, key: str, emit: bool = True) -> None:
+        keys = [option[0] for option in self._options]
+        if key not in keys:
+            return
+        self.blockSignals(not emit)
+        self.setCurrentIndex(keys.index(key))
+        self.blockSignals(False)
 
 
 def configure_operational_tabs(tabs: QTabWidget, area: str | None = None, palette: dict | None = None) -> QTabWidget:
