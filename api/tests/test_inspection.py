@@ -380,9 +380,15 @@ class InspectionApiTests(unittest.TestCase):
             ok = self._post(iid, "catch-up", {"steps": steps[:3], "confirm_dates": True})
             self.assertEqual((ok.status_code, ok.json()["stage"], ok.json()["visit_date"]), (200, "inloco", visit))
             # com approve depois a visita ja aconteceu: a data passada nao e aviso e nao precisa confirmar
-            other = self._create("PD-1181").json()["id"]
-            done = self._post(other, "catch-up", {"steps": steps})
-            self.assertEqual((done.status_code, done.json()["stage"], done.json()["visit_date"]), (200, "doc", visit), done.text)
+            # PD-1195 com NQT e visita proprias: NQT repetido e a mesma visita da PD-1180 geram 409 (nao e o caso testado)
+            other = self._create("PD-1195").json()["id"]
+            other_steps = [
+                {"action": "request", "pd_registered": True}, {"action": "nqt", "nqt_code": "N-8"},
+                {"action": "decision", "decision": "inloco", "visit_date": "2030-03-11"},
+                {"action": "approve", "occurred_on": approved},
+            ]
+            done = self._post(other, "catch-up", {"steps": other_steps})
+            self.assertEqual((done.status_code, done.json()["stage"], done.json()["visit_date"]), (200, "doc", "2030-03-11"), done.text)
 
     def test_reschedule_visit_keeps_attempt_and_logs_from_to(self):
         iid = self._to_nqt("PD-1195", "NQT-0418")
