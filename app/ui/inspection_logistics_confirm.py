@@ -42,9 +42,7 @@ def confirmation_text(info: dict[str, Any], fallback: str = "") -> str:
             parts.append(f"O novo PD já tem inspeção própria: a inspeção do PD {pd} fica como está.")
         elif inspection:
             parts.append(f"A inspeção do PD {pd} fica como está.")
-        if log and info.get("leaves_log"):
-            parts.append(f"A proposta sai do {log_code}, porque a inspeção do novo PD não está finalizada (o histórico fica registrado).")
-        elif log:
+        if log:  # trocar o PD só avisa: a proposta continua no LOG (só o cancelamento tira do LOG)
             parts.append(f"A proposta continua no {log_code}.")
     if inspection and info.get("inspection_orphaned"):
         parts.append(f"Depois disso, a inspeção do PD {pd} fica sem nenhuma proposta ativa.")

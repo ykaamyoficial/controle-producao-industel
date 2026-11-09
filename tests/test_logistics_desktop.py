@@ -509,6 +509,27 @@ class PageTests(QtCase):
         self.assertEqual(page.loads_table.item(0, 0).text(), "CE-02")
         self.assertEqual(sum(1 for c in api.calls if c[0] == "list_loads"), 1)
 
+    def test_export_button_is_disabled_while_generating_and_re_enabled_on_both_outcomes(self):
+        page = LogisticsPage(FakeService(FakeLogisticsApi()))
+        jobs = []
+
+        def queue(owner, operation, on_success, on_error, **kwargs):
+            jobs.append((on_success, on_error))  # nao roda: o teste decide quando termina
+
+        with patch("app.ui.logistics_page.QFileDialog.getSaveFileName", return_value=("LOGs.xlsx", "")), patch.object(page_module, "start_worker", queue):
+            page.export_button.click()
+            self.assertFalse(page.export_button.isEnabled())
+            with patch("app.ui.logistics_page.open_file") as opened:
+                jobs[-1][0](None)
+            opened.assert_called_once()
+            self.assertTrue(page.export_button.isEnabled())
+            page.export_button.click()
+            self.assertFalse(page.export_button.isEnabled())
+            with patch("app.ui.logistics_page.QMessageBox.warning") as warning:
+                jobs[-1][1](RuntimeError("disco cheio"))
+            warning.assert_called_once()
+            self.assertTrue(page.export_button.isEnabled())
+
     def test_primary_button_follows_the_tab(self):
         page = LogisticsPage(FakeService())
         self.assertFalse(page.new_log_button.isHidden())
@@ -593,6 +614,32 @@ class LogDetailDialogTests(QtCase):
     def test_progress_button_hidden_when_delivered(self):
         dialog, _api = self._dialog(stage="aprovada", delivered_on="2026-11-11")
         self.assertNotIn("Registrar andamento", [b.text() for b in dialog.action_buttons])
+
+    def test_delivered_log_offers_correction_instead_of_progress(self):
+        dialog, _api = self._dialog(stage="aprovada", display_stage="entregue", delivered_on="2026-11-11")
+        names = [b.text() for b in dialog.action_buttons]
+        self.assertIn("Corrigir entrega", names)
+        self.assertNotIn("Registrar andamento", names)
+        self.assertEqual(dialog.delivery_button.text(), "Corrigir entrega")
+        self.assertEqual(dialog.stage_badge.text(), "Entregue")  # display_stage, nao a etapa gravada
+
+    def test_correction_hidden_before_delivery_and_without_edit_permission(self):
+        dialog, _api = self._dialog(stage="docs")
+        self.assertNotIn("Corrigir entrega", [b.text() for b in dialog.action_buttons])
+        self.assertFalse(hasattr(dialog, "delivery_button"))
+        dialog, _api = self._dialog(can_edit=False, delivered_on="2026-11-11")
+        self.assertNotIn("Corrigir entrega", [b.text() for b in dialog.action_buttons])
+
+    def test_correcting_only_the_proof_link_needs_no_reason(self):
+        dialog, api = self._dialog(delivered_on="2026-11-11")
+
+        def fill(d):
+            d.link_field.setText("https://x.example/a.pdf")
+            d.submit()
+
+        with self._script(fill):
+            dialog.delivery_button.click()
+        self.assertEqual(api.calls[-1], ("log_delivery", 1, "2026-11-11", "https://x.example/a.pdf", None))
 
     def test_progress_button_hidden_without_edit_permission(self):
         dialog, _api = self._dialog(can_edit=False)
@@ -748,6 +795,22 @@ class LogDetailDialogTests(QtCase):
         with self._script(fill):
             dialog.edit_dates_button.click()
         self.assertEqual([c[-1] for c in api.calls if c[0] == "update_log_dates"], ["cliente pediu", True])
+
+    def test_delivery_changing_a_saved_date_needs_a_reason(self):
+        dialog, api = self._dialog(delivered_on="2026-11-11")
+        seen = {}
+
+        def fill(d):
+            d.date_fields["delivered_on"].line.setText("12/11/2026")
+            d.submit()
+            seen["error"] = d.error_label.text()
+            d.reason_field.setText("data errada")
+            d.submit()
+
+        with self._script(fill):
+            dialog.delivery_button.click()
+        self.assertEqual(seen["error"], "Informe o motivo.")
+        self.assertEqual(api.calls[-1], ("log_delivery", 1, "2026-11-12", None, "data errada"))
 
     def test_log_in_load_blocks_removal(self):
         dialog, _api = self._dialog(load_id=5, load_code="CE-01")

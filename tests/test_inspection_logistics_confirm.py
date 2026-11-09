@@ -27,7 +27,7 @@ CANCEL_INFO = {
     "new_pd_has_inspection": False,
     "leaves_log": True,
 }
-CHANGE_INFO = {**CANCEL_INFO, "action": "change_order", "inspection_follows_new_pd": True}
+CHANGE_INFO = {**CANCEL_INFO, "action": "change_order", "inspection_follows_new_pd": True, "leaves_log": False}  # L10: trocar PD nunca tira do LOG
 
 
 def _confirmation(info) -> AppError:
@@ -44,10 +44,13 @@ class TextTests(unittest.TestCase):
         text = confirmation_text(CHANGE_INFO)
         self.assertIn("única proposta com o PD PD-1201", text)
         self.assertIn("passa a acompanhar o novo PD", text)
-        self.assertIn("sai do LOG101", text)
-        stays = confirmation_text({**CHANGE_INFO, "inspection_follows_new_pd": False, "new_pd_has_inspection": True, "leaves_log": False})
+        self.assertIn("continua no LOG101", text)
+        self.assertNotIn("sai do LOG101", text)
+        self.assertNotIn("não está finalizada", text)
+        stays = confirmation_text({**CHANGE_INFO, "inspection_follows_new_pd": False, "new_pd_has_inspection": True})
         self.assertIn("já tem inspeção própria", stays)
         self.assertIn("continua no LOG101", stays)
+        self.assertNotIn("sai do LOG101", stays)
 
     def test_other_errors_return_none_and_no_question(self):
         with patch(QUESTION) as question:

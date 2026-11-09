@@ -50,7 +50,7 @@ from app.ui.logistics_progress import RecordLogProgressDialog
 from app.ui.styles import STATUS_BADGE_COLORS, _contrast_text, _is_dark
 
 # Categoria de cor (STATUS_BADGE_COLORS) de cada etapa do LOG e de cada situacao de proposta.
-LOG_STAGE_CATEGORY = {"reservada": "waiting", "docs": "attention", "aprovada": "done"}
+LOG_STAGE_CATEGORY = {"reservada": "waiting", "docs": "attention", "aprovada": "done", "entregue": "final_done"}
 ITEM_STATUS = {
     "ok": ("No LOG", "done"),
     "pendente": ("Inclusão pendente", "attention"),
@@ -413,7 +413,7 @@ class LogDetailDialog(_DetailDialog):
     # ---- tela ------------------------------------------------------------
     def _build(self) -> QWidget:
         data = self.data
-        stage = data.get("stage") or ""
+        stage = data.get("display_stage") or data.get("stage") or ""  # "entregue" quando delivered_on existe
         palette = self.service.palette
         content = QWidget()
         layout = QVBoxLayout(content)
@@ -432,7 +432,11 @@ class LogDetailDialog(_DetailDialog):
         if self.can_edit:
             self.edit_dates_button = self._make_button("Editar datas", "edit", "secondary", self.open_edit_dates)
             secondary.insert(0, self.edit_dates_button)
-            if not data.get("delivered_on"):
+            if data.get("delivered_on"):
+                # Entregue: a unica correcao possivel e a data/comprovante da entrega (a API pede motivo se a data mudar).
+                self.delivery_button = self._make_button("Corrigir entrega", "edit", "secondary", self.open_delivery)
+                secondary.insert(0, self.delivery_button)
+            else:
                 primary.append(self._make_button("Registrar andamento", "check", "primary", self.open_progress))
         status = [self.stage_badge, self.days_label]
         missing = int(data.get("without_doc_count") or 0)
@@ -503,11 +507,12 @@ class LogDetailDialog(_DetailDialog):
                 ]
             )
         )
+        shown = data.get("display_stage") or data.get("stage") or ""
         status, status_layout = make_panel("Situação atual")
         status_layout.addLayout(
             kv_grid(
                 [
-                    ("Etapa atual", StatusBadge(log_stage_label(data.get("stage") or ""), *log_stage_colors(data.get("stage") or "", self.service.palette))),
+                    ("Etapa atual", StatusBadge(log_stage_label(shown), *log_stage_colors(shown, self.service.palette))),
                     ("Dias na etapa", days_text(data.get("days_in_stage"), business=data.get("business_days_in_stage"))),
                     ("Propostas", str(data.get("proposal_count", len(data.get("items") or [])))),
                     ("Carga de entrega", data.get("load_code") or EM_DASH),
@@ -646,6 +651,27 @@ class LogDetailDialog(_DetailDialog):
             self._after_action(dialog.result_data)
         elif dialog.reloaded:  # a etapa mudou enquanto a janela estava aberta: mostra o LOG atual
             self._apply(dialog.log)
+
+    def open_delivery(self) -> None:
+        """Corrige a entrega real no CD + comprovante (so texto). Motivo so ao mudar a data ja gravada."""
+        data, log_id = self.data, self._log_id()
+        delivered = as_date(data.get("delivered_on"))
+        dialog = DateEditDialog(
+            self,
+            title="Corrigir entrega",
+            subtitle=f"{data.get('code', '')} · data em que a carga chegou no CD da Equatorial",
+            dates=[("delivered_on", "Entregue no CD em", delivered)],
+            send=lambda values, reason, link, confirm: self.api.log_delivery(
+                log_id, values["delivered_on"], link, reason or None, confirm_dates=confirm
+            ),
+            ok_text="Salvar correção",
+            only_changed=False,
+            shortcuts=True,
+            reason_needed=lambda values: delivered is not None and values["delivered_on"] != delivered.isoformat(),
+            link=("Link ou caminho do comprovante", data.get("delivery_proof_link") or ""),
+        )
+        if dialog.exec() and dialog.result_data is not None:
+            self._after_action(dialog.result_data)
 
     def generate_report(self) -> None:
         from app.ui import report_actions  # import tardio: o modulo de relatorios e opcional nesta tela

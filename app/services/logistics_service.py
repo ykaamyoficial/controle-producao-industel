@@ -7,6 +7,7 @@ LOG_STAGE_LABELS = {
     "reservada": "Data reservada",
     "docs": "Documentação enviada",
     "aprovada": "Aprovada para entrega",
+    "entregue": "Entregue",  # etapa derivada (display_stage) quando delivered_on existe
 }
 LINK_MAX_LENGTH = 500
 

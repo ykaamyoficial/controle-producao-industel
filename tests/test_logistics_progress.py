@@ -162,7 +162,11 @@ class InspectionQuestionTests(QtCase):
             next(b for b in box.buttons() if b.text() == "Incluir mesmo assim").click()
             return 0
 
-        with patch.object(QMessageBox, "exec", exec_and_click):
+        class ClickingBox(QMessageBox):
+            def exec(self):  # so a caixa deste modulo; QMessageBox.exec global ficaria com o teste inteiro
+                return exec_and_click(self)
+
+        with patch.object(dialogs_module, "QMessageBox", ClickingBox):
             self.assertTrue(dialogs_module.ask_inspection_confirmation(None, proposals))
         self.assertIn("Incluir mesmo assim", clicks[0])
         self.assertIn("Cancelar", clicks[0])
