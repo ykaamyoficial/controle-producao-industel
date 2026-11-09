@@ -161,8 +161,8 @@ class LogisticsApiTests(unittest.TestCase):
         }
         return self.client.post("/api/v1/logistics/logs", json=body, headers=self._h(who))
 
-    def _approved_log(self, code="LOG101", cps=("CP 100", "CP 101")) -> int:
-        lid = self._log(code, cps).json()["id"]
+    def _approved_log(self, code="LOG101", cps=("CP 100", "CP 101"), **extra) -> int:
+        lid = self._log(code, cps, **extra).json()["id"]
         docs = {"nf_link": "https://x/nf.pdf", "xml_link": "https://x/nf.xml", "bim_link": r"\\srv\bim\a.pdf"}
         self.assertEqual(self.client.post(f"/api/v1/logistics/logs/{lid}/docs", json=docs, headers=self._h()).status_code, 200)
         self.assertEqual(self.client.post(f"/api/v1/logistics/logs/{lid}/approve", headers=self._h()).status_code, 200)
@@ -425,6 +425,21 @@ class LogisticsApiTests(unittest.TestCase):
         self.assertEqual(self._load([second]).json()["code"], "CE-02")
         self.assertEqual(self.client.get("/api/v1/logistics/logs", params={"in_load": "false"}, headers=self._h()).json()["total"], 1)
 
+    def test_log_with_pending_inspection_enters_load_and_stays_counted_without_doc(self):
+        lid = self._approved_log("LOG101", ("CP 100", "CP 300"), confirm_inspection=True)  # CP 300: PD-3 ainda sem DOC BIM
+        load = self._load([lid])
+        self.assertEqual(load.status_code, 201, load.text)
+        load = load.json()
+        self.assertEqual((load["logs"][0]["without_doc_count"], load["log_codes"]), (1, ["LOG101"]))
+        items = {i["proposal_number"]: i for i in load["logs"][0]["items"]}
+        self.assertFalse(items["CP 300"]["inspection_finished"])
+        self.assertTrue(items["CP 100"]["inspection_finished"])
+        detail = self.client.get(f"/api/v1/logistics/loads/{load['id']}", headers=self._h()).json()
+        self.assertEqual(detail["logs"][0]["without_doc_count"], 1)
+        log = self.client.get(f"/api/v1/logistics/logs/{lid}", headers=self._h()).json()
+        self.assertEqual((log["load_id"] is not None, log["without_doc_count"]), (True, 1))
+        self.assertFalse({i["proposal_number"]: i for i in log["items"]}["CP 300"]["inspection_finished"])
+
     def test_load_add_remove_log_update_date_and_undo(self):
         a = self._approved_log("LOG101", ("CP 100",))
         b = self._approved_log("LOG102", ("CP 200",))
@@ -497,7 +512,7 @@ class LogisticsApiTests(unittest.TestCase):
         b = self._approved_log("LOG102", ("CP 200",))
         load = self._load([a, b]).json()
         self.assertEqual(self._cancel("CP 200", confirm_inspection_logistics=True).status_code, 200)  # LOG102 fica vazio dentro da carga
-        delivered = self.client.post(f"/api/v1/logistics/logs/{b}/delivery", json={"delivered_on": "2020-01-11", "delivery_proof_link": "https://srv/comprovantes/log102.pdf"}, headers=self._h())
+        delivered = self.client.post(f"/api/v1/logistics/logs/{b}/delivery", json={"delivered_on": "2020-01-11", "delivery_proof_link": "https://srv/comprovantes/log102.pdf", "note": "entregue no portao"}, headers=self._h())
         self.assertEqual(delivered.status_code, 200, delivered.text)
         before = self.client.get(f"/api/v1/logistics/logs/{b}", headers=self._h()).json()
         self.assertEqual(self.client.delete(f"/api/v1/logistics/loads/{load['id']}", headers=self._h()).status_code, 204)
@@ -515,6 +530,10 @@ class LogisticsApiTests(unittest.TestCase):
         fields = ("requested_date", "reserved_date", "loading_date", "delivery_date", "delivered_on", "delivery_proof_link", "nf_link", "xml_link", "bim_link")
         self.assertEqual({k: deleted["LOG102"][k] for k in fields}, {k: before[k] for k in fields})
         self.assertTrue(any("CP 200 removida" in e["text"] for e in deleted["LOG102"]["history"]))
+        # data real e observacao do andamento sobrevivem na auditoria
+        entrega = next(e for e in deleted["LOG102"]["history"] if e["text"].startswith("Entregue no CD"))
+        self.assertEqual((entrega["occurred_on"], entrega["note"]), ("2020-01-11", "entregue no portao"))
+        self.assertTrue(all({"occurred_on", "note"} <= e.keys() for e in deleted["LOG102"]["history"]))
 
     def test_reproving_last_inclusion_of_log_in_load_records_event_in_load(self):
         a = self._approved_log("LOG101", ("CP 100",))
@@ -836,7 +855,7 @@ class LogisticsApiTests(unittest.TestCase):
         self.assertEqual(self._set_order("CP 101", "PD-SEM", confirm_inspection_logistics=True).status_code, 200)
         log = self.client.get(f"/api/v1/logistics/logs/{lid}", headers=self._h()).json()
         self.assertEqual([i["proposal_number"] for i in log["items"]], ["CP 100", "CP 101", "CP 300"])
-        self.assertIn("CP 101: PD alterado, inspeção em sem inspeção", [e["text"] for e in log["events"]])
+        self.assertIn("CP 101: PD alterado, sem inspeção cadastrada", [e["text"] for e in log["events"]])
         # cancelar continua tirando do LOG (CP 100 some; CP 101 e CP 300 ficam)
         self.assertEqual(self._cancel("CP 100", confirm_inspection_logistics=True).status_code, 200)
         log = self.client.get(f"/api/v1/logistics/logs/{lid}", headers=self._h()).json()

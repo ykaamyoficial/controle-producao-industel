@@ -523,7 +523,10 @@ async def _proposal_history(session: AsyncSession, proposal: Proposal, actor: Us
 
 async def _events_dump(session: AsyncSession, *, log_id: int | None = None, load_id: int | None = None) -> list[dict]:
     """Historico em texto, gravado na auditoria antes de excluir LOG/carga (os eventos somem em cascata)."""
-    return [{"at": e.created_at.isoformat(), "text": e.text, "reason": e.reason, "actor": e.actor_name} for e in reversed(await _events(session, log_id=log_id, load_id=load_id))]
+    return [
+        {"at": e.created_at.isoformat(), "text": e.text, "reason": e.reason, "actor": e.actor_name, "occurred_on": e.occurred_on.isoformat() if e.occurred_on else None, "note": e.note}
+        for e in reversed(await _events(session, log_id=log_id, load_id=load_id))
+    ]
 
 
 async def _delete_log(session: AsyncSession, row: LogisticsLog, actor: User, request_id: str | None, reason: str) -> None:

@@ -133,4 +133,5 @@ async def apply_order_change(session: AsyncSession, proposal: Proposal, old_pd: 
     found = await logistics_service.active_log_item_of(session, proposal.id)
     if found:  # PD novo nao tira a proposta do LOG (L10); so registra no historico em que etapa esta o novo PD
         new_insp = await _inspection_of(session, new_pd)
-        logistics_service.add_log_event(session, found[0], actor, f"{proposal.proposal_number}: PD alterado, inspeção em {new_insp.stage if new_insp else 'sem inspeção'}")
+        where = f"inspeção em {new_insp.stage}" if new_insp else "sem inspeção cadastrada"  # sem mapa de rotulos de etapa na API: codigo cru
+        logistics_service.add_log_event(session, found[0], actor, f"{proposal.proposal_number}: PD alterado, {where}")
