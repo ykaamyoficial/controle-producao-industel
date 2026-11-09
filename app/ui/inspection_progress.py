@@ -8,7 +8,6 @@ API (409) aparecem num painel dentro da propria janela: "Marcar mesmo assim / Es
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date
 from typing import Any
 
 from PySide6.QtCore import QTimer, Signal
@@ -27,7 +26,7 @@ from PySide6.QtWidgets import (
 
 from app.services.inspection_service import LINK_MAX_LENGTH, STAGE_LABELS
 from app.ui.background_worker import start_worker
-from app.ui.components.date_quick_field import DateQuickField
+from app.ui.components.date_quick_field import DateQuickField, local_today
 from app.ui.components.detail_widgets import make_panel
 from app.ui.components.dialog_shell import dialog_footer, dialog_header, dialog_layout, set_notice_kind
 from app.ui.components.modern_button import ModernButton
@@ -129,7 +128,7 @@ class OutcomeForm(QFrame):
             layout.addWidget(label)
             layout.addWidget(widget)
         layout.addWidget(QLabel("Aconteceu em"))
-        self.occurred = DateQuickField("quando aconteceu", initial=date.today())
+        self.occurred = DateQuickField("quando aconteceu", initial=local_today())
         layout.addWidget(self.occurred)
         layout.addWidget(QLabel("Observação (opcional)"))
         self.note = QLineEdit()

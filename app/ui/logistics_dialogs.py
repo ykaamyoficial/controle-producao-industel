@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 from app.services.logistics_service import LINK_MAX_LENGTH, LOG_STAGE_LABELS, STALE_ERROR_CODES
 from app.ui.background_worker import start_worker
 from app.ui.components.badge_delegate import BADGE_ROLE, BadgeColumnDelegate
+from app.ui.components.date_quick_field import local_today
 from app.ui.components.detail_widgets import (
     EM_DASH,
     STEP_CURRENT,
@@ -689,7 +690,7 @@ class NewLogDialog(QDialog):
         )
         note.setWordWrap(True)
         layout.addWidget(note)
-        today = date.today()
+        today = local_today()
         grid = QGridLayout()
         grid.setHorizontalSpacing(12)
         grid.setVerticalSpacing(8)
@@ -1042,7 +1043,7 @@ class NewLoadDialog(QDialog):
 
         panel, layout = make_panel("Dados da carga")
         layout.addWidget(QLabel("Data de saída do pátio"))
-        self.date_field = QLineEdit(date_text(date.today() + timedelta(days=23)))
+        self.date_field = QLineEdit(date_text(local_today() + timedelta(days=23)))
         self._date_edited = False  # a saída acompanha o carregamento dos LOGs marcados até o usuário digitar outra
         self.date_field.textEdited.connect(lambda _text: setattr(self, "_date_edited", True))
         self.date_field.setPlaceholderText("DD/MM/AAAA")

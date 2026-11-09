@@ -35,14 +35,6 @@ from app.ui.sidebar import NAV_LABELS, Sidebar
 FIXED_TODAY = date(2026, 11, 10)
 
 
-class FixedDate(date):
-    """`date` cujo today() e fixo: a tela e o teste leem o mesmo dia, mesmo na virada da meia-noite."""
-
-    @classmethod
-    def today(cls):
-        return FIXED_TODAY
-
-
 def _sync_worker(owner, operation, on_success, on_error, *, operation_name=None):
     try:
         result = operation()
@@ -148,8 +140,8 @@ class QtCase(unittest.TestCase):
             patch.object(dialogs_module, "start_worker", _sync_worker),
             patch.object(progress_module, "start_worker", _sync_worker),
             patch.object(date_edit_module, "start_worker", _sync_worker),
-            patch.object(progress_module, "date", FixedDate),
-            patch.object(date_quick_field_module, "date", FixedDate),
+            patch.object(progress_module, "local_today", lambda: FIXED_TODAY),
+            patch.object(date_quick_field_module, "local_today", lambda: FIXED_TODAY),
         ]
         for item in patches:
             item.start()

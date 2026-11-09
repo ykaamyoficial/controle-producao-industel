@@ -196,14 +196,6 @@ class FakeService:
 FIXED_TODAY = date(2026, 11, 10)
 
 
-class FixedDate(date):
-    """`date` cujo today() e fixo: a tela e o teste leem o mesmo dia, mesmo na virada da meia-noite."""
-
-    @classmethod
-    def today(cls):
-        return FIXED_TODAY
-
-
 class QtCase(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -214,7 +206,7 @@ class QtCase(unittest.TestCase):
             item = patch.object(module, "start_worker", _sync_worker)
             item.start()
             self.addCleanup(item.stop)
-        fixed = patch.object(date_quick_field_module, "date", FixedDate)
+        fixed = patch.object(date_quick_field_module, "local_today", lambda: FIXED_TODAY)
         fixed.start()
         self.addCleanup(fixed.stop)
 

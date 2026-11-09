@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QHBoxLayout, QLineEdit, QWidget
@@ -8,6 +9,12 @@ from PySide6.QtWidgets import QHBoxLayout, QLineEdit, QWidget
 from app.ui.components.modern_button import ModernButton
 
 DATE_FORMAT = "%d/%m/%Y"
+LOCAL_TZ = ZoneInfo("America/Sao_Paulo")  # mesmo fuso de api/app/modules/logistics/calendar_rules.py
+
+
+def local_today() -> date:
+    """Hoje em Sao Paulo, nao o relogio do PC (que pode estar em outro fuso)."""
+    return datetime.now(LOCAL_TZ).date()
 
 
 class DateQuickField(QWidget):
@@ -30,8 +37,8 @@ class DateQuickField(QWidget):
         row.addWidget(self.line, 1)
         self.today_button = ModernButton("Hoje", variant="ghost")
         self.yesterday_button = ModernButton("Ontem", variant="ghost")
-        self.today_button.clicked.connect(lambda: self.set_date(date.today()))
-        self.yesterday_button.clicked.connect(lambda: self.set_date(date.today() - timedelta(days=1)))
+        self.today_button.clicked.connect(lambda: self.set_date(local_today()))
+        self.yesterday_button.clicked.connect(lambda: self.set_date(local_today() - timedelta(days=1)))
         if shortcuts:
             row.addWidget(self.today_button)
             row.addWidget(self.yesterday_button)
