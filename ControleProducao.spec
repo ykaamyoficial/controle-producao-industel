@@ -22,6 +22,8 @@ hiddenimports += collect_submodules('pdfminer')
 hiddenimports += collect_submodules('PIL')
 hiddenimports += collect_submodules('certifi')
 certifi_datas = collect_data_files('certifi')
+# Windows nao tem base de fusos: ZoneInfo("America/Sao_Paulo") precisa do pacote tzdata
+tzdata_datas = collect_data_files('tzdata')
 
 # Baloes do Windows (windows-toasts -> winrt-*, extensoes nativas). Se algum
 # pacote nao estiver instalado no ambiente de build, o app cai no winotify.
@@ -50,7 +52,7 @@ a = Analysis(
         (_ASSETS, 'app\\assets'),
         ('app\\migrations', 'app\\migrations'),
         ('app\\config\\controle_producao_config.example.json', 'app\\config'),
-    ] + certifi_datas + _EXTRA_DATAS,
+    ] + certifi_datas + tzdata_datas + _EXTRA_DATAS,
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
