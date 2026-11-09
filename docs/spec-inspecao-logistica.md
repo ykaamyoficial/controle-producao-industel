@@ -67,7 +67,7 @@ Registro de duas visões: nenhuma divergência até agora.
 
 1. Pré-requisito: os PDs/propostas escolhidos têm a inspeção finalizada (DOC BIM em PDF).
 2. No portal, a pessoa escolhe a data de entrega. Se a data está disponível, o portal a reserva e gera o código LOG (formato `LOG000`, ex.: LOG123). Se não está, a pessoa escolhe a data disponível mais próxima.
-3. Aqui ela registra: código LOG, estado da Equatorial, data pedida, data reservada, dia de carregamento no pátio da Industel e dia de entrega no CD da Equatorial. Vincula as propostas/pedidos ao LOG.
+3. Aqui ela registra: código LOG, estado da Equatorial, data pedida, data reservada, dia de carregamento no pátio da Industel e dia de entrega no CD da Equatorial (a entrega no CD é a mesma data reservada; ver Datas). Vincula as propostas/pedidos ao LOG.
 4. Etapas: Data reservada → Documentação enviada (NF, XML, BIM como links) → Aprovada para entrega (quando a documentação está toda ok).
 5. Depois do LOG criado, é possível incluir novos pedidos. Cada inclusão tem resultado Aprovada ou Reprovada.
 6. Remover proposta do LOG exige motivo (D12).
@@ -107,6 +107,19 @@ A entrega é por conta da Industel. Uma carga reúne vários LOGs, inclusive de 
 - Código NQT e código LOG únicos, com erro claro em duplicidade.
 - Sem importação de andamento atual: começa vazio.
 - Telas seguem a skill `qt-industrial-ui` e o padrão de "Detalhes da proposta".
+
+## Datas (decisões de 2026-11-08)
+
+Valem para a Inspeção e a Logística. Não mudam D1 a D18.
+
+1. Nenhuma regra de data bloqueia. Só avisa, com "Marcar mesmo assim" ou "Escolher outra data". Único impedimento: data inexistente (ex.: 31/02) ou campo obrigatório vazio.
+2. D7 mantida: sem alerta de prazo.
+3. Dia útil: segunda a sexta, menos feriados nacionais, de GO e de Goiânia. Carnaval e Corpus Christi não param a fábrica. Sábado não é dia útil.
+4. Sem folga mínima: só conflito no mesmo dia gera aviso.
+5. Data reservada do LOG = entrega no CD. Saída da carga = carregamento. A tela preenche igual; a API avisa se divergir, sem bloquear.
+6. Nenhum campo extra além de observação livre.
+7. Data gravada pode ser corrigida depois, com histórico "de X para Y" e motivo. Histórico nunca é apagado.
+8. "Hoje" é calculado no fuso America/Sao_Paulo.
 
 ## 9. Premissas e riscos
 
