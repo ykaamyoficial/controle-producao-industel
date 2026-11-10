@@ -213,8 +213,9 @@ class _DetailDialog(QDialog):
 
     changed_signal = Signal()
 
-    def __init__(self, service, data: dict, parent=None, *, can_edit: bool | None = None):
+    def __init__(self, service, data: dict, parent=None, *, can_edit: bool | None = None, start_action: str | None = None):
         super().__init__(parent)
+        self._start_action = start_action  # metodo a disparar quando o detalhe terminar de carregar
         self.service = service
         self.api = service.logistics_service()
         self.data: dict = dict(data)
@@ -247,6 +248,9 @@ class _DetailDialog(QDialog):
         self._busy = False
         self.data = dict(detail)
         self._render()
+        action, self._start_action = self._start_action, None
+        if action:
+            getattr(self, action)()
 
     def _show_error(self, exc: Exception) -> None:
         self._busy = False
@@ -376,8 +380,8 @@ class LogDetailDialog(_DetailDialog):
     """Detalhes do LOG: fluxo (data reservada, documentacao, aprovacao),
     propostas (inclusao pendente, remocao com motivo) e historico."""
 
-    def __init__(self, service, log: dict, parent=None, *, can_edit: bool | None = None):
-        super().__init__(service, log, parent, can_edit=can_edit)
+    def __init__(self, service, log: dict, parent=None, *, can_edit: bool | None = None, start_action: str | None = None):
+        super().__init__(service, log, parent, can_edit=can_edit, start_action=start_action)
         self._eligible: list[dict] = []
         self.reason_field: QLineEdit | None = None
         self.items_table = None
@@ -936,8 +940,8 @@ class LoadDetailDialog(_DetailDialog):
     """Detalhes da carga de entrega: resumo, LOGs do caminhao, saida e historico.
     "Desfazer carga" apaga a carga e libera os LOGs."""
 
-    def __init__(self, service, load: dict, parent=None, *, can_edit: bool | None = None):
-        super().__init__(service, load, parent, can_edit=can_edit)
+    def __init__(self, service, load: dict, parent=None, *, can_edit: bool | None = None, start_action: str | None = None):
+        super().__init__(service, load, parent, can_edit=can_edit, start_action=start_action)
         self.deleted = False
         self.date_field: QLineEdit | None = None
         self.reason_field: QLineEdit | None = None

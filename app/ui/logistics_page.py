@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 
 from app.services.log_report import stage_text
 from app.services.xlsx_export import write_logs_xlsx
+from app.ui.action_center.row_action_center import RowActionCenter
 from app.ui.background_worker import start_worker
 from app.ui.components.badge_delegate import BADGE_ROLE, BadgeColumnDelegate
 from app.ui.components.detail_widgets import EM_DASH
@@ -29,6 +30,7 @@ from app.ui.components.modern_table import TABLE_HEADER_HEIGHT, TABLE_ROW_HEIGHT
 from app.ui.components.operational_layout import OPERATIONAL_PAGE_MARGINS, OPERATIONAL_PAGE_SPACING
 from app.ui.components.operational_table import configure_operational_table
 from app.ui.components.page_header import page_header
+from app.ui.components.row_actions import RowAction, install_row_actions
 from app.ui.components.skeleton import SkeletonRows
 from app.ui.components.top_tabs import OperationalTabSwitch
 from app.ui.inspection_dialogs import days_text, format_date
@@ -44,11 +46,11 @@ from app.ui.report_actions import open_file
 
 PAGE_SIZE = 100
 EXPORT_PAGE_SIZE = 500  # maximo aceito pela API
-LOG_COLUMNS = ["LOG", "Estado", "Data reservada", "Carregamento", "Entrega no CD", "Etapa", "Dias na etapa", "Propostas", "Carga"]
-LOG_STAGE_COLUMN = 5
+LOG_COLUMNS = ["", "LOG", "Estado", "Data reservada", "Carregamento", "Entrega no CD", "Etapa", "Dias na etapa", "Propostas", "Carga"]
+LOG_STAGE_COLUMN = 6  # a coluna 0 e o icone que abre a Central de Acoes
 LOG_STAGE_FILTERS = ("reservada", "docs", "aprovada", "entregue")
-LOAD_COLUMNS = ["Carga", "Saída prevista", "LOGs", "Estados", "Propostas", "Andamento"]
-LOAD_LEFT_COLUMNS = (2, 3)
+LOAD_COLUMNS = ["", "Carga", "Saída prevista", "LOGs", "Estados", "Propostas", "Andamento"]
+LOAD_LEFT_COLUMNS = (3, 4)
 
 
 def log_row_colors(stage: str, palette: dict) -> tuple[str, str]:
@@ -151,7 +153,7 @@ class LogisticsPage(QWidget):
         root.addWidget(self.tabs)  # abas no topo, igual a Produção
         root.addWidget(header)
 
-        self.logs_table = self._make_table(LOG_COLUMNS, badge_column=LOG_STAGE_COLUMN, left_columns=(0, 1))
+        self.logs_table = self._make_table(LOG_COLUMNS, badge_column=LOG_STAGE_COLUMN, left_columns=(1, 2))
         self.loads_table = self._make_table(LOAD_COLUMNS, left_columns=LOAD_LEFT_COLUMNS)
 
         self.skeleton = SkeletonRows(top_offset=TABLE_HEADER_HEIGHT)
@@ -205,6 +207,8 @@ class LogisticsPage(QWidget):
             table.setItemDelegateForColumn(badge_column, BadgeColumnDelegate(table))
         table.itemSelectionChanged.connect(self._sync_buttons)
         table.doubleClicked.connect(lambda _index: self.open_selected())
+        actions = self._log_actions if columns is LOG_COLUMNS else self._load_actions
+        install_row_actions(table, self.service.palette, actions, self._open_action_center)
         return table
 
     def _set_tab_options(self) -> None:
@@ -257,6 +261,7 @@ class LogisticsPage(QWidget):
         for row, log in enumerate(self._log_rows):
             stage = log.get("display_stage") or log.get("stage") or ""
             values = [
+                "",
                 log.get("code") or EM_DASH,
                 log.get("state") or EM_DASH,
                 format_date(log.get("reserved_date")),
@@ -293,6 +298,7 @@ class LogisticsPage(QWidget):
         self.loads_table.setRowCount(len(self._load_rows))
         for row, load in enumerate(self._load_rows):
             values = [
+                "",
                 load.get("code") or EM_DASH,
                 format_date(load.get("departure_date")),
                 ", ".join(load.get("log_codes") or []) or EM_DASH,
@@ -435,14 +441,48 @@ class LogisticsPage(QWidget):
         self.next_button.setVisible(paged)
 
     def open_selected(self) -> None:
+        self._open_detail()
+
+    def _open_detail(self, start_action: str | None = None) -> None:
+        """Abre o detalhe do item selecionado; `start_action` dispara a acao (metodo do dialogo) ao carregar."""
         item = self.selected()
         if item is None:
             return
         dialog_class = LogDetailDialog if self.tab == "logs" else LoadDetailDialog
-        dialog = dialog_class(self.service, item, self, can_edit=self.can_edit)
+        extra = {"start_action": start_action} if start_action else {}
+        dialog = dialog_class(self.service, item, self, can_edit=self.can_edit, **extra)
         dialog.exec()
         if dialog.changed:
             self._refresh_all()
+
+    def _log_actions(self, row: int) -> list[RowAction]:
+        """Acoes do LOG: as mesmas do cabecalho do LogDetailDialog."""
+        if not 0 <= row < len(self._log_rows):
+            return []
+        log = self._log_rows[row]
+        actions = [RowAction("Detalhes", "info", True, self._open_detail, "Consulte o fluxo, as propostas e o histórico do LOG.")]
+        if not self.can_edit:
+            return actions
+        actions.append(RowAction("Editar datas", "edit", True, lambda: self._open_detail("open_edit_dates"), "Altere as datas do LOG e diga o motivo."))
+        if log.get("delivered_on") or log.get("display_stage") == "entregue":
+            actions.append(RowAction("Corrigir entrega", "edit", True, lambda: self._open_detail("open_delivery"), "Corrija a data e o comprovante da entrega no CD."))
+        else:
+            actions.append(RowAction("Registrar andamento", "check", True, lambda: self._open_detail("open_progress"), "Informe o resultado da etapa atual.", primary=True))
+        return actions
+
+    def _load_actions(self, row: int) -> list[RowAction]:
+        if not 0 <= row < len(self._load_rows):
+            return []
+        actions = [RowAction("Detalhes", "info", True, self._open_detail, "Consulte os LOGs, a saída e o histórico da carga.")]
+        if self.can_edit:
+            actions.append(RowAction("Saiu em", "check", True, lambda: self._open_detail("open_departed"), "Registre a data real de saída do pátio.", primary=True))
+            actions.append(RowAction("Desfazer carga", "close", True, lambda: self._open_detail("_undo"), "Apague a carga e libere os LOGs."))
+        return actions
+
+    def _open_action_center(self, row: int, actions: list[RowAction]) -> None:
+        rows = self._log_rows if self.tab == "logs" else self._load_rows
+        title = str(rows[row].get("code") or ("LOG" if self.tab == "logs" else "Carga"))
+        RowActionCenter(self.service.palette, title, actions, self).exec()
 
     def open_new_log(self) -> None:
         dialog = NewLogDialog(self.service, self)

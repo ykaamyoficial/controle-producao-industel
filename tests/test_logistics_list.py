@@ -58,7 +58,7 @@ class LogListTests(unittest.TestCase):
         return page, api
 
     def _codes(self, page):
-        return [page.logs_table.item(row, 0).text() for row in range(page.logs_table.rowCount())]
+        return [page.logs_table.item(row, 1).text() for row in range(page.logs_table.rowCount())]
 
     def test_states_come_from_the_api(self):
         page, _api = self._page()
@@ -71,9 +71,9 @@ class LogListTests(unittest.TestCase):
         self.assertEqual(self._codes(page), ["LOG103"])
         self.assertEqual(page.count_label.text(), "1 LOGs")
         self.assertEqual(api.calls[-1][1]["stage"], "entregue")
-        self.assertEqual(page.logs_table.item(0, 5).text(), "Entregue")
-        self.assertEqual(page.logs_table.item(0, 6).text(), "4 dias (2 úteis)")
-        self.assertEqual(page.logs_table.item(0, 5).data(BADGE_ROLE), category_colors("final_done", page.service.palette))
+        self.assertEqual(page.logs_table.item(0, 6).text(), "Entregue")
+        self.assertEqual(page.logs_table.item(0, 7).text(), "4 dias (2 úteis)")
+        self.assertEqual(page.logs_table.item(0, 6).data(BADGE_ROLE), category_colors("final_done", page.service.palette))
         self.assertEqual(page.tabs._options[0], ("logs", "LOGs", 3))
 
     def test_combines_stage_state_and_load_with_search(self):
