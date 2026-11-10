@@ -30,7 +30,7 @@ from app.ui.components.modern_table import TABLE_HEADER_HEIGHT, TABLE_ROW_HEIGHT
 from app.ui.components.operational_layout import OPERATIONAL_PAGE_MARGINS, OPERATIONAL_PAGE_SPACING
 from app.ui.components.operational_table import configure_operational_table
 from app.ui.components.page_header import page_header
-from app.ui.components.row_actions import RowAction, install_row_actions
+from app.ui.components.row_actions import ACTION_COLUMN, RowAction, install_row_actions
 from app.ui.components.skeleton import SkeletonRows
 from app.ui.components.top_tabs import OperationalTabSwitch
 from app.ui.inspection_dialogs import days_text, format_date
@@ -206,7 +206,7 @@ class LogisticsPage(QWidget):
             table.setColumnWidth(badge_column, 210)
             table.setItemDelegateForColumn(badge_column, BadgeColumnDelegate(table))
         table.itemSelectionChanged.connect(self._sync_buttons)
-        table.doubleClicked.connect(lambda _index: self.open_selected())
+        table.doubleClicked.connect(lambda index: index.column() != ACTION_COLUMN and self.open_selected())
         actions = self._log_actions if columns is LOG_COLUMNS else self._load_actions
         install_row_actions(table, self.service.palette, actions, self._open_action_center)
         return table
@@ -446,7 +446,7 @@ class LogisticsPage(QWidget):
     def _open_detail(self, start_action: str | None = None) -> None:
         """Abre o detalhe do item selecionado; `start_action` dispara a acao (metodo do dialogo) ao carregar."""
         item = self.selected()
-        if item is None:
+        if item is None or (start_action and not self.can_edit):
             return
         dialog_class = LogDetailDialog if self.tab == "logs" else LoadDetailDialog
         extra = {"start_action": start_action} if start_action else {}
@@ -476,13 +476,15 @@ class LogisticsPage(QWidget):
         actions = [RowAction("Detalhes", "info", True, self._open_detail, "Consulte os LOGs, a saída e o histórico da carga.")]
         if self.can_edit:
             actions.append(RowAction("Saiu em", "check", True, lambda: self._open_detail("open_departed"), "Registre a data real de saída do pátio.", primary=True))
-            actions.append(RowAction("Desfazer carga", "close", True, lambda: self._open_detail("_undo"), "Apague a carga e libere os LOGs."))
+            actions.append(RowAction("Desfazer carga", "close", True, lambda: self._open_detail("_undo"), "Apague a carga e libere os LOGs.", destructive=True))
         return actions
 
     def _open_action_center(self, row: int, actions: list[RowAction]) -> None:
         rows = self._log_rows if self.tab == "logs" else self._load_rows
         title = str(rows[row].get("code") or ("LOG" if self.tab == "logs" else "Carga"))
-        RowActionCenter(self.service.palette, title, actions, self).exec()
+        center = RowActionCenter(self.service.palette, title, actions, self)
+        center.exec()
+        center.deleteLater()
 
     def open_new_log(self) -> None:
         dialog = NewLogDialog(self.service, self)

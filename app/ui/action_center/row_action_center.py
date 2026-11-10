@@ -22,6 +22,7 @@ class RowActionCenter(QDialog):
         self.palette = palette
         self.actions = actions
         self.cards: list[ActionCardButton] = []
+        self.chosen: RowAction | None = None
         self.setWindowTitle("Ações")
         style_dialog_from_parent(self, parent)
         self.setMinimumWidth(720)
@@ -59,7 +60,7 @@ class RowActionCenter(QDialog):
             label=action.label,
             description=action.description,
             icon=action.icon,
-            category=ActionCategory.PRIMARY if action.primary else ActionCategory.NORMAL,
+            category=ActionCategory.DESTRUCTIVE if action.destructive else (ActionCategory.PRIMARY if action.primary else ActionCategory.NORMAL),
             area="",
         )
         card = ActionCardButton(
@@ -75,5 +76,13 @@ class RowActionCenter(QDialog):
         return card
 
     def _run(self, action: RowAction) -> None:
+        self.chosen = action
         self.accept()
-        action.callback()
+
+    def exec(self) -> int:
+        # accept() so inicia a animacao de saida: a acao roda depois que a Central fechou
+        result = super().exec()
+        chosen, self.chosen = self.chosen, None
+        if chosen is not None:
+            chosen.callback()
+        return result

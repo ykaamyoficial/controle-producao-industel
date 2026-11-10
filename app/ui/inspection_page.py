@@ -25,7 +25,7 @@ from app.ui.components.modern_table import TABLE_HEADER_HEIGHT, TABLE_ROW_HEIGHT
 from app.ui.components.operational_layout import OPERATIONAL_PAGE_MARGINS, OPERATIONAL_PAGE_SPACING
 from app.ui.components.operational_table import configure_operational_table
 from app.ui.components.page_header import page_header
-from app.ui.components.row_actions import RowAction, install_row_actions
+from app.ui.components.row_actions import ACTION_COLUMN, RowAction, install_row_actions
 from app.ui.components.segmented_control import SegmentedControl
 from app.ui.components.skeleton import SkeletonRows
 from app.ui.inspection_progress import RecordProgressDialog
@@ -127,7 +127,7 @@ class InspectionPage(QWidget):
         self.table.setShowGrid(False)
         self.table.setItemDelegateForColumn(STAGE_COLUMN, BadgeColumnDelegate(self.table))
         self.table.itemSelectionChanged.connect(self._sync_buttons)
-        self.table.doubleClicked.connect(lambda _index: self.open_selected())
+        self.table.doubleClicked.connect(lambda index: index.column() != ACTION_COLUMN and self.open_selected())
         install_row_actions(self.table, self.service.palette, self._row_actions, self._open_action_center)
 
         self.skeleton = SkeletonRows(top_offset=TABLE_HEADER_HEIGHT)
@@ -309,7 +309,7 @@ class InspectionPage(QWidget):
 
     def start_selected(self) -> None:
         row = self.selected_inspection()
-        if row is None or not self._is_to_request(row) or not row.get("proposal_id"):
+        if not self.can_edit or row is None or not self._is_to_request(row) or not row.get("proposal_id"):
             return
         numbers = ", ".join(row.get("proposal_numbers") or [])
         label = f"Proposta {numbers} · {row.get('customer_name') or ''}"
@@ -335,7 +335,9 @@ class InspectionPage(QWidget):
 
     def _open_action_center(self, row: int, actions: list[RowAction]) -> None:
         pd_code = self._rows[row].get("pd_code")
-        RowActionCenter(self.service.palette, f"PD {pd_code}" if pd_code else "Inspeção", actions, self).exec()
+        center = RowActionCenter(self.service.palette, f"PD {pd_code}" if pd_code else "Inspeção", actions, self)
+        center.exec()
+        center.deleteLater()
 
     def open_new(self) -> None:
         dialog = NewInspectionDialog(self.service, self)

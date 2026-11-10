@@ -24,6 +24,7 @@ class RowAction:
     callback: Callable[[], None]
     description: str = ""
     primary: bool = False
+    destructive: bool = False
 
 
 class RowActionIconDelegate(QStyledItemDelegate):
@@ -107,6 +108,7 @@ def install_row_actions(
             qaction.triggered.connect(lambda _checked=False, callback=action.callback: callback())
             menu.addAction(qaction)
         menu.exec(table.viewport().mapToGlobal(position))
+        menu.deleteLater()
 
     table.cellClicked.connect(clicked)
     table.setContextMenuPolicy(Qt.CustomContextMenu)
