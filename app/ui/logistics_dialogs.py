@@ -229,6 +229,7 @@ class _DetailDialog(QDialog):
         self.error_label: QLabel | None = None  # o primeiro aviso da tela; os demais abas espelham o texto
         self._notice_labels: list[QLabel] = []
         self.action_buttons: list[ModernButton] = []
+        self._offered: list = []  # handlers dos botoes realmente oferecidos no ultimo _render
         self.setMinimumSize(760, 480)
         fit_to_screen(self, 1040, 640)
         style_dialog_from_parent(self, parent)
@@ -249,13 +250,15 @@ class _DetailDialog(QDialog):
         self.data = dict(detail)
         self._render()
         action, self._start_action = self._start_action, None
-        if action:
-            getattr(self, action)()
+        handler = getattr(self, action) if action else None
+        if handler is not None and handler in self._offered:
+            self._submit(handler)
 
     def _show_error(self, exc: Exception) -> None:
         self._busy = False
         for button in self.action_buttons:
             button.setEnabled(True)
+        self._start_action = None
         self._set_notice(str(exc))
         if getattr(exc, "error_code", None) in STALE_ERROR_CODES:
             self._reload()
@@ -321,6 +324,7 @@ class _DetailDialog(QDialog):
             self._content.setParent(None)
             self._content.deleteLater()
         self.action_buttons = []
+        self._offered = []
         self.error_label = None
         self._notice_labels = []
         self._tabs = None
@@ -341,6 +345,7 @@ class _DetailDialog(QDialog):
         button = ModernButton(text, icon, variant=variant)
         button.clicked.connect(lambda _=False: self._submit(handler))
         self.action_buttons.append(button)
+        self._offered.append(handler)
         return button
 
     def _submit(self, handler: Callable[[], None]) -> None:
