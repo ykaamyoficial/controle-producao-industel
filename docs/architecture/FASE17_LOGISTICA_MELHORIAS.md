@@ -30,6 +30,17 @@ Plano: `docs/plano-logistica-melhorias.md`. Spec: `docs/spec-logistica-melhorias
   - `app/ui/report_actions.py`: ações de "Salvar como" e abertura do arquivo gerado (`QDesktopServices.openUrl`), com aviso se falhar.
   - `ControleProducao.spec` inclui `openpyxl`.
 
+## Ícone de ações e menu de contexto (Inspeção e Logística)
+
+As listas de Inspeção e de Logística (abas LOGs e Cargas de entrega) ganharam, como no resto do sistema:
+
+- Coluna 0 com o ícone em círculo (`RowActionIconDelegate`, `app/ui/components/row_actions.py`). Clicar nele seleciona a linha e abre a Central de Ações (`RowActionCenter`, `app/ui/action_center/row_action_center.py`, mesma casca de cards da Central da carga, sem passar pelo provider de propostas). Cursor de mão sobre o ícone.
+- Botão direito na linha seleciona a linha e abre um `QMenu` com as mesmas ações. A lista de `RowAction` é uma só e alimenta menu e Central.
+- Ações por linha, com as regras dos botões da página (`can_edit` e estado). Inspeção: Detalhes e Registrar andamento (inspeção real), Iniciar inspeção (linha "A solicitar"), Nova inspeção. LOG: Detalhes, Editar datas, Corrigir entrega (já entregue) ou Registrar andamento. Carga: Detalhes, Saiu em, Desfazer carga. Sem `can_edit`, só Detalhes.
+- `LogDetailDialog` e `LoadDetailDialog` aceitam `start_action=` (nome do método, ex.: `open_progress`) e o disparam uma vez, depois do primeiro carregamento, para a ação abrir direto sem duplicar lógica.
+- Colunas deslocadas em +1: `COLUMNS`/`STAGE_COLUMN`/`LEFT_COLUMNS` (Inspeção) e `LOG_STAGE_COLUMN`/`LOAD_LEFT_COLUMNS` (Logística). Testes: `tests/test_row_actions_desktop.py`.
+- Não conferido com dados reais nem a pintura do ícone fora do offscreen.
+
 ## Contrato novo da API
 
 - `POST` de criação e inclusão de LOG: `confirm_inspection`; 409 `LOGISTICS_INSPECTION_CONFIRMATION_REQUIRED` com `details` por proposta.
