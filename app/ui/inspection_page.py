@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.ui.action_center.row_action_center import RowActionCenter
 from app.ui.background_worker import start_worker
 from app.ui.components.badge_delegate import BADGE_ROLE, BadgeColumnDelegate
 from app.ui.components.detail_widgets import EM_DASH
@@ -24,6 +25,7 @@ from app.ui.components.modern_table import TABLE_HEADER_HEIGHT, TABLE_ROW_HEIGHT
 from app.ui.components.operational_layout import OPERATIONAL_PAGE_MARGINS, OPERATIONAL_PAGE_SPACING
 from app.ui.components.operational_table import configure_operational_table
 from app.ui.components.page_header import page_header
+from app.ui.components.row_actions import RowAction, install_row_actions
 from app.ui.components.segmented_control import SegmentedControl
 from app.ui.components.skeleton import SkeletonRows
 from app.ui.inspection_progress import RecordProgressDialog
@@ -38,9 +40,9 @@ from app.ui.inspection_dialogs import (
 )
 
 PAGE_SIZE = 100
-COLUMNS = ["PD principal", "Propostas", "NQT", "Etapa", "Tentativa", "Visita", "Dias na etapa"]
-STAGE_COLUMN = 3
-LEFT_COLUMNS = (0, 1)
+COLUMNS = ["", "PD principal", "Propostas", "NQT", "Etapa", "Tentativa", "Visita", "Dias na etapa"]
+STAGE_COLUMN = 4  # a coluna 0 e o icone que abre a Central de Acoes
+LEFT_COLUMNS = (1, 2)
 # Filtro -> parametro `stage` da API (None = todas).
 STAGE_FILTERS = {"all": None, "open": "open", "fim": "fim"}
 
@@ -126,6 +128,7 @@ class InspectionPage(QWidget):
         self.table.setItemDelegateForColumn(STAGE_COLUMN, BadgeColumnDelegate(self.table))
         self.table.itemSelectionChanged.connect(self._sync_buttons)
         self.table.doubleClicked.connect(lambda _index: self.open_selected())
+        install_row_actions(self.table, self.service.palette, self._row_actions, self._open_action_center)
 
         self.skeleton = SkeletonRows(top_offset=TABLE_HEADER_HEIGHT)
         clear_button = ModernButton("Limpar filtros", "clear", variant="ghost")
@@ -220,6 +223,7 @@ class InspectionPage(QWidget):
             to_request = self._is_to_request(item)
             stage = "to_request" if to_request else item.get("stage") or ""
             values = [
+                "",
                 item.get("pd_code") or ("Digitar o PD" if to_request else EM_DASH),
                 ", ".join(item.get("proposal_numbers") or []) or EM_DASH,
                 item.get("nqt_code") or EM_DASH,
@@ -311,6 +315,27 @@ class InspectionPage(QWidget):
         label = f"Proposta {numbers} · {row.get('customer_name') or ''}"
         if start_inspection_for_proposal(self.service, int(row["proposal_id"]), self, proposal_label=label):
             self.refresh()
+
+    def _row_actions(self, row: int) -> list[RowAction]:
+        """Acoes possiveis da linha (menu de contexto e Central); mesmas regras de `_sync_buttons`."""
+        if not 0 <= row < len(self._rows):
+            return []
+        real = not self._is_to_request(self._rows[row])
+        actions = []
+        if real:
+            actions.append(RowAction("Detalhes", "info", True, self.open_selected, "Consulte o pedido, o NQT e o histórico."))
+        if not self.can_edit:
+            return actions
+        if real:
+            actions.append(RowAction("Registrar andamento", "edit", True, self.register_selected, "Informe o resultado da etapa atual.", primary=True))
+        else:
+            actions.append(RowAction("Iniciar inspeção", "new", True, self.start_selected, "Abra a inspeção desta proposta.", primary=True))
+        actions.append(RowAction("Nova inspeção", "new", True, self.open_new, "Abra uma inspeção pelo número da proposta."))
+        return actions
+
+    def _open_action_center(self, row: int, actions: list[RowAction]) -> None:
+        pd_code = self._rows[row].get("pd_code")
+        RowActionCenter(self.service.palette, f"PD {pd_code}" if pd_code else "Inspeção", actions, self).exec()
 
     def open_new(self) -> None:
         dialog = NewInspectionDialog(self.service, self)
