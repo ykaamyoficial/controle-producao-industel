@@ -10,13 +10,16 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import test_inspection_entry_desktop as insp
 import test_logistics_desktop as logi
+from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QMenu
 
+from app.services.backend_adapter import OFFICIAL_COLOR_PALETTES
 from app.ui import inspection_page as insp_page_module
 from app.ui import logistics_dialogs as dialogs_module
 from app.ui import logistics_page as logi_page_module
 from app.ui.components import row_actions as row_actions_module
-from app.ui.components.row_actions import RowActionIconDelegate
+from app.ui.action_center.row_action_center import RowActionCenter
+from app.ui.components.row_actions import RowAction, RowActionIconDelegate
 from app.ui.inspection_page import InspectionPage
 from app.ui.logistics_dialogs import LoadDetailDialog, LogDetailDialog
 from app.ui.logistics_page import LogisticsPage
@@ -30,6 +33,9 @@ class _CenterSpy:
 
     def exec(self):
         return 0
+
+    def deleteLater(self):
+        pass
 
 
 def context_menu_labels(table, row: int) -> list[str]:
@@ -46,6 +52,18 @@ def context_menu_labels(table, row: int) -> list[str]:
     return captured[0] if captured else []
 
 
+def trigger_menu_action(table, row: int, label: str) -> None:
+    """Botao direito na linha e aciona (QAction.triggered) a entrada com esse rotulo."""
+
+    class TriggerMenu(QMenu):
+        def exec(self, *_args):
+            next(a for a in self.actions() if a.text() == label).trigger()
+
+    position = table.visualRect(table.model().index(row, 1)).center()
+    with patch.object(row_actions_module, "QMenu", TriggerMenu):
+        table.customContextMenuRequested.emit(position)
+
+
 class _SpyMixin:
     def setUp(self):
         super().setUp()
@@ -54,6 +72,27 @@ class _SpyMixin:
             patcher = patch.object(module, "RowActionCenter", _CenterSpy)
             patcher.start()
             self.addCleanup(patcher.stop)
+
+
+class RowActionCenterTests(insp.QtCase):
+    def test_callback_runs_after_exec_with_center_closed(self):
+        seen = []
+        center = None
+
+        def callback():
+            seen.append(center.isVisible())
+
+        actions = [RowAction("Fazer", "info", True, callback), RowAction("Apagar", "close", True, lambda: None, destructive=True)]
+        center = RowActionCenter(OFFICIAL_COLOR_PALETTES["claro"], "T", actions)
+        QTimer.singleShot(0, center.cards[0].click)
+        center.exec()
+        self.assertEqual(seen, [False])
+
+    def test_destructive_action_uses_destructive_card(self):
+        actions = [RowAction("Fazer", "info", True, lambda: None), RowAction("Apagar", "close", True, lambda: None, destructive=True)]
+        center = RowActionCenter(OFFICIAL_COLOR_PALETTES["claro"], "T", actions)
+        plain = RowActionCenter(OFFICIAL_COLOR_PALETTES["claro"], "T", [RowAction("Apagar", "close", True, lambda: None)])
+        self.assertNotEqual(center.cards[1].styleSheet(), plain.cards[0].styleSheet())
 
 
 class InspectionRowActionsTests(_SpyMixin, insp.QtCase):
@@ -84,6 +123,30 @@ class InspectionRowActionsTests(_SpyMixin, insp.QtCase):
         self.assertEqual(context_menu_labels(page.table, 0), ["Iniciar inspeção", "Nova inspeção"])
         self.assertEqual(context_menu_labels(page.table, 1), ["Detalhes", "Registrar andamento", "Nova inspeção"])
         self.assertEqual(page.table.currentRow(), 1)  # botao direito seleciona a linha
+
+    def test_to_request_row_center_and_menu_trigger(self):
+        page = self._page()
+        page.table.cellClicked.emit(0, 0)
+        self.assertEqual(_CenterSpy.calls, [("Inspeção", ["Iniciar inspeção", "Nova inspeção"])])
+        with patch.object(page, "open_new") as opened:
+            trigger_menu_action(page.table, 0, "Nova inspeção")
+        opened.assert_called_once()
+
+    def test_double_click_on_icon_column_does_not_open_details(self):
+        page = self._page()
+        with patch.object(page, "open_selected") as opened:
+            page.table.doubleClicked.emit(page.table.model().index(1, 0))
+            opened.assert_not_called()
+            page.table.doubleClicked.emit(page.table.model().index(1, 1))
+            opened.assert_called_once()
+
+    def test_view_only_user_cannot_start_inspection(self):
+        page = self._page()
+        page.can_edit = False
+        page.table.selectRow(0)
+        with patch.object(insp_page_module, "start_inspection_for_proposal") as start:
+            page.start_selected()
+        start.assert_not_called()
 
     def test_view_only_user_gets_only_details(self):
         page = self._page()
@@ -120,9 +183,28 @@ class LogisticsRowActionsTests(_SpyMixin, logi.QtCase):
         page.loads_table.cellClicked.emit(0, 0)
         self.assertEqual(_CenterSpy.calls, [("CE-01", ["Detalhes", "Saiu em", "Desfazer carga"])])
 
+    def test_undo_load_is_destructive(self):
+        page = self._page(tab="loads")
+        by_label = {a.label: a for a in page._load_actions(0)}
+        self.assertTrue(by_label["Desfazer carga"].destructive)
+        self.assertFalse(by_label["Saiu em"].destructive)
+
+    def test_double_click_on_icon_column_does_not_open_details(self):
+        page = self._page()
+        with patch.object(page, "open_selected") as opened:
+            page.logs_table.doubleClicked.emit(page.logs_table.model().index(0, 0))
+            opened.assert_not_called()
+
     def test_loads_view_only_gets_only_details(self):
         page = self._page(can_edit=False, tab="loads")
         self.assertEqual(context_menu_labels(page.loads_table, 0), ["Detalhes"])
+
+    def test_menu_triggered_runs_callback(self):
+        page = self._page()
+        opened = []
+        with patch.object(page, "_open_detail", lambda start_action=None: opened.append(start_action)):
+            trigger_menu_action(page.logs_table, 0, "Editar datas")
+        self.assertEqual(opened, ["open_edit_dates"])
 
     def test_action_opens_detail_with_start_action(self):
         page = self._page()
@@ -145,6 +227,29 @@ class LogisticsRowActionsTests(_SpyMixin, logi.QtCase):
 
 
 class StartActionTests(logi.QtCase):
+    def test_start_action_blocked_when_updated_state_does_not_offer_button(self):
+        api = logi.FakeLogisticsApi()
+        delivered = logi._log(stage="aprovada", display_stage="entregue", delivered_on="2026-11-11")
+        api.result = delivered
+        with patch.object(LogDetailDialog, "open_progress") as action:
+            dialog = LogDetailDialog(logi.FakeService(api), logi._log(), can_edit=True, start_action="open_progress")
+            dialog._apply(delivered)
+        action.assert_not_called()
+
+    def test_start_action_blocked_without_edit_permission(self):
+        api = logi.FakeLogisticsApi()
+        with patch.object(LogDetailDialog, "open_edit_dates") as action:
+            dialog = LogDetailDialog(logi.FakeService(api, False), logi._log(), can_edit=False, start_action="open_edit_dates")
+            dialog._apply(logi._log())
+        action.assert_not_called()
+
+    def test_start_action_cleared_on_error(self):
+        with patch.object(LogDetailDialog, "open_edit_dates"):
+            dialog = LogDetailDialog(logi.FakeService(logi.FakeLogisticsApi()), logi._log(), can_edit=True, start_action="open_edit_dates")
+        dialog._start_action = "open_edit_dates"
+        dialog._show_error(RuntimeError("falhou"))
+        self.assertIsNone(dialog._start_action)
+
     def test_log_dialog_runs_start_action_once_after_loading(self):
         api = logi.FakeLogisticsApi()
         api.result = logi._log()
