@@ -42,6 +42,7 @@ from app.ui.logistics_dialogs import (
     category_colors,
     log_stage_colors,
 )
+from app.ui import report_actions
 from app.ui.report_actions import open_file
 
 PAGE_SIZE = 100
@@ -455,12 +456,26 @@ class LogisticsPage(QWidget):
         if dialog.changed:
             self._refresh_all()
 
+    def _print_report(self) -> None:
+        """A linha da lista não traz itens: busca o detalhe (como o botão do detalhe) e emite o PDF."""
+        item = self.selected()
+        if item is None:
+            return
+        api, logs = self.service.logistics_service(), self.tab == "logs"
+        try:
+            detail = api.get_log(int(item["id"])) if logs else api.get_load(int(item["id"]))
+        except Exception as exc:
+            QMessageBox.warning(self, "Imprimir relatório", f"Não foi possível carregar os dados: {exc}")
+            return
+        (report_actions.save_log_report if logs else report_actions.save_load_report)(self, detail, self.service)
+
     def _log_actions(self, row: int) -> list[RowAction]:
         """Acoes do LOG: as mesmas do cabecalho do LogDetailDialog."""
         if not 0 <= row < len(self._log_rows):
             return []
         log = self._log_rows[row]
         actions = [RowAction("Detalhes", "info", True, self._open_detail, "Consulte o fluxo, as propostas e o histórico do LOG.")]
+        actions.append(RowAction("Imprimir relatório", "reports", True, self._print_report, "Gere o PDF do LOG com o peso por proposta."))
         if not self.can_edit:
             return actions
         actions.append(RowAction("Editar datas", "edit", True, lambda: self._open_detail("open_edit_dates"), "Altere as datas do LOG e diga o motivo."))
@@ -474,6 +489,7 @@ class LogisticsPage(QWidget):
         if not 0 <= row < len(self._load_rows):
             return []
         actions = [RowAction("Detalhes", "info", True, self._open_detail, "Consulte os LOGs, a saída e o histórico da carga.")]
+        actions.append(RowAction("Imprimir relatório", "reports", True, self._print_report, "Gere o PDF da carga com o peso por LOG."))
         if self.can_edit:
             actions.append(RowAction("Saiu em", "check", True, lambda: self._open_detail("open_departed"), "Registre a data real de saída do pátio.", primary=True))
             actions.append(RowAction("Desfazer carga", "close", True, lambda: self._open_detail("_undo"), "Apague a carga e libere os LOGs.", destructive=True))

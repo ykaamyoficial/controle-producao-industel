@@ -167,27 +167,60 @@ class LogisticsRowActionsTests(_SpyMixin, logi.QtCase):
     def test_logs_click_opens_center_with_progress_for_open_log(self):
         page = self._page()
         page.logs_table.cellClicked.emit(0, 0)
-        self.assertEqual(_CenterSpy.calls, [("LOG101", ["Detalhes", "Editar datas", "Registrar andamento"])])
+        self.assertEqual(_CenterSpy.calls, [("LOG101", ["Detalhes", "Imprimir relatório", "Editar datas", "Registrar andamento"])])
 
     def test_logs_menu_for_delivered_log_offers_delivery_correction(self):
         page = self._page(logs=[logi._log(stage="aprovada", display_stage="entregue", delivered_on="2026-11-11")])
-        self.assertEqual(context_menu_labels(page.logs_table, 0), ["Detalhes", "Editar datas", "Corrigir entrega"])
+        self.assertEqual(context_menu_labels(page.logs_table, 0), ["Detalhes", "Imprimir relatório", "Editar datas", "Corrigir entrega"])
 
     def test_logs_view_only_gets_only_details(self):
         page = self._page(can_edit=False)
-        self.assertEqual(context_menu_labels(page.logs_table, 0), ["Detalhes"])
+        self.assertEqual(context_menu_labels(page.logs_table, 0), ["Detalhes", "Imprimir relatório"])
 
     def test_loads_menu_and_click(self):
         page = self._page(tab="loads")
-        self.assertEqual(context_menu_labels(page.loads_table, 0), ["Detalhes", "Saiu em", "Desfazer carga"])
+        self.assertEqual(context_menu_labels(page.loads_table, 0), ["Detalhes", "Imprimir relatório", "Saiu em", "Desfazer carga"])
         page.loads_table.cellClicked.emit(0, 0)
-        self.assertEqual(_CenterSpy.calls, [("CE-01", ["Detalhes", "Saiu em", "Desfazer carga"])])
+        self.assertEqual(_CenterSpy.calls, [("CE-01", ["Detalhes", "Imprimir relatório", "Saiu em", "Desfazer carga"])])
 
     def test_undo_load_is_destructive(self):
         page = self._page(tab="loads")
         by_label = {a.label: a for a in page._load_actions(0)}
         self.assertTrue(by_label["Desfazer carga"].destructive)
         self.assertFalse(by_label["Saiu em"].destructive)
+
+    def test_print_report_action_is_plain(self):
+        for tab, actions in (("logs", lambda p: p._log_actions(0)), ("loads", lambda p: p._load_actions(0))):
+            by_label = {a.label: a for a in actions(self._page(tab=tab))}
+            self.assertFalse(by_label["Imprimir relatório"].primary)
+            self.assertFalse(by_label["Imprimir relatório"].destructive)
+
+    def test_print_report_fetches_detail_and_calls_report_actions(self):
+        page = self._page()
+        page.logs_table.selectRow(0)
+        with patch.object(logi_page_module.report_actions, "save_log_report") as save:
+            trigger_menu_action(page.logs_table, 0, "Imprimir relatório")
+        parent, detail, service = save.call_args.args
+        self.assertEqual(detail["code"], "LOG101")
+        self.assertIs(service, page.service)
+        self.assertIn(("get_log", 1), page.service.api.calls)
+
+    def test_print_report_on_loads_tab(self):
+        page = self._page(tab="loads")
+        page.loads_table.selectRow(0)
+        page.service.api.get_load = lambda load_id: logi._load(id=load_id)
+        with patch.object(logi_page_module.report_actions, "save_load_report") as save:
+            trigger_menu_action(page.loads_table, 0, "Imprimir relatório")
+        self.assertEqual(save.call_args.args[1]["code"], "CE-01")
+
+    def test_print_report_fetch_error_warns_without_report(self):
+        page = self._page()
+        page.logs_table.selectRow(0)
+        page.service.api.error = OSError("sem rede")
+        with patch.object(logi_page_module.report_actions, "save_log_report") as save,                 patch.object(logi_page_module.QMessageBox, "warning") as warning:
+            page._print_report()
+        save.assert_not_called()
+        warning.assert_called_once()
 
     def test_double_click_on_icon_column_does_not_open_details(self):
         page = self._page()
@@ -197,7 +230,7 @@ class LogisticsRowActionsTests(_SpyMixin, logi.QtCase):
 
     def test_loads_view_only_gets_only_details(self):
         page = self._page(can_edit=False, tab="loads")
-        self.assertEqual(context_menu_labels(page.loads_table, 0), ["Detalhes"])
+        self.assertEqual(context_menu_labels(page.loads_table, 0), ["Detalhes", "Imprimir relatório"])
 
     def test_menu_triggered_runs_callback(self):
         page = self._page()
@@ -220,7 +253,7 @@ class LogisticsRowActionsTests(_SpyMixin, logi.QtCase):
             def exec(self):
                 return 0
 
-        with patch.object(logi_page_module, "LogDetailDialog", FakeDialog):
+        with patch.object(logi_page_module, "LogDetailDialog", FakeDialog),                 patch.object(logi_page_module.report_actions, "save_log_report"):
             for action in page._log_actions(0):
                 action.callback()
         self.assertEqual(opened, [None, "open_edit_dates", "open_progress"])
