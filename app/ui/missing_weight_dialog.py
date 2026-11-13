@@ -25,7 +25,7 @@ def incomplete_proposals(logs: list[dict[str, Any]], weights: dict[int, Weight])
 
 
 class MissingWeightDialog(QDialog):
-    """Aviso antes do relatório: propostas sem peso. Aceitar = gerar assim mesmo; fechar = cancelar."""
+    """Aviso antes do relatório: propostas com peso pendente. Aceitar = gerar assim mesmo; fechar = cancelar."""
 
     def __init__(self, service, logs: list[dict[str, Any]], weights: dict[int, Weight], can_edit: bool, parent=None):
         super().__init__(parent)
@@ -33,14 +33,14 @@ class MissingWeightDialog(QDialog):
         self.logs = logs
         self.weights = dict(weights)  # resultado: já recalculado após "Informar peso"
         self.can_edit = can_edit
-        self.setWindowTitle("Propostas sem peso")
+        self.setWindowTitle("Propostas com peso pendente")
         self.setMinimumSize(720, 420)
         style_dialog_from_parent(self, parent)
         root = QVBoxLayout(self)
         root.setContentsMargins(16, 14, 16, 14)
         root.setSpacing(10)
         self.summary = QLabel()
-        root.addWidget(dialog_header(QLabel("Propostas sem peso"), self.summary))
+        root.addWidget(dialog_header(QLabel("Propostas com peso pendente"), self.summary))
         self.table = QTableWidget(0, 3)
         self.table.setHorizontalHeaderLabels(["Proposta", "Cliente", "Situação"])
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
@@ -93,10 +93,11 @@ class MissingWeightDialog(QDialog):
             dialog = ItemWeightDialog(self.service, pid, self)
             if not (dialog.exec() and dialog.saved_count):
                 return
-            fresh = collect_weights(self.service, [{"items": [i for log_ in self.logs for i in active_items(log_) if i.get("proposal_id") == pid]}])
         except Exception as exc:
-            QMessageBox.warning(self, "Informar peso", f"Não foi possível carregar ou atualizar os itens da proposta: {exc}")
+            QMessageBox.warning(self, "Informar peso", f"Não foi possível abrir os itens da proposta: {exc}")
             return
+        # collect_weights não lança: falha de consulta vira NOT_QUERIED.
+        fresh = collect_weights(self.service, [{"items": [i for log_ in self.logs for i in active_items(log_) if i.get("proposal_id") == pid]}])
         # Falha ao reconsultar mantém o último estado conhecido em vez de virar "não consultado".
         self.weights.update({k: v for k, v in fresh.items() if v[1] != NOT_QUERIED})
         self._fill()

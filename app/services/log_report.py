@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import QMarginsF, QRectF, QSizeF, Qt, QUrl
-from PySide6.QtGui import QFont, QImage, QPageLayout, QPainter, QTextDocument
+from PySide6.QtGui import QFont, QImage, QPageLayout, QPainter, QTextCursor, QTextDocument
 from PySide6.QtPrintSupport import QPrinter
 
 from app.services.inspection_service import STAGE_LABELS as INSPECTION_STAGE_LABELS
@@ -63,30 +63,29 @@ def _kv_table(pairs: list[tuple[str, Any]]) -> str:
     return f"<table cellspacing='0' cellpadding='3'>{rows}</table>"
 
 
-def _weight_line(proposal_ids: list[Any], weights: dict[int, Weight]) -> str:
-    """"12.340,00 kg · 2 de 5 propostas com peso ausente ou incompleto"; o peso é só o conhecido, nunca chute."""
+def _weight_parts(proposal_ids: list[Any], weights: dict[int, Weight]) -> tuple[str, str]:
+    """("12.340,00 kg", "2 de 5 propostas com peso ausente ou incompleto (1 não consultada(s))"); o peso é só o conhecido."""
     total, incomplete, count = summarize(proposal_ids, weights)
-    text = fmt_kg(total)
-    if incomplete:
-        text += f" · {incomplete} de {count} propostas com peso ausente ou incompleto"
+    detail = f"{incomplete} de {count} propostas com peso ausente ou incompleto" if incomplete else ""
     unknown = len({pid for pid in proposal_ids if weights.get(pid, (None, 0))[1] == NOT_QUERIED})
     if unknown:
-        text += f" ({unknown} não consultada(s))"
-    return text
+        detail += f" ({unknown} não consultada(s))"
+    return fmt_kg(total), detail
 
 
-# shortcut: Qt não documenta page-break-inside em <tr>; em teste com 159 linhas o Qt já não cortou linha
-# (com ou sem o estilo). Se aparecer corte com linhas de várias linhas de texto, paginar à mão.
-AVOID_BREAK = " style='page-break-inside: avoid'"
+def _weight_line(proposal_ids: list[Any], weights: dict[int, Weight]) -> str:
+    kg, detail = _weight_parts(proposal_ids, weights)
+    return f"{kg} · {detail}" if detail else kg
 
 
 def _th(label: str, right: bool = False) -> str:
-    return f"<th bgcolor='{T['accent']}' align='{'right' if right else 'left'}'>{_color(T['accent_text'], label, True)}</th>"
+    width = " width='15%'" if right else ""
+    return f"<th bgcolor='{T['accent']}' align='{'right' if right else 'left'}'{width}>{_color(T['accent_text'], label, True)}</th>"
 
 
 def _items_table(items: list[dict[str, Any]], weights: dict[int, Weight], total_label: str) -> str:
     head = "<tr>" + _th("Proposta") + _th("Pedido (PD)") + _th("Cliente / obra") + _th("Inspeção") + _th("Peso", True) + "</tr>"
-    rows, partial = [], False
+    rows, partial, notes = [], False, []
     for index, item in enumerate(items):
         weight, missing = weights.get(item.get("proposal_id"), (None, 0))
         mark = " *" if weight is not None and missing else ""
@@ -94,7 +93,7 @@ def _items_table(items: list[dict[str, Any]], weights: dict[int, Weight], total_
         partial = partial or bool(mark)
         zebra = f" bgcolor='{T['zebra']}'" if index % 2 else ""
         rows.append(
-            f"<tr{zebra}{AVOID_BREAK}>"
+            f"<tr{zebra}>"
             f"<td>{_text(item.get('proposal_number'))}</td>"
             f"<td>{_text(item.get('pd_code'))}</td>"
             f"<td>{_text(' / '.join(part for part in (item.get('customer_name'), item.get('project_name')) if part))}</td>"
@@ -105,12 +104,13 @@ def _items_table(items: list[dict[str, Any]], weights: dict[int, Weight], total_
     if not rows:
         rows.append("<tr><td colspan='5'>Nenhuma proposta neste LOG</td></tr>")
     else:
-        line = _weight_line([item.get("proposal_id") for item in items], weights)
+        kg, detail = _weight_parts([item.get("proposal_id") for item in items], weights)
         rows.append(
             f"<tr bgcolor='{T['table_header']}'><td colspan='4' align='right'><b>{escape(total_label)}</b></td>"
-            f"<td align='right'><b>{escape(line)}</b></td></tr>"
+            f"<td align='right'><b>{escape(kg)}</b></td></tr>"
         )
-    note = f"<p>{_color(T['muted'], '* peso parcial: há itens sem peso informado nesta proposta.')}</p>" if partial else ""
+        notes = (["* peso parcial: há itens sem peso informado nesta proposta."] if partial else []) + ([f"{total_label}: {detail}."] if detail else [])
+    note = f"<p>{_color(T['muted'], '<br>'.join(escape(n) for n in notes))}</p>" if notes else ""
     return f"<table cellspacing='0' cellpadding='5' width='100%'><thead>{head}</thead><tbody>{''.join(rows)}</tbody></table>{note}"
 
 
@@ -145,7 +145,7 @@ def log_report_html(
     weights = weights or {}
     ids = [item.get("proposal_id") for item in active_items(log)]
     summary = _summary([
-        ("Propostas", str(len(set(ids)))),
+        ("Propostas", str(len({pid for pid in ids if pid is not None}))),
         ("Peso total", _weight_line(ids, weights)),
         ("Etapa", stage_text(log.get("display_stage") or log.get("stage"))),
         ("Carregamento", _date(log.get("loading_date"))),
@@ -175,12 +175,61 @@ def load_report_html(
     return f"<html><body>{_logo()}<h2>{title}</h2>{summary}{_kv_table([('Saiu em', departed)])}<br>{sections}{total}</body></html>"
 
 
-def _print_pdf(html: str, path: str | Path, issued_by: str = "", issued_at: datetime | None = None) -> None:
-    """PDF A4 paginado à mão (QPainter) para ter o rodapé "página X de Y", que print_() não faz."""
+def _page_cuts(document: QTextDocument) -> list[tuple[float, tuple[float, float] | None]]:
+    """Posições Y onde se pode começar uma página: linha de texto solta ou linha de tabela inteira.
+
+    Cada corte traz o (topo, base) do cabeçalho da tabela a repetir, se cair dentro de uma tabela.
+    """
+    layout, cuts = document.documentLayout(), []
+    block = document.begin()
+    while block.isValid():
+        cursor = QTextCursor(block)
+        table = cursor.currentTable()
+        if table is None:
+            top = layout.blockBoundingRect(block).top()
+            lines = block.layout().lineCount() if block.layout() else 0
+            cuts += [(top + block.layout().lineAt(i).y(), None) for i in range(lines)]
+        else:
+            cell, heads = table.cellAt(cursor), table.format().headerRowCount()
+            # só o primeiro bloco da primeira célula de cada linha marca o topo da linha
+            first = table.cellAt(cell.row(), 0)
+            if cell.column() == 0 and block == first.firstCursorPosition().block() and cell.row() >= heads + 1:
+                pad = table.format().cellPadding() + table.format().cellSpacing()
+                head = table.cellAt(0, 0).firstCursorPosition().block()
+                head_top = layout.blockBoundingRect(head).top() - pad
+                head_bottom = layout.blockBoundingRect(table.cellAt(heads, 0).firstCursorPosition().block()).top() - pad
+                cuts.append((layout.blockBoundingRect(block).top() - pad, (head_top, head_bottom) if heads else None))
+        block = block.next()
+    return sorted(cuts, key=lambda cut: cut[0])
+
+
+def _paginate(document: QTextDocument, body_h: float) -> list[tuple[float, float, tuple[float, float] | None]]:
+    """Páginas como (y0, y1, cabeçalho a repetir): corta só em limite de linha, nunca no meio dela."""
+    cuts, total = _page_cuts(document), document.size().height()
+    pages, y0, head = [], 0.0, None
+    while True:
+        room = body_h - (head[1] - head[0] if head else 0)
+        if total - y0 <= room:
+            pages.append((y0, total, head))
+            return pages
+        # corte: o maior limite que ainda cabe; se uma linha sozinha passa da página, corta no limite da página
+        fit = [cut for cut in cuts if y0 + 1 < cut[0] <= y0 + room]
+        y1, next_head = fit[-1] if fit else (y0 + room, None)
+        pages.append((y0, y1, head))
+        y0, head = y1, next_head
+
+
+def _document(html: str, width: float) -> QTextDocument:
     document = QTextDocument()
     if LOGO_PATH.exists():
         document.addResource(QTextDocument.ResourceType.ImageResource, QUrl("logo"), QImage(str(LOGO_PATH)))
     document.setHtml(html)
+    document.setPageSize(QSizeF(width, -1))  # folha contínua: a paginação é de _paginate, não do Qt
+    return document
+
+
+def _print_pdf(html: str, path: str | Path, issued_by: str = "", issued_at: datetime | None = None) -> None:
+    """PDF A4 paginado à mão (QPainter): rodapé "página X de Y" e corte só entre linhas, que o print_() do Qt não garante."""
     printer = QPrinter(QPrinter.HighResolution)
     printer.setOutputFormat(QPrinter.PdfFormat)
     printer.setOutputFileName(str(path))
@@ -189,27 +238,35 @@ def _print_pdf(html: str, path: str | Path, issued_by: str = "", issued_at: date
     page = printer.pageRect(QPrinter.Unit.DevicePixel)
     footer_h = 28.0
     width, body_h = page.width() / scale, page.height() / scale - footer_h
-    document.setPageSize(QSizeF(width, body_h))
-    pages = max(1, document.pageCount())
+    document = _document(html, width)
+    layout = _paginate(document, body_h)
     issued = (issued_at or datetime.now()).strftime("%d/%m/%Y %H:%M")
     painter = QPainter(printer)
     try:
         painter.scale(scale, scale)
         font = QFont(painter.font())
         font.setPixelSize(10)
-        for number in range(pages):
+        for number, (y0, y1, head) in enumerate(layout):
             if number:
                 printer.newPage()
+            top = 0.0
+            if head:  # continuação de tabela: repete o cabeçalho
+                top = head[1] - head[0]
+                painter.save()
+                painter.setClipRect(QRectF(0, 0, width, top))
+                painter.translate(0, -head[0])
+                document.drawContents(painter, QRectF(0, head[0], width, top))
+                painter.restore()
             painter.save()
-            painter.setClipRect(QRectF(0, 0, width, body_h))
-            painter.translate(0, -number * body_h)
-            document.drawContents(painter, QRectF(0, number * body_h, width, body_h))
+            painter.setClipRect(QRectF(0, top, width, y1 - y0))
+            painter.translate(0, top - y0)
+            document.drawContents(painter, QRectF(0, y0, width, y1 - y0))
             painter.restore()
             painter.setFont(font)
             painter.setPen(T["muted"])
             footer = QRectF(0, body_h + 6, width, footer_h - 6)
             painter.drawText(footer, int(Qt.AlignLeft | Qt.AlignVCenter), f"Emitido por {issued_by or '—'} em {issued}")
-            painter.drawText(footer, int(Qt.AlignRight | Qt.AlignVCenter), f"página {number + 1} de {pages}")
+            painter.drawText(footer, int(Qt.AlignRight | Qt.AlignVCenter), f"página {number + 1} de {len(layout)}")
     finally:
         painter.end()
 

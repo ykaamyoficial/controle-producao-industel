@@ -53,7 +53,7 @@ Spec: `docs/spec-logistica-relatorio-peso.md`. Plano: `docs/plano-logistica-rela
 - **Rodapé paginado:** "Emitido por ... · página X de Y" desenhado com `QPainter` em cada página. Cores por token. Os testes conferem o rodapé pelo que o `QPainter` desenha, sem depender de fonte.
 - **Limitações e pendências:**
   - "Informar peso" só salva para proposta na Produção. A lista do LOG não traz a área da proposta e a API devolve 409 nas outras. O botão não é desabilitado por proposta; o motivo fica na dica. Decisão pendente do Henrique: expor a área na API ou consultar antes.
-  - A linha da tabela do PDF usa `page-break-inside: avoid`; se o Qt não honrar, a linha pode cortar entre páginas.
+  - Paginação do PDF é manual (`_paginate` em `log_report.py`): corta só no topo de linha de tabela ou de linha de texto e repete o cabeçalho da tabela, então linha de proposta não parte entre páginas (conferido com 120 e 159 linhas, cliente de 1 a 12 linhas). O detalhe de peso incompleto/não consultado fica numa nota abaixo da tabela, não na célula estreita do total.
   - As consultas de peso por proposta rodam na thread de UI, uma por proposta, e a tela pode ficar parada em carga grande.
   - Texto do PDF continua não verificável em teste offscreen; não conferido com dados reais.
 

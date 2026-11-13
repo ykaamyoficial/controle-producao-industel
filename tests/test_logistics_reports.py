@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import tempfile
 import unittest
 from datetime import datetime
@@ -217,14 +218,41 @@ class PdfTests(QtCase):
             self.assertTrue(document[0].get_images())
 
     def test_long_table_breaks_pages_without_cutting_rows(self):
-        items = [_item(f"{10000 + i}/A", pd=f"PD-{i}") for i in range(160)]
+        # clientes de 1 a 12 linhas: linha alta é o caso em que o Qt cortava no meio.
+        items = [{**_pitem(i, f"PR-{i:04d}"), "project_name": f"Obra {i}", "customer_name": "Torres Norte " * (1 + i % 12)} for i in range(1, 160)]
+        html = log_report_html(_log(items=items), {i: (None, -1) for i in range(1, 160)})
+        width, body_h = 680.0, 900.0
+        document = log_report._document(html, width)
+        cut_tops = {y for y, _ in log_report._page_cuts(document)}
+        pages = log_report._paginate(document, body_h)
+        self.assertGreater(len(pages), 5)
+        for (y0, y1, head), (n0, _, _) in zip(pages, pages[1:]):
+            self.assertEqual(y1, n0)
+            self.assertIn(y1, cut_tops)  # cada corte cai no topo de uma linha, nunca dentro dela
+        self.assertTrue(all(head for _, _, head in pages[1:]))  # continuação repete o cabeçalho
+        for y0, y1, head in pages:
+            self.assertLessEqual(y1 - y0 + (head[1] - head[0] if head else 0), body_h)
+        # a linha de total vai junto com o rótulo (mesma célula de linha) e o aviso não está na célula estreita
+        self.assertIn("Total", html)
+        self.assertIn("159 de 159 propostas com peso ausente ou incompleto (159 não consultada(s))", html)
+
+    def test_pdf_pages_hold_whole_rows(self):
+        items = [{**_pitem(i, f"PR-{i:04d}"), "project_name": f"Obra {i}", "customer_name": "Torres Norte " * (1 + i % 12)} for i in range(1, 160)]
         build_log_report(_log(items=items), self.path("longo.pdf"))
         with fitz.open(self.path("longo.pdf")) as document:
-            self.assertGreater(document.page_count, 1)
-        html = log_report_html(_log(items=items))
-        self.assertIn("<thead>", html)
-        for number in ("10000/A", "10080/A", "10159/A"):
-            self.assertIn(number, html)
+            texts = [" ".join(page.get_text().split()) for page in document]
+        if not any("PR-0001" in text for text in texts):
+            self.skipTest("sem fonte instalada o Qt grava caixas em vez de texto")
+        self.assertGreater(len(texts), 5)
+        for i in range(1, 160):
+            number = [n for n, text in enumerate(texts) if f"PR-{i:04d}" in text]
+            obra = [n for n, text in enumerate(texts) if re.search(rf"Obra {i}(?!\d)", text)]
+            self.assertEqual(number, obra, f"linha {i} dividida entre páginas")
+            self.assertEqual(len(number), 1)
+
+    def test_log_card_ignores_missing_proposal_id(self):
+        html = log_report_html(_log(items=[{**_item("A/1"), "proposal_id": None}, _pitem(2, "B/1")]))
+        self.assertIn("<b>1</b>", html)
 
 
 class FakeWeightService:
