@@ -178,15 +178,22 @@ class WeightHtmlTests(unittest.TestCase):
 
 class PdfTests(QtCase):
     def test_footer_has_issuer_date_and_page_x_of_y(self):
+        # O texto extraido do PDF depende de fonte instalada; por isso grava-se o que o QPainter desenha.
+        drawn = []
+        original = log_report.QPainter.drawText
+
+        def record(painter, *args):
+            drawn.append(args[-1])
+            return original(painter, *args)
+
         items = [_pitem(i, f"{10000 + i}/A") for i in range(1, 161)]
-        build_log_report(_log(items=items), self.path("rod.pdf"), {}, "Maria", datetime(2026, 11, 13, 9, 5))
+        with patch.object(log_report.QPainter, "drawText", record):
+            build_log_report(_log(items=items), self.path("rod.pdf"), {}, "Maria", datetime(2026, 11, 13, 9, 5))
         with fitz.open(self.path("rod.pdf")) as document:
             pages = document.page_count
-            self.assertGreater(pages, 1)
-            for number, page in enumerate(document, 1):
-                text = page.get_text()
-                self.assertIn(f"página {number} de {pages}", text)
-                self.assertIn("Emitido por Maria em 13/11/2026 09:05", text)
+        self.assertGreater(pages, 1)
+        self.assertEqual(drawn[0::2], ["Emitido por Maria em 13/11/2026 09:05"] * pages)
+        self.assertEqual(drawn[1::2], [f"página {n} de {pages}" for n in range(1, pages + 1)])
 
     def test_log_pdf_is_written(self):
         build_log_report(_log(), self.path("log.pdf"))
