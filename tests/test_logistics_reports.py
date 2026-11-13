@@ -114,24 +114,24 @@ class HtmlTests(unittest.TestCase):
         html = log_report_html(_log(items=[_item("10480/B", finished=True), _item("10483/A", pd="PD-2", inspection_stage="solicitada", finished=False)]))
         self.assertNotIn("Inspeção", html)  # relatório enxuto: sem coluna de inspeção
         self.assertNotIn("Estado", html)
-        self.assertIn("LOG101</span></h3>", html)
+        self.assertIn("LOG101", html)
         self.assertNotIn("<a ", html)
         self.assertNotIn("href", html)
 
     def test_load_html_shows_label_for_pd_without_doc(self):
         html = load_report_html(_load())
-        self.assertIn("Carga CE-01", html)
+        self.assertIn("CARGA CE-01", html)
         self.assertNotIn("Inspeção", html)
         self.assertIn("10483/A", html)
-        self.assertIn("Saída 12/11/2026", html)
-        self.assertIn("Entrega 13/11/2026", html)
+        self.assertIn("SAÍDA 20/11", html)
+        self.assertIn("CARREGA 12/11 ENTREGA 13/11", html)
 
     def test_sem_inspecao_label(self):
         self.assertEqual(log_report.inspection_text({"inspection_stage": None, "inspection_finished": False}), "Sem inspeção")
         self.assertEqual(log_report.inspection_text({"inspection_stage": "nqt", "inspection_finished": False}), "Inspeção: NQT gerado")
 
     def test_html_escapes_user_text(self):
-        html = log_report_html(_log(items=[{**_item("10480/B"), "customer_name": "<b>ACME</b>"}]))
+        html = log_report_html(_log(items=[_item("<b>ACME</b>")]))
         self.assertIn("&lt;b&gt;ACME&lt;/b&gt;", html)
 
 
@@ -143,21 +143,21 @@ class WeightHtmlTests(unittest.TestCase):
     def test_log_weight_total_dash_and_missing_count(self):
         log = _log(items=[_pitem(1, "A/1"), _pitem(2, "B/1"), _pitem(3, "C/1")])
         html = log_report_html(log, {1: (1234.5, 0), 2: (None, 1), 3: (10.0, 2)})
-        self.assertIn("1.234,50 kg", html)
-        self.assertIn("—", html)
-        self.assertIn("10,00 kg *", html)
-        self.assertIn("1.244,50 kg · 2 de 3 propostas com peso ausente ou incompleto", html)
+        self.assertIn("A/1 – PD-1 – 1.235 Kg", html)
+        self.assertIn("B/1 – PD-1 – —", html)
+        self.assertIn("C/1 – PD-1 – 10 Kg *", html)
+        self.assertIn("PESO TOTAL: 1.245 Kg", html)
+        self.assertIn("2 de 3 propostas com peso ausente ou incompleto", html)
         self.assertIn("* peso parcial", html)
 
     def test_no_weights_shows_dash_total_not_zero(self):
         html = log_report_html(_log(), None)
-        self.assertNotIn("0,00 kg", html)
+        self.assertNotIn("0 Kg", html)
         self.assertIn("1 de 1 propostas com peso ausente ou incompleto", html)
 
     def test_not_queried_is_not_shown_as_no_weight(self):
         html = log_report_html(_log(), {1: (None, -1)})
         self.assertIn("não consultado", html)
-        self.assertIn("1 não consultada(s)", html)
 
     def test_all_known_has_no_missing_text(self):
         self.assertNotIn("sem peso", log_report_html(_log(items=[_pitem(1, "A/1")]), {1: (5.0, 0)}))
@@ -166,8 +166,8 @@ class WeightHtmlTests(unittest.TestCase):
         gone = {**_pitem(9, "ZZ/9"), "removed_at": "2026-11-01T00:00:00Z"}
         html = log_report_html(_log(items=[_pitem(1, "A/1"), gone]), {1: (5.0, 0), 9: (100.0, 0)})
         self.assertNotIn("ZZ/9", html)
-        self.assertIn("5,00 kg", html)
-        self.assertNotIn("105,00", html)
+        self.assertIn("PESO TOTAL: 5 Kg", html)
+        self.assertNotIn("105", html)
 
     def test_load_subtotal_per_log_and_shared_proposal_counted_once(self):
         load = _load(logs=[
@@ -175,12 +175,10 @@ class WeightHtmlTests(unittest.TestCase):
             _log(id=2, code="LOG2", items=[_pitem(2, "B/1"), _pitem(3, "C/1")]),
         ])
         html = load_report_html(load, {1: (10.0, 0), 2: (20.0, 0), 3: (30.0, 0)})
-        self.assertIn("Subtotal do LOG", html)
-        self.assertIn("30,00 kg", html)  # LOG1
-        self.assertIn("50,00 kg", html)  # LOG2 (proposta 2 repete aqui)
-        self.assertIn("Total da carga", html)
-        self.assertIn("60,00 kg", html)  # 10+20+30, e nao 80
-        self.assertNotIn("80,00 kg", html)
+        self.assertIn("PESO DO LOG: 30 Kg", html)  # LOG1
+        self.assertIn("PESO DO LOG: 50 Kg", html)  # LOG2 (proposta 2 repete aqui)
+        self.assertIn("PESO TOTAL DA CARGA: 60 Kg", html)  # 10+20+30, e nao 80
+        self.assertNotIn("80 Kg", html)
 
 
 class PdfTests(QtCase):
@@ -223,31 +221,30 @@ class PdfTests(QtCase):
         html = log_report_html(_log(items=items), {i: (None, -1) for i in range(1, 160)})
         body_h = 900.0
         pages = log_report._paginate(log_report._document(html, 680.0), body_h)
-        self.assertGreater(len(pages), 5)
+        self.assertGreater(len(pages), 3)
         for (y0, y1, head), (n0, _, _) in zip(pages, pages[1:]):
             self.assertEqual(y1, n0)
-        self.assertTrue(all(head for _, _, head in pages[1:]))  # continuação repete o cabeçalho
         for y0, y1, head in pages:
             self.assertLessEqual(y1 - y0 + (head[1] - head[0] if head else 0), body_h)
-        self.assertIn("159 de 159 propostas com peso ausente ou incompleto (159 não consultada(s))", html)
+        self.assertIn("159 de 159 propostas com peso ausente ou incompleto", html)
 
     def _pdf_texts(self, name):
         with fitz.open(self.path(name)) as document:
             return [" ".join(page.get_text().split()) for page in document]
 
-    def _check_pages(self, texts, pids, logs, total_label, tag):
+    def _check_pages(self, texts, pids, logs, total_label, tag, total_count=None):
         footer = re.compile(r"Emitido por .*$")
         body = [footer.sub("", text).strip() for text in texts]
         self.assertTrue(all(body), f"{tag}: página só com rodapé")  # inclui a última
         for i in pids:
-            where = [{n for n, text in enumerate(texts) if re.search(re.escape(tok) + r"(?!\d)", text)} for tok in (f"PR-{i:04d}", f"Obra {i}", f"FIM{i}")]
-            self.assertTrue(where[0] == where[1] == where[2] and len(where[0]) == 1, f"{tag}: linha {i} dividida {where}")
+            where = [{n for n, text in enumerate(texts) if re.search(re.escape(tok) + r"(?!\d)", text)} for tok in (f"PR-{i:04d}",)]
+            self.assertTrue(len(where[0]) == 1, f"{tag}: linha {i} dividida ou ausente {where}")
         # rótulo e valor na mesma página (o texto das páginas é concatenado, então um corte entre eles quebra o padrão por página)
         counts = {
-            f"{total_label} 1": sum(len(re.findall(rf"{total_label} [\d.,]+ kg", text)) for text in texts),
-            "Entrega": sum(len(re.findall(r"Entrega \d\d/\d\d/\d{4}", text)) for text in texts),
+            f"{total_label} 1": sum(len(re.findall(rf"{total_label}: [\d.,]+ Kg", text)) for text in texts),
+            "Entrega": sum(len(re.findall(r"CARREGA \d\d/\d\d ENTREGA \d\d/\d\d", text)) for text in texts),
         }
-        self.assertEqual(counts[f"{total_label} 1"], logs, f"{tag}: total dividido")
+        self.assertEqual(counts[f"{total_label} 1"], total_count or logs, f"{tag}: total dividido")
         self.assertEqual(counts["Entrega"], logs, f"{tag}: bloco de datas dividido")
 
     def test_pdf_sweep_never_splits_totals_or_leaves_footer_only_page(self):
@@ -265,13 +262,13 @@ class PdfTests(QtCase):
                 build_log_report(_log(code="LOG-1", items=make(1, n + 1)), self.path("l.pdf"), weights, "Maria")
                 texts = self._pdf_texts("l.pdf")
                 multi += len(texts) > 1
-                self._check_pages(texts, range(1, n + 1), 1, "Total", "log " + tag)
+                self._check_pages(texts, range(1, n + 1), 1, "PESO TOTAL", "log " + tag, total_count=2)  # topo e rodapé do bloco
                 half = n // 2
                 logs = [_log(code=f"LOG-{j}", items=items) for j, items in ((1, make(1, half + 1)), (2, make(half + 1, n + 1)))]
                 build_load_report(_load(logs=logs), self.path("c.pdf"), weights, "Maria")
                 texts = self._pdf_texts("c.pdf")
-                self._check_pages(texts, range(1, n + 1), 2, "Subtotal do LOG", "carga " + tag)
-                self.assertEqual(sum(len(re.findall(r"Total da carga [\d.,]+ kg", t)) for t in texts), 1, f"carga {tag}: Total da carga dividido")
+                self._check_pages(texts, range(1, n + 1), 2, "PESO DO LOG", "carga " + tag)
+                self.assertEqual(sum(len(re.findall(r"PESO TOTAL DA CARGA: [\d.,]+ Kg", t)) for t in texts), 2, f"carga {tag}: total da carga dividido")
         self.assertGreater(multi, 2)
 
     def test_pagination_sweep_geometry(self):
@@ -345,7 +342,8 @@ class PdfTests(QtCase):
 
     def test_log_card_ignores_missing_proposal_id(self):
         html = log_report_html(_log(items=[{**_item("A/1"), "proposal_id": None}, _pitem(2, "B/1")]))
-        self.assertIn("<b>1</b>", html)
+        self.assertIn("A/1", html)
+        self.assertIn("B/1", html)
 
 
 class FakeWeightService:

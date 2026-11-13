@@ -10,7 +10,7 @@ from PySide6.QtGui import QFont, QImage, QPageLayout, QPainter, QTextCursor, QTe
 from PySide6.QtPrintSupport import QPrinter
 
 from app.services.inspection_service import STAGE_LABELS as INSPECTION_STAGE_LABELS
-from app.services.log_weight import NOT_QUERIED, Weight, active_items, fmt_kg, summarize
+from app.services.log_weight import NOT_QUERIED, Weight, active_items, summarize
 from app.services.logistics_service import LOG_STAGE_LABELS
 from app.ui.theme_tokens import _FALLBACK_PALETTE, ui_tokens
 
@@ -19,11 +19,6 @@ LOGO_PATH = Path(__file__).resolve().parents[1] / "assets" / "images" / "logo.pn
 # Papel é sempre claro: cores da paleta clara da marca, por token, mesmo com tema escuro ativo.
 T = ui_tokens(_FALLBACK_PALETTE)
 STAGE_TEXT = {**LOG_STAGE_LABELS, "entregue": "Entregue"}
-
-
-def _delivery(log: dict[str, Any]) -> str:
-    """Entrega real quando já houve; senão a prevista no CD."""
-    return _date(log.get("delivered_on") or log.get("delivery_date"))
 
 
 def stage_text(stage: str | None) -> str:
@@ -54,71 +49,69 @@ def _color(color: str, html: str, bold: bool = False) -> str:
     return f"<span style='color:{color}'>{html}</span>"
 
 
-def _weight_parts(proposal_ids: list[Any], weights: dict[int, Weight]) -> tuple[str, str]:
-    """("12.340,00 kg", "2 de 5 propostas com peso ausente ou incompleto (1 não consultada(s))"); o peso é só o conhecido."""
-    total, incomplete, count = summarize(proposal_ids, weights)
-    detail = f"{incomplete} de {count} propostas com peso ausente ou incompleto" if incomplete else ""
-    unknown = len({pid for pid in proposal_ids if weights.get(pid, (None, 0))[1] == NOT_QUERIED})
-    if unknown:
-        detail += f" ({unknown} não consultada(s))"
-    return fmt_kg(total), detail
+HIGHLIGHT = "#ffff00"  # marca-texto do papel, igual à planilha manual da expedição (não é cor de tela)
 
 
-def _weight_line(proposal_ids: list[Any], weights: dict[int, Weight]) -> str:
-    kg, detail = _weight_parts(proposal_ids, weights)
-    return f"{kg} · {detail}" if detail else kg
+def _short(value: Any) -> str:
+    """dd/mm, como na folha manual."""
+    return date.fromisoformat(str(value)[:10]).strftime("%d/%m") if value else "—"
 
 
-def _th(label: str) -> str:
-    return f"<th bgcolor='{T['accent']}' align='center'>{_color(T['accent_text'], label, True)}</th>"
+def _kg_int(value: float | None) -> str:
+    """Peso inteiro com ponto de milhar, como na folha manual: 5.119 Kg."""
+    return "—" if value is None else f"{int(value + 0.5):,}".replace(",", ".") + " Kg"
 
 
-def _items_table(items: list[dict[str, Any]], weights: dict[int, Weight], total_label: str) -> str:
-    head = "<tr>" + _th("Proposta") + _th("Pedido (PD)") + _th("Cliente / obra") + _th("Peso") + "</tr>"
-    rows, partial, notes = [], False, []
-    for index, item in enumerate(items):
+def _big(text: str, size: int = 14, highlight: bool = False, heading: bool = False) -> str:
+    """Linha grande, centralizada e em negrito. `heading` usa <h3> para o corte de página não deixá-la sozinha no fim."""
+    back = f"background-color:{HIGHLIGHT};" if highlight else ""
+    if heading:
+        # o Qt ignora font-size dentro de <h3>; <font size> funciona (6 = 18pt, 5 = 14pt)
+        inner = f"<font size='{6 if size >= 18 else 5}'><span style='{back}'>{text}</span></font>"
+        return f"<h3 align='center'><b>{inner}</b></h3>"
+    return f"<p align='center'><b><span style='font-size:{size}pt;{back}'>{text}</span></b></p>"
+
+
+def _lines(items: list[dict[str, Any]], weights: dict[int, Weight]) -> tuple[str, str]:
+    """Uma linha por proposta ("CP 5702 – 5400128517 – 5.119 Kg") e as notas de peso incompleto."""
+    rows, partial = [], False
+    for item in items:
         weight, missing = weights.get(item.get("proposal_id"), (None, 0))
         mark = " *" if weight is not None and missing else ""
-        weight_text = "não consultado" if missing == NOT_QUERIED else fmt_kg(weight)
         partial = partial or bool(mark)
-        zebra = f" bgcolor='{T['zebra']}'" if index % 2 else ""
-        rows.append(
-            f"<tr{zebra}>"
-            f"<td align='center'>{_text(item.get('proposal_number'))}</td>"
-            f"<td align='center'>{_text(item.get('pd_code'))}</td>"
-            f"<td align='center'>{_text(' / '.join(part for part in (item.get('customer_name'), item.get('project_name')) if part))}</td>"
-            f"<td align='center'>{weight_text}{mark}</td>"
-            "</tr>"
-        )
+        weight_text = "não consultado" if missing == NOT_QUERIED else _kg_int(weight)
+        rows.append(_big(f"{_text(item.get('proposal_number'))} – {_text(item.get('pd_code'))} – {weight_text}{mark}"))
     if not rows:
-        rows.append("<tr><td colspan='4' align='center'>Nenhuma proposta neste LOG</td></tr>")
-    else:
-        kg, detail = _weight_parts([item.get("proposal_id") for item in items], weights)
-        rows.append(
-            f"<tr bgcolor='{T['table_header']}'><td colspan='3' align='center'><b>{escape(total_label)}</b></td>"
-            f"<td align='center'><b>{escape(kg)}</b></td></tr>"
-        )
-        notes = (["* peso parcial: há itens sem peso informado nesta proposta."] if partial else []) + ([f"{total_label}: {detail}."] if detail else [])
-    note = f"<p align='center'>{_color(T['muted'], '<br>'.join(escape(n) for n in notes))}</p>" if notes else ""
-    return f"<table cellspacing='0' cellpadding='5' width='100%'><thead>{head}</thead><tbody>{''.join(rows)}</tbody></table>{note}"
+        rows.append(_big("Nenhuma proposta neste LOG"))
+    notes = ["* peso parcial: há itens sem peso informado nesta proposta."] if partial else []
+    return "".join(rows), "".join(f"<p align='center'>{_color(T['muted'], escape(n))}</p>" for n in notes)
 
 
-def _log_section(log: dict[str, Any], heading: str, weights: dict[int, Weight], subtotal: bool = False) -> str:
-    total_label = "Subtotal do LOG" if subtotal else "Total"
-    dates = f"<p align='center'>{_color(T['muted'], 'Saída ' + _date(log.get('loading_date')) + ' · Entrega ' + _delivery(log))}</p>" if subtotal else ""
-    table = _items_table(active_items(log), weights, total_label)
-    return f"<h3 align='center'>{_color(T['accent'], heading)}</h3>{dates}{table}<br>"
+def _total(label: str, items: list[dict[str, Any]], weights: dict[int, Weight]) -> str:
+    total, incomplete, count = summarize([item.get("proposal_id") for item in items], weights)
+    html = _big(f"{label}: {escape(_kg_int(total))}", 18)
+    if incomplete:
+        html += f"<p align='center'>{_color(T['muted'], escape(f'{incomplete} de {count} propostas com peso ausente ou incompleto.'))}</p>"
+    return html
 
 
-def _summary(cards: list[tuple[str, str]]) -> str:
-    cells = "".join(
-        f"<td align='center' bgcolor='{T['accent_soft']}'>{_color(T['muted'], escape(label))}<br><b>{escape(value)}</b></td>" for label, value in cards
-    )
-    return f"<table cellspacing='6' cellpadding='6' width='100%'><tr>{cells}</tr></table><br>"
+def _dates(log: dict[str, Any]) -> str:
+    return _big(f"CARREGA {_short(log.get('loading_date'))} ENTREGA {_short(log.get('delivered_on') or log.get('delivery_date'))}", 14, True, True)
+
+
+def _log_block(log: dict[str, Any], weights: dict[int, Weight], total_label: str) -> str:
+    items = active_items(log)
+    lines, notes = _lines(items, weights)
+    return f"{_big(_text(log.get('code')), 18, heading=True)}{_dates(log)}{lines}{notes}{_total(total_label, items, weights)}"
 
 
 def _logo() -> str:
-    return "<p align='center'><img src='logo' width='150'></p>" if LOGO_PATH.exists() else ""
+    return "<p align='center'><img src='logo' width='130'></p>" if LOGO_PATH.exists() else ""
+
+
+def _top_total(label: str, items: list[dict[str, Any]], weights: dict[int, Weight]) -> str:
+    total = summarize([item.get("proposal_id") for item in items], weights)[0]
+    return _big(f"{label}: {escape(_kg_int(total))}", 20)
 
 
 def log_report_html(
@@ -126,15 +119,8 @@ def log_report_html(
 ) -> str:
     """HTML do relatório do LOG. `issued_by`/`issued_at` só entram no rodapé do PDF (_print_pdf)."""
     weights = weights or {}
-    ids = [item.get("proposal_id") for item in active_items(log)]
-    summary = _summary([
-        ("Propostas", str(len({pid for pid in ids if pid is not None}))),
-        ("Peso total", _weight_line(ids, weights)),
-        ("Saída", _date(log.get("loading_date"))),
-        ("Entrega", _delivery(log)),
-    ])
-    title = _color(T["accent"], "Relatório do LOG")
-    return f"<html><body>{_logo()}<h2 align='center'>{title}</h2>{summary}{_log_section(log, _text(log.get('code')), weights)}</body></html>"
+    items = active_items(log)
+    return f"<html><body>{_logo()}{_top_total('PESO TOTAL', items, weights)}{_log_block(log, weights, 'PESO TOTAL')}</body></html>"
 
 
 def load_report_html(
@@ -142,20 +128,16 @@ def load_report_html(
 ) -> str:
     weights = weights or {}
     logs = load.get("logs") or []
-    departed = _date(load.get("departed_on") or load.get("departure_date"))
-    # Regra: o subtotal de cada LOG conta as propostas dele; o total da carga conta cada
+    # Regra: o peso de cada LOG conta as propostas dele; o total da carga conta cada
     # proposta uma vez, mesmo que ela apareça em dois LOGs (summarize deduplica).
-    ids = [item.get("proposal_id") for log in logs for item in active_items(log)]
-    summary = _summary([
-        ("LOGs", str(len(logs))),
-        ("Propostas", str(len({pid for pid in ids if pid is not None}))),
-        ("Peso total da carga", _weight_line(ids, weights)),
-        ("Saída", departed),
-    ])
-    sections = "".join(_log_section(log, _text(log.get("code")), weights, subtotal=True) for log in logs)
-    total = f"<h3 align='center'>{_color(T['accent'], 'Total da carga')}</h3><p align='center'><b>{escape(_weight_line(ids, weights))}</b></p>"
-    title = _color(T["accent"], "Carga " + _text(load.get("code")))
-    return f"<html><body>{_logo()}<h2 align='center'>{title}</h2>{summary}{sections}{total}</body></html>"
+    items = [item for log in logs for item in active_items(log)]
+    saida = _short(load.get("departed_on") or load.get("departure_date"))
+    blocks = "".join(_log_block(log, weights, "PESO DO LOG") for log in logs)
+    return (
+        f"<html><body>{_logo()}{_top_total('PESO TOTAL DA CARGA', items, weights)}"
+        f"{_big('CARGA ' + _text(load.get('code')), 18, heading=True)}{_big('SAÍDA ' + saida, 14, True, True)}{blocks}"
+        f"{_total('PESO TOTAL DA CARGA', items, weights)}</body></html>"
+    )
 
 
 def _page_cuts(document: QTextDocument) -> list[tuple[float, tuple[float, float] | None]]:
