@@ -59,7 +59,7 @@ class CollectTests(unittest.TestCase):
     def test_api_error_becomes_no_weight_without_raising(self):
         with self.assertLogs("app.services.log_weight", "WARNING"):
             weights = collect_weights(FakeService({1: [_it("1")]}, fail={2}), self._logs())
-        self.assertEqual(weights[2], (None, 0))
+        self.assertEqual(weights[2], (None, -1))  # não consultado, != sem peso
         self.assertEqual(weights[1], (1.0, 0))
 
     def test_summarize_counts_shared_proposal_once(self):

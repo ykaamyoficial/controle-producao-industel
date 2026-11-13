@@ -10,7 +10,7 @@ from PySide6.QtGui import QFont, QImage, QPageLayout, QPainter, QTextDocument
 from PySide6.QtPrintSupport import QPrinter
 
 from app.services.inspection_service import STAGE_LABELS as INSPECTION_STAGE_LABELS
-from app.services.log_weight import Weight, active_items, fmt_kg, summarize
+from app.services.log_weight import NOT_QUERIED, Weight, active_items, fmt_kg, summarize
 from app.services.logistics_service import LOG_STAGE_LABELS
 from app.ui.theme_tokens import _FALLBACK_PALETTE, ui_tokens
 
@@ -64,12 +64,20 @@ def _kv_table(pairs: list[tuple[str, Any]]) -> str:
 
 
 def _weight_line(proposal_ids: list[Any], weights: dict[int, Weight]) -> str:
-    """"12.340,00 kg · 2 de 5 propostas sem peso"; o peso é só o conhecido, nunca chute."""
+    """"12.340,00 kg · 2 de 5 propostas com peso ausente ou incompleto"; o peso é só o conhecido, nunca chute."""
     total, incomplete, count = summarize(proposal_ids, weights)
     text = fmt_kg(total)
     if incomplete:
-        text += f" · {incomplete} de {count} propostas sem peso"
+        text += f" · {incomplete} de {count} propostas com peso ausente ou incompleto"
+    unknown = len({pid for pid in proposal_ids if weights.get(pid, (None, 0))[1] == NOT_QUERIED})
+    if unknown:
+        text += f" ({unknown} não consultada(s))"
     return text
+
+
+# shortcut: Qt não documenta page-break-inside em <tr>; em teste com 159 linhas o Qt já não cortou linha
+# (com ou sem o estilo). Se aparecer corte com linhas de várias linhas de texto, paginar à mão.
+AVOID_BREAK = " style='page-break-inside: avoid'"
 
 
 def _th(label: str, right: bool = False) -> str:
@@ -82,15 +90,16 @@ def _items_table(items: list[dict[str, Any]], weights: dict[int, Weight], total_
     for index, item in enumerate(items):
         weight, missing = weights.get(item.get("proposal_id"), (None, 0))
         mark = " *" if weight is not None and missing else ""
+        weight_text = "não consultado" if missing == NOT_QUERIED else fmt_kg(weight)
         partial = partial or bool(mark)
         zebra = f" bgcolor='{T['zebra']}'" if index % 2 else ""
         rows.append(
-            f"<tr{zebra}>"
+            f"<tr{zebra}{AVOID_BREAK}>"
             f"<td>{_text(item.get('proposal_number'))}</td>"
             f"<td>{_text(item.get('pd_code'))}</td>"
             f"<td>{_text(' / '.join(part for part in (item.get('customer_name'), item.get('project_name')) if part))}</td>"
             f"<td>{_text(inspection_text(item))}</td>"
-            f"<td align='right'>{fmt_kg(weight)}{mark}</td>"
+            f"<td align='right'>{weight_text}{mark}</td>"
             "</tr>"
         )
     if not rows:

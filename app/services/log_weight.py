@@ -13,7 +13,9 @@ from typing import Any
 
 log = logging.getLogger(__name__)
 
-# (peso total conhecido ou None se nenhum item tem peso, itens sem peso)
+# (peso total conhecido ou None se nenhum item tem peso, itens sem peso);
+# itens sem peso = NOT_QUERIED (-1) quando a consulta falhou: "não consultado" != "sem peso".
+NOT_QUERIED = -1
 Weight = tuple["float | None", int]
 
 
@@ -52,8 +54,9 @@ def active_items(log_: dict[str, Any]) -> list[dict[str, Any]]:
 def collect_weights(service: Any, logs: list[dict[str, Any]]) -> dict[int, Weight]:
     """Peso por proposta_id; cada proposta é consultada uma vez, mesmo repetida em LOGs.
 
-    Falha ao buscar os itens (API/rede) vira (None, 0), "sem peso", e é registrada:
-    o relatório sai mesmo assim e o aviso da T4 lista a proposta.
+    Falha ao buscar os itens (API/rede/403) vira (None, NOT_QUERIED), é registrada e
+    NÃO vale "sem peso": o relatório sai mesmo assim e o aviso lista a proposta como
+    não consultada.
     """
     weights: dict[int, Weight] = {}
     for log_ in logs:
@@ -65,7 +68,7 @@ def collect_weights(service: Any, logs: list[dict[str, Any]]) -> dict[int, Weigh
                 weights[pid] = proposal_weight(service.proposal_items(pid))
             except Exception as exc:
                 log.warning("Peso da proposta %s indisponível: %s", pid, exc)
-                weights[pid] = (None, 0)
+                weights[pid] = (None, NOT_QUERIED)
     return weights
 
 
@@ -77,5 +80,5 @@ def summarize(proposal_ids: list[Any], weights: dict[int, Weight]) -> tuple[floa
     """
     unique = list(dict.fromkeys(pid for pid in proposal_ids if pid is not None))
     known = [weights[pid][0] for pid in unique if weights.get(pid, (None, 0))[0] is not None]
-    incomplete = sum(1 for pid in unique if weights.get(pid, (None, 0))[0] is None or weights[pid][1] > 0)
+    incomplete = sum(1 for pid in unique if weights.get(pid, (None, 0))[0] is None or weights[pid][1] != 0)
     return (sum(known) if known else None), incomplete, len(unique)

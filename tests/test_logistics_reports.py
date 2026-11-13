@@ -144,13 +144,18 @@ class WeightHtmlTests(unittest.TestCase):
         self.assertIn("1.234,50 kg", html)
         self.assertIn("—", html)
         self.assertIn("10,00 kg *", html)
-        self.assertIn("1.244,50 kg · 2 de 3 propostas sem peso", html)
+        self.assertIn("1.244,50 kg · 2 de 3 propostas com peso ausente ou incompleto", html)
         self.assertIn("* peso parcial", html)
 
     def test_no_weights_shows_dash_total_not_zero(self):
         html = log_report_html(_log(), None)
         self.assertNotIn("0,00 kg", html)
-        self.assertIn("1 de 1 propostas sem peso", html)
+        self.assertIn("1 de 1 propostas com peso ausente ou incompleto", html)
+
+    def test_not_queried_is_not_shown_as_no_weight(self):
+        html = log_report_html(_log(), {1: (None, -1)})
+        self.assertIn("não consultado", html)
+        self.assertIn("1 não consultada(s)", html)
 
     def test_all_known_has_no_missing_text(self):
         self.assertNotIn("sem peso", log_report_html(_log(items=[_pitem(1, "A/1")]), {1: (5.0, 0)}))
@@ -374,6 +379,28 @@ class MissingWeightDialogTests(QtCase):
             dialog.inform_weight()
         self.assertEqual(dialog.table.rowCount(), 1)
         self.assertEqual(dialog.weights[1], (None, 0))
+
+    def test_not_queried_row_and_empty_state(self):
+        _, _, dialog = self._dialog(True)
+        dialog.weights[1] = (None, -1)
+        dialog._fill()
+        self.assertEqual(dialog.table.item(0, 2).text(), "Não foi possível consultar")
+        dialog.weights[1] = (6.0, 0)
+        dialog._fill()
+        self.assertEqual(dialog.summary.text(), "Todos os pesos informados.")
+
+    def test_dialog_failure_warns_and_keeps_state(self):
+        mod, _, dialog = self._dialog(True)
+        dialog.table.selectRow(0)
+
+        class Boom:
+            def __init__(self, *a):
+                raise OSError("rede")
+
+        with patch.object(mod, "ItemWeightDialog", Boom), patch.object(mod.QMessageBox, "warning") as warn:
+            dialog.inform_weight()
+        warn.assert_called_once()
+        self.assertEqual(dialog.table.rowCount(), 1)
 
     def test_reject_means_cancel(self):
         _, _, dialog = self._dialog(True)
