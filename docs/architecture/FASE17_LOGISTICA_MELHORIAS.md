@@ -41,6 +41,22 @@ As listas de Inspeção e de Logística (abas LOGs e Cargas de entrega) ganharam
 - Colunas deslocadas em +1: `COLUMNS`/`STAGE_COLUMN`/`LEFT_COLUMNS` (Inspeção) e `LOG_STAGE_COLUMN`/`LOAD_LEFT_COLUMNS` (Logística). Testes: `tests/test_row_actions_desktop.py`.
 - Não conferido com dados reais nem a pintura do ícone fora do offscreen.
 
+## Relatório de LOG e carga com peso
+
+Spec: `docs/spec-logistica-relatorio-peso.md`. Plano: `docs/plano-logistica-relatorio-peso.md`. Só Desktop, sem mudança na API.
+
+- **Ação "Imprimir relatório"** nos menus de contexto e na Central de Ações das abas LOGs e Cargas de entrega (`logistics_page.py`, `_print_report`). Fica disponível sem `can_edit`. A linha da lista não traz itens, então a ação busca o detalhe (`get_log` ou `get_load`) e chama `report_actions.save_log_report` ou `save_load_report`.
+- **Arquivos novos:** `app/services/log_weight.py` (cálculo e coleta de peso) e `app/ui/missing_weight_dialog.py` (`MissingWeightDialog`). Testes: `tests/test_log_weight.py`, `tests/test_logistics_reports.py`, `tests/test_row_actions_desktop.py`.
+- **Regra de peso:** `peso` do item é o peso unitário (`unit_weight` da API); total do item = peso x quantidade. Item sem peso (vazio, 0 ou inválido) é "sem peso" e nunca vira 0 kg; sem peso em nenhum item o total é "—", não 0. Proposta repetida em vários LOGs é consultada uma vez e contada uma vez no total da carga. Itens removidos (`removed_at`) ficam fora do relatório e do peso. O relatório traz coluna Peso, total, subtotal por LOG e total da carga.
+- **Aviso de peso faltando:** antes de emitir, `report_actions` calcula os pesos. Se alguma proposta está sem peso ou com item sem peso, abre `MissingWeightDialog` com a lista. "Informar peso" (abre `ItemWeightDialog`, recalcula a proposta ao salvar) só aparece com `service.can_edit("PRODUCAO")`; "Gerar assim mesmo" emite o PDF com o peso conhecido; fechar ou cancelar não emite. Sem proposta incompleta, o aviso não abre.
+- **"Não consultado":** se a consulta dos itens falha (API, rede, 403), a proposta vira `NOT_QUERIED`, é registrada no log e aparece como "Não foi possível consultar" no aviso e como não consultada no PDF, diferente de "sem peso". O relatório sai mesmo assim. Falha ao reconsultar depois de "Informar peso" mantém o último estado conhecido.
+- **Rodapé paginado:** "Emitido por ... · página X de Y" desenhado com `QPainter` em cada página. Cores por token. Os testes conferem o rodapé pelo que o `QPainter` desenha, sem depender de fonte.
+- **Limitações e pendências:**
+  - "Informar peso" só salva para proposta na Produção. A lista do LOG não traz a área da proposta e a API devolve 409 nas outras. O botão não é desabilitado por proposta; o motivo fica na dica. Decisão pendente do Henrique: expor a área na API ou consultar antes.
+  - A linha da tabela do PDF usa `page-break-inside: avoid`; se o Qt não honrar, a linha pode cortar entre páginas.
+  - As consultas de peso por proposta rodam na thread de UI, uma por proposta, e a tela pode ficar parada em carga grande.
+  - Texto do PDF continua não verificável em teste offscreen; não conferido com dados reais.
+
 ## Contrato novo da API
 
 - `POST` de criação e inclusão de LOG: `confirm_inspection`; 409 `LOGISTICS_INSPECTION_CONFIRMATION_REQUIRED` com `details` por proposta.
@@ -73,6 +89,12 @@ Ordem cronológica, da mais antiga para a mais nova:
 - `593b661` Dialogos de Logistica: janela Registrar andamento, pedido em inspecao no LOG e painel Dados do LOG
 - `5d4e342` Pagina de Logistica: botao Exportar fica desabilitado durante a geracao
 - `cebd079` Dialogos de Logistica: Corrigir entrega, etapa Entregue no selo e fim do aviso morto de troca de PD
+- `1cc8628` Logística: cálculo de peso por proposta para o relatório
+- `bac226d` Logística: relatório de LOG/carga com peso, resumo, zebra e rodapé paginado
+- `c1cdafa` Testes do relatório: rodapé conferido pelo que o QPainter desenha, sem depender de fonte
+- `8dd76a9` Logística: aviso de propostas sem peso antes de emitir o relatório
+- `7346543` Logística: ação Imprimir relatório nos menus de LOG e Carga
+- `3826645` Logística: relatório distingue peso não consultado de sem peso; aviso mais robusto
 
 Os arquivos `.claude/agents/*` modificados, `output/`, `nao_existe.json` e o atalho `.lnk` ficaram fora dos commits.
 
