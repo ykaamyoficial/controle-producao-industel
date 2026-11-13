@@ -217,38 +217,132 @@ class PdfTests(QtCase):
         with fitz.open(self.path("logo.pdf")) as document:
             self.assertTrue(document[0].get_images())
 
-    def test_long_table_breaks_pages_without_cutting_rows(self):
-        # clientes de 1 a 12 linhas: linha alta é o caso em que o Qt cortava no meio.
+    def test_long_table_pages_fit_and_repeat_header(self):
         items = [{**_pitem(i, f"PR-{i:04d}"), "project_name": f"Obra {i}", "customer_name": "Torres Norte " * (1 + i % 12)} for i in range(1, 160)]
         html = log_report_html(_log(items=items), {i: (None, -1) for i in range(1, 160)})
-        width, body_h = 680.0, 900.0
-        document = log_report._document(html, width)
-        cut_tops = {y for y, _ in log_report._page_cuts(document)}
-        pages = log_report._paginate(document, body_h)
+        body_h = 900.0
+        pages = log_report._paginate(log_report._document(html, 680.0), body_h)
         self.assertGreater(len(pages), 5)
         for (y0, y1, head), (n0, _, _) in zip(pages, pages[1:]):
             self.assertEqual(y1, n0)
-            self.assertIn(y1, cut_tops)  # cada corte cai no topo de uma linha, nunca dentro dela
         self.assertTrue(all(head for _, _, head in pages[1:]))  # continuação repete o cabeçalho
         for y0, y1, head in pages:
             self.assertLessEqual(y1 - y0 + (head[1] - head[0] if head else 0), body_h)
-        # a linha de total vai junto com o rótulo (mesma célula de linha) e o aviso não está na célula estreita
-        self.assertIn("Total", html)
         self.assertIn("159 de 159 propostas com peso ausente ou incompleto (159 não consultada(s))", html)
 
-    def test_pdf_pages_hold_whole_rows(self):
-        items = [{**_pitem(i, f"PR-{i:04d}"), "project_name": f"Obra {i}", "customer_name": "Torres Norte " * (1 + i % 12)} for i in range(1, 160)]
-        build_log_report(_log(items=items), self.path("longo.pdf"))
-        with fitz.open(self.path("longo.pdf")) as document:
-            texts = [" ".join(page.get_text().split()) for page in document]
-        if not any("PR-0001" in text for text in texts):
+    def _pdf_texts(self, name):
+        with fitz.open(self.path(name)) as document:
+            return [" ".join(page.get_text().split()) for page in document]
+
+    def _check_pages(self, texts, pids, logs, total_label, tag):
+        footer = re.compile(r"Emitido por .*$")
+        body = [footer.sub("", text).strip() for text in texts]
+        self.assertTrue(all(body), f"{tag}: página só com rodapé")  # inclui a última
+        for i in pids:
+            where = [{n for n, text in enumerate(texts) if re.search(re.escape(tok) + r"(?!\d)", text)} for tok in (f"PR-{i:04d}", f"Obra {i}", f"FIM{i}")]
+            self.assertTrue(where[0] == where[1] == where[2] and len(where[0]) == 1, f"{tag}: linha {i} dividida {where}")
+        # rótulo e valor na mesma página (o texto das páginas é concatenado, então um corte entre eles quebra o padrão por página)
+        counts = {
+            f"{total_label} 1": sum(len(re.findall(rf"{total_label} [\d.,]+ kg", text)) for text in texts),
+            "Entrega no CD": sum(len(re.findall(r"Entrega no CD \d\d/\d\d/\d{4}", text)) for text in texts),
+            "Estado": sum(len(re.findall(r"LOG-\d+ Estado \S+", text)) for text in texts),
+        }
+        self.assertEqual(counts[f"{total_label} 1"], logs, f"{tag}: total dividido")
+        self.assertEqual(counts["Entrega no CD"], logs, f"{tag}: bloco de datas dividido")
+        self.assertEqual(counts["Estado"], logs, f"{tag}: Estado separado do título")
+
+    def test_pdf_sweep_never_splits_totals_or_leaves_footer_only_page(self):
+        probe = {**_pitem(1, "PR-0001"), "customer_name": "Torres"}
+        build_log_report(_log(items=[probe]), self.path("probe.pdf"))
+        if "PR-0001" not in self._pdf_texts("probe.pdf")[0]:
             self.skipTest("sem fonte instalada o Qt grava caixas em vez de texto")
-        self.assertGreater(len(texts), 5)
-        for i in range(1, 160):
-            number = [n for n, text in enumerate(texts) if f"PR-{i:04d}" in text]
-            obra = [n for n, text in enumerate(texts) if re.search(rf"Obra {i}(?!\d)", text)]
-            self.assertEqual(number, obra, f"linha {i} dividida entre páginas")
-            self.assertEqual(len(number), 1)
+        multi = 0
+        for n in (4, 21, 40):  # PDF com texto é lento; a varredura larga é test_pagination_sweep
+            for k in (1, 9):
+                def make(first, last):
+                    return [{**_pitem(i, f"PR-{i:04d}"), "project_name": f"Obra {i}", "customer_name": "Torres Norte " * k + f"FIM{i}"} for i in range(first, last)]
+                weights = {i: (10.0, 0) for i in range(1, n + 1)}
+                tag = f"n={n} k={k}"
+                build_log_report(_log(code="LOG-1", items=make(1, n + 1)), self.path("l.pdf"), weights, "Maria")
+                texts = self._pdf_texts("l.pdf")
+                multi += len(texts) > 1
+                self._check_pages(texts, range(1, n + 1), 1, "Total", "log " + tag)
+                half = n // 2
+                logs = [_log(code=f"LOG-{j}", items=items) for j, items in ((1, make(1, half + 1)), (2, make(half + 1, n + 1)))]
+                build_load_report(_load(logs=logs), self.path("c.pdf"), weights, "Maria")
+                texts = self._pdf_texts("c.pdf")
+                self._check_pages(texts, range(1, n + 1), 2, "Subtotal do LOG", "carga " + tag)
+                self.assertEqual(sum(len(re.findall(r"Total da carga [\d.,]+ kg", t)) for t in texts), 1, f"carga {tag}: Total da carga dividido")
+        self.assertGreater(multi, 2)
+
+    def test_pagination_sweep_geometry(self):
+        """Varredura larga em memória, medindo a geometria das células (independente do código de corte)."""
+        from PySide6.QtGui import QTextCursor
+
+        def tables_of(document):
+            found, block = {}, document.begin()
+            while block.isValid():
+                table = QTextCursor(block).currentTable()
+                if table is not None:
+                    found[table.firstPosition()] = table
+                block = block.next()
+            return list(found.values())
+
+        cases = 0
+        for n in range(4, 70, 2):
+            for k in (1, 3, 8, 15, 25):
+                def make(first, last):
+                    return [{**_pitem(i, f"PR-{i:04d}"), "customer_name": "Torres Norte " * k} for i in range(first, last)]
+                logs = [_log(code=f"LOG-{j}", items=items) for j, items in ((1, make(1, n // 2 + 1)), (2, make(n // 2 + 1, n + 1)))]
+                document = log_report._document(load_report_html(_load(logs=logs), {i: (10.0, 0) for i in range(1, n + 1)}), 680.0)
+                layout = document.documentLayout()
+                pages = log_report._paginate(document, 980.0)
+                tag = f"n={n} k={k}"
+                cases += 1
+                for y0, y1, _ in pages[:-1]:
+                    for table in tables_of(document):
+                        frame = layout.frameBoundingRect(table)
+                        if not frame.top() + 1 < y1 < frame.bottom() - 1:
+                            continue
+                        pad = table.format().cellPadding() + table.format().cellSpacing()
+                        tops = [min(layout.blockBoundingRect(table.cellAt(r, c).firstCursorPosition().block()).top() - pad
+                                    for c in range(table.columns()) if table.cellAt(r, c).row() == r) for r in range(table.rows())]
+                        heads = table.format().headerRowCount()
+                        ok = heads and any(abs(y1 - top) < 1 for top in tops[heads + 1:])
+                        self.assertTrue(ok, f"{tag}: corte em {y1:.1f} dentro de tabela (linhas {[round(t) for t in tops]})")
+                # a última página tem conteúdo de verdade, não só a sobra do <br> final
+                last_y0, last_y1, _ = pages[-1]
+                self.assertGreater(last_y1 - last_y0, 20, f"{tag}: última página vazia")
+                self.assertAlmostEqual(last_y1, log_report._content_height(document), places=3)
+        self.assertGreaterEqual(cases, 150)
+
+    @unittest.skipUnless(os.name == "nt", "bloqueio de arquivo só no Windows")
+    def test_locked_pdf_raises_and_keeps_old_file(self):
+        import ctypes
+        from ctypes import wintypes
+
+        build_log_report(_log(), self.path("x.pdf"))
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.CreateFileW.restype = wintypes.HANDLE
+        handle = kernel.CreateFileW(self.path("x.pdf"), 0x80000000, 0, None, 3, 0x80, None)  # leitura, sem compartilhar
+        self.addCleanup(kernel.CloseHandle, handle)
+        before = os.path.getsize(self.path("x.pdf"))
+        with self.assertRaisesRegex(OSError, "Feche o arquivo"):
+            build_log_report(_log(code="OUTRO"), self.path("x.pdf"))
+        self.assertEqual(os.path.getsize(self.path("x.pdf")), before)
+
+    def test_inactive_painter_raises(self):
+        painter = patch.object(log_report, "QPainter")
+        with painter as factory:
+            factory.return_value.isActive.return_value = False
+            with self.assertRaisesRegex(OSError, "Feche o arquivo"):
+                build_log_report(_log(), self.path("y.pdf"))
+
+    def test_error_while_drawing_removes_partial_pdf(self):
+        with patch.object(log_report, "QFont", side_effect=RuntimeError("boom")):
+            with self.assertRaises(RuntimeError):
+                build_log_report(_log(), self.path("z.pdf"))
+        self.assertFalse(os.path.exists(self.path("z.pdf")))
 
     def test_log_card_ignores_missing_proposal_id(self):
         html = log_report_html(_log(items=[{**_item("A/1"), "proposal_id": None}, _pitem(2, "B/1")]))

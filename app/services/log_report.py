@@ -181,19 +181,26 @@ def _page_cuts(document: QTextDocument) -> list[tuple[float, tuple[float, float]
     Cada corte traz o (topo, base) do cabeçalho da tabela a repetir, se cair dentro de uma tabela.
     """
     layout, cuts = document.documentLayout(), []
+    floor, hold = 0.0, False  # floor: base da última tabela; hold: bloco logo após tabela/título não pode abrir página
     block = document.begin()
     while block.isValid():
         cursor = QTextCursor(block)
         table = cursor.currentTable()
         if table is None:
             top = layout.blockBoundingRect(block).top()
+            heading = block.blockFormat().headingLevel() > 0
             lines = block.layout().lineCount() if block.layout() else 0
-            cuts += [(top + block.layout().lineAt(i).y(), None) for i in range(lines)]
+            # o bloco vazio que o Qt põe após a tabela começa acima da base dela: não é corte válido
+            if not hold or heading:
+                cuts += [(top + block.layout().lineAt(i).y(), None) for i in range(lines) if top + block.layout().lineAt(i).y() >= floor - 0.5]
+            hold = heading or (hold and not block.text().strip())
         else:
             cell, heads = table.cellAt(cursor), table.format().headerRowCount()
-            # só o primeiro bloco da primeira célula de cada linha marca o topo da linha
+            floor, hold = layout.frameBoundingRect(table).bottom(), True
+            # só o primeiro bloco da primeira célula de cada linha marca o topo da linha;
+            # shortcut: tabela sem cabeçalho (resumo, Estado/Etapa/...) é curta e nunca se parte; se passar da página, corte duro
             first = table.cellAt(cell.row(), 0)
-            if cell.column() == 0 and block == first.firstCursorPosition().block() and cell.row() >= heads + 1:
+            if cell.column() == 0 and block == first.firstCursorPosition().block() and heads and cell.row() >= heads + 1:
                 pad = table.format().cellPadding() + table.format().cellSpacing()
                 head = table.cellAt(0, 0).firstCursorPosition().block()
                 head_top = layout.blockBoundingRect(head).top() - pad
@@ -203,9 +210,22 @@ def _page_cuts(document: QTextDocument) -> list[tuple[float, tuple[float, float]
     return sorted(cuts, key=lambda cut: cut[0])
 
 
+def _content_height(document: QTextDocument) -> float:
+    """Base do último conteúdo (texto, imagem ou tabela); o <br> final e a margem não contam."""
+    layout, bottom, block = document.documentLayout(), 0.0, document.begin()
+    while block.isValid():
+        table = QTextCursor(block).currentTable()
+        if table is not None:
+            bottom = max(bottom, layout.frameBoundingRect(table).bottom())
+        elif block.text().strip():
+            bottom = max(bottom, layout.blockBoundingRect(block).bottom())
+        block = block.next()
+    return bottom or document.size().height()
+
+
 def _paginate(document: QTextDocument, body_h: float) -> list[tuple[float, float, tuple[float, float] | None]]:
     """Páginas como (y0, y1, cabeçalho a repetir): corta só em limite de linha, nunca no meio dela."""
-    cuts, total = _page_cuts(document), document.size().height()
+    cuts, total = _page_cuts(document), _content_height(document)
     pages, y0, head = [], 0.0, None
     while True:
         room = body_h - (head[1] - head[0] if head else 0)
@@ -242,6 +262,8 @@ def _print_pdf(html: str, path: str | Path, issued_by: str = "", issued_at: date
     layout = _paginate(document, body_h)
     issued = (issued_at or datetime.now()).strftime("%d/%m/%Y %H:%M")
     painter = QPainter(printer)
+    if not painter.isActive():  # o Qt não levanta erro se o arquivo está aberto em outro programa
+        raise OSError(f"Não foi possível gravar o PDF em {path}. Feche o arquivo se ele estiver aberto em outro programa e tente de novo.")
     try:
         painter.scale(scale, scale)
         font = QFont(painter.font())
@@ -267,8 +289,11 @@ def _print_pdf(html: str, path: str | Path, issued_by: str = "", issued_at: date
             footer = QRectF(0, body_h + 6, width, footer_h - 6)
             painter.drawText(footer, int(Qt.AlignLeft | Qt.AlignVCenter), f"Emitido por {issued_by or '—'} em {issued}")
             painter.drawText(footer, int(Qt.AlignRight | Qt.AlignVCenter), f"página {number + 1} de {len(layout)}")
-    finally:
+    except Exception:
         painter.end()
+        Path(path).unlink(missing_ok=True)  # não deixa PDF parcial no disco
+        raise
+    painter.end()
 
 
 def build_log_report(
