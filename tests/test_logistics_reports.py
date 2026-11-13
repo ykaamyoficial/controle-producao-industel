@@ -113,7 +113,7 @@ class HtmlTests(unittest.TestCase):
         html = log_report_html(_log(items=[_item("10480/B", finished=True), _item("10483/A", pd="PD-2", inspection_stage="solicitada", finished=False)]))
         self.assertIn("DOC BIM em mãos", html)
         self.assertIn("Inspeção solicitada", html)
-        self.assertIn("<h3>LOG101</h3>", html)
+        self.assertIn("LOG101</span></h3>", html)
         self.assertNotIn("<a ", html)
         self.assertNotIn("href", html)
 
@@ -133,7 +133,61 @@ class HtmlTests(unittest.TestCase):
         self.assertIn("&lt;b&gt;EQT&lt;/b&gt;", html)
 
 
+def _pitem(pid, number):
+    return {**_item(number), "id": pid, "proposal_id": pid}
+
+
+class WeightHtmlTests(unittest.TestCase):
+    def test_log_weight_total_dash_and_missing_count(self):
+        log = _log(items=[_pitem(1, "A/1"), _pitem(2, "B/1"), _pitem(3, "C/1")])
+        html = log_report_html(log, {1: (1234.5, 0), 2: (None, 1), 3: (10.0, 2)})
+        self.assertIn("1.234,50 kg", html)
+        self.assertIn("—", html)
+        self.assertIn("10,00 kg *", html)
+        self.assertIn("1.244,50 kg · 2 de 3 propostas sem peso", html)
+        self.assertIn("* peso parcial", html)
+
+    def test_no_weights_shows_dash_total_not_zero(self):
+        html = log_report_html(_log(), None)
+        self.assertNotIn("0,00 kg", html)
+        self.assertIn("1 de 1 propostas sem peso", html)
+
+    def test_all_known_has_no_missing_text(self):
+        self.assertNotIn("sem peso", log_report_html(_log(items=[_pitem(1, "A/1")]), {1: (5.0, 0)}))
+
+    def test_removed_items_are_not_listed_or_summed(self):
+        gone = {**_pitem(9, "ZZ/9"), "removed_at": "2026-11-01T00:00:00Z"}
+        html = log_report_html(_log(items=[_pitem(1, "A/1"), gone]), {1: (5.0, 0), 9: (100.0, 0)})
+        self.assertNotIn("ZZ/9", html)
+        self.assertIn("5,00 kg", html)
+        self.assertNotIn("105,00", html)
+
+    def test_load_subtotal_per_log_and_shared_proposal_counted_once(self):
+        load = _load(logs=[
+            _log(id=1, code="LOG1", items=[_pitem(1, "A/1"), _pitem(2, "B/1")]),
+            _log(id=2, code="LOG2", items=[_pitem(2, "B/1"), _pitem(3, "C/1")]),
+        ])
+        html = load_report_html(load, {1: (10.0, 0), 2: (20.0, 0), 3: (30.0, 0)})
+        self.assertIn("Subtotal do LOG", html)
+        self.assertIn("30,00 kg", html)  # LOG1
+        self.assertIn("50,00 kg", html)  # LOG2 (proposta 2 repete aqui)
+        self.assertIn("Total da carga", html)
+        self.assertIn("60,00 kg", html)  # 10+20+30, e nao 80
+        self.assertNotIn("80,00 kg", html)
+
+
 class PdfTests(QtCase):
+    def test_footer_has_issuer_date_and_page_x_of_y(self):
+        items = [_pitem(i, f"{10000 + i}/A") for i in range(1, 161)]
+        build_log_report(_log(items=items), self.path("rod.pdf"), {}, "Maria", datetime(2026, 11, 13, 9, 5))
+        with fitz.open(self.path("rod.pdf")) as document:
+            pages = document.page_count
+            self.assertGreater(pages, 1)
+            for number, page in enumerate(document, 1):
+                text = page.get_text()
+                self.assertIn(f"página {number} de {pages}", text)
+                self.assertIn("Emitido por Maria em 13/11/2026 09:05", text)
+
     def test_log_pdf_is_written(self):
         build_log_report(_log(), self.path("log.pdf"))
         self.assertGreater(os.path.getsize(self.path("log.pdf")), 0)
