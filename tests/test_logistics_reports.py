@@ -222,33 +222,160 @@ class PdfTests(QtCase):
             self.assertIn(number, html)
 
 
+class FakeWeightService:
+    def __init__(self, items=None, edit=True, fail=False):
+        self.items = items if items is not None else {1: [{"id": 1, "peso": 2, "quantidade": 3}]}
+        self.edit, self.fail, self.areas = edit, fail, []
+
+    def proposal_items(self, pid):
+        if self.fail:
+            raise OSError("rede")
+        return self.items.get(pid, [])
+
+    def can_edit(self, area):
+        self.areas.append(area)
+        return self.edit
+
+    def user_name(self):
+        return "Maria"
+
+
 class ReportActionsTests(QtCase):
-    def test_save_and_open(self):
+    def _save(self, fn, obj, service, target, dialog=None):
+        patches = [patch.object(report_actions.QFileDialog, "getSaveFileName", return_value=(target, "")),
+                   patch.object(report_actions.QDesktopServices, "openUrl", return_value=True)]
+        if dialog is not None:
+            patches.append(patch.object(report_actions, "MissingWeightDialog", dialog))
+        with patches[0], patches[1] as opened:
+            if dialog is not None:
+                with patches[2]:
+                    fn(None, obj, service)
+            else:
+                fn(None, obj, service)
+        return opened
+
+    def test_all_with_weight_no_warning_and_passes_weights_and_user(self):
         target = self.path("LOG101.pdf")
-        with patch.object(report_actions.QFileDialog, "getSaveFileName", return_value=(target, "")), \
-                patch.object(report_actions.QDesktopServices, "openUrl", return_value=True) as opened:
-            report_actions.save_log_report(None, _log())
+        with patch.object(report_actions, "build_log_report", wraps=build_log_report) as build:
+            opened = self._save(report_actions.save_log_report, _log(), FakeWeightService(), target, dialog=_Boom)
+        self.assertGreater(os.path.getsize(target), 0)
+        opened.assert_called_once()
+        self.assertEqual(build.call_args.kwargs["weights"], {1: (6.0, 0)})
+        self.assertEqual(build.call_args.kwargs["issued_by"], "Maria")
+
+    def test_missing_weight_generate_anyway(self):
+        target = self.path("a.pdf")
+        opened = self._save(report_actions.save_log_report, _log(), FakeWeightService(items={}), target, dialog=_make_dialog(True))
         self.assertGreater(os.path.getsize(target), 0)
         opened.assert_called_once()
 
+    def test_missing_weight_cancel_emits_nothing(self):
+        with patch.object(report_actions.QFileDialog, "getSaveFileName") as ask,                 patch.object(report_actions, "MissingWeightDialog", _make_dialog(False)):
+            report_actions.save_load_report(None, _load(), FakeWeightService(items={}))
+        ask.assert_not_called()
+
+    def test_edit_permission_uses_production_and_reaches_dialog(self):
+        service = FakeWeightService(items={}, edit=False)
+        seen = []
+        dialog = _make_dialog(True, seen)
+        self._save(report_actions.save_log_report, _log(), service, self.path("b.pdf"), dialog=dialog)
+        self.assertEqual(service.areas, ["PRODUCAO"])
+        self.assertEqual(seen, [False])
+
+    def test_api_error_on_weight_is_missing_not_crash(self):
+        seen = []
+        self._save(report_actions.save_log_report, _log(), FakeWeightService(fail=True), self.path("c.pdf"), dialog=_make_dialog(True, seen))
+        self.assertEqual(seen, [True])
+
     def test_cancelled_save_writes_nothing(self):
-        with patch.object(report_actions.QFileDialog, "getSaveFileName", return_value=("", "")), \
-                patch.object(report_actions.QDesktopServices, "openUrl") as opened:
-            report_actions.save_load_report(None, _load())
+        with patch.object(report_actions.QFileDialog, "getSaveFileName", return_value=("", "")),                 patch.object(report_actions.QDesktopServices, "openUrl") as opened:
+            report_actions.save_load_report(None, _load(), FakeWeightService())
         opened.assert_not_called()
 
     def test_open_failure_warns(self):
         target = self.path("CE-01.pdf")
-        with patch.object(report_actions.QFileDialog, "getSaveFileName", return_value=(target, "")), \
-                patch.object(report_actions.QDesktopServices, "openUrl", return_value=False), \
-                patch("app.ui.report_actions.QMessageBox.warning") as warning:
-            report_actions.save_load_report(None, _load())
+        with patch.object(report_actions.QFileDialog, "getSaveFileName", return_value=(target, "")),                 patch.object(report_actions.QDesktopServices, "openUrl", return_value=False),                 patch("app.ui.report_actions.QMessageBox.warning") as warning:
+            report_actions.save_load_report(None, _load(), FakeWeightService())
         warning.assert_called_once()
 
     def test_generation_failure_warns(self):
         target = self.path("falha.pdf")
-        with patch.object(report_actions.QFileDialog, "getSaveFileName", return_value=(target, "")), \
-                patch.object(report_actions, "build_log_report", side_effect=OSError("disco cheio")), \
-                patch("app.ui.report_actions.QMessageBox.warning") as warning:
-            report_actions.save_log_report(None, _log())
+        with patch.object(report_actions.QFileDialog, "getSaveFileName", return_value=(target, "")),                 patch.object(report_actions, "build_log_report", side_effect=OSError("disco cheio")),                 patch("app.ui.report_actions.QMessageBox.warning") as warning:
+            report_actions.save_log_report(None, _log(), FakeWeightService())
         warning.assert_called_once()
+
+
+class _Boom:
+    def __init__(self, *a, **k):
+        raise AssertionError("aviso não deveria abrir")
+
+
+def _make_dialog(accept, seen=None):
+    class Dialog:
+        def __init__(self, service, logs, weights, can_edit, parent=None):
+            self.weights = weights
+            if seen is not None:
+                seen.append(can_edit)
+
+        def exec(self):
+            return accept
+
+    return Dialog
+
+
+class MissingWeightDialogTests(QtCase):
+    def _dialog(self, can_edit, items=None):
+        from app.ui import missing_weight_dialog as mod
+
+        service = FakeWeightService(items=items if items is not None else {})
+        weights = mod.collect_weights(service, [_log()])
+        return mod, service, mod.MissingWeightDialog(service, [_log()], weights, can_edit)
+
+    def test_lists_missing_and_hides_inform_without_permission(self):
+        _, _, dialog = self._dialog(False)
+        self.assertEqual(dialog.table.rowCount(), 1)
+        self.assertEqual(dialog.table.item(0, 0).text(), "10480/B")
+        self.assertTrue(dialog.inform_button.isHidden())
+
+    def test_inform_weight_recalculates_after_save(self):
+        mod, service, dialog = self._dialog(True)
+        self.assertFalse(dialog.inform_button.isHidden())
+        dialog.table.selectRow(0)
+
+        class Saved:
+            saved_count = 1
+
+            def __init__(self, svc, pid, parent):
+                self.pid = pid
+
+            def exec(self):
+                service.items[self.pid] = [{"id": 1, "peso": 2, "quantidade": 3}]
+                return 1
+
+        with patch.object(mod, "ItemWeightDialog", Saved):
+            dialog.inform_weight()
+        self.assertEqual(dialog.weights[1], (6.0, 0))
+        self.assertEqual(dialog.table.rowCount(), 0)
+
+    def test_inform_weight_cancelled_keeps_state(self):
+        mod, _, dialog = self._dialog(True)
+        dialog.table.selectRow(0)
+
+        class Cancelled:
+            saved_count = 0
+
+            def __init__(self, *a):
+                pass
+
+            def exec(self):
+                return 0
+
+        with patch.object(mod, "ItemWeightDialog", Cancelled):
+            dialog.inform_weight()
+        self.assertEqual(dialog.table.rowCount(), 1)
+        self.assertEqual(dialog.weights[1], (None, 0))
+
+    def test_reject_means_cancel(self):
+        _, _, dialog = self._dialog(True)
+        dialog.reject()
+        self.assertEqual(dialog.result(), 0)

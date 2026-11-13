@@ -649,7 +649,7 @@ class LogDetailDialogTests(QtCase):
         dialog, _api = self._dialog(can_edit=False)
         calls = []
         fake = type(sys)("app.ui.report_actions")
-        fake.save_log_report = lambda parent, log: calls.append((parent, log["code"]))
+        fake.save_log_report = lambda parent, log, service: calls.append((parent, log["code"]))
         import app.ui
 
         # `from app.ui import report_actions` olha o atributo do pacote primeiro: troca os dois.
@@ -929,7 +929,7 @@ class LogDetailDialogTests(QtCase):
         dialog, _api = self._dialog(can_edit=False)
         calls = []
         fake = type(sys)("app.ui.report_actions")
-        fake.save_log_report = lambda parent, log: calls.append((parent, log["code"]))
+        fake.save_log_report = lambda parent, log, service: calls.append((parent, log["code"]))
         import app.ui
 
         with patch.dict(sys.modules, {"app.ui.report_actions": fake}), patch.object(app.ui, "report_actions", fake, create=True):
@@ -1292,7 +1292,7 @@ class LoadDialogTests(QtCase):
         dialog, _api = self._detail(can_edit=False)
         calls = []
         fake = type(sys)("app.ui.report_actions")
-        fake.save_load_report = lambda parent, load: calls.append((parent, load["code"]))
+        fake.save_load_report = lambda parent, load, service: calls.append((parent, load["code"]))
         import app.ui
 
         with patch.dict(sys.modules, {"app.ui.report_actions": fake}), patch.object(app.ui, "report_actions", fake, create=True):

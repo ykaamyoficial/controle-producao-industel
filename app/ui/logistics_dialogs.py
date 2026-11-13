@@ -685,7 +685,7 @@ class LogDetailDialog(_DetailDialog):
     def generate_report(self) -> None:
         from app.ui import report_actions  # import tardio: o modulo de relatorios e opcional nesta tela
 
-        report_actions.save_log_report(self, self.data)
+        report_actions.save_log_report(self, self.data, self.service)
 
     def _resolve(self, result: str) -> None:
         item = self.selected_item()
@@ -1056,7 +1056,7 @@ class LoadDetailDialog(_DetailDialog):
     def generate_report(self) -> None:
         from app.ui import report_actions  # import tardio: o modulo de relatorios e opcional nesta tela
 
-        report_actions.save_load_report(self, self.data)
+        report_actions.save_load_report(self, self.data, self.service)
 
     def open_departed(self) -> None:
         """"Saiu em": saída REAL da carga. Motivo só ao mudar uma data já gravada."""
