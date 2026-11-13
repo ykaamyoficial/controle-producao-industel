@@ -112,8 +112,8 @@ class HtmlTests(unittest.TestCase):
 
     def test_log_html_has_label_and_no_links(self):
         html = log_report_html(_log(items=[_item("10480/B", finished=True), _item("10483/A", pd="PD-2", inspection_stage="solicitada", finished=False)]))
-        self.assertIn("DOC BIM em mãos", html)
-        self.assertIn("Inspeção solicitada", html)
+        self.assertNotIn("Inspeção", html)  # relatório enxuto: sem coluna de inspeção
+        self.assertNotIn("Estado", html)
         self.assertIn("LOG101</span></h3>", html)
         self.assertNotIn("<a ", html)
         self.assertNotIn("href", html)
@@ -121,17 +121,18 @@ class HtmlTests(unittest.TestCase):
     def test_load_html_shows_label_for_pd_without_doc(self):
         html = load_report_html(_load())
         self.assertIn("Carga CE-01", html)
-        self.assertIn("Inspeção solicitada", html)
+        self.assertNotIn("Inspeção", html)
         self.assertIn("10483/A", html)
-        self.assertIn("ainda não saiu", html)
+        self.assertIn("Saída 12/11/2026", html)
+        self.assertIn("Entrega 13/11/2026", html)
 
     def test_sem_inspecao_label(self):
         self.assertEqual(log_report.inspection_text({"inspection_stage": None, "inspection_finished": False}), "Sem inspeção")
         self.assertEqual(log_report.inspection_text({"inspection_stage": "nqt", "inspection_finished": False}), "Inspeção: NQT gerado")
 
     def test_html_escapes_user_text(self):
-        html = log_report_html(_log(state="<b>EQT</b>"))
-        self.assertIn("&lt;b&gt;EQT&lt;/b&gt;", html)
+        html = log_report_html(_log(items=[{**_item("10480/B"), "customer_name": "<b>ACME</b>"}]))
+        self.assertIn("&lt;b&gt;ACME&lt;/b&gt;", html)
 
 
 def _pitem(pid, number):
@@ -244,12 +245,10 @@ class PdfTests(QtCase):
         # rótulo e valor na mesma página (o texto das páginas é concatenado, então um corte entre eles quebra o padrão por página)
         counts = {
             f"{total_label} 1": sum(len(re.findall(rf"{total_label} [\d.,]+ kg", text)) for text in texts),
-            "Entrega no CD": sum(len(re.findall(r"Entrega no CD \d\d/\d\d/\d{4}", text)) for text in texts),
-            "Estado": sum(len(re.findall(r"LOG-\d+ Estado \S+", text)) for text in texts),
+            "Entrega": sum(len(re.findall(r"Entrega \d\d/\d\d/\d{4}", text)) for text in texts),
         }
         self.assertEqual(counts[f"{total_label} 1"], logs, f"{tag}: total dividido")
-        self.assertEqual(counts["Entrega no CD"], logs, f"{tag}: bloco de datas dividido")
-        self.assertEqual(counts["Estado"], logs, f"{tag}: Estado separado do título")
+        self.assertEqual(counts["Entrega"], logs, f"{tag}: bloco de datas dividido")
 
     def test_pdf_sweep_never_splits_totals_or_leaves_footer_only_page(self):
         probe = {**_pitem(1, "PR-0001"), "customer_name": "Torres"}
