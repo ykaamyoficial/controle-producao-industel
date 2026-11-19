@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 import unittest
+import unittest.mock
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from urllib.parse import urlparse
@@ -166,8 +167,10 @@ class UpdateAuditRouterTests(unittest.TestCase):
     def test_events_endpoint_triggers_its_own_drain_caller_never_has_to_drain_manually(self):
         # Nao chamamos self._drain() aqui de proposito -- o endpoint deve
         # drenar sozinho (Secao 18: "perto de tempo real") antes de responder.
+        # O endpoint drena o spool padrao do servico; apontamos o padrao para o spool temporario do teste.
         self._seed_event(version="3.4.0")
-        response = self.client.get("/api/v1/admin/update-audit/events?version=3.4.0", headers=self._auth(self.audit_token))
+        with unittest.mock.patch.object(audit_service, "build_default_spool", return_value=self.spool):
+            response = self.client.get("/api/v1/admin/update-audit/events?version=3.4.0", headers=self._auth(self.audit_token))
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["total"], 1)
 
