@@ -6,7 +6,7 @@ Plano: `docs/plano-logistica-melhorias.md`. Spec: `docs/spec-logistica-melhorias
 
 - L1 e L2: pedido ainda em inspeção entra no LOG, em qualquer etapa, após confirmação. A lista mostra a etapa da inspeção e o LOG mostra quantos pedidos não têm DOC BIM.
 - L3: janela "Registrar andamento" do LOG, no padrão da Inspeção, com data "Aconteceu em" (Hoje/Ontem/outra) e observação.
-- L5 e L6: relatório PDF do LOG (uma página, sem links) e relatório PDF da Carga, com logo da Industel.
+- L5 e L6: relatório PDF do LOG e relatório PDF da Carga, com logo da Industel e sem links (formato final na seção "Relatório de LOG e carga com peso").
 - L7: painel "Dados do LOG" sem vazio e com caminhos curtos.
 - L8: contador de dias para na entrega; etapa "Entregue" na lista.
 - L9: filtros por etapa, estado e carga na lista, e exportação XLSX que respeita os filtros.
@@ -26,7 +26,7 @@ Plano: `docs/plano-logistica-melhorias.md`. Spec: `docs/spec-logistica-melhorias
 - **T9 (Desktop, lista):** `logistics_page.py` mostra `display_stage` e dias congelados; "Entregue" tem selo próprio por token. Filtros de Etapa, Estado e Carga ao lado da busca, combinados com ela.
 - **T10 (Desktop, relatórios e XLSX):**
   - `app/services/xlsx_export.py`: exportação XLSX com `openpyxl==3.1.5` fixado em `requirements.txt`. Cabeçalho em negrito, larguras, filtro ligado, texto começando com `=` gravado como texto.
-  - `app/services/log_report.py`: `build_log_report` e `build_load_report`, HTML impresso com `QPrinter` em PDF (mesmo caminho de `process_page.py`). Sem links. Tabela que passa de uma página quebra com cabeçalho repetido.
+  - `app/services/log_report.py`: `build_log_report` e `build_load_report`, HTML impresso com `QPrinter` em PDF (mesmo caminho de `process_page.py`). Sem links. Layout da primeira versão (tabela) foi substituído depois; ver a seção do relatório com peso.
   - `app/ui/report_actions.py`: ações de "Salvar como" e abertura do arquivo gerado (`QDesktopServices.openUrl`), com aviso se falhar.
   - `ControleProducao.spec` inclui `openpyxl`.
 
@@ -47,15 +47,21 @@ Spec: `docs/spec-logistica-relatorio-peso.md`. Plano: `docs/plano-logistica-rela
 
 - **Ação "Imprimir relatório"** nos menus de contexto e na Central de Ações das abas LOGs e Cargas de entrega (`logistics_page.py`, `_print_report`). Fica disponível sem `can_edit`. A linha da lista não traz itens, então a ação busca o detalhe (`get_log` ou `get_load`) e chama `report_actions.save_log_report` ou `save_load_report`.
 - **Arquivos novos:** `app/services/log_weight.py` (cálculo e coleta de peso) e `app/ui/missing_weight_dialog.py` (`MissingWeightDialog`). Testes: `tests/test_log_weight.py`, `tests/test_logistics_reports.py`, `tests/test_row_actions_desktop.py`.
-- **Regra de peso:** `peso` do item é o peso unitário (`unit_weight` da API); total do item = peso x quantidade. Item sem peso (vazio, 0 ou inválido) é "sem peso" e nunca vira 0 kg; sem peso em nenhum item o total é "—", não 0. Proposta repetida em vários LOGs é consultada uma vez e contada uma vez no total da carga. Itens removidos (`removed_at`) ficam fora do relatório e do peso. O relatório traz coluna Peso, total, subtotal por LOG e total da carga.
+- **Regra de peso:** `peso` do item é o peso unitário (`unit_weight` da API); total do item = peso x quantidade. Item sem peso (vazio, 0 ou inválido) é "sem peso" e nunca vira 0 kg; sem peso em nenhum item o total é "—", não 0. Proposta repetida em vários LOGs é consultada uma vez e contada uma vez no total da carga. Itens removidos (`removed_at`) ficam fora do relatório e do peso. O relatório traz o peso por proposta, o peso do LOG e o peso total da carga (layout em "Formato final do PDF").
 - **Aviso de peso faltando:** antes de emitir, `report_actions` calcula os pesos. Se alguma proposta está sem peso ou com item sem peso, abre `MissingWeightDialog` com a lista. "Informar peso" (abre `ItemWeightDialog`, recalcula a proposta ao salvar) só aparece com `service.can_edit("PRODUCAO")`; "Gerar assim mesmo" emite o PDF com o peso conhecido; fechar ou cancelar não emite. Sem proposta incompleta, o aviso não abre.
 - **"Não consultado":** se a consulta dos itens falha (API, rede, 403), a proposta vira `NOT_QUERIED`, é registrada no log e aparece como "Não foi possível consultar" no aviso e como não consultada no PDF, diferente de "sem peso". O relatório sai mesmo assim. Falha ao reconsultar depois de "Informar peso" mantém o último estado conhecido.
+- **Formato final do PDF (`58e6f0a` e `c1d31a3`):** o relatório deixou de ser tabela e imita a folha manual da expedição. Só saída e entrega, sem coluna de inspeção (o rótulo `inspection_text` ficou no módulo só porque o teste ainda o usa), tudo centralizado e em negrito, com a logo no topo e sem links.
+  - **LOG:** `PESO TOTAL: X Kg` no topo (20 pt); código do LOG (18 pt); linha `CARREGA dd/mm ENTREGA dd/mm` com marca-texto amarelo (a data de entrega vem de `delivered_on`, senão de `delivery_date`); uma linha por proposta no formato `CP 5702 – 5400128517 – 5.119 Kg` (número da proposta, PD e peso inteiro com ponto de milhar); `PESO TOTAL: X Kg` de novo no fim.
+  - **Carga:** `PESO TOTAL DA CARGA` no topo; `CARGA <código>`; `SAÍDA dd/mm` em amarelo (`departed_on`, senão `departure_date`); um bloco por LOG (título, datas, linhas, `PESO DO LOG`); `PESO TOTAL DA CARGA` no fim. Proposta repetida em dois LOGs aparece nos dois blocos e conta uma vez no total da carga.
+  - **Peso incompleto ou não consultado:** proposta com peso parcial leva ` *` depois do peso e a nota "* peso parcial: há itens sem peso informado nesta proposta."; proposta não consultada mostra "não consultado" no lugar do peso; o total mostra "N de M propostas com peso ausente ou incompleto". Sem nenhum peso, o total é "—".
+  - Datas ausentes aparecem como "—". Papel sempre claro, cores por token da paleta clara.
 - **Rodapé paginado:** "Emitido por ... · página X de Y" desenhado com `QPainter` em cada página. Cores por token. Os testes conferem o rodapé pelo que o `QPainter` desenha, sem depender de fonte.
 - **Limitações e pendências:**
   - "Informar peso" só salva para proposta na Produção. A lista do LOG não traz a área da proposta e a API devolve 409 nas outras. O botão não é desabilitado por proposta; o motivo fica na dica. Decisão pendente do Henrique: expor a área na API ou consultar antes.
-  - Paginação do PDF é manual (`_paginate` em `log_report.py`): corta só no topo de linha de tabela ou de linha de texto e repete o cabeçalho da tabela, então linha de proposta não parte entre páginas (conferido com 120 e 159 linhas, cliente de 1 a 12 linhas). O detalhe de peso incompleto/não consultado fica numa nota abaixo da tabela, não na célula estreita do total. Também não corta logo após título nem dentro de tabela sem cabeçalho (resumo, Estado/Etapa/datas), a última página mede o conteúdo (sem página só com rodapé) e PDF bloqueado em outro programa levanta erro em vez de falhar calado (PDF parcial é apagado). Limite: tabela sem cabeçalho maior que a página sofre corte duro.
+  - Paginação do PDF é manual (`_paginate` em `log_report.py`, `8822e65` e `04876de`): corta só no topo de linha de texto (ou de linha de tabela, código que sobrou da primeira versão e hoje não é exercitado pelo relatório), então linha de proposta, datas e total não partem entre páginas. Título (`<h3>`) não fica sozinho no fim da página, a última página mede o conteúdo (sem página só com rodapé) e PDF bloqueado em outro programa levanta erro em vez de falhar calado (PDF parcial é apagado). Os testes de geometria foram escritos para a versão em tabela (120 e 159 linhas); o layout em linhas centralizadas não foi revarrido com a mesma amplitude.
+  - Auditoria 02 (`docs/auditoria-deploy/02_testes.md`, T3): `test_pdf_sweep_never_splits_totals_or_leaves_footer_only_page` fica pulado quando não há fonte instalada ("sem fonte instalada o Qt grava caixas em vez de texto"), e é ele que confere "não parte total" e "sem página só com rodapé" no texto real. Passam `test_pagination_sweep_geometry`, `test_footer_has_issuer_date_and_page_x_of_y` e `test_locked_pdf_raises_and_keeps_old_file`. Pendente: conferência visual de um PDF de LOG/carga grande no ambiente de dev antes de usar.
   - As consultas de peso por proposta rodam na thread de UI, uma por proposta, e a tela pode ficar parada em carga grande.
-  - Texto do PDF continua não verificável em teste offscreen; não conferido com dados reais.
+  - Texto do PDF continua não verificável em teste offscreen sem fonte; o conteúdo é conferido no HTML (`log_report_html`, `load_report_html`). Não conferido com dados reais.
 
 ## Contrato novo da API
 
@@ -73,7 +79,7 @@ Spec: `docs/spec-logistica-relatorio-peso.md`. Plano: `docs/plano-logistica-rela
 - Pedido sem PD ou sem inspeção cadastrada continua fora da lista de elegíveis.
 - Dias na etapa de LOG entregue são congelados em `delivered_on`, sem migration; LOG sem `delivered_on` continua contando.
 - XLSX com `openpyxl` fixado em 3.1.5; PDF com `QPrinter` (sem dependência nova para PDF).
-- Relatório é "uma página" no caso comum, mas quebra em páginas seguintes e não corta dados.
+- Relatório é "uma página" no caso comum, mas quebra em páginas seguintes e não corta dados. O formato é o da folha manual (linhas centralizadas), não tabela.
 
 ## Commits
 
@@ -95,6 +101,10 @@ Ordem cronológica, da mais antiga para a mais nova:
 - `8dd76a9` Logística: aviso de propostas sem peso antes de emitir o relatório
 - `7346543` Logística: ação Imprimir relatório nos menus de LOG e Carga
 - `3826645` Logística: relatório distingue peso não consultado de sem peso; aviso mais robusto
+- `8822e65` Logística: PDF do relatório pagina à mão e não corta linha entre páginas
+- `04876de` Logística: paginação do PDF não corta no fim da tabela, sem página só com rodapé e erro se o PDF está bloqueado
+- `58e6f0a` Relatório de LOG/carga mais enxuto: só saída e entrega, sem coluna de inspeção, tudo centralizado
+- `c1d31a3` Relatório de LOG/carga no estilo da folha manual: linhas CP - PD - peso, datas em destaque e peso total no topo e no fim
 
 Os arquivos `.claude/agents/*` modificados, `output/`, `nao_existe.json` e o atalho `.lnk` ficaram fora dos commits.
 
@@ -145,7 +155,8 @@ Não resolvidas nesta fase:
 
 - Conferência visual do Henrique na edição de teste (`scripts/build_test_installer.py`, contra a dev 8001). Painel "Dados do LOG", janela "Registrar andamento", relatórios e filtros não foram vistos com dados reais.
 - Build PyInstaller com `openpyxl` não rodado. Falta conferir que a biblioteca entra no executável.
-- Texto do PDF não verificável em teste offscreen (fonte vazia no ambiente de teste). Teste confere só que o arquivo existe, tem tamanho maior que zero e que o XLSX é relido com as linhas esperadas.
+- Texto do PDF não verificável em teste offscreen (fonte vazia no ambiente de teste). Teste confere só que o arquivo existe, tem tamanho maior que zero e que o XLSX é relido com as linhas esperadas; o teste de paginação com texto real fica pulado sem fonte (auditoria 02, T3).
+- Conferência visual do PDF de LOG/carga grande no ambiente de dev (auditoria 02, T3), já no formato final da folha manual.
 - `LogDeliveryPayload` não tem `confirm_dates`: a entrega não avisa data fora do dia útil nem data futura. Só o andamento avisa.
 - Decisão do Henrique: push e merge da branch `logistica-melhorias`.
 
