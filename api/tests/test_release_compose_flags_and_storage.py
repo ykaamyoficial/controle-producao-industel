@@ -28,6 +28,9 @@ def test_flags_repassadas_com_default_desligado():
     assert _env("ALMOX_INTEGRATION_SECRET") == "${ALMOX_INTEGRATION_SECRET:-}"
     assert _env("ALMOX_WEBHOOK_URL") == "${ALMOX_WEBHOOK_URL:-}"
     assert _env("PASSWORD_MIN_LENGTH") == "${PASSWORD_MIN_LENGTH:-10}"
+    # sem env_file: a variavel do .env so chega ao container se o compose a cita
+    assert _env("LOGIN_IP_MAX_FAILURES") == "${LOGIN_IP_MAX_FAILURES:-20}"
+    assert _env("LOGIN_IP_WINDOW_SECONDS") == "${LOGIN_IP_WINDOW_SECONDS:-300}"
 
 
 def test_diretorios_de_estado_ficam_no_volume_api_data():
@@ -51,3 +54,11 @@ def test_defaults_do_codigo_para_flags_e_almox_sao_desligados():
     # sem segredo a conciliacao do Almox+ responde 503; sem URL nenhum webhook sai
     assert campos["almox_integration_secret"].default == ""
     assert campos["almox_webhook_url"].default == ""
+
+
+def test_login_por_ip_repassado_nos_dois_compose():
+    dev = (ROOT / "docker-compose.dev.yml").read_text(encoding="utf-8")
+    assert "LOGIN_IP_MAX_FAILURES: ${LOGIN_IP_MAX_FAILURES:-20}" in dev
+    assert "LOGIN_IP_WINDOW_SECONDS: ${LOGIN_IP_WINDOW_SECONDS:-300}" in dev
+    assert Settings.model_fields["login_ip_max_failures"].default == 20
+    assert Settings.model_fields["login_ip_window_seconds"].default == 300

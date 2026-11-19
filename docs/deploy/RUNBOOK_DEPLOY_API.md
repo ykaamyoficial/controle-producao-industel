@@ -379,7 +379,7 @@ Depois de alguns dias estável, **sem apagar nada antes de confirmação do Henr
 
 ## 8. Avisos de comportamento novo
 
-- **Login por IP.** `LOGIN_IP_MAX_FAILURES=20` por `LOGIN_IP_WINDOW_SECONDS=300` (0 desliga) devolve 429 com `Retry-After`. Atrás do túnel `cloudflared` o IP visto é o do proxy, então **todos os usuários dividem um único balde**: um atacante pode travar o login de todos por 5 minutos. Mitigar com regra de rate limit no WAF/Cloudflare para `/api/v1/auth/*` e, se necessário, subir o limite ou colocar 0 por variável de ambiente no `.env` (`dc up -d api` para aplicar).
+- **Login por IP.** `LOGIN_IP_MAX_FAILURES=20` por `LOGIN_IP_WINDOW_SECONDS=300` (0 desliga) devolve 429 com `Retry-After`. Atrás do túnel `cloudflared` o IP visto é o do proxy, então **todos os usuários dividem um único balde**: um atacante pode travar o login de todos por 5 minutos. Mitigar com regra de rate limit no WAF/Cloudflare para `/api/v1/auth/*` e, se necessário, subir o limite ou colocar 0 por variável de ambiente no `.env` do SERVIDOR (o compose de produção repassa `LOGIN_IP_MAX_FAILURES` e `LOGIN_IP_WINDOW_SECONDS` ao container; `dc up -d api` para aplicar).
 - `/system/compatibility` só grava heartbeat de instalação com Bearer; sem token só devolve a política.
 - `PASSWORD_MIN_LENGTH` 10 vale só para senhas novas; usuários com senha curta continuam entrando.
 - Backup de volumes (`cp_storage_*.tar`, `cp_updates_*.tar`) aumenta o uso de disco; a retenção é de 14 dias.
