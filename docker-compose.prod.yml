@@ -73,11 +73,25 @@ services:
       REFRESH_TOKEN_EXPIRE_DAYS: ${REFRESH_TOKEN_EXPIRE_DAYS:-7}
       LOGIN_MAX_FAILED_ATTEMPTS: ${LOGIN_MAX_FAILED_ATTEMPTS:-5}
       LOGIN_LOCK_MINUTES: ${LOGIN_LOCK_MINUTES:-15}
-      PASSWORD_MIN_LENGTH: ${PASSWORD_MIN_LENGTH:-4}
+      PASSWORD_MIN_LENGTH: ${PASSWORD_MIN_LENGTH:-10}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
       NOMUS_ENCRYPTION_KEY: ${NOMUS_ENCRYPTION_KEY:?defina NOMUS_ENCRYPTION_KEY}
       BACKUP_DIR: ${BACKUP_DIR:-/var/backups/controle-producao}
       UPDATE_REPOSITORY_DIR: ${UPDATE_REPOSITORY_DIR:-/var/lib/controle-producao/updates}
+      # Estado/anexos gravaveis da API: todos dentro de /app/data, que e o
+      # volume nomeado "api_data" (ver "volumes:" do servico). Caminhos
+      # absolutos explicitos -- sem eles o default da API e relativo ao cwd.
+      CHAT_STORAGE_ROOT: ${CHAT_STORAGE_ROOT:-/app/data/storage}
+      AUDIT_SPOOL_DIR: ${AUDIT_SPOOL_DIR:-/app/data/audit_spool}
+      MAINTENANCE_STATE_DIR: ${MAINTENANCE_STATE_DIR:-/app/data/system_state}
+      # Flags de comportamento -- DESLIGADAS por padrao; ligar so por decisao
+      # explicita no .env, antes de cada deploy (auditoria 06, C9).
+      REMANAGEMENT_BY_ROWS_ENABLED: ${REMANAGEMENT_BY_ROWS_ENABLED:-false}
+      CLIENT_VERSION_ENFORCEMENT_ENABLED: ${CLIENT_VERSION_ENFORCEMENT_ENABLED:-false}
+      # Integracao Almox+ (docs/architecture/ALMOX_INTEGRATION.md): sem segredo a
+      # conciliacao responde 503; sem URL nenhum webhook sai. Sem default fixo.
+      ALMOX_INTEGRATION_SECRET: ${ALMOX_INTEGRATION_SECRET:-}
+      ALMOX_WEBHOOK_URL: ${ALMOX_WEBHOOK_URL:-}
       # Notificacoes multicanal (Fase 11) -- canal de e-mail. Desligado por
       # padrao; o worker so sobe com NOTIFICATIONS_EMAIL_ENABLED=true E
       # SMTP_HOST/SMTP_FROM preenchidos. Sem isso as demais notificacoes
@@ -107,6 +121,13 @@ services:
       # bind mount de codigo (Secao 17 continua valendo: nenhum arquivo de
       # /app/api vem do host).
       - update_repository_data:/var/lib/controle-producao/updates
+      # Anexos de proposta/chat, spool de auditoria e estado de manutencao
+      # (/app/data/{storage,audit_spool,system_state}). Volume NOVO "api_data"
+      # (no Docker: <projeto>_api_data = controle_producao_industel_api_data);
+      # o dono apiuser vem da imagem (api/Dockerfile cria /app/data com
+      # chown). Sem ele, cada recreate do container apagava os anexos (B2).
+      # Inclua este volume no backup (scripts/servidor/backup_db.ps1).
+      - api_data:/app/data
     # Sem bind mount de /app/api (Secao 17).
     # Sem "build:" -- este compose so consome uma imagem ja publicada, nunca
     # builda a partir do codigo fonte do host (Secao 6).
@@ -121,8 +142,12 @@ services:
   # durante a migracao (Secao 12, Etapas A-C); so deve ser bloqueada para a
   # LAN manualmente na Etapa D, depois de validar HTTPS de outro computador
   # (ver docs/architecture/FASE5_HTTPS_E_SEGURANCA.md).
+  # Perfil "caddy": NAO sobe num "docker compose up -d" comum (no SERVIDOR o
+  # TLS e do Cloudflare e o .env leva valores ficticios). Para usar:
+  #   docker compose -f docker-compose.prod.yml --profile caddy up -d
   caddy:
     image: caddy:2-alpine
+    profiles: ["caddy"]
     container_name: controle_producao_caddy
     restart: unless-stopped
     depends_on:
@@ -151,3 +176,4 @@ volumes:
   postgres_prod_data:
   caddy_data:
   update_repository_data:
+  api_data:
