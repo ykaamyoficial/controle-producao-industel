@@ -54,16 +54,33 @@ http://127.0.0.1:8000
 
 ## Testes
 
-Suite oficial:
+Suite oficial (Desktop e API sem banco; a API pula os testes que exigem Postgres):
 
 ```bat
 python -m pytest tests api/tests -q
 ```
 
-Resultado registrado na baseline 3.0.0:
+Suite da API com Postgres descartavel (leva cerca de 1 hora). O nome do banco precisa ter `test`:
+
+```bat
+set APP_ENV=test
+set POSTGRES_TEST_DATABASE_URL=postgresql+psycopg://USUARIO:SENHA@127.0.0.1:5432/controle_producao_test
+python -m pytest api/tests -q --ignore=api/tests/test_docker_release_integration.py --ignore=api/tests/test_deployment_rollback_integration.py
+```
+
+`test_docker_release_integration.py` e `test_deployment_rollback_integration.py` exigem Docker real e
+ambiente proprio e travam a suite com Docker ativo. Rode-os a parte, com timeout:
+
+```bat
+python -m pytest api/tests/test_docker_release_integration.py api/tests/test_deployment_rollback_integration.py -q --timeout=600
+```
+
+Resultado da rodada final de 2026-11-19 (HEAD 2c8166e):
 
 ```text
-330 passed, 35 skipped, 0 failed
+Desktop:                  2488 passed, 22 skipped, 0 failed (220 arquivos)
+API sem banco:             995 passed, 527 skipped, 0 failed
+API com Postgres (suite inteira, sem os 2 arquivos Docker): 1520 passed, 2 skipped, 0 failed
 ```
 
 ## Gerar o executavel
