@@ -89,6 +89,7 @@ def _timestamp(value: Any) -> float | None:
 
 def _list_item(row: dict[str, Any]) -> dict[str, Any]:
     item = {field: row.get(field) for field in _OUTPUT_FIELDS}
+    item["requires_inspection"] = bool(row.get("requires_inspection"))
     item["legacy_updated_at"] = api_datetime(row.get("legacy_updated_at"))
     item["synced_at"] = api_datetime(row.get("synced_at"))
     item["version"] = row.get("version")
