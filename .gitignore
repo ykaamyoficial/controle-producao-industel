@@ -72,3 +72,7 @@ reports/
 /tmp/
 build_teste/
 dist_teste/
+
+# Saidas locais (PDFs de referencia, manuais)
+output/
+*.dump
