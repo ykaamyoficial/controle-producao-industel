@@ -274,6 +274,8 @@ class DesktopApiClient:
             raise ApiAuthenticationError(message or "Autenticacao invalida.", status_code=401, request_id=request_id)
         if response.status_code == 403:
             raise ApiPermissionError(request_id=request_id)
+        if response.status_code == 429:  # limite de tentativas de login por IP: mostra a mensagem da API
+            raise ApiAuthenticationError(message or "Muitas tentativas. Aguarde e tente novamente.", status_code=429, request_id=request_id)
         if response.status_code in {400, 413, 415, 422}:
             self._log_parse_failure(method=method, path=path, response=response, request_id=request_id, reason=f"validacao rejeitada pela API (code={code or 'desconhecido'})")
             raise ApiValidationError(message or "Dados invalidos para a API.", status_code=response.status_code, request_id=request_id)

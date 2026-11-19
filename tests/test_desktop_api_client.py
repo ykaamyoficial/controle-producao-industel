@@ -10,7 +10,7 @@ from app.integrations.api.auth_client import AuthApiClient
 from app.integrations.api.client import DesktopApiClient
 from app.integrations.api.compatibility import compatibility_report
 from app.integrations.api.config import DesktopApiSettings
-from app.integrations.api.exceptions import ApiBusinessError, ApiConnectionError, ApiPermissionError, ApiSessionExpiredError, ApiTimeoutError, ApiUnavailableError, ApiUnexpectedResponseError, ApiValidationError, sanitize_secret
+from app.integrations.api.exceptions import ApiAuthenticationError, ApiBusinessError, ApiConnectionError, ApiPermissionError, ApiSessionExpiredError, ApiTimeoutError, ApiUnavailableError, ApiUnexpectedResponseError, ApiValidationError, sanitize_secret
 from app.integrations.api.models import SystemIdentity, SystemVersion
 from app.integrations.api.proposals_client import ProposalsApiClient
 from app.integrations.api.session import ExperimentalApiSession
@@ -111,6 +111,7 @@ class DesktopApiClientTests(unittest.TestCase):
         cases = [
             (401, "TOKEN_EXPIRED", ApiSessionExpiredError),
             (403, "PERMISSION_DENIED", ApiPermissionError),
+            (429, "LOGIN_RATE_LIMITED", ApiAuthenticationError),
             (503, "DATABASE_UNAVAILABLE", ApiUnavailableError),
         ]
         for status, code, expected in cases:

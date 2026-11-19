@@ -3,8 +3,9 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.app.core.exceptions import AuthenticationError
 from api.app.database.session import get_db_session
-from api.app.modules.auth import service
+from api.app.modules.auth import ip_rate_limit, service
 from api.app.modules.auth.dependencies import get_current_active_user
 from api.app.modules.auth.models import User
 from api.app.modules.auth.schemas import LoginRequest, LogoutRequest, RefreshRequest, TokenResponse, UserOut
@@ -19,14 +20,20 @@ def _ip(request: Request) -> str | None:
 
 @router.post("/login", response_model=TokenResponse)
 async def login(payload: LoginRequest, request: Request, session: AsyncSession = Depends(get_db_session)):
-    return await service.login(
-        session,
-        payload.username,
-        payload.password,
-        request_id=getattr(request.state, "request_id", None),
-        ip_address=_ip(request),
-        user_agent=request.headers.get("user-agent"),
-    )
+    ip = _ip(request)
+    ip_rate_limit.check(ip)
+    try:
+        return await service.login(
+            session,
+            payload.username,
+            payload.password,
+            request_id=getattr(request.state, "request_id", None),
+            ip_address=ip,
+            user_agent=request.headers.get("user-agent"),
+        )
+    except AuthenticationError:
+        ip_rate_limit.record_failure(ip)
+        raise
 
 
 @router.post("/refresh", response_model=TokenResponse)
