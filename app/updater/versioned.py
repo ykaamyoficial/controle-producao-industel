@@ -5,10 +5,11 @@ Duas fases, ambas retornando um UpdateStatus (nunca silenciosas):
 * stage(): com o Desktop AINDA aberto -- copia/verifica o pacote, extrai para
   versions/<v>.tmp e renomeia para versions/<v>. Nada que esteja em uso e
   tocado, entao pode rodar a qualquer hora. Falha aqui = nada mudou.
-* activate(): quando o usuario manda reiniciar -- grava o ponteiro (atomico),
-  pede a saida de todos os processos do app, encerra os teimosos, abre o
-  launcher e espera o handshake. Sem handshake, volta o ponteiro e reabre a
-  versao anterior.
+* activate(): quando o usuario manda reiniciar -- grava o ponteiro e SO ENTAO
+  pede a saida de todos os processos do app (se o ponteiro nao puder ser
+  gravado, o programa continua aberto e o erro e reportado), encerra os
+  teimosos, abre o launcher e espera o handshake. Sem handshake, volta o
+  ponteiro e reabre a versao anterior.
 
 Como o ponteiro muda ANTES de os processos antigos sairem e nenhuma pasta e
 renomeada, um processo que nao fecha (ex.: agente --notifier) nao impede mais
@@ -32,7 +33,7 @@ from app.updater.extraction import PathTraversalError, safe_extract_zip
 from app.updater.handshake import clear_handshake_marker, wait_for_handshake
 from app.updater.lock import UpdaterLock, UpdaterLockError
 from app.updater.status import (
-    PHASE_ACTIVATING, PHASE_FAILED, PHASE_RESTARTING, PHASE_ROLLED_BACK, PHASE_STAGED, PHASE_STAGING,
+    PHASE_ACTIVATING, PHASE_CLOSING, PHASE_FAILED, PHASE_RESTARTING, PHASE_ROLLED_BACK, PHASE_STAGED, PHASE_STAGING,
     PHASE_SUCCESS, UpdateStatus, write_status,
 )
 from app.updater.validation import PackageValidationStatus, verify_package
@@ -67,6 +68,7 @@ class VersionedUpdater:
         handshake_waiter=wait_for_handshake,
         disk_usage_fn=shutil.disk_usage,
         sleep: Callable[[float], None] = time.sleep,
+        elevate: Callable[[], bool] | None = None,
     ):
         self._lock_path = lock_path
         self._status_directory = status_directory
@@ -79,6 +81,7 @@ class VersionedUpdater:
         self._wait_handshake = handshake_waiter
         self._disk_usage = disk_usage_fn
         self._sleep = sleep
+        self._elevate = elevate  # ultimo recurso: relancar --activate elevado (True = relancado)
 
     # -- fase 1 --------------------------------------------------------------
 
@@ -196,10 +199,19 @@ class VersionedUpdater:
         if previous is None or previous == target or not versions.app_executable(root, previous).is_file():
             previous = request.current_version if versions.app_executable(root, request.current_version).is_file() else None
 
-        self._report(request, PHASE_ACTIVATING, 10, "Fechando o programa para concluir a atualizacao")
+        # O ponteiro vem ANTES de fechar o app: se nao der para grava-lo, o programa segue aberto.
+        self._report(request, PHASE_ACTIVATING, 5, "Verificando permissoes...")
+        try:
+            versions.write_pointer(root, target, previous_version=previous)
+            written = versions.read_pointer(root)
+            if written is None or written.version != target:
+                raise OSError("current.json nao refletiu a nova versao apos a gravacao.")
+        except OSError as exc:
+            return self._pointer_failed(request, exc)
+
+        self._report(request, PHASE_CLOSING, 10, "Fechando o programa para concluir a atualizacao")
         clear_handshake_marker(request.request_id)
         quit_signal.request_quit(request.request_id)
-        versions.write_pointer(root, target, previous_version=previous)
 
         leftovers = self._stop_processes(
             root, exclude_pids=(os.getpid(),),
@@ -225,13 +237,34 @@ class VersionedUpdater:
             return self._report(request, PHASE_SUCCESS, 100, "Atualizacao concluida.")
         return self._rollback(request, root, previous=previous, reason=failure)
 
+    def _pointer_failed(self, request: UpdateRequest, exc: OSError) -> UpdateStatus:
+        log.error("versioned_activate_pointer_failed | erro=%s", exc)
+        if self._elevate is not None and self._elevate():
+            return self._report(request, PHASE_ACTIVATING, 5, "Aguardando permissao de administrador")
+        return self._report(
+            request, PHASE_FAILED, 5,
+            "Nao foi possivel trocar a versao do programa (sem permissao no arquivo current.json). "
+            "O programa continua aberto e na versao atual. Peca ao TI para atualizar como administrador ou reinstalar com o Setup.",
+            error=str(exc),
+        )
+
     def _rollback(self, request: UpdateRequest, root: Path, *, previous: str | None, reason: str) -> UpdateStatus:
         log.error("versioned_activate_failed | reason=%s | previous=%s", reason, previous)
+        # Daqui o app antigo ja fechou: FAILED com percent 100 e o que app/services/update_outcome_notice.py avisa na proxima abertura.
         if previous is None:
             return self._report(
-                request, PHASE_FAILED, 70, "A atualizacao falhou e nao ha versao anterior para restaurar.", error=reason,
+                request, PHASE_FAILED, 100, "A atualizacao falhou e nao ha versao anterior para restaurar.", error=reason,
             )
-        versions.write_pointer(root, previous)
+        try:
+            versions.write_pointer(root, previous)
+        except OSError as exc:
+            log.error("versioned_rollback_pointer_failed | erro=%s", exc)
+            return self._report(
+                request, PHASE_FAILED, 100,
+                "A nova versao nao abriu corretamente e nao foi possivel restaurar a versao anterior "
+                "(sem permissao no arquivo current.json). Peca ao TI para reinstalar com o Setup.",
+                error=f"{reason}; {exc}",
+            )
         self._stop_processes(
             versions.version_dir(root, request.target_version), exclude_pids=(os.getpid(),),
             graceful_timeout_seconds=0.0, force_timeout_seconds=self._config.force_timeout_seconds,
@@ -241,7 +274,7 @@ class VersionedUpdater:
         except OSError as exc:
             log.error("versioned_rollback_relaunch_failed | erro=%s", exc)
         return self._report(
-            request, PHASE_ROLLED_BACK, 100, f"A atualizacao falhou; a versao {previous} foi restaurada.", error=reason,
+            request, PHASE_ROLLED_BACK, 100, f"A nova versao nao abriu corretamente; a versao {previous} foi restaurada.", error=reason,
         )
 
     # -- utilidades ----------------------------------------------------------
@@ -259,6 +292,7 @@ class VersionedUpdater:
 
     def _report(self, request: UpdateRequest, phase: str, percent: int, message: str, *, error: str | None = None) -> UpdateStatus:
         status = UpdateStatus(request.request_id, phase, percent, message, error)
+        log.info("versioned_status | request_id=%s | phase=%s | percent=%s", request.request_id, phase, percent)
         try:
             write_status(status, directory=self._status_directory)
         except OSError as exc:

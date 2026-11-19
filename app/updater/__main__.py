@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import argparse
 import logging
-import os
 import sys
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -48,8 +47,16 @@ def _configure_logging() -> logging.Logger:
 
 
 def _can_write_pointer(install_root: Path) -> bool:
+    """Teste real de escrita: os.access(W_OK) no Windows ignora a ACL (so olha o atributo
+    somente-leitura). Abrir em r+b nao altera o conteudo."""
     pointer = versions.pointer_path(install_root)
-    return os.access(pointer, os.W_OK) if pointer.exists() else is_writable(install_root)
+    if not pointer.exists():
+        return is_writable(install_root)
+    try:
+        with open(pointer, "r+b"):
+            return True
+    except OSError:
+        return False
 
 
 def _run_versioned(request: UpdateRequest, args, argv, log: logging.Logger) -> int:
@@ -58,7 +65,11 @@ def _run_versioned(request: UpdateRequest, args, argv, log: logging.Logger) -> i
     # o current.json, que o instalador deixa gravavel por usuarios -- assim o
     # UAC aparece uma vez (na preparacao) e nao de novo ao reiniciar.
     can_write = is_writable(install_root) if args.stage else _can_write_pointer(install_root)
-    if not is_admin() and not can_write:
+    elevate = None
+    if not args.no_elevate and not is_admin():
+        relaunch_argv = argv if argv is not None else sys.argv[1:]
+        elevate = lambda: relaunch_elevated(relaunch_argv)  # noqa: E731 - ultimo recurso se o ponteiro falhar
+    if not args.no_elevate and not is_admin() and not can_write:
         log.warning("update_elevation_required | install_root=%s | mode=%s", install_root, "stage" if args.stage else "activate")
         if relaunch_elevated(argv if argv is not None else sys.argv[1:]):
             log.warning("update_elevation_relaunched | request_id=%s", request.request_id)
@@ -71,6 +82,7 @@ def _run_versioned(request: UpdateRequest, args, argv, log: logging.Logger) -> i
             graceful_exit_timeout_seconds=args.app_exit_timeout_seconds if args.app_exit_timeout_seconds != 60.0 else 20.0,
             handshake_timeout_seconds=args.handshake_timeout_seconds if args.handshake_timeout_seconds != 30.0 else 45.0,
         ),
+        elevate=elevate,
     )
     try:
         if args.stage:
@@ -108,6 +120,10 @@ def main(argv: list[str] | None = None) -> int:
         "--activate", action="store_true",
         help="Layout versionado, fase 2: troca o ponteiro, fecha o app, abre a nova versao e confirma.",
     )
+    parser.add_argument(
+        "--no-elevate", action="store_true",
+        help="Desliga toda elevacao (UAC), inclusive a pre-checagem. Usado pela validacao automatizada (scripts/validar_activate_sem_admin.ps1).",
+    )
     parser.add_argument("--app-exit-timeout-seconds", type=float, default=60.0)
     parser.add_argument("--handshake-timeout-seconds", type=float, default=30.0)
     args = parser.parse_args(argv)
@@ -125,7 +141,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.stage or args.activate:
         return _run_versioned(request, args, argv, log)
 
-    if not is_admin() and not is_writable(install_dir):
+    if not args.no_elevate and not is_admin() and not is_writable(install_dir):
         log.warning("update_elevation_required | install_dir=%s", install_dir)
         if relaunch_elevated(argv if argv is not None else sys.argv[1:]):
             log.warning("update_elevation_relaunched | request_id=%s", request.request_id)

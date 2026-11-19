@@ -9,7 +9,8 @@ from unittest import mock
 
 from app.updater import versions as v
 from app.updater.contract import UpdateRequest
-from app.updater.status import PHASE_FAILED, PHASE_ROLLED_BACK, PHASE_STAGED, PHASE_SUCCESS, read_status
+from app.updater.lock import UpdaterLock
+from app.updater.status import PHASE_ACTIVATING, PHASE_FAILED, PHASE_ROLLED_BACK, PHASE_STAGED, PHASE_SUCCESS, read_status, write_status as real_write_status
 from app.updater.versioned import VersionedConfig, VersionedUpdater
 from tests.test_updater_versions import folder_without_create_permission
 
@@ -184,6 +185,123 @@ class VersionedUpdaterTests(unittest.TestCase):
             self._updater().activate(request)
         quit_signal.request_quit.assert_called_once_with("req1")
         quit_signal.clear_quit_request.assert_called_once()
+
+    # -- activate: ponteiro nao gravavel, elevacao, ordem, rollback ---------------
+
+    def _pointer_bytes(self) -> bytes:
+        return v.pointer_path(self.root).read_bytes()
+
+    def test_activate_pointer_not_writable_fails_without_closing_the_app(self):
+        request, _ = self._stage()
+        before = self._pointer_bytes()
+        with mock.patch("app.updater.versioned.quit_signal") as quit_signal,                 mock.patch("app.updater.versioned.versions.write_pointer", side_effect=PermissionError("negado")):
+            status = self._updater().activate(request)
+        self.assertEqual(status.phase, PHASE_FAILED)
+        self.assertIn("continua aberto", status.message)
+        self.assertIn("current.json", status.message)
+        self.assertIn("negado", status.error)
+        quit_signal.request_quit.assert_not_called()
+        self.stopper.assert_not_called()
+        self.launch.assert_not_called()
+        self.assertEqual(self._pointer_bytes(), before)
+        self.assertEqual(read_status("req1", directory=self.status_dir).phase, PHASE_FAILED)
+
+    def test_activate_fails_when_pointer_does_not_reflect_target_after_write(self):
+        request, _ = self._stage()
+        with mock.patch("app.updater.versioned.quit_signal") as quit_signal,                 mock.patch("app.updater.versioned.versions.write_pointer"):
+            status = self._updater().activate(request)
+        self.assertEqual(status.phase, PHASE_FAILED)
+        quit_signal.request_quit.assert_not_called()
+        self.stopper.assert_not_called()
+
+    def test_activate_direct_write_fallback_still_works_when_temp_cannot_be_created(self):
+        request, _ = self._stage()
+        with folder_without_create_permission(self.root):
+            status = self._updater().activate(request)
+        self.assertEqual(status.phase, PHASE_SUCCESS)
+        self.assertEqual(v.read_pointer(self.root).version, "2.9.0")
+
+    def test_activate_elevates_as_last_resort_and_releases_lock_without_failed(self):
+        request, _ = self._stage()
+        elevate = mock.Mock(return_value=True)
+        with mock.patch("app.updater.versioned.quit_signal") as quit_signal,                 mock.patch("app.updater.versioned.versions.write_pointer", side_effect=PermissionError("negado")):
+            status = self._updater(elevate=elevate).activate(request)
+        elevate.assert_called_once_with()
+        self.assertEqual(status.phase, PHASE_ACTIVATING)
+        self.assertIn("administrador", status.message)
+        self.assertFalse(status.is_failure)
+        quit_signal.request_quit.assert_not_called()
+        self.stopper.assert_not_called()
+        with UpdaterLock(self.tmp / ".lock", timeout_seconds=1):  # lock liberado para o processo elevado
+            pass
+
+    def test_activate_fails_when_elevation_is_declined(self):
+        request, _ = self._stage()
+        elevate = mock.Mock(return_value=False)
+        with mock.patch("app.updater.versioned.versions.write_pointer", side_effect=PermissionError("negado")):
+            status = self._updater(elevate=elevate).activate(request)
+        elevate.assert_called_once_with()
+        self.assertEqual(status.phase, PHASE_FAILED)
+
+    def test_activate_does_not_elevate_when_pointer_is_written(self):
+        request, _ = self._stage()
+        elevate = mock.Mock(return_value=True)
+        self.assertEqual(self._updater(elevate=elevate).activate(request).phase, PHASE_SUCCESS)
+        elevate.assert_not_called()
+
+    def test_activate_writes_pointer_before_asking_the_app_to_quit_and_reports_phases_in_order(self):
+        request, _ = self._stage()
+        calls: list[str] = []
+        phases: list[str] = []
+        real_write_pointer = v.write_pointer
+
+        def write_pointer(*args, **kwargs):
+            calls.append("pointer")
+            return real_write_pointer(*args, **kwargs)
+
+        def write_status(status, **kwargs):
+            phases.append(status.phase)
+            return real_write_status(status, **kwargs)
+
+        with mock.patch("app.updater.versioned.quit_signal") as quit_signal,                 mock.patch("app.updater.versioned.versions.write_pointer", side_effect=write_pointer),                 mock.patch("app.updater.versioned.write_status", side_effect=write_status):
+            quit_signal.request_quit.side_effect = lambda *_: calls.append("quit")
+            self.stopper.side_effect = lambda *a, **k: calls.append("stop") or []
+            self.launch.side_effect = lambda *a, **k: calls.append("launch") or 1
+            status = self._updater().activate(request)
+        self.assertEqual(status.phase, PHASE_SUCCESS)
+        self.assertEqual(calls, ["pointer", "quit", "stop", "launch"])
+        self.assertEqual(phases, [PHASE_ACTIVATING, "CLOSING", "RESTARTING", PHASE_SUCCESS])
+
+    def test_rollback_without_handshake_restores_pointer_relaunches_old_app_and_explains(self):
+        request, _ = self._stage()
+        self.handshake.return_value = False
+        status = self._updater().activate(request)
+        self.assertEqual(status.phase, PHASE_ROLLED_BACK)
+        self.assertEqual(v.read_pointer(self.root).version, "2.8.0")
+        self.assertIn("a versao 2.8.0 foi restaurada", status.message)
+        self.assertIn("nao abriu corretamente", status.message)
+        self.assertIn("handshake", status.error)
+        self.assertNotIn("--post-update", self.launch.call_args.args[1])  # reabre a versao anterior, sem handshake
+        self.assertEqual(read_status("req1", directory=self.status_dir).phase, PHASE_ROLLED_BACK)
+
+    def test_rollback_with_unwritable_pointer_reports_failed_instead_of_raising(self):
+        request, _ = self._stage()
+        self.handshake.return_value = False
+        real = v.write_pointer
+        outcomes = iter([None, PermissionError("negado")])
+
+        def write_pointer(*args, **kwargs):
+            failure = next(outcomes)
+            if failure:
+                raise failure
+            return real(*args, **kwargs)
+
+        with mock.patch("app.updater.versioned.versions.write_pointer", side_effect=write_pointer):
+            status = self._updater().activate(request)
+        self.assertEqual(status.phase, PHASE_FAILED)
+        self.assertIn("restaurar a versao anterior", status.message)
+        self.assertIn("negado", status.error)
+        self.assertEqual(v.read_pointer(self.root).version, "2.9.0")  # ponteiro como esta
 
 
 if __name__ == "__main__":
