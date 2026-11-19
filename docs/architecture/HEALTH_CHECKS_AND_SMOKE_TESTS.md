@@ -139,6 +139,19 @@ autenticação nova só para este propósito, fora do escopo desta fase. Se uma
 fase futura introduzir uma credencial técnica formal, este passo pode ser
 adicionado sem alterar a arquitetura do runner.
 
+### Smoke de deploy com login (`scripts/smoke_deploy.py`)
+
+Estende o runner acima (o CLI `python -m api.app.health.smoke` continua so publico).
+Etapas: as 4 publicas, `updates/desktop`, opcionalmente `/docs`, `/redoc` e `/openapi.json`
+fechados (`--expect-production-hardening`, exige 404) e, sem `--skip-auth`, login com
+`SMOKE_USERNAME`/`SMOKE_PASSWORD` (ou prompt, senha sem eco), `auth/me`, `system/compatibility`
+e uma listagem `limit=1` de propostas, almoxarifado, inspecao e logistica. Todas as etapas
+sao GET, exceto o login (que cria uma sessao). TLS sempre verificado; token so em memoria.
+
+```bash
+python scripts/smoke_deploy.py --base-url https://HOST --expect-production-hardening
+```
+
 ### CLI
 
 ```bash
