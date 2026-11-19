@@ -42,16 +42,16 @@ Entregues ao cliente (8):
   CP 05495 MNS ENGENHARIA: — -> Finalizado · Entregue (11 peças)
   CP 05500 MNS ENGENHARIA: Almoxarifado · Em separação -> Almoxarifado · Almoxarifado entregue (11 peças)
   CP 05508 MNS ENGENHARIA: Expedição · Em separação -> Finalizado · Entregue (11 peças)
-  CP05377 MNS ENGENHARIA ENGº LEONARDO M. N. SOUZA: — -> Finalizado · Entregue (11 peças)
-  CP05412 MNS ENGENHARIA ENGº LEONARDO M. N. SOUZA: — -> Finalizado · Entregue (11 peças)
-  CP05413 MNS ENGENHARIA ENGº LEONARDO M. N. SOUZA: — -> Finalizado · Entregue (11 peças)
-  CP05414 MNS ENGENHARIA ENGº LEONARDO M. N. SOUZA: — -> Finalizado · Entregue (11 peças)
+  CP05377 MNS ENGENHARIA ENGº CICLANO DE TAL: — -> Finalizado · Entregue (11 peças)
+  CP05412 MNS ENGENHARIA ENGº CICLANO DE TAL: — -> Finalizado · Entregue (11 peças)
+  CP05413 MNS ENGENHARIA ENGº CICLANO DE TAL: — -> Finalizado · Entregue (11 peças)
+  CP05414 MNS ENGENHARIA ENGº CICLANO DE TAL: — -> Finalizado · Entregue (11 peças)
 
 Atrasadas (60):
   CP05236 ENERGY SYSTEN CONSTRUÇÕES E: prazo 22/07 · 84 d de atraso
   CP05349 EQUATORIAL PIAUI DISTRIBUIDORA DE ENERGIA S.A: prazo 25/08 · 50 d de atraso
-  CP05432 EQUATORIAL ENERGIA - CEEE JOSÉ RAIMUNDO R. MARQUES: prazo 28/08 · 47 d de atraso
-  CP05434 EQUATORIAL GOIAS DIST. DE JOSÉ RAIMUNDO R. MARQUES: prazo 28/08 · 47 d de atraso
+  CP05432 EQUATORIAL ENERGIA - CEEE BELTRANO DE TAL: prazo 28/08 · 47 d de atraso
+  CP05434 EQUATORIAL GOIAS DIST. DE BELTRANO DE TAL: prazo 28/08 · 47 d de atraso
   CP05446 EQUATORIAL ALAGOAS CONTRATO TRIENAL: prazo 31/08 · 44 d de atraso
 
 Vencem em até 3 dias (21):
@@ -62,11 +62,11 @@ Vencem em até 3 dias (21):
   CP 05571 EQUATORIAL PARÁ DISTRIBUIDORA DE ENERGIA S.A.: vence hoje
 
 Paradas há muito tempo (87):
-  CP05433 EQUATORIAL MARANHAO JOSÉ RAIMUNDO: sem movimento há 16 dias
-  CP05432 EQUATORIAL ENERGIA - CEEE JOSÉ RAIMUNDO R. MARQUES: sem movimento há 16 dias
-  CP05430 EQUATORIAL MARANHAO CAMILA BUENO DE OLIVEIRA: sem movimento há 16 dias
+  CP05433 EQUATORIAL MARANHAO BELTRANO: sem movimento há 16 dias
+  CP05432 EQUATORIAL ENERGIA - CEEE BELTRANO DE TAL: sem movimento há 16 dias
+  CP05430 EQUATORIAL MARANHAO FULANA DE TAL: sem movimento há 16 dias
   CP05419 EQUATORIAL GOIAS DIST. DE CONTRATO TRIENAL: sem movimento há 16 dias
-  CP05434 EQUATORIAL GOIAS DIST. DE JOSÉ RAIMUNDO R. MARQUES: sem movimento há 16 dias
+  CP05434 EQUATORIAL GOIAS DIST. DE BELTRANO DE TAL: sem movimento há 16 dias
 
 Parciais pendentes (3):
   CP 05493 MNS ENGENHARIA: 2 parcial(is) em aberto

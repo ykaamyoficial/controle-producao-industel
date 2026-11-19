@@ -16,12 +16,12 @@ from api.app.modules.logistics.state_resolver import resolve_state
         ("Equatorial Piauí", "EQT-PI"),
         ("EQUATORIAL MARANHAO DISTRIBUIDORA DE ENERGIA S.A", "EQT-MA"),
         ("EQUATORIAL MARANHAO", "EQT-MA"),
-        ("EQUATORIAL MARANHAO CAMILA BUENO DE OLIVEIRA", "EQT-MA"),
+        ("EQUATORIAL MARANHAO FULANA DE TAL", "EQT-MA"),
         ("EQUATORIAL MARANHÃO CONTRATO TRIENAL", "EQT-MA"),
         ("EQUATORIAL ALAGOAS DISTRIBUIDORA DE ENERGIA S.A.", "EQT-AL"),
         ("EQUATORIAL AMAPÁ", "EQT-AP"),
         ("EQUATORIAL ENERGIA - CEEE", "EQT-RS"),
-        ("EQUATORIAL GOIÁS JOSÉ RAIMUNDO R. MARQUES", "EQT-GO"),
+        ("EQUATORIAL GOIÁS BELTRANO DE TAL", "EQT-GO"),
         ("EQUATORIAL PARANAPANEMA", None),  # PARA so como palavra inteira
         ("EQUATORIAL PARÁ MARANHAO", None),  # ambiguo
         ("EQUATORIAL ENERGIA", None),
