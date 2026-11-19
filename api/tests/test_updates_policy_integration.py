@@ -158,7 +158,7 @@ class CompatibilityEndpointPolicyIntegrationTests(unittest.TestCase):
             return await save_policy(session, enforcement=enforcement, authorized_release_version=authorized_release_version, grace_until=grace_until, message=message)
 
     def test_no_policy_saved_is_backward_compatible_and_never_blocks(self):
-        response = self.client.get("/api/v1/system/compatibility?desktop_version=2.5.2")
+        response = self.client.get("/api/v1/system/compatibility?desktop_version=2.10.0")
         self.assertEqual(response.status_code, 200)
         body = response.json()
         self.assertEqual(body["enforcement"], "NONE")
@@ -175,7 +175,7 @@ class CompatibilityEndpointPolicyIntegrationTests(unittest.TestCase):
 
     def test_recommended_enforcement_reflected_in_response(self):
         asyncio.run(self._save(EnforcementMode.RECOMMENDED, None, None, "Nova versao recomendada"))
-        response = self.client.get("/api/v1/system/compatibility?desktop_version=2.5.2")
+        response = self.client.get("/api/v1/system/compatibility?desktop_version=2.10.0")
         body = response.json()
         self.assertEqual(body["enforcement"], "RECOMMENDED")
         self.assertEqual(body["message"], "Nova versao recomendada")

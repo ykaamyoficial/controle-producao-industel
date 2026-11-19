@@ -7,7 +7,7 @@ from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-API_VERSION = "0.11.0"
+API_VERSION = "0.12.0"
 API_STAGE = "official-fiscal"
 API_CONTRACT_VERSION = "v1"
 SERVICE_NAME = "controle-producao-api"
@@ -19,10 +19,14 @@ EXPECTED_DATABASE_REVISION = "20261109_0047"
 # antiga) somente quando uma release futura publicar uma migration puramente aditiva que
 # o servidor comprovadamente sabe operar antes E depois de aplicada.
 MINIMUM_DATABASE_REVISION = EXPECTED_DATABASE_REVISION
-MINIMUM_DESKTOP_VERSION = "2.5.2"
-RECOMMENDED_DESKTOP_VERSION = "2.7.0"
+# 2.10.0: a aba Almoxarifado passou a listar so propostas que "entraram por numero" e a
+# baixa de estoque tem rotas novas (migration 0044); o Desktop 2.9.0 ou anterior nao tem a
+# tela de entrada e ve a aba vazia/travada. Continua sendo so preflight enquanto
+# CLIENT_VERSION_ENFORCEMENT_ENABLED estiver desligado.
+MINIMUM_DESKTOP_VERSION = "2.10.0"
+RECOMMENDED_DESKTOP_VERSION = "2.10.0"
 MAXIMUM_DESKTOP_VERSION: str | None = None
-SUPPORTED_FEATURES = ["auth", "auth_me", "permissions_read", "refresh", "logout", "proposals_read", "proposal_items_read", "proposals_write", "proposal_items_write", "production_official", "galvanization_official", "expedition_official", "compensated_remanagement", "fiscal_official", "notifications_multichannel"]
+SUPPORTED_FEATURES = ["auth", "auth_me", "permissions_read", "refresh", "logout", "proposals_read", "proposal_items_read", "proposals_write", "proposal_items_write", "production_official", "galvanization_official", "expedition_official", "compensated_remanagement", "fiscal_official", "notifications_multichannel", "inspection", "logistics", "warehouse_entry", "warehouse_stock_deduction", "proposal_undo", "fiscal_cancel"]
 
 
 class Settings(BaseSettings):
