@@ -49,7 +49,10 @@ class Settings(BaseSettings):
     notifier_device_expire_days: int = Field(default=90, ge=1, alias="NOTIFIER_DEVICE_EXPIRE_DAYS")
     login_max_failed_attempts: int = Field(default=5, ge=1, alias="LOGIN_MAX_FAILED_ATTEMPTS")
     login_lock_minutes: int = Field(default=15, ge=1, alias="LOGIN_LOCK_MINUTES")
-    password_min_length: int = Field(default=4, ge=4, alias="PASSWORD_MIN_LENGTH")
+    # Limite de falhas de login por IP numa janela deslizante (0 desliga). Ver auth/ip_rate_limit.py.
+    login_ip_max_failures: int = Field(default=20, ge=0, alias="LOGIN_IP_MAX_FAILURES")
+    login_ip_window_seconds: int = Field(default=300, ge=1, alias="LOGIN_IP_WINDOW_SECONDS")
+    password_min_length: int = Field(default=10, ge=4, alias="PASSWORD_MIN_LENGTH")
     password_max_length: int = Field(default=256, ge=32, alias="PASSWORD_MAX_LENGTH")
     jwt_issuer: str = Field(default="controle-producao-api", alias="JWT_ISSUER")
     jwt_audience: str = Field(default="controle-producao-clients", alias="JWT_AUDIENCE")
@@ -202,6 +205,10 @@ class Settings(BaseSettings):
     @property
     def cors_origins(self) -> list[str]:
         return [origin.strip() for origin in self.cors_allowed_origins.split(",") if origin.strip()]
+
+    @property
+    def is_production(self) -> bool:
+        return self.app_env.strip().lower() == "production"
 
     @property
     def auth_ready(self) -> bool:

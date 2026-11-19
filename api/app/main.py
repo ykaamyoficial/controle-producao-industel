@@ -177,6 +177,10 @@ def create_app() -> FastAPI:
         version=API_VERSION,
         description="Fundacao da API do Sistema de Controle de Producao.",
         lifespan=lifespan,
+        # Auditoria 05 achado 3: em producao a documentacao interativa e o schema nao ficam publicos.
+        docs_url=None if settings.is_production else "/docs",
+        redoc_url=None if settings.is_production else "/redoc",
+        openapi_url=None if settings.is_production else "/openapi.json",
     )
 
     if settings.cors_origins:

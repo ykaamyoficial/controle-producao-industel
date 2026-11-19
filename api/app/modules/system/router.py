@@ -1,7 +1,9 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
+from fastapi.security import HTTPAuthorizationCredentials
 
+from api.app.modules.auth.dependencies import bearer_scheme
 from api.app.modules.system import service
 from api.app.modules.system.schemas import HealthResponse, IdentityResponse, MaintenanceStateResponse, ReadyResponse, SystemCompatibilityResponse, VersionResponse
 
@@ -42,10 +44,14 @@ async def compatibility(
     installation_id: str | None = Query(default=None, max_length=36),
     machine_name: str | None = Query(default=None, max_length=255),
     os_version: str | None = Query(default=None, max_length=255),
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
 ):
+    # Leitura publica (o preflight do Desktop roda antes do login); o registro da instalacao
+    # (heartbeat + auditoria) so acontece com Bearer valido -- auditoria 05, achado 5.
+    authenticated = await service.is_authenticated_bearer(credentials)
     return await service.compatibility(
         desktop_version=desktop_version, installation_id=installation_id,
-        machine_name=machine_name, os_version=os_version,
+        machine_name=machine_name, os_version=os_version, authenticated=authenticated,
     )
 
 

@@ -311,7 +311,10 @@ class ChannelAssignmentAndDiscoveryIntegrationTests(unittest.TestCase):
         self.assertEqual(response.json()["channel"], "PRODUCTION")
 
     def test_heartbeat_via_compatibility_updates_last_seen_and_version(self):
-        self.client.get("/api/v1/system/compatibility?installation_id=pc-heartbeat&desktop_version=3.2.0")
+        self.client.get(
+            "/api/v1/system/compatibility?installation_id=pc-heartbeat&desktop_version=3.2.0",
+            headers=self._auth(self.admin_token),
+        )
         listing = self.client.get("/api/v1/channels/installations", headers=self._auth(self.admin_token))
         rows = {row["installation_id"]: row for row in listing.json()["items"]}
         self.assertIn("pc-heartbeat", rows)

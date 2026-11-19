@@ -14,11 +14,12 @@ log = logging.getLogger("api.errors")
 
 
 class ApiError(Exception):
-    def __init__(self, code: str, message: str, status_code: int = 400, *, details: object | None = None):
+    def __init__(self, code: str, message: str, status_code: int = 400, *, details: object | None = None, headers: dict[str, str] | None = None):
         self.code = code
         self.message = message
         self.status_code = status_code
         self.details = details
+        self.headers = headers
         super().__init__(message)
 
 
@@ -109,11 +110,16 @@ class ChannelReleaseNotEligibleError(ApiError):
 def install_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(ApiError)
     async def api_error_handler(request: Request, exc: ApiError):
-        return error_response(exc.code, exc.message, request, status_code=exc.status_code, details=exc.details)
+        response = error_response(exc.code, exc.message, request, status_code=exc.status_code, details=exc.details)
+        for name, value in (exc.headers or {}).items():
+            response.headers[name] = value
+        return response
 
     @app.exception_handler(RequestValidationError)
     async def validation_error_handler(request: Request, exc: RequestValidationError):
-        log.warning("validation_error path=%s errors=%s", request.url.path, exc.errors())
+        # So loc/type: `input` (valor enviado) pode ser uma senha de login malformado.
+        errors = [{"loc": list(error.get("loc", ())), "type": error.get("type")} for error in exc.errors()]
+        log.warning("validation_error path=%s errors=%s", request.url.path, errors)
         return error_response(
             error_codes.VALIDATION_ERROR,
             "Dados invalidos na requisicao.",

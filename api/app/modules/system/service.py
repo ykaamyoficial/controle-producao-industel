@@ -20,6 +20,8 @@ from api.app.database.health import database_check
 from api.app.database.session import get_engine, get_sessionmaker
 from api.app.maintenance.models import retry_after_seconds_for
 from api.app.maintenance.service import build_default_service as build_default_maintenance_service
+from api.app.modules.auth import repository as auth_repository
+from api.app.modules.auth.tokens import decode_access_token
 from api.app.modules.system.schemas import HealthResponse, IdentityResponse, MaintenanceInfo, MaintenanceStateResponse, ReadyResponse, SystemCompatibilityResponse, VersionResponse
 from api.app.updates import policy as update_policy
 
@@ -60,12 +62,30 @@ async def version() -> VersionResponse:
     )
 
 
+async def is_authenticated_bearer(credentials) -> bool:
+    """True so com Bearer valido de usuario ativo. Nunca levanta: token ausente/invalido
+    vira anonimo, para o preflight do Desktop (pre-login) continuar lendo a politica."""
+    if credentials is None or credentials.scheme.lower() != "bearer":
+        return False
+    try:
+        payload = decode_access_token(credentials.credentials)
+        sessionmaker = get_sessionmaker()
+        if sessionmaker is None:
+            return False
+        async with sessionmaker() as session:
+            user = await auth_repository.get_user_by_id(session, int(payload["sub"]))
+        return user is not None and bool(user.active)
+    except Exception:
+        return False
+
+
 async def compatibility(
     *,
     desktop_version: str | None = None,
     installation_id: str | None = None,
     machine_name: str | None = None,
     os_version: str | None = None,
+    authenticated: bool = False,
 ) -> SystemCompatibilityResponse:
     """Publica a politica oficial de compatibilidade (read-only quanto a
     politica em si -- falhas de configuracao/banco sao propagadas como erros
@@ -78,9 +98,11 @@ async def compatibility(
     "clientes antigos continuam entendendo campos anteriores").
 
     Fase 15, Secao 15/19: quando `installation_id` e informado, resolve o canal
-    server-side desta instalacao e registra um heartbeat best-effort (last_seen_at/
-    current_desktop_version) -- a UNICA excecao deliberada a "sem efeitos colaterais"
-    do docstring original, e nunca falha a requisicao principal se o heartbeat falhar.
+    server-side desta instalacao e, SE `authenticated`, registra um heartbeat best-effort
+    (last_seen_at/current_desktop_version) -- a UNICA excecao deliberada a "sem efeitos
+    colaterais" do docstring original, e nunca falha a requisicao principal se o heartbeat
+    falhar. Anonimo (preflight pre-login) so le: o canal ja atribuido e resolvido sem gravar
+    nada (instalacao desconhecida = PRODUCTION) e nenhum evento de auditoria e emitido.
     """
     try:
         policy = get_compatibility_policy()
@@ -97,11 +119,11 @@ async def compatibility(
     maintenance_info = _maintenance_info()
     channel = await _resolve_channel_and_heartbeat(
         installation_id=installation_id, machine_name=machine_name,
-        os_version=os_version, desktop_version=desktop_version,
+        os_version=os_version, desktop_version=desktop_version, authenticated=authenticated,
     )
     production_version, pilot_version = _channel_versions()
 
-    if installation_id:
+    if installation_id and authenticated:
         desktop_state_value = evaluation.desktop_state.value if evaluation.desktop_state is not None else None
         audit_service.record_event(
             event_type=AuditEventType.DESKTOP_COMPATIBILITY_CHECKED, component=Component.COMPATIBILITY_POLICY,
@@ -133,6 +155,7 @@ async def compatibility(
 
 async def _resolve_channel_and_heartbeat(
     *, installation_id: str | None, machine_name: str | None, os_version: str | None, desktop_version: str | None,
+    authenticated: bool = False,
 ) -> Channel:
     if not installation_id:
         return Channel.PRODUCTION
@@ -141,6 +164,8 @@ async def _resolve_channel_and_heartbeat(
         return Channel.PRODUCTION
     try:
         async with sessionmaker() as session:
+            if not authenticated:
+                return await channel_installations.resolve_channel(session, installation_id)
             row = await channel_installations.upsert_heartbeat(
                 session, installation_id=installation_id, machine_name=machine_name,
                 os_version=os_version, current_desktop_version=desktop_version,

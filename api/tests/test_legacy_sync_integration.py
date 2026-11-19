@@ -238,7 +238,7 @@ class LegacySyncIntegrationTests(unittest.TestCase):
             "dry_run": False,
             "batch_number": 1,
             "batch_total": 1,
-            "default_password": "2026",
+            "default_password": "Senha-legado-2026",
             "users": [
                 {
                     "legacy_id": 501,
@@ -266,7 +266,7 @@ class LegacySyncIntegrationTests(unittest.TestCase):
 
     def test_users_sync_requires_superuser(self):
         headers = asyncio.run(self._operator_headers())
-        payload = {"source_identifier": "legacy.db", "default_password": "2026", "users": []}
+        payload = {"source_identifier": "legacy.db", "default_password": "Senha-legado-2026", "users": []}
         response = self.client.post("/api/v1/users/admin/sync", json=payload, headers=headers)
         self.assertEqual(response.status_code, 403)
 
