@@ -24,31 +24,27 @@ Isso implica uma regra central: **o rollback so e seguro se o codigo da
 release anterior conseguir operar corretamente sobre o schema atual do
 banco**, que pode ja ter avancado alem do que aquela release conhecia.
 
-## Compatibilidade de schema: reaproveitando a Fase 04
+## Compatibilidade de schema: igualdade de revisao
 
-`api/app/deployment/schema_compatibility.py` reaproveita o mesmo registro de
-risco classificado manualmente na Fase 04
-(`api/alembic/migration_risk_registry.json`) e o `ScriptDirectory` real do
-Alembic (`api/app/core/migration_state.py`) -- nenhuma heuristica nova, nenhum
-parser de SQL, nenhuma inferencia por nome de coluna.
+A readiness de cada imagem (`api/app/database/health.py`, `revision_status`)
+so responde `compatible` quando a revisao do banco e IGUAL a
+`EXPECTED_DATABASE_REVISION` daquela imagem. Banco a frente (mesmo so com
+migrations ADDITIVE) ou atras deixa a imagem anterior unhealthy.
 
-`evaluate_rollback_schema_compatibility(from_revision, to_revision)`:
+`evaluate_rollback_schema_compatibility(from_revision, to_revision)`
+(`api/app/deployment/schema_compatibility.py`):
 
-1. Se `from_revision == to_revision`, e sempre compativel (nada mudou).
-2. Caso contrario, percorre a cadeia real de migrations entre as duas
-   revisoes (`ScriptDirectory.walk_revisions`) e verifica se alguma delas
-   esta classificada como `DESTRUCTIVE` no registro da Fase 04.
-3. Qualquer `DESTRUCTIVE` no caminho bloqueia o rollback automatico
-   (`compatible=False`) -- a versao anterior nao pode operar com seguranca
-   sobre colunas/constraints que ela nao conhece.
-4. Qualquer ambiguidade (revisao desconhecida, revisao atual do banco
-   indisponivel, ordem entre as revisoes indeterminada) tambem bloqueia --
+1. `from_revision` (revisao da release anterior saudavel) e `to_revision`
+   (revisao atual do banco) precisam existir e estar no historico real de
+   migrations (`api/app/core/migration_state.py`); senao bloqueia --
    **fail-closed**, nunca assume seguranca por falta de informacao.
+2. Compativel so se `from_revision == to_revision`. Qualquer diferenca
+   bloqueia (`compatible=False`) e o motivo orienta restaurar o dump
+   pre-deploy antes de subir a imagem anterior.
 
 Quando bloqueado, o deployment associado (se houver) e escalado para
-`MANUAL_INTERVENTION_REQUIRED`: a partir dai a decisao e humana (reverter o
-schema manualmente a partir de um backup, ou aceitar rodar sem rollback ate
-uma correcao "forward-fix").
+`MANUAL_INTERVENTION_REQUIRED`: a partir dai a decisao e humana (restaurar o
+dump pre-deploy, perdendo o que entrou depois dele, ou corrigir para frente).
 
 ## Maquina de estados (`DeploymentState`/`DeploymentStatus`)
 
@@ -160,9 +156,8 @@ decidido sobre `rollback_allowed`).
 - `api/tests/test_deployment_models_and_store.py` -- `DeploymentState`
   imutavel, round-trip JSON, `DeploymentStateStore.last_healthy()` por tempo
   real (nao por texto).
-- `api/tests/test_deployment_schema_compatibility.py` -- contra o registro de
-  risco **real** da Fase 04 (as duas migrations `DESTRUCTIVE` conhecidas,
-  `20260720_0005` e `20260807_0014`, servem de fixture determinista).
+- `api/tests/test_deployment_schema_compatibility.py` -- revisoes reais, sem
+  banco: igual, banco a frente, banco atras, revisao desconhecida/vazia.
 - `api/tests/test_deployment_rollback_service.py` -- `DeploymentOrchestrator`
   com um `FakeDocker` injetado (nenhum subprocess real): maquina de estados,
   bloqueio por schema, sucesso, idempotencia, falhas de saude/smoke,

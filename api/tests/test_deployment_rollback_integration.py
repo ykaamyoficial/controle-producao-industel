@@ -163,10 +163,10 @@ class RollbackRealDockerTests(unittest.TestCase):
         self.assertEqual(second.status, DeploymentStatus.ROLLED_BACK)
         self.assertEqual(container_id_after_first, container_id_after_second, "container nao deveria ser recriado num rollback idempotente")
 
-    def test_rollback_blocked_when_destructive_migration_applied_since_previous_release(self):
+    def test_rollback_blocked_when_database_revision_differs_from_previous_release(self):
         # Simula uma release anterior saudavel registrada com database_revision_after
-        # ANTES da migration real classificada DESTRUCTIVE (20260807_0014, Fase 04);
-        # o "banco atual" informado ja avancou alem dela.
+        # 20260803_0013; o "banco atual" informado ja avancou para 20260810_0015.
+        # A readiness exige revisao igual, entao o rollback so de imagem e negado.
         self.store.save(DeploymentState(
             deployment_id="prev-healthy-before-destructive",
             started_at_utc=datetime.now(timezone.utc),

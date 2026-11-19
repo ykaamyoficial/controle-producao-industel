@@ -136,9 +136,11 @@ class RollbackTests(DeploymentOrchestratorTestCase):
         self.assertEqual(escalated.rollback_allowed, False)
         self.assertEqual(len(self.docker.calls), 0, "nenhuma acao Docker deve ocorrer quando o rollback e negado")
 
-    def test_destructive_migration_since_previous_release_blocks_rollback(self):
-        # previous ficou em 20260803_0013; o banco atual ja passou pela
-        # DESTRUCTIVE 20260807_0014 -- rollback deve ser negado.
+    def test_database_ahead_of_previous_release_blocks_rollback(self):
+        # previous ficou em 20260803_0013; o banco atual esta em 20260810_0015.
+        # A readiness da imagem anterior exige revisao igual, entao qualquer
+        # diferenca nega o rollback (antes o motivo citava a DESTRUCTIVE 0014;
+        # agora cita a revisao do banco e orienta restaurar o dump).
         self.store.save(_healthy_state())
         self.store.save(_failed_state())
         orchestrator = self._orchestrator()
@@ -148,7 +150,8 @@ class RollbackTests(DeploymentOrchestratorTestCase):
             )
         escalated = self.store.load("deploy_new_failed")
         self.assertEqual(escalated.status, DeploymentStatus.MANUAL_INTERVENTION_REQUIRED)
-        self.assertIn("20260807_0014", escalated.rollback_reason)
+        self.assertIn("20260810_0015", escalated.rollback_reason)
+        self.assertIn("dump pre-deploy", escalated.rollback_reason)
         self.assertEqual(len(self.docker.calls), 0)
 
     def test_successful_rollback_swaps_container_and_reaches_rolled_back(self):

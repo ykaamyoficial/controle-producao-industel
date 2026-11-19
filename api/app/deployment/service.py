@@ -10,10 +10,12 @@ Design geral:
     um registro anterior in-place -- o historico completo e a fonte de
     verdade para "qual foi a ultima release saudavel" (Secao 8).
   - Rollback NUNCA restaura o PostgreSQL (Secao 6): so reativa a imagem
-    Docker anterior. A unica pergunta de seguranca e "o codigo antigo opera
-    bem sobre o schema atual, que nao vai ser revertido?" -- respondida por
-    schema_compatibility.evaluate_rollback_schema_compatibility usando o
-    registro de risco classificado manualmente na Fase 04.
+    Docker anterior. A unica pergunta de seguranca e "o codigo antigo fica
+    pronto sobre o schema atual, que nao vai ser revertido?" -- respondida por
+    schema_compatibility.evaluate_rollback_schema_compatibility: so quando o
+    banco esta exatamente na revisao que a release anterior espera (a
+    readiness compara igualdade); com migration aplicada, o caminho e
+    restaurar o dump pre-deploy.
   - Um unico lock de arquivo (reaproveita api.app.backup.lock.BackupLock,
     generico o suficiente para nao duplicar a mesma logica de exclusao mutua
     -- Secao 17) protege TODA leitura+escrita do estado, incluindo a

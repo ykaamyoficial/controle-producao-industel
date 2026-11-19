@@ -110,13 +110,13 @@ Before/while doing this, remind the user explicitly:
 
 - Rollback **only swaps the Docker image** back to the last healthy one —
   **PostgreSQL is never auto-reverted**.
-- This is only safe if the prior release's code can still operate correctly
-  against the **current** schema. Cross-check any migrations shipped in this
-  release against `api/alembic/migration_risk_registry.json` (same registry
-  the `migration-check` skill uses) — if any migration in the path is
-  classified `DESTRUCTIVE`, automatic rollback is blocked/unsafe and the
-  script itself will escalate to `MANUAL_INTERVENTION_REQUIRED` rather than
-  improvise a downgrade. Don't declare rollback "safe" without checking this.
+- This is only safe if the database is at **exactly** the revision the prior
+  release expects: its readiness (`api/app/database/health.py`) requires
+  equality, so any migration shipped in this release (even ADDITIVE) leaves
+  the prior image unhealthy. In that case the script blocks and escalates to
+  `MANUAL_INTERVENTION_REQUIRED`; the real rollback is restoring the
+  pre-deploy dump, then starting the prior image. Don't declare rollback
+  "safe" without checking this.
 
 ## 8. Production-consequence gate
 
