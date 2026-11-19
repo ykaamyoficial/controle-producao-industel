@@ -266,9 +266,7 @@ class UpdateDialog(QDialog):
         set_callback = getattr(coordinator, "set_progress_callback", None)
         if callable(set_callback):
             set_callback(progress)
-        result = coordinator.start_required_update(expected_version=self.update_info.get("latest_version"))
-        progress("Atualizacao preparada", 90)
-        return result
+        return coordinator.start_required_update(expected_version=self.update_info.get("latest_version"))
 
     def _update_failed(self, exc):
         self.download_button.setEnabled(True)
@@ -292,7 +290,8 @@ class UpdateDialog(QDialog):
             # sozinho para o Updater assumir (mesmo padrao de
             # CompatibilityGateDialog._on_update_result).
             self.update_launched = True
-            self._set_progress("Atualizacao iniciada. O sistema sera fechado automaticamente.", 100)
+            # Nunca 100% aqui: o programa ainda vai fechar e reabrir na nova versao.
+            self._set_progress("Concluindo: o programa fecha e reabre na nova versao", 98)
             self.accept()
             return
 

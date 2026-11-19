@@ -107,6 +107,34 @@ class UpdateDialogOrchestratorFlowTests(unittest.TestCase):
         self.assertTrue(dialog.download_button.isEnabled())
         self.assertEqual(dialog.download_button.text(), "Atualizar agora")
 
+    def test_launch_never_shows_100_percent_and_says_it_is_finishing(self):
+        launch_result = UpdateLaunchResult(launched=True, request_id="req-1", updater_pid=123, target_version="2.5.0")
+        dialog = UpdateDialog(_UPDATE_INFO, update_coordinator_factory=lambda: _FakeCoordinator(launch_result, calls=[]))
+        dialog.show()
+        with self._confirm_yes():
+            dialog.download_update()
+            _pump_until(lambda: dialog.update_launched)
+        self.assertIn("Concluindo", dialog.progress_title.text())
+        self.assertEqual(dialog._progress_animation.endValue(), 98)
+        self.assertLess(dialog.progress_bar.value(), 100)
+
+    def test_failure_from_updater_status_is_shown_in_full_and_app_stays_open(self):
+        text = (
+            "Nao foi possivel trocar a versao do programa (sem permissao no arquivo current.json). "
+            "O programa continua aberto e na versao atual. (negado)"
+        )
+        launch_result = UpdateLaunchResult(launched=False, request_id="req-1", updater_pid=1, error_message=text)
+        dialog = UpdateDialog(_UPDATE_INFO, update_coordinator_factory=lambda: _FakeCoordinator(launch_result, calls=[]))
+        dialog.show()
+        with self._confirm_yes(), self._suppress_warning_box() as warning_box:
+            dialog.download_update()
+            _pump_until(lambda: warning_box.called)
+        self.assertIn(text, warning_box.call_args.args[2])
+        self.assertFalse(dialog.update_launched)
+        self.assertTrue(dialog.isVisible())
+        self.assertTrue(dialog.download_button.isEnabled())
+        self.assertEqual(dialog.progress_bar.value(), 0)
+
     def test_coordinator_exception_does_not_crash_dialog(self):
         class _RaisingCoordinator:
             def start_required_update(self, *, expected_version=None):

@@ -239,6 +239,26 @@ def confirm_post_update_handshake(argv: list[str]) -> None:
         log.exception("Falha ao confirmar handshake pos-atualizacao | request_id=%s", request_id)
 
 
+def show_pending_update_failure_notice(parent=None, *, notice_provider=None, warn=QMessageBox.warning) -> bool:
+    """Depois de um rollback o app antigo reabre sem dialogo: avisa uma vez o que houve.
+    So em instalacao empacotada com atualizacao automatica (nunca em dev/edicao de teste)."""
+    if notice_provider is None:
+        from app.services.app_paths import is_packaged
+        from app.services.update_outcome_notice import pending_update_failure_notice
+
+        if not (is_packaged() and edition.updates_enabled()):
+            return False
+        notice_provider = pending_update_failure_notice
+    try:
+        notice = notice_provider()
+        if notice:
+            warn(parent, "Atualizacao do sistema", notice)
+        return bool(notice)
+    except Exception:
+        log.exception("Falha ao mostrar o aviso de atualizacao anterior")
+        return False
+
+
 def main():
     configure_logging()
     log.info("desktop_started version=%s", get_desktop_version())
@@ -322,6 +342,7 @@ def main():
     from app.services.update_quit_watcher import install_quit_watcher
 
     install_quit_watcher(app, lambda: (window.close(), app.quit()))
+    show_pending_update_failure_notice(window)
     return app.exec()
 
 

@@ -187,7 +187,7 @@ class CompatibilityGateDialog(QDialog):
             # instante antes do dialogo fechar.
             self.update_launched = True
             self.proceed = False
-            self.message_label.setText("Atualização iniciada. O sistema será fechado automaticamente para concluir a instalação.")
+            self.message_label.setText("Concluindo: o programa fecha e reabre na nova versão.")
             self.reject()
             return
         error_message = getattr(result, "error_message", None) or "Nao foi possivel iniciar a atualizacao."

@@ -120,6 +120,30 @@ class CompatibilityGateDialogUpdateFlowTests(unittest.TestCase):
         self.assertTrue(dialog.isVisible())
         self.assertIn("SHA-256", dialog.message_label.text())
 
+    def test_launch_message_says_finishing_and_failure_shows_full_updater_text(self):
+        dto = _dto(authorized_update_version="3.2.0")
+        result = CompatibilityCheckResult(CompatibilityStatus.UPDATE_REQUIRED, "3.0.0", dto=dto)
+        text = "Nao foi possivel trocar a versao do programa. O programa continua aberto e na versao atual. (negado)"
+        dialog = CompatibilityGateDialog(
+            lambda: result, update_launcher=lambda _v: UpdateLaunchResult(launched=False, request_id="r", updater_pid=1, error_message=text),
+        )
+        dialog.show()
+        _pump_until(lambda: dialog.check_result is not None)
+        dialog.update_now_button.click()
+        _pump_until(lambda: dialog.update_now_button.isEnabled())
+        self.assertIn(text, dialog.message_label.text())
+        self.assertFalse(dialog.update_launched)
+        self.assertTrue(dialog.retry_button.isEnabled() and dialog.exit_button.isEnabled())
+
+        launched = CompatibilityGateDialog(
+            lambda: result, update_launcher=lambda _v: UpdateLaunchResult(launched=True, request_id="r", updater_pid=1),
+        )
+        launched.show()
+        _pump_until(lambda: launched.check_result is not None)
+        launched.update_now_button.click()
+        _pump_until(lambda: launched.update_launched)
+        self.assertIn("Concluindo", launched.message_label.text())
+
     def test_update_launcher_exception_does_not_crash_dialog(self):
         dto = _dto(authorized_update_version="3.2.0")
         result = CompatibilityCheckResult(CompatibilityStatus.UPDATE_REQUIRED, "3.0.0", dto=dto)

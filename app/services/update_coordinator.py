@@ -34,10 +34,17 @@ from app.updater.manifest_store import LastKnownGoodManifestStore
 from app.updater.paths import download_dir, manifest_dir, quarantine_dir
 from app.updater import versions
 from app.updater.process_control import launch_detached_process
-from app.updater.status import PHASE_STAGED, UpdateStatus, read_status
+from app.updater.status import (
+    PHASE_ACTIVATING, PHASE_CLOSING, PHASE_FAILED, PHASE_RESTARTING, PHASE_ROLLED_BACK, PHASE_STAGED, PHASE_SUCCESS,
+    UpdateStatus, read_status,
+)
 from app.version import APP_VERSION
 
 log = get_logger("update_coordinator")
+
+# O status STAGED do mesmo request_id continua em disco durante a ativacao: so estas fases valem.
+_ACTIVATION_PHASES = frozenset({PHASE_ACTIVATING, PHASE_CLOSING, PHASE_RESTARTING, PHASE_SUCCESS, PHASE_FAILED, PHASE_ROLLED_BACK})
+_ACTIVATION_HANDOFF_PHASES = frozenset({PHASE_CLOSING, PHASE_RESTARTING, PHASE_SUCCESS})
 
 
 @dataclass(frozen=True)
@@ -232,6 +239,24 @@ class UpdateCoordinator:
         except OSError as exc:
             log.error("update_coordinator_launch_failed | fase=activate | erro=%s", exc)
             return UpdateLaunchResult(False, request_id, None, target_version=target_version, error_message=f"Falha ao iniciar o Updater: {exc}")
+
+        # So devolve launched=True quando o Updater confirma que gravou o ponteiro e vai fechar o app.
+        status = self._wait_for_activation(request_id)
+        if status is None:
+            log.error("update_coordinator_activate_no_response | request_id=%s", request_id)
+            return UpdateLaunchResult(
+                False, request_id, pid, target_version=target_version,
+                error_message=(
+                    "O Updater nao respondeu ao pedido de troca de versao. O programa continua aberto na versao atual; "
+                    "se aparecer um pedido de permissao do Windows, aceite e tente novamente."
+                ),
+            )
+        if status.phase not in _ACTIVATION_HANDOFF_PHASES:
+            log.error("update_coordinator_activate_failed | request_id=%s | phase=%s | erro=%s", request_id, status.phase, status.error or status.message)
+            message = f"{status.message} ({status.error})" if status.error else status.message
+            if "continua aberto" not in message:
+                message += " O programa continua aberto na versao atual."
+            return UpdateLaunchResult(False, request_id, pid, target_version=target_version, error_message=message)
         log.info("update_coordinator_launched | request_id=%s | updater_pid=%s | target_version=%s | layout=versioned", request_id, pid, target_version)
         return UpdateLaunchResult(True, request_id, pid, target_version=target_version)
 
@@ -252,6 +277,29 @@ class UpdateCoordinator:
                 if now - last_change > self._status_stall_timeout:
                     return None
             elif now - started > self._status_start_timeout:
+                return None
+            self._sleep(0.5)
+
+    def _wait_for_activation(self, request_id: str) -> UpdateStatus | None:
+        started = self._clock()
+        last_change = started
+        last_seen: tuple[str, int, str] | None = None
+        while True:
+            status = self._status_reader(request_id)
+            now = self._clock()
+            if status is not None and status.phase in _ACTIVATION_PHASES:
+                key = (status.phase, status.percent, status.message)
+                if key != last_seen:
+                    last_seen, last_change = key, now
+                    if status.phase == PHASE_ACTIVATING:
+                        self._progress(status.message, 95)
+                    elif status.phase == PHASE_CLOSING:
+                        self._progress(status.message, 98)
+                if status.phase != PHASE_ACTIVATING:
+                    return status
+                if now - last_change > self._status_stall_timeout:
+                    return None
+            elif last_seen is None and now - started > self._status_start_timeout:
                 return None
             self._sleep(0.5)
 
