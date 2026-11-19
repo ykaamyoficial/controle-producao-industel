@@ -50,6 +50,9 @@ class Settings(BaseSettings):
     jwt_issuer: str = Field(default="controle-producao-api", alias="JWT_ISSUER")
     jwt_audience: str = Field(default="controle-producao-clients", alias="JWT_AUDIENCE")
     provisioning_secret: str = Field(default="", alias="PROVISIONING_SECRET")
+    # Senha inicial do usuario `admin`, usada so quando ele ainda nao existe
+    # (api/app/modules/auth/bootstrap.py). Vazia = nao cria. Nunca vai para log.
+    bootstrap_admin_password: str = Field(default="", alias="BOOTSTRAP_ADMIN_PASSWORD")
     operational_instance_id: str = Field(default="", alias="OPERATIONAL_INSTANCE_ID")
     operational_company_id: str = Field(default="", alias="OPERATIONAL_COMPANY_ID")
     operational_company_code: str = Field(default="local-dev", alias="OPERATIONAL_COMPANY_CODE")

@@ -102,7 +102,20 @@ Falhas de login incrementam contador persistido no usuario. Ao atingir `LOGIN_MA
 
 ## Bootstrap do Administrador
 
-O primeiro administrador e criado manualmente:
+### Usuario `admin` no startup
+
+No startup a API chama `ensure_default_admin()` (`api/app/modules/auth/bootstrap.py`). Nao existe senha fixa no codigo. Regras:
+
+- se o usuario `admin` ja existe, nao toca em nada, mesmo desativado, sem superusuario ou com senha trocada: nunca redefine senha, nunca reativa, nunca recoloca `is_superuser` nem `password_must_change`;
+- se o `admin` nao existe e `BOOTSTRAP_ADMIN_PASSWORD` esta definida, cria o `admin` uma vez, superusuario, com perfil `admin` e `password_must_change=True`;
+- se o `admin` nao existe e a variavel esta vazia, nao cria e registra um aviso no log, sem valores;
+- a senha nunca vai para o log.
+
+Defina `BOOTSTRAP_ADMIN_PASSWORD` so no `.env` local (fora do git) ou no ambiente do container, com placeholder no `.env.example`. Depois da primeira subida ela pode ser apagada. Hoje `password_must_change` vai na resposta do login e do `/auth/me`, mas nem a API nem o Desktop obrigam a troca: nenhuma rota bloqueia e o Desktop so guarda o valor.
+
+### Criacao manual
+
+O primeiro administrador tambem pode ser criado manualmente:
 
 ```bat
 scripts\create_api_admin.bat
@@ -120,8 +133,8 @@ Regras:
 - exige `SECRET_KEY` forte;
 - exige banco na revisao esperada;
 - falha se ja existe administrador ativo;
-- solicita senha sem eco no terminal;
-- pode usar variaveis apenas para automacao de testes.
+- solicita senha sem eco no terminal (o script nao tem senha embutida);
+- pode usar variaveis (`API_BOOTSTRAP_PASSWORD`) apenas para automacao de testes.
 
 ## Endpoints
 
@@ -172,6 +185,7 @@ PASSWORD_MIN_LENGTH=4
 PASSWORD_MAX_LENGTH=256
 JWT_ISSUER=controle-producao-api
 JWT_AUDIENCE=controle-producao-clients
+BOOTSTRAP_ADMIN_PASSWORD=
 ```
 
 Com banco configurado e revisao compativel, `/api/v1/system/ready` considera a API nao pronta quando `SECRET_KEY` esta ausente ou tem menos de 32 caracteres.

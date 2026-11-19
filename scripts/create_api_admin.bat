@@ -12,7 +12,7 @@ if "%SECRET_KEY%"=="" (
 
 if "%API_BOOTSTRAP_USERNAME%"=="" set "API_BOOTSTRAP_USERNAME=admin"
 if "%API_BOOTSTRAP_DISPLAY_NAME%"=="" set "API_BOOTSTRAP_DISPLAY_NAME=Administrador"
-if "%API_BOOTSTRAP_PASSWORD%"=="" set "API_BOOTSTRAP_PASSWORD=admin12345"
+rem Senha: sem valor embutido. Use API_BOOTSTRAP_PASSWORD ou digite quando o create-admin pedir (sem eco).
 
 docker compose -f docker-compose.dev.yml run --rm ^
   -e API_BOOTSTRAP_USERNAME ^
