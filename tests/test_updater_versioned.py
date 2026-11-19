@@ -11,6 +11,7 @@ from app.updater import versions as v
 from app.updater.contract import UpdateRequest
 from app.updater.status import PHASE_FAILED, PHASE_ROLLED_BACK, PHASE_STAGED, PHASE_SUCCESS, read_status
 from app.updater.versioned import VersionedConfig, VersionedUpdater
+from tests.test_updater_versions import folder_without_create_permission
 
 
 def _make_zip(path: Path, version: str, *, with_exe: bool = True, marker: str | None = None) -> Path:
@@ -147,6 +148,21 @@ class VersionedUpdaterTests(unittest.TestCase):
         self.assertEqual(v.read_pointer(self.root).version, "2.8.0")
         self.assertEqual(self.launch.call_count, 2)
         self.assertEqual(self.stopper.call_args.args[0], v.version_dir(self.root, "2.9.0"))
+
+    def test_activate_works_without_permission_to_create_files_in_install_root(self):
+        request, _ = self._stage()
+        with folder_without_create_permission(self.root):
+            status = self._updater().activate(request)
+        self.assertEqual(status.phase, PHASE_SUCCESS)
+        self.assertEqual(v.read_pointer(self.root).version, "2.9.0")
+
+    def test_rollback_restores_pointer_without_permission_to_create_files_in_install_root(self):
+        request, _ = self._stage()
+        self.handshake.return_value = False
+        with folder_without_create_permission(self.root):
+            status = self._updater().activate(request)
+        self.assertEqual(status.phase, PHASE_ROLLED_BACK)
+        self.assertEqual(v.read_pointer(self.root).version, "2.8.0")
 
     def test_activate_rolls_back_when_launch_fails(self):
         request, _ = self._stage()

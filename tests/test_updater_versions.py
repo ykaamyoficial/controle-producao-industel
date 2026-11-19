@@ -3,9 +3,26 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
+from unittest import mock
 
 from app.updater import versions as v
+
+
+@contextmanager
+def folder_without_create_permission(root: Path):
+    """Reproduz o ACL do instalador: current.json gravavel, mas criar arquivo novo
+    (o temp do write_pointer) na pasta da instalacao da PermissionError."""
+    original = Path.write_text
+
+    def guarded(self, *args, **kwargs):
+        if self.parent == root and self.name.endswith(".tmp"):
+            raise PermissionError(13, "Permission denied", str(self))
+        return original(self, *args, **kwargs)
+
+    with mock.patch.object(Path, "write_text", guarded):
+        yield
 
 
 def _install(root: Path, version: str) -> Path:
@@ -35,6 +52,28 @@ class VersionsTests(unittest.TestCase):
         pointer = v.read_pointer(self.root)
         self.assertEqual((pointer.version, pointer.previous_version), ("2.9.0", "2.8.0"))
         self.assertEqual([p.name for p in self.root.iterdir()], ["current.json"])
+
+    def test_write_pointer_falls_back_to_direct_write_without_folder_permission(self):
+        (self.root / "current.json").write_text("{}")
+        with folder_without_create_permission(self.root):
+            v.write_pointer(self.root, "2.10.1", previous_version="2.10.0")
+        pointer = v.read_pointer(self.root)
+        self.assertEqual((pointer.version, pointer.previous_version), ("2.10.1", "2.10.0"))
+        self.assertEqual([p.name for p in self.root.iterdir()], ["current.json"])
+
+    def test_write_pointer_falls_back_when_replace_is_denied(self):
+        (self.root / "current.json").write_text("{}")
+        with mock.patch("app.updater.versions.os.replace", side_effect=PermissionError(13, "negado")):
+            v.write_pointer(self.root, "2.10.1")
+        self.assertEqual(v.read_pointer(self.root).version, "2.10.1")
+        self.assertEqual([p.name for p in self.root.iterdir()], ["current.json"])
+
+    def test_write_pointer_still_fails_when_pointer_itself_is_not_writable(self):
+        with folder_without_create_permission(self.root), mock.patch.object(
+            Path, "write_text", side_effect=PermissionError(13, "negado")
+        ):
+            with self.assertRaises(PermissionError):
+                v.write_pointer(self.root, "2.10.1")
 
     def test_read_pointer_tolerates_corruption(self):
         (self.root / "current.json").write_text("{nao e json")

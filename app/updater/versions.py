@@ -110,7 +110,8 @@ def read_pointer(install_root: Path) -> Pointer | None:
 
 def write_pointer(install_root: Path, version: str, *, previous_version: str | None = None) -> Pointer:
     """Escrita atomica: temp no mesmo diretorio + os.replace. Nunca deixa um
-    current.json pela metade, mesmo se faltar energia no meio."""
+    current.json pela metade, mesmo se faltar energia no meio. Sem permissao na
+    pasta (usuario comum), cai para gravacao direta no proprio arquivo."""
     version_key(version)
     if previous_version is not None:
         version_key(previous_version)
@@ -127,13 +128,24 @@ def write_pointer(install_root: Path, version: str, *, previous_version: str | N
         "previous_version": pointer.previous_version,
         "updated_at": pointer.updated_at,
     }
-    root.mkdir(parents=True, exist_ok=True)
+    if not root.is_dir():
+        root.mkdir(parents=True, exist_ok=True)
+    text = json.dumps(payload, indent=2)
     temp = root / f"{POINTER_FILE_NAME}.{os.getpid()}.tmp"
     try:
-        temp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        temp.write_text(text, encoding="utf-8")
         os.replace(temp, pointer_path(root))
+    except PermissionError:
+        # shortcut: o instalador so da Modify a Users no ARQUIVO current.json, nao na
+        # pasta -- sem permissao de criar o temp (ou de trocar o arquivo), grava direto
+        # no ponteiro, em uma unica escrita de ~200 bytes (janela de corte minima);
+        # trocar por servico elevado se o ponteiro crescer ou a ACL mudar.
+        pointer_path(root).write_text(text, encoding="utf-8")
     finally:
-        temp.unlink(missing_ok=True)
+        try:
+            temp.unlink(missing_ok=True)
+        except OSError:
+            pass  # sem permissao na pasta nao ha temp a limpar
     return pointer
 
 
