@@ -58,15 +58,17 @@ class _EnvTestCase(unittest.TestCase):
 class DocsExposureTests(_EnvTestCase):
     DOC_PATHS = ("/docs", "/redoc", "/openapi.json")
 
-    def test_docs_closed_in_production(self):
-        os.environ["APP_ENV"] = "production"
-        get_settings.cache_clear()
-        client = TestClient(create_app())
-        for path in self.DOC_PATHS:
-            self.assertEqual(client.get(path).status_code, 404, path)
+    def test_docs_closed_in_production_and_unknown_envs(self):
+        # fail-closed: so abre em ambiente sabidamente de dev/teste.
+        for env in ("production", "prod", "PRODUCTION", "staging", ""):
+            os.environ["APP_ENV"] = env
+            get_settings.cache_clear()
+            client = TestClient(create_app())
+            for path in self.DOC_PATHS:
+                self.assertEqual(client.get(path).status_code, 404, f"{env!r} {path}")
 
     def test_docs_open_in_development_and_test(self):
-        for env in ("development", "test"):
+        for env in ("development", "test", "dev", "local", " Development "):
             os.environ["APP_ENV"] = env
             get_settings.cache_clear()
             client = TestClient(create_app())

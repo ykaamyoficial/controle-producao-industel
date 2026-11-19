@@ -207,8 +207,10 @@ class Settings(BaseSettings):
         return [origin.strip() for origin in self.cors_allowed_origins.split(",") if origin.strip()]
 
     @property
-    def is_production(self) -> bool:
-        return self.app_env.strip().lower() == "production"
+    def docs_enabled(self) -> bool:
+        # Fail-closed: /docs, /redoc e /openapi.json so abrem em ambiente sabidamente de dev/teste;
+        # qualquer outro APP_ENV ("prod", "staging", erro de digitacao) fecha.
+        return self.app_env.strip().lower() in {"development", "dev", "test", "local"}
 
     @property
     def auth_ready(self) -> bool:

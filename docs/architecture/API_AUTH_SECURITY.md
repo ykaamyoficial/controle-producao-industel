@@ -102,7 +102,7 @@ Alem do bloqueio por conta, `POST /api/v1/auth/login` limita falhas por IP (`api
 
 ## Superficie Publica em Producao
 
-- `/docs` e `/openapi.json` ficam fechados quando `APP_ENV` e producao (`docs_url=None` e `openapi_url=None` em `api/app/main.py`); em dev ficam abertos.
+- `/docs`, `/redoc` e `/openapi.json` so abrem com `APP_ENV` em `development`, `dev`, `test` ou `local` (`Settings.docs_enabled`); qualquer outro valor (`production`, `prod`, `staging`, vazio) fecha (fail-closed, `api/app/main.py`).
 - `GET /api/v1/system/compatibility` e de leitura publica (o preflight do Desktop roda antes do login), mas nao registra nada para chamada anonima: o heartbeat e a auditoria da instalacao so acontecem com Bearer valido.
 
 ## Auditoria de Seguranca
