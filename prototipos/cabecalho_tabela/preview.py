@@ -125,18 +125,18 @@ COLUNAS = [
     ("Obra/Site", "obra", 0, True, None, ""),
 ]
 LINHAS = [
-    ("CP 05640", "MNS ENGENHARIA", "Aguardando início", "waiting", "28/10/2026", "2026-10-28", "SITE - MSCMP007"),
-    ("CP 05641", "MNS ENGENHARIA", "Aguardando início", "waiting", "28/10/2026", "2026-10-28", "SITE - MSCMP010"),
-    ("CP 05630", "EQUATORIAL GOIAS DIST. DE ENERGIA S/A", "Aguardando início", "waiting", "24/10/2026", "2026-10-24", "PEDIDO COMPRA 7000056232"),
-    ("CP 05620", "EQUATORIAL GOIAS DIST. DE ENERGIA S/A", "Aguardando início", "waiting", "23/10/2026", "2026-10-23", "PEDIDO COMPRA 7000056167"),
-    ("CP 05530-2", "MNS ENGENHARIA", "Item pendente de fabricação", "pending", "01/10/2026", "2026-10-01", "TAMTSNOD004 - SN-SNOMN9 - COLLOG"),
-    ("CP 05492", "MNS ENGENHARIA", "Item pendente de fabricação", "pending", "30/09/2026", "2026-09-30", "MSBTG004_A"),
-    ("CP 05639", "MNS ENGENHARIA", "Em produção", "running", "28/10/2026", "2026-10-28", "PARA ESTOQUE"),
-    ("CP 05632", "MNS ENGENHARIA", "Em produção", "running", "25/10/2026", "2026-10-25", "MTVRZ003 - MTW29"),
-    ("CP 05633", "MNS ENGENHARIA", "Em produção", "running", "25/10/2026", "2026-10-25", "MTVRZ004 - MTW30"),
-    ("CP 05634", "EQUATORIAL PARÁ DISTRIBUIDORA DE ENERGIA S.A.", "Em produção", "running", "26/10/2026", "2026-10-26", "PEDIDO COMPRA 7000056169"),
-    ("CP 05635", "MNS ENGENHARIA", "Aguardando início", "waiting", "29/10/2026", "2026-10-29", "SITE - MSRBS015"),
-    ("CP 05636", "MNS ENGENHARIA", "Em produção", "running", "30/10/2026", "2026-10-30", "MTVRZ005 - MTW31"),
+    ("CP 09640", "CLIENTE EXEMPLO A LTDA", "Aguardando início", "waiting", "28/10/2026", "2026-10-28", "SITE - EX-A007"),
+    ("CP 09641", "CLIENTE EXEMPLO A LTDA", "Aguardando início", "waiting", "28/10/2026", "2026-10-28", "SITE - EX-A010"),
+    ("CP 09630", "ENERGIA EXEMPLO GOIAS DIST. DE ENERGIA S/A", "Aguardando início", "waiting", "24/10/2026", "2026-10-24", "PEDIDO COMPRA 9000056232"),
+    ("CP 09620", "ENERGIA EXEMPLO GOIAS DIST. DE ENERGIA S/A", "Aguardando início", "waiting", "23/10/2026", "2026-10-23", "PEDIDO COMPRA 9000056167"),
+    ("CP 09530-2", "CLIENTE EXEMPLO A LTDA", "Item pendente de fabricação", "pending", "01/10/2026", "2026-10-01", "EX-N004 - EX-SN9 - LOG"),
+    ("CP 09492", "CLIENTE EXEMPLO A LTDA", "Item pendente de fabricação", "pending", "30/09/2026", "2026-09-30", "EX-B004_A"),
+    ("CP 09639", "CLIENTE EXEMPLO A LTDA", "Em produção", "running", "28/10/2026", "2026-10-28", "PARA ESTOQUE"),
+    ("CP 09632", "CLIENTE EXEMPLO A LTDA", "Em produção", "running", "25/10/2026", "2026-10-25", "EX-V003 - EX-29"),
+    ("CP 09633", "CLIENTE EXEMPLO A LTDA", "Em produção", "running", "25/10/2026", "2026-10-25", "EX-V004 - EX-30"),
+    ("CP 09634", "ENERGIA EXEMPLO PARÁ DISTRIBUIDORA DE ENERGIA S.A.", "Em produção", "running", "26/10/2026", "2026-10-26", "PEDIDO COMPRA 9000056169"),
+    ("CP 09635", "CLIENTE EXEMPLO A LTDA", "Aguardando início", "waiting", "29/10/2026", "2026-10-29", "SITE - EX-R015"),
+    ("CP 09636", "CLIENTE EXEMPLO A LTDA", "Em produção", "running", "30/10/2026", "2026-10-30", "EX-V005 - EX-31"),
 ]
 PAPEL_ORDEM = Qt.UserRole + 1
 
