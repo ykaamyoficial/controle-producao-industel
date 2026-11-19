@@ -178,10 +178,13 @@ class SmokeDeployFakeServerTests(unittest.TestCase):
 
         class Handler(BaseHTTPRequestHandler):
             def _reply(self):
+                # Le o corpo inteiro antes de responder: fechar com bytes nao lidos gera RST (WinError 10053) no cliente.
+                self.rfile.read(int(self.headers.get("Content-Length") or 0))
                 seen.append((self.command, self.path, self.headers.get("X-Client-Version"), self.headers.get("Authorization")))
                 body = json.dumps({"ok": True}).encode()
                 self.send_response(200)
                 self.send_header("Content-Length", str(len(body)))
+                self.send_header("Connection", "close")
                 self.end_headers()
                 self.wfile.write(body)
 
