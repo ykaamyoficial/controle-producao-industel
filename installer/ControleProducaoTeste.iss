@@ -3,7 +3,7 @@
 ; Usado por scripts\build_test_installer.py (PyInstaller com
 ; CONTROLE_PRODUCAO_EDITION=teste -> dist_teste\ e build_teste\).
 #define MyAppName "Controle de Producao Industel TESTE"
-#define MyAppVersion "2.10.0"
+#define MyAppVersion "2.10.1"
 #define MyAppPublisher "Industel"
 ; ControleProducaoTeste.exe na raiz e o LAUNCHER de teste (le current.json e abre
 ; versions\<versao>\ControleProducaoTesteApp.exe).
@@ -20,7 +20,7 @@ DefaultDirName={autopf}\{#MyAppDir}
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 OutputDir=..\release\teste
-OutputBaseFilename=ControleProducaoTesteSetup-2.10.0
+OutputBaseFilename=ControleProducaoTesteSetup-2.10.1
 SetupIconFile=..\build_teste\assets\images\Logo_Industel_Icone.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 Compression=lzma

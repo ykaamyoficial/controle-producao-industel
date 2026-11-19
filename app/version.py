@@ -5,7 +5,7 @@ APP_NAME = "Controle de Producao Industel"
 # APP_NAME fica sem acento de proposito: entra nos arquivos de release
 # (scripts/create_release_files.py) e precisa bater com o instalador.
 APP_DISPLAY_NAME = "Controle de Produção Industel"
-APP_VERSION = "2.10.0"
+APP_VERSION = "2.10.1"
 APP_BUILD = "2026.11.19"
 APP_PUBLISHER = "Industel"
 APP_CHANNEL = "stable"
