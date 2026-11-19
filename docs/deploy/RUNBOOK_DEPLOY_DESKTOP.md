@@ -139,6 +139,8 @@ Verificação: imprime `OK: release 2.10.0 sincronizada, estado=READY` (ou `AUTH
 
 Limpeza do que foi copiado: `docker exec controle_producao_api rm -f /tmp/manifest.json /tmp/ControleProducao-2.10.0-update.zip /tmp/sync_release_to_server.py`.
 
+**Passo obrigatório depois do sync (descoberto no deploy de 2026-11-19):** a release `AUTHORIZED` não basta. O botão "Atualizar agora" só aparece quando `GET /api/v1/system/compatibility?desktop_version=<versão antiga>` devolve `authorized_update_version`, e esse campo vem da política de atualização, não da release. Sem isso o Desktop só avisa que há versão nova. Com um token de admin (`updates.manage`): `PUT /api/v1/updates/policy` com `{"enforcement": "NONE", "authorized_release_version": "2.10.0", "grace_until": null, "message": ""}`. Confira em seguida que `authorized_update_version` é `2.10.0` e `policy_revision` subiu.
+
 Estado das releases: `GET /api/v1/updates/desktop/admin/releases` (Bearer de admin) deve listar 2.10.0, e a 2.9.0 que estava `AUTHORIZED` hoje continua listada.
 
 ### D3. Modo B: piloto [AUT]
