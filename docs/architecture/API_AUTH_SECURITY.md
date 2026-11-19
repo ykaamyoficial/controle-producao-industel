@@ -63,7 +63,7 @@ Senhas usam Argon2id via `argon2-cffi`, com salt automatico e suporte a rehash. 
 
 Politica inicial:
 
-- minimo configuravel, padrao 10 caracteres;
+- minimo configuravel (`PASSWORD_MIN_LENGTH`), padrao 10 caracteres; o piso aceito pela configuracao e 4, usado so no compose de dev (`docker-compose.dev.yml`); producao fica em 10 (`docker-compose.prod.yml`);
 - maximo configuravel, padrao 256 caracteres;
 - permite frases-senha;
 - bloqueia senhas evidentemente fracas;
@@ -95,6 +95,15 @@ Permissoes funcionais de propostas, producao, galvanizacao, expedicao, almoxarif
 ## Bloqueio de Conta
 
 Falhas de login incrementam contador persistido no usuario. Ao atingir `LOGIN_MAX_FAILED_ATTEMPTS`, a conta recebe `locked_until` por `LOGIN_LOCK_MINUTES`. Login valido limpa contador e bloqueio.
+
+## Limite de Falhas por IP
+
+Alem do bloqueio por conta, `POST /api/v1/auth/login` limita falhas por IP (`api/app/modules/auth/ip_rate_limit.py`): janela deslizante em memoria em que so falhas contam (sucesso nao conta nem zera). Ao passar de `LOGIN_IP_MAX_FAILURES` (padrao 20, `0` desliga) em `LOGIN_IP_WINDOW_SECONDS` (padrao 300), a API responde 429 `LOGIN_RATE_LIMITED` com `Retry-After`. Limites conhecidos: o contador e por processo (reiniciar a API zera; com varias replicas o limite real e multiplo) e, atras do `cloudflared`, o IP visto e o do proxy, entao os clientes do tunel dividem o mesmo balde. O limite por IP real deve ficar no WAF/Cloudflare.
+
+## Superficie Publica em Producao
+
+- `/docs` e `/openapi.json` ficam fechados quando `APP_ENV` e producao (`docs_url=None` e `openapi_url=None` em `api/app/main.py`); em dev ficam abertos.
+- `GET /api/v1/system/compatibility` e de leitura publica (o preflight do Desktop roda antes do login), mas nao registra nada para chamada anonima: o heartbeat e a auditoria da instalacao so acontecem com Bearer valido.
 
 ## Auditoria de Seguranca
 
@@ -181,7 +190,9 @@ ACCESS_TOKEN_EXPIRE_MINUTES=15
 REFRESH_TOKEN_EXPIRE_DAYS=7
 LOGIN_MAX_FAILED_ATTEMPTS=5
 LOGIN_LOCK_MINUTES=15
-PASSWORD_MIN_LENGTH=4
+PASSWORD_MIN_LENGTH=10
+LOGIN_IP_MAX_FAILURES=20
+LOGIN_IP_WINDOW_SECONDS=300
 PASSWORD_MAX_LENGTH=256
 JWT_ISSUER=controle-producao-api
 JWT_AUDIENCE=controle-producao-clients
@@ -227,7 +238,7 @@ A etapa inclui testes unitarios para senha/tokens/permissoes e testes HTTP/Postg
 - Sem migracao de usuarios SQLite.
 - Sem integracao do desktop.
 - Sem armazenamento seguro do refresh token no cliente desktop.
-- Sem rate limit distribuido por IP.
+- Limite de login por IP e em memoria, por processo, e enxerga o IP do proxy atras do tunel (ver "Limite de Falhas por IP"); sem rate limit distribuido.
 - Sem chave assimetrica para JWT.
 - Sem modulos produtivos de propostas, producao ou expedicao.
 
