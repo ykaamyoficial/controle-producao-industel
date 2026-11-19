@@ -86,7 +86,7 @@ Nada de produção aqui. Checklist mínimo em Windows 10 limpo:
 2. Conferir `current.json`, `versions\2.10.0\ControleProducaoApp.exe`, `Updater.exe` e as pastas em `%ProgramData%\Industel\ControleProducao`.
 3. Abrir Inspeção, Logística, imprimir um relatório de LOG/carga (PDF), ver o balão do Windows (valida as dependências de toast) e o agente `--notifier`.
 4. Instalar por cima de um 2.9.0 já usado: dados e login preservados, mesma `installation_id`.
-5. Atualização real 2.9.0 -> 2.10.0 pela API de dev: edição **oficial** com `DESKTOP_API_BASE_URL` apontando para a dev (a edição de teste não atualiza). UAC aparece uma vez no `--stage`. Repetir com usuário **não administrador**.
+5. Atualização real 2.9.0 -> 2.10.0 pela API de dev: edição **oficial** com `DESKTOP_API_BASE_URL` apontando para a dev (a edição de teste não atualiza). UAC aparece uma vez no `--stage`. Repetir com usuário **não administrador**. **Validar as duas fases (`--stage` e `--activate`) sem administrador**: foi o que faltou na 2.10.0 (ver seção 9).
 6. Falhas provocadas: ZIP adulterado (sha256 errado) vai para quarentena sem instalar; `ControleProducaoApp.exe` inválido dá `ROLLED_BACK`.
 7. Desinstalar: `versions\`, `_internal` e `current.json` somem, `%ProgramData%\Industel\ControleProducao` fica, não sobra entrada em `HKCU\...\Run` (o `.iss` oficial agora limpa, commit e4242ea).
 
@@ -192,3 +192,23 @@ Passos:
 - `scripts\build_test_installer.py` procura `Inno Setup 6`; use `ISCC_PATH` se for gerar o instalador de teste.
 - Primeiro acesso em máquina nova exige digitar a URL da API (não há URL de produção embutida).
 - Edição de teste não testa atualização (`updates_enabled()` falso nela).
+
+## 9. Lição da 2.10.0: o `--activate` falhava sem administrador (corrigido na 2.10.1)
+
+**O que aconteceu (deploy de 2026-11-19).** "Atualizar agora" em PC com usuário comum: o `--stage` (elevado, UAC) funcionava, mas o `--activate` falhava com `PermissionError: [Errno 13] ... current.json.<pid>.tmp`. O instalador (`installer\ControleProducao.iss`, `CurStepChanged`) dá `Modify` a `Users` só no **arquivo** `current.json`, não na pasta; o `write_pointer` criava um temp na pasta (negado). Como `_can_write_pointer` olha só o arquivo (`os.access` verdadeiro), o Updater não eleva no `activate`. Os testes não pegaram porque rodavam como dono da pasta em `%TEMP%`.
+
+**Correção (2.10.1).** `write_pointer` tenta o caminho atômico e, em `PermissionError`, grava direto em `current.json` (uma única escrita de cerca de 200 bytes; `shortcut:` documentado no código). Vale também para o rollback do ponteiro. **Quem executa é o Updater da versão instalada**: PC em 2.9.0 continua com o bug ao atualizar; a correção só vale para atualizações **a partir** da 2.10.1.
+
+**Regra daqui para frente: validar sempre sem administrador.** Antes de publicar qualquer versão do Desktop, rodar o `--activate` do Updater novo numa pasta com a ACL do instalador (usuário atual sem criar arquivo na raiz, `Modify` só em `current.json`), sem elevação, com `CONTROLE_PRODUCAO_DATA_DIR` apontando para uma pasta de teste (nunca `C:\Program Files` nem `C:\ProgramData\Industel` reais). `tests/test_updater_versions.py` e `tests/test_updater_versioned.py` simulam a ACL com `PermissionError` no temp; não substituem o teste real. Se a ACL do instalador mudar, repita. O script `scriptsalidar_activate_sem_admin.ps1 -Work <pasta nova> -StandinExe <app de mentira>` faz exatamente isso (monta o layout, aplica a ACL, roda `Updater.exe --activate` sem elevação e confere `current.json`); `-OldUpdaterRepo <checkout antigo>` serve de controle negativo. Em 2026-11-19 o Updater 2.10.1 passou (2.10.0 -> 2.10.1, `previous_version` 2.10.0, handshake confirmado, sem UAC) e o código da 2.10.0 reproduziu o `PermissionError` de produção.
+
+### Frota ainda em 2.9.0 (com a 2.10.1 publicada e autorizada)
+
+Caminho recomendado: **instalar o `ControleProducaoSetup-2.10.x.exe`** (como administrador local) por cima. Dados e `installation_id` ficam em `%ProgramData%\Industel\ControleProducao`; o Setup já traz o Updater corrigido.
+
+Alternativa, sem administrador no segundo passo:
+
+1. Abrir o app, "Atualizar agora", aceitar o UAC. O `--stage` prepara `versions\<nova>` (a 2.10.1, se a política do servidor autorizar a 2.10.1) e o `--activate` falha (Updater 2.9.0).
+2. Rodar `scripts\destravar_atualizacao_2_10.bat` (duplo clique, sem administrador). Ele aponta `current.json` para a **maior** versão pronta em `versions\` (2.10.0 ou maior, com `ControleProducaoApp.exe` e `VERSION` igual ao nome da pasta), mantém `previous_version` com a versão que estava ativa e guarda backup do `current.json` antigo em `%ProgramData%\Industel\ControleProducao\updater\backup_ponteiro`. Sem versão pronta, ele explica que é preciso clicar "Atualizar agora" antes (ou instalar o Setup).
+3. Fechar o app e abrir de novo: abre na versão nova. Dali em diante o Updater é o corrigido.
+
+Se o PC não conseguir gravar `current.json` (ACL diferente), o script avisa; use o Setup.
