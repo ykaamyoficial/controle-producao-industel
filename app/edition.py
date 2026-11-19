@@ -19,6 +19,10 @@ EDITION_FILE_NAME = "edition.json"
 # Endereco publico da API de desenvolvimento usado pelo instalador de teste.
 TEST_API_BASE_URL = "https://producaodev.ykora.com.br"
 OFFICIAL_API_PORT = 8000
+# Lista de BLOQUEIO da API de producao: o codigo nao embute a URL oficial (vale a config
+# salva), entao os hosts conhecidos ficam aqui. Hostname publico (tunel) e IP do SERVIDOR.
+# Comparacao exata, sem diferenciar maiuscula; producaodev.ykora.com.br NAO esta aqui.
+PRODUCTION_API_HOSTS = frozenset({"api.ykora.com.br", "192.168.2.128"})
 TEST_SUFFIX = "Teste"
 
 
@@ -122,13 +126,16 @@ def updates_enabled() -> bool:
 
 
 def check_test_api_url(url: str) -> None:
-    """Na edicao de teste a API oficial (porta 8000) nunca e aceita. Levanta ValueError."""
+    """Na edicao de teste a API oficial nunca e aceita: porta 8000 em qualquer host, nem os
+    hosts de PRODUCTION_API_HOSTS em qualquer porta. Levanta ValueError."""
     try:
-        port = urlparse(url).port
+        parsed = urlparse(url)
+        port = parsed.port
     except ValueError:
         raise ValueError("Endereco da API invalido: porta incorreta.") from None
-    if port == OFFICIAL_API_PORT:
+    host = (parsed.hostname or "").rstrip(".")
+    if port == OFFICIAL_API_PORT or host in PRODUCTION_API_HOSTS:
         raise ValueError(
-            f"A edicao de teste nao pode usar a API oficial (porta {OFFICIAL_API_PORT}). "
+            "A edicao de teste nao pode usar a API oficial (producao). "
             "Use a API de dev, por exemplo https://producaodev.ykora.com.br."
         )

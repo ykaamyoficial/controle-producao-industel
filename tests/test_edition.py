@@ -121,9 +121,25 @@ class EditionTestTests(unittest.TestCase):
             # config salva com a porta oficial (ex.: editada a mao) cai no padrao de dev
             self.assertEqual(self._store(tmp, "http://127.0.0.1:8000").load_settings().base_url, "https://producaodev.ykora.com.br")
 
+    def test_production_hosts_are_refused_and_dev_accepted(self):
+        with patch.dict(os.environ, TEST_ENV), tempfile.TemporaryDirectory() as tmp:
+            store = self._store(tmp)
+            for bad in ("https://api.ykora.com.br", "https://API.ykora.com.br/", "https://api.ykora.com.br.:8001",
+                        "http://api.ykora.com.br:8001/x", "http://192.168.2.128", "http://192.168.2.128:8001",
+                        "http://192.168.2.128:8000", "http://qualquer-host:8000"):
+                with self.assertRaisesRegex(DesktopApiConfigError, "oficial", msg=bad):
+                    normalize_api_base_url(bad)
+                with self.assertRaises(DesktopApiConfigError, msg=bad):
+                    store.save_settings(enabled=True, base_url=bad)
+                # config salva com producao (ex.: editada a mao) cai no padrao de dev
+                self.assertEqual(self._store(tmp, bad).load_settings().base_url, "https://producaodev.ykora.com.br")
+            for good in ("https://producaodev.ykora.com.br", "http://127.0.0.1:8001", "http://192.168.0.7:8001"):
+                self.assertEqual(normalize_api_base_url(good), good)
+
     def test_production_is_unchanged(self):
         with patch.dict(os.environ, {**PROD_ENV, "DESKTOP_API_BASE_URL": "http://10.0.0.1:8000"}), tempfile.TemporaryDirectory() as tmp:
             self.assertEqual(normalize_api_base_url("http://127.0.0.1:8000"), "http://127.0.0.1:8000")
+            self.assertEqual(normalize_api_base_url("https://api.ykora.com.br"), "https://api.ykora.com.br")
             settings = self._store(tmp, "http://192.168.0.7:8000").load_settings()
             self.assertEqual(settings.base_url, "http://10.0.0.1:8000")
             self.assertFalse(self._store(tmp + "x").is_configured())
