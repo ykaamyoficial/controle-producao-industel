@@ -5,6 +5,8 @@ rem Publica a API usando um tunel nomeado Cloudflare (endereco fixo).
 rem Defina CLOUDFLARE_TUNNEL_TOKEN somente nesta sessao ou em um .env local.
 
 cd /d "%~dp0.."
+call "%~dp0load_dev_env.bat"
+if errorlevel 1 exit /b 1
 
 if "%CLOUDFLARE_TUNNEL_TOKEN%"=="" (
   echo ERRO: defina CLOUDFLARE_TUNNEL_TOKEN antes de executar.

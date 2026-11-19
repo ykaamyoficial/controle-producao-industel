@@ -66,7 +66,7 @@ Arquitetura:
 
 ```text
 Windows
-  -> http://127.0.0.1:8000
+  -> http://127.0.0.1:8001
 API Docker
   -> postgresql+asyncpg://...@postgres:5432/controle_producao_dev
 PostgreSQL Docker
@@ -98,18 +98,11 @@ O runtime Docker completo:
 ## Pre-requisitos
 
 - Docker Desktop em modo Linux containers;
-- porta `8000` livre no Windows;
-- senha local definida via variavel de ambiente.
+- porta `8001` livre no Windows (a `8000` e da API oficial e nunca e usada pela dev);
+- arquivo de segredos de dev fora do repositorio (ver "Segredos de dev" abaixo).
 
-Exemplo:
-
-```bat
-set POSTGRES_PASSWORD=sua_senha_local
-set POSTGRES_DB=controle_producao_dev
-set POSTGRES_USER=controle_dev
-set POSTGRES_PORT=55432
-set API_PORT=8000
-```
+`scripts\load_dev_env.bat` define os padroes de banco e porta (`POSTGRES_*`, `API_PORT=8001`);
+variaveis ja existentes no Windows sao preservadas.
 
 ## Versao do Python
 
@@ -180,9 +173,9 @@ controle_producao_test
 ## Acessar API pelo Windows
 
 ```text
-http://127.0.0.1:8000/api/v1/system/health
-http://127.0.0.1:8000/api/v1/system/ready
-http://127.0.0.1:8000/api/v1/system/version
+http://127.0.0.1:8001/api/v1/health/live
+http://127.0.0.1:8001/api/v1/health/ready
+http://127.0.0.1:8001/api/v1/system/version
 ```
 
 ## Parar ambiente
@@ -208,10 +201,42 @@ docker compose -f docker-compose.dev.yml down -v
 Local oficial para desenvolvimento:
 
 - variaveis do terminal antes de chamar os scripts;
+- segredos (`SECRET_KEY`, `PROVISIONING_SECRET`, `NOMUS_ENCRYPTION_KEY`) em `%USERPROFILE%\.controle-producao-dev\dev.env`, fora do repositorio (secao abaixo);
 - `api/.env` apenas para execucao local alternativa, nao recomendada;
 - Compose para runtime oficial Docker.
 
 Nenhuma senha real deve ser versionada.
+
+## Segredos de dev (fora do repositorio)
+
+O repositorio e publico e os valores antigos de dev ficaram no historico do git: considere-os
+queimados. `api/.env.example` e `docker-compose.dev.yml` nao trazem mais valor nenhum para
+`SECRET_KEY`, `PROVISIONING_SECRET` e `NOMUS_ENCRYPTION_KEY`; o compose recusa subir sem eles.
+
+```bat
+python scripts\gerar_segredos_dev.py
+```
+
+Cria `%USERPROFILE%\.controle-producao-dev\dev.env` com valores aleatorios (nao imprime nada) e
+recusa sobrescrever sem `--forcar`. `scripts\load_dev_env.bat` le esse arquivo (outro caminho:
+`CONTROLE_DEV_ENV_FILE`) e falha com mensagem clara se ele ou alguma chave faltar. Para rodar
+`docker compose` na mao: `docker compose --env-file %USERPROFILE%\.controle-producao-dev\dev.env -f docker-compose.dev.yml ...`.
+
+### Aplicar em uma dev que ja esta rodando
+
+1. Pare o ambiente: `scripts\stop_dev_environment.bat` (ou `docker compose ... stop api`).
+2. Gere o arquivo (`python scripts\gerar_segredos_dev.py`).
+3. Suba de novo: `scripts\start_dev_environment.bat` (o script carrega o arquivo novo).
+
+Efeitos: trocar `SECRET_KEY` invalida todas as sessoes (todo mundo precisa logar de novo) e
+`PROVISIONING_SECRET` novo precisa ser informado nos instaladores de teste que o usam.
+
+**Aviso sobre `NOMUS_ENCRYPTION_KEY`:** ela cifra a chave da API do Nomus gravada no banco.
+Se o banco de dev ja tem credencial Nomus cifrada, trocar a chave a deixa ilegivel (a API
+responde 503 "nao foi possivel decifrar"). A API nao suporta chave antiga (`..._OLD`).
+Escolha: (a) recadastrar a chave do Nomus na tela de integracao depois da troca; ou
+(b) manter o valor antigo em `NOMUS_ENCRYPTION_KEY` no `dev.env` (editando o arquivo a mao),
+sabendo que esse valor esta queimado e protege so a credencial Nomus da dev.
 
 ## Dependencias
 

@@ -7,6 +7,7 @@ setlocal
 
 cd /d "%~dp0\.."
 call "%~dp0load_dev_env.bat"
+if errorlevel 1 exit /b 1
 set "API_PORT=8001"
 set "API_BIND=0.0.0.0"
 docker compose -f docker-compose.dev.yml up -d api

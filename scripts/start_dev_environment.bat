@@ -3,6 +3,7 @@ setlocal
 
 cd /d "%~dp0\.."
 call "%~dp0load_dev_env.bat"
+if errorlevel 1 exit /b 1
 
 if "%POSTGRES_PASSWORD%"=="" (
   echo Defina POSTGRES_PASSWORD no ambiente local antes de iniciar o ambiente de desenvolvimento.

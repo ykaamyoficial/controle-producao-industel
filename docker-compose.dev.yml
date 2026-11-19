@@ -43,8 +43,8 @@ services:
       DATABASE_POOL_TIMEOUT: ${DATABASE_POOL_TIMEOUT:-30}
       DATABASE_POOL_RECYCLE: ${DATABASE_POOL_RECYCLE:-1800}
       DATABASE_ECHO: ${DATABASE_ECHO:-false}
-      SECRET_KEY: ${SECRET_KEY:-controle-producao-api-dev-secret-key-2026}
-      PROVISIONING_SECRET: ${PROVISIONING_SECRET:-dev-provisioning-secret-change-me-32chars}
+      SECRET_KEY: ${SECRET_KEY:?defina SECRET_KEY em %USERPROFILE%\.controle-producao-dev\dev.env (python scripts/gerar_segredos_dev.py)}
+      PROVISIONING_SECRET: ${PROVISIONING_SECRET:?defina PROVISIONING_SECRET em %USERPROFILE%\.controle-producao-dev\dev.env (python scripts/gerar_segredos_dev.py)}
       BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-}
       OPERATIONAL_INSTANCE_ID: ${OPERATIONAL_INSTANCE_ID:-}
       OPERATIONAL_COMPANY_ID: ${OPERATIONAL_COMPANY_ID:-}
@@ -63,7 +63,7 @@ services:
       # descartavel e um receptor local; nunca apontar para o Almox real.
       ALMOX_INTEGRATION_SECRET: ${ALMOX_INTEGRATION_SECRET:-}
       ALMOX_WEBHOOK_URL: ${ALMOX_WEBHOOK_URL:-}
-      NOMUS_ENCRYPTION_KEY: ${NOMUS_ENCRYPTION_KEY:-dev-nomus-encryption-key-change-me}
+      NOMUS_ENCRYPTION_KEY: ${NOMUS_ENCRYPTION_KEY:?defina NOMUS_ENCRYPTION_KEY em %USERPROFILE%\.controle-producao-dev\dev.env (python scripts/gerar_segredos_dev.py)}
       # Notificacoes multicanal (Fase 11) -- canal de e-mail (desligado por padrao).
       NOTIFICATIONS_EMAIL_ENABLED: ${NOTIFICATIONS_EMAIL_ENABLED:-false}
       NOTIFICATIONS_DIGEST_HOUR: ${NOTIFICATIONS_DIGEST_HOUR:-7}

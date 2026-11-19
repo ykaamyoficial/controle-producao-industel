@@ -7,6 +7,8 @@ rem O endereco exibido e temporario; para um endereco fixo, use
 rem CLOUDFLARE_TUNNEL_TOKEN com scripts\start_cloudflare_named_tunnel.bat.
 
 cd /d "%~dp0.."
+call "%~dp0load_dev_env.bat"
+if errorlevel 1 exit /b 1
 
 where cloudflared >nul 2>nul
 if errorlevel 1 (
