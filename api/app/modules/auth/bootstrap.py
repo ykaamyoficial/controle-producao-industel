@@ -7,6 +7,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 
 from api.app.core.config import get_settings
+from api.app.core.exceptions import ApiError
 from api.app.database.session import get_sessionmaker
 from api.app.modules.auth import repository
 from api.app.modules.auth.models import Permission, User
@@ -56,8 +57,10 @@ async def sync_official_permissions() -> None:
 async def ensure_default_admin() -> None:
     """Cria o usuario `admin` UMA vez, com a senha de BOOTSTRAP_ADMIN_PASSWORD e
     troca obrigatoria no primeiro login. Se o `admin` ja existe (mesmo
-    desativado, sem superusuario ou com senha trocada) nao toca em nada: nunca
-    redefine senha, nunca reativa. A senha nunca vai para o log."""
+    desativado, sem superusuario ou com senha trocada) ou se ja ha qualquer
+    superusuario ativo (admin renomeado/excluido), nao toca em nada: nunca
+    redefine senha, nunca reativa, nunca recria. Senha fora da politica so gera
+    log de erro (a API sobe sem o admin). A senha nunca vai para o log."""
     session_factory = get_sessionmaker()
     if session_factory is None:
         raise RuntimeError("DATABASE_URL nao configurada.")
@@ -66,17 +69,31 @@ async def ensure_default_admin() -> None:
         username = repository.normalize_username(DEFAULT_ADMIN_USERNAME)
         if await repository.get_user_by_username(session, username) is not None:
             return
+        # Mesma trava do CLI create-admin: com a senha ainda no .env, recriar aqui daria
+        # um superusuario de senha conhecida a cada restart.
+        if await repository.active_admin_count(session) > 0:
+            return
 
-        password = get_settings().bootstrap_admin_password
+        settings = get_settings()
+        password = settings.bootstrap_admin_password
         if not password:
             log.warning("Usuario %s nao existe e BOOTSTRAP_ADMIN_PASSWORD nao esta definida; administrador inicial nao criado.", username)
+            return
+        try:
+            password_hash = hash_password(password)
+        except ApiError:
+            log.error(
+                "BOOTSTRAP_ADMIN_PASSWORD recusada pela politica de senha (minimo %s caracteres, sem senha fraca); "
+                "administrador inicial %s NAO criado. Corrija a variavel e reinicie a API.",
+                settings.password_min_length, username,
+            )
             return
 
         role = await _ensure_admin_role(session)
         user = User(
             username=username,
             display_name="Administrador",
-            password_hash=hash_password(password),
+            password_hash=password_hash,
             active=True,
             is_superuser=True,
             password_must_change=True,

@@ -106,9 +106,9 @@ async def _update_admin(**fields) -> None:
         await session.commit()
 
 
-async def _seed_admin(**fields) -> None:
+async def _seed_admin(username: str = "admin", **fields) -> None:
     async with get_sessionmaker()() as session:
-        session.add(User(username="admin", display_name="Administrador", password_hash=hash_password(OTHER_PASSWORD), password_changed_at=utcnow(), **fields))
+        session.add(User(username=username, display_name="Administrador", password_hash=hash_password(OTHER_PASSWORD), password_changed_at=utcnow(), **fields))
         await session.commit()
 
 
@@ -187,6 +187,52 @@ def test_without_env_and_without_admin_creates_nothing_and_warns(caplog):
     warnings = [record for record in _bootstrap_logs(caplog) if record.levelno == logging.WARNING]
     assert len(warnings) == 1
     assert "BOOTSTRAP_ADMIN_PASSWORD" in warnings[0].getMessage()
+
+
+def test_renamed_admin_is_not_recreated(monkeypatch):
+    _use_password(monkeypatch, PASSWORD)
+    asyncio.run(ensure_default_admin())
+    asyncio.run(_update_admin(username="chefe"))
+
+    asyncio.run(ensure_default_admin())
+
+    assert asyncio.run(_admin()) is None
+    assert asyncio.run(_user_count()) == 1
+
+
+def test_deleted_admin_with_other_active_superuser_is_not_recreated(monkeypatch, caplog):
+    asyncio.run(_seed_admin("chefe", active=True, is_superuser=True))
+    _use_password(monkeypatch, PASSWORD)
+    caplog.set_level(logging.DEBUG)
+
+    asyncio.run(ensure_default_admin())
+
+    assert asyncio.run(_admin()) is None
+    assert asyncio.run(_user_count()) == 1
+    assert _bootstrap_logs(caplog) == []
+
+
+def test_inactive_superuser_does_not_block_bootstrap(monkeypatch):
+    asyncio.run(_seed_admin("chefe", active=False, is_superuser=True))
+    _use_password(monkeypatch, PASSWORD)
+
+    asyncio.run(ensure_default_admin())
+
+    assert asyncio.run(_admin()) is not None
+
+
+def test_password_below_policy_logs_error_and_does_not_raise(monkeypatch, caplog):
+    short = "curta1234"  # 9 caracteres, minimo padrao e 10
+    _use_password(monkeypatch, short)
+    caplog.set_level(logging.DEBUG)
+
+    asyncio.run(ensure_default_admin())  # nao levanta: a API sobe sem o admin
+
+    assert asyncio.run(_user_count()) == 0
+    errors = [record for record in _bootstrap_logs(caplog) if record.levelno == logging.ERROR]
+    assert len(errors) == 1
+    assert "BOOTSTRAP_ADMIN_PASSWORD" in errors[0].getMessage()
+    assert short not in caplog.text
 
 
 def test_password_never_appears_in_logs(monkeypatch, caplog):
