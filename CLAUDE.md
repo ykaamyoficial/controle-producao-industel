@@ -23,6 +23,7 @@ O desktop é cliente da API. A API centraliza autenticação, permissões, regra
 - Toda fase finalizada ganha um doc de fechamento em `docs/architecture/`. Use a skill `fase-report` para seguir o template atual.
 - Toda migration Alembic nova falha `scripts/check_migration_safety.py` até ganhar classificação (`ADDITIVE|TRANSITIONAL|DESTRUCTIVE|DATA_MIGRATION`) + justificativa em `api/alembic/migration_risk_registry.json`. Use a skill `migration-check`.
 - Release segue o checklist PRECHECK -> DEPLOY -> VERIFY -> ROLLBACK (`docs/architecture/CI_CD_PIPELINE.md`). Tag de imagem Docker sempre == `API_VERSION`; `:latest` é banido em produção. Use a skill `release-checklist`.
+- Deploy de produção: runbooks em `docs/deploy/` (`RUNBOOK_DEPLOY_API.md`, `RUNBOOK_DEPLOY_DESKTOP.md`, `CHECKLIST_ANTES_DE_RODAR.md`); endereço e infra do SERVIDOR em `docs/plano-migracao-api-servidor.md`.
 - Toda tela, diálogo ou componente em `app/ui/` segue o padrão visual da skill `qt-industrial-ui` (preserva a identidade atual; um botão primário por tela; cor só por token; telas sobrepostas no padrão de "Detalhes da proposta"). A migração das telas existentes segue `docs/architecture/REFINAMENTO_VISUAL_PLANO_MIGRACAO.md`; os protótipos de referência ficam em `prototipos/`.
 
 ## Testes

@@ -1,5 +1,7 @@
 # Plano: migração da API de produção para o SERVIDOR
 
+> **Estado em 2026-11-19:** a virada foi executada em 2026-11-04 e a produção roda no SERVIDOR (API, Postgres e `cloudflared` em Docker, conforme este plano). A janela de rollback para este PC (D11 da especificação: containers e volumes parados, não apagados, por 7 dias) **acabou em 2026-11-11**; voltar para a máquina antiga deixou de ser um caminho suportado, e qualquer volta exige o dump mais recente do SERVIDOR. O texto abaixo é o plano e o registro históricos e foi mantido como estava. A limpeza da origem (Tarefa 10, dia 7) só ocorre com confirmação do Henrique, e o plano não registra que ela foi feita. O deploy atual da API e do Desktop segue `docs/deploy/` (RUNBOOKs).
+
 **Objetivo:** API, banco e túnel de produção passam deste PC para o Docker do SERVIDOR, sem perda de dados e sem alterar nenhum Desktop.
 
 **Arquitetura (2-3 frases):** o SERVIDOR (`192.168.2.128`, Windows 10 + Docker Desktop, engine Linux) roda o mesmo `docker-compose.prod.yml` de hoje (só `postgres` e `api`, sem Caddy), com a API publicada apenas em `127.0.0.1:8000`. O `cloudflared` passa a ser um container no mesmo compose, com a credencial do túnel atual, e entrega `api.ykora.com.br` direto para `http://api:8000`. O banco (103 MB) vai por `pg_dump -Fc` e `pg_restore`.
