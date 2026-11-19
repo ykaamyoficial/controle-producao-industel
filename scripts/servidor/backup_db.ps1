@@ -23,12 +23,14 @@
 #                      controle_producao_industel_update_repository_data. Confirme os nomes reais
 #                      com `docker volume ls`; sem o volume o script falha (nao finge sucesso).
 #   -ImagemAuxiliar    imagem do container auxiliar do tar. Vazio = imagem do container Postgres.
-#   -RetencaoDias      dias de retencao local. Default 14.
+#   -RetencaoDias      dias de retencao local, de 1 a 3650 (0/negativo apagaria o backup recem-criado).
+#                      Default 14.
 # Codigos de saida: 0 ok; 1 falha de dump/validacao/volume; 2 falha na copia externa.
 # Uso: backup_db.ps1 [-DestinoExterno \\PC\pasta] [-RetencaoDias 14]
 param(
     [Alias('Destino')]
     [string]$DestinoExterno = '',
+    [ValidateRange(1,3650)]
     [int]$RetencaoDias = 14,
     [string]$CredencialXml = 'C:\ControleProducao\cred_backup.xml',
     [string]$Pasta = 'C:\ControleProducao\backups',
@@ -83,7 +85,6 @@ try {
 
     docker cp "${Container}:/tmp/$nome" $local
     if ($LASTEXITCODE -ne 0) { throw "docker cp falhou ($LASTEXITCODE)" }
-    docker exec $Container rm -f "/tmp/$nome" "/tmp/$nome.lst" | Out-Null
     [void]$gerados.Add($local)
 
     # 2b. tamanho, sha256 local igual ao do container e arquivo .sha256 ao lado
@@ -104,6 +105,9 @@ try {
     Log "ERRO backup: $($_.Exception.Message) (retencao NAO executada; backups antigos preservados)"
     Write-Error "backup falhou: $($_.Exception.Message)" -ErrorAction Continue
     exit 1
+} finally {
+    # limpa o dump e o .lst temporarios do container, com sucesso ou falha (nao altera o exit code)
+    try { docker exec $Container rm -f "/tmp/$nome" "/tmp/$nome.lst" 2>$null | Out-Null } catch { }
 }
 
 # 4. copia externa

@@ -47,3 +47,15 @@ def test_retencao_so_depois_das_etapas_que_podem_falhar():
     assert s.index("pg_restore --list") < s.index("Backup-Volume $VolumeUpdates") < s.index("# 4. copia externa") < ret
     assert s.count("Remove-Item") == 1 and s.index("Remove-Item") > ret
     assert s.count("exit 1") >= 1 and s.index("exit 1") < ret
+
+
+def test_retencao_validada_e_temporarios_limpos_em_finally():
+    s = SCRIPT.read_text(encoding="utf-8")
+    # 0/negativo apagaria o backup recem-criado
+    assert "[ValidateRange(1,3650)]" in s and s.index("[ValidateRange(1,3650)]") < s.index("[int]$RetencaoDias")
+    # a limpeza do /tmp do container fica num finally (cobre falha) e nao no corpo do try
+    fim = s.index("} finally {", s.index("exit 1"))
+    assert s.index('rm -f "/tmp/$nome" "/tmp/$nome.lst"') > fim
+    assert s.count('rm -f "/tmp/$nome" "/tmp/$nome.lst"') == 1
+    # o finally nao pode mascarar o exit code: o catch continua saindo com 1
+    assert s.index("exit 1") < fim
