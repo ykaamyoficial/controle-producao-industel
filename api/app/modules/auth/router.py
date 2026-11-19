@@ -21,9 +21,9 @@ def _ip(request: Request) -> str | None:
 @router.post("/login", response_model=TokenResponse)
 async def login(payload: LoginRequest, request: Request, session: AsyncSession = Depends(get_db_session)):
     ip = _ip(request)
-    ip_rate_limit.check(ip)
+    slot = ip_rate_limit.reserve(ip)  # antes do await: a rajada simultanea ja encontra as vagas ocupadas
     try:
-        return await service.login(
+        response = await service.login(
             session,
             payload.username,
             payload.password,
@@ -32,8 +32,12 @@ async def login(payload: LoginRequest, request: Request, session: AsyncSession =
             user_agent=request.headers.get("user-agent"),
         )
     except AuthenticationError:
-        ip_rate_limit.record_failure(ip)
+        raise  # falha de credencial: a reserva fica e conta
+    except BaseException:
+        ip_rate_limit.release(ip, slot)
         raise
+    ip_rate_limit.release(ip, slot)
+    return response
 
 
 @router.post("/refresh", response_model=TokenResponse)

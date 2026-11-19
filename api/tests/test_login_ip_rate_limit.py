@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import unittest
 from unittest.mock import AsyncMock, patch
 
+import httpx
 from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 
@@ -52,31 +54,43 @@ class LoginIpRateLimitUnitTests(_EnvTestCase):
 
     def _fail(self, ip, times):
         for _ in range(times):
-            ip_rate_limit.record_failure(ip)
+            ip_rate_limit.reserve(ip)  # reserva nao devolvida = falha
 
     def test_blocks_after_limit_with_retry_after_and_isolates_ips(self):
         with patch("api.app.modules.auth.ip_rate_limit.time.monotonic", return_value=1000.0):
-            self._fail("1.1.1.1", 2)
-            ip_rate_limit.check("1.1.1.1")  # ainda abaixo do limite
-            self._fail("1.1.1.1", 1)
+            self._fail("1.1.1.1", 3)  # as 3 cabem no limite
             with self.assertRaises(ApiError) as raised:
-                ip_rate_limit.check("1.1.1.1")
+                ip_rate_limit.reserve("1.1.1.1")
             self.assertEqual(raised.exception.status_code, 429)
             self.assertEqual(raised.exception.headers, {"Retry-After": "60"})
-            ip_rate_limit.check("2.2.2.2")  # outro IP nao e afetado
+            ip_rate_limit.reserve("2.2.2.2")  # outro IP nao e afetado
 
     def test_window_slides_and_unblocks(self):
         with patch("api.app.modules.auth.ip_rate_limit.time.monotonic", return_value=1000.0):
             self._fail("1.1.1.1", 3)
             with self.assertRaises(ApiError):
-                ip_rate_limit.check("1.1.1.1")
+                ip_rate_limit.reserve("1.1.1.1")
         with patch("api.app.modules.auth.ip_rate_limit.time.monotonic", return_value=1061.0):
-            ip_rate_limit.check("1.1.1.1")
+            ip_rate_limit.reserve("1.1.1.1")
 
     def test_reset_clears_counters(self):
         self._fail("1.1.1.1", 3)
         ip_rate_limit.reset()
-        ip_rate_limit.check("1.1.1.1")
+        ip_rate_limit.reserve("1.1.1.1")
+
+    def test_release_returns_the_slot(self):
+        self._fail("1.1.1.1", 2)
+        ip_rate_limit.release("1.1.1.1", ip_rate_limit.reserve("1.1.1.1"))
+        ip_rate_limit.reserve("1.1.1.1")  # a devolvida liberou a 3a vaga
+        with self.assertRaises(ApiError):
+            ip_rate_limit.reserve("1.1.1.1")
+        ip_rate_limit.release("9.9.9.9", 123.0)  # reserva desconhecida: nada acontece
+
+    def test_tracked_ips_are_capped_dropping_least_recently_used(self):
+        with patch.object(ip_rate_limit, "_MAX_TRACKED_IPS", 3):
+            for ip in ("a", "b", "c", "a", "d"):  # "a" reusado vai para o fim; "b" e o mais antigo
+                ip_rate_limit.reserve(ip)
+        self.assertEqual(list(ip_rate_limit._failures), ["c", "a", "d"])
 
 
 class LoginIpRateLimitDisabledTests(_EnvTestCase):
@@ -84,8 +98,8 @@ class LoginIpRateLimitDisabledTests(_EnvTestCase):
 
     def test_zero_disables(self):
         for _ in range(100):
-            ip_rate_limit.record_failure("1.1.1.1")
-        ip_rate_limit.check("1.1.1.1")
+            self.assertIsNone(ip_rate_limit.reserve("1.1.1.1"))
+        self.assertEqual(ip_rate_limit._failures, {})
 
 
 class LoginRouteRateLimitTests(_EnvTestCase):
@@ -93,12 +107,42 @@ class LoginRouteRateLimitTests(_EnvTestCase):
 
     def setUp(self):
         super().setUp()
-        app = create_app()
-        app.dependency_overrides[get_db_session] = lambda: None
-        self.client = TestClient(app)
+        self.app = create_app()
+        self.app.dependency_overrides[get_db_session] = lambda: None
+        self.client = TestClient(self.app)
 
     def _login(self):
         return self.client.post("/api/v1/auth/login", json={"username": "u", "password": "p"})
+
+    def test_simultaneous_burst_only_lets_the_limit_through(self):
+        fail = AuthenticationError(error_codes.INVALID_CREDENTIALS, "Usuario ou senha invalidos.")
+
+        async def scenario():
+            gate = asyncio.Event()
+
+            async def slow_fail(*_args, **_kwargs):
+                await gate.wait()
+                raise fail
+
+            transport = httpx.ASGITransport(app=self.app)
+            async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+                with patch("api.app.modules.auth.router.service.login", new=AsyncMock(side_effect=slow_fail)) as login:
+                    tasks = [asyncio.create_task(client.post("/api/v1/auth/login", json={"username": "u", "password": "p"})) for _ in range(5)]
+                    await asyncio.sleep(0.3)  # as 5 chegam a rota antes de qualquer falha terminar
+                    gate.set()
+                    responses = await asyncio.gather(*tasks)
+                return sorted(response.status_code for response in responses), login.await_count
+
+        codes, calls = asyncio.run(scenario())
+        self.assertEqual(codes, [401, 401, 429, 429, 429])
+        self.assertEqual(calls, 2)
+
+    def test_non_credential_error_does_not_count(self):
+        boom = ApiError(error_codes.CONFIGURATION_ERROR, "Configuracao de autenticacao incompleta.", status_code=503)
+        with patch("api.app.modules.auth.router.service.login", new=AsyncMock(side_effect=boom)):
+            for _ in range(4):
+                self.assertEqual(self._login().status_code, 503)
+        self.assertEqual(ip_rate_limit._failures, {})
 
     def test_429_after_failures_and_success_does_not_count(self):
         fail = AuthenticationError(error_codes.INVALID_CREDENTIALS, "Usuario ou senha invalidos.")

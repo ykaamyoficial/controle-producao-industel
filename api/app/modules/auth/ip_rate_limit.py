@@ -1,6 +1,8 @@
 """Limite de falhas de login por IP (auditoria 05, achado 4).
 
 Janela deslizante em memoria: so falhas contam, sucesso nao zera nem conta.
+Cada tentativa e reservada antes do await do login (reserve) e devolvida se nao for
+falha de credencial (release); assim uma rajada simultanea nao passa inteira.
 shortcut: contador por processo -- com varios workers/replicas o limite real e
 N x o configurado e reiniciar a API zera tudo; subir para Redis/WAF se isso importar.
 shortcut: o IP vem de request.client.host. Atras de cloudflared/Caddy esse host e o do
@@ -23,20 +25,22 @@ _MAX_TRACKED_IPS = 10_000
 
 
 def _prune(ip: str, now: float, window: int) -> deque[float]:
-    bucket = _failures.setdefault(ip, deque())
+    # pop + reinsercao: a ordem do dict fica "usado ha mais tempo primeiro", base do descarte no teto.
+    bucket = _failures.pop(ip, None) or deque()
     while bucket and bucket[0] <= now - window:
         bucket.popleft()
-    if not bucket:
-        _failures.pop(ip, None)
+    if bucket:
+        _failures[ip] = bucket
     return bucket
 
 
-def check(ip: str | None) -> None:
-    """Levanta 429 com Retry-After se o IP ja estourou o limite na janela."""
+def reserve(ip: str | None) -> float | None:
+    """Reserva uma tentativa do IP (conta como falha ate release) ou levanta 429 com
+    Retry-After se o IP ja estourou o limite na janela. Sincrono, sem await: atomico no loop."""
     settings = get_settings()
     limit, window = settings.login_ip_max_failures, settings.login_ip_window_seconds
     if limit <= 0 or not ip:
-        return
+        return None
     now = time.monotonic()
     bucket = _prune(ip, now, window)
     if len(bucket) >= limit:
@@ -45,17 +49,28 @@ def check(ip: str | None) -> None:
             error_codes.LOGIN_RATE_LIMITED, "Muitas tentativas de login. Aguarde alguns minutos e tente novamente.",
             status_code=429, headers={"Retry-After": str(retry_after)},
         )
+    if not bucket:  # IP novo na janela: respeita o teto de memoria
+        if len(_failures) >= _MAX_TRACKED_IPS:
+            for known in list(_failures):
+                _prune(known, now, window)
+        while len(_failures) >= _MAX_TRACKED_IPS:
+            del _failures[next(iter(_failures))]
+        _failures[ip] = bucket
+    bucket.append(now)
+    return now
 
 
-def record_failure(ip: str | None) -> None:
-    settings = get_settings()
-    if settings.login_ip_max_failures <= 0 or not ip:
+def release(ip: str | None, token: float | None) -> None:
+    """Devolve a reserva: tentativa que nao foi falha de credencial nao conta."""
+    bucket = _failures.get(ip) if token is not None and ip else None
+    if bucket is None:
         return
-    now = time.monotonic()
-    if len(_failures) >= _MAX_TRACKED_IPS:
-        for known in list(_failures):
-            _prune(known, now, settings.login_ip_window_seconds)
-    _failures.setdefault(ip, deque()).append(now)
+    try:
+        bucket.remove(token)
+    except ValueError:
+        return  # ja saiu da janela ou o IP foi descartado pelo teto
+    if not bucket:
+        _failures.pop(ip, None)
 
 
 def reset() -> None:
