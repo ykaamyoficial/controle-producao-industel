@@ -1,3 +1,5 @@
+# LEGADO - NAO USAR PARA RELEASE (configuracao alternativa cx_Freeze, aponta para gerados\ e 2.0.0).
+# Caminho oficial: Updater.spec + ControleProducao.spec + Launcher.spec -> installer\ControleProducao.iss.
 from __future__ import annotations
 
 from pathlib import Path

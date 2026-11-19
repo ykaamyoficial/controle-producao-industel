@@ -1,3 +1,9 @@
+ATENCAO - LEGADO: este roteiro (setup.py / gerar_exe_setup.bat) gera um build plano, sem launcher
+nem Updater, e empacota app\config inteiro (identidade e config locais da maquina). NAO use para
+release. Caminho oficial: Updater.spec + ControleProducao.spec + Launcher.spec (PyInstaller) ->
+installer\ControleProducao.iss (ISCC) -> scripts\build_update_package.py ->
+scripts\generate_release_manifest.py.
+
 CONFIGURACAO PARA GERAR O EXE
 
 Arquivo principal para selecionar no gerador:

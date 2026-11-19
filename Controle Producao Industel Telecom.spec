@@ -1,3 +1,6 @@
+# LEGADO - NAO USAR PARA RELEASE. Layout plano, sem launcher/Updater, e empacota app\config
+# inteiro (identidade e config locais). Caminho oficial: Updater.spec + ControleProducao.spec +
+# Launcher.spec -> installer\ControleProducao.iss (ISCC) -> scripts\build_update_package.py.
 # -*- mode: python ; coding: utf-8 -*-
 
 

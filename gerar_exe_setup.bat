@@ -1,4 +1,9 @@
 @echo off
+rem LEGADO - NAO USAR PARA RELEASE: gera layout plano (sem launcher/Updater) a partir de
+rem "Controle Producao Industel Telecom.spec" e empacota app\config inteiro (identidade
+rem e config locais). Caminho oficial: Updater.spec + ControleProducao.spec + Launcher.spec
+rem -> installer\ControleProducao.iss (ISCC) -> scripts\build_update_package.py
+rem -> scripts\generate_release_manifest.py.
 setlocal
 cd /d "%~dp0"
 

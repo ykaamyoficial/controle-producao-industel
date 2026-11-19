@@ -4,9 +4,9 @@
 # so depende de httpx + stdlib (nao arrasta PySide6/pdfplumber/PIL, que o
 # Desktop principal precisa mas o Updater nao usa).
 #
-# NAO build-verificado nesta sessao (sem ambiente para instalar/testar um
-# .exe empacotado) -- ver docs/architecture/UPDATER_DESKTOP.md, secao de
-# riscos/pendencias, antes do primeiro uso real.
+# Build verificado (2026-10-08, ver docs/architecture/UPDATER_DESKTOP.md). Spec
+# oficial: faz parte do caminho Updater.spec + ControleProducao.spec + Launcher.spec
+# -> ISCC. UPX desligado (como nos demais specs): reduz falso positivo de antivirus.
 
 from PyInstaller.utils.hooks import collect_submodules
 import os
@@ -46,7 +46,7 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=False,
     console=True,
     disable_windowed_traceback=False,
     argv_emulation=False,
@@ -59,7 +59,7 @@ coll = COLLECT(
     a.binaries,
     a.datas,
     strip=False,
-    upx=True,
+    upx=False,
     upx_exclude=[],
     name='Updater' + _S,
 )

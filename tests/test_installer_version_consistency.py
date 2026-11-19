@@ -39,6 +39,13 @@ class InstallerVersionConsistencyTests(unittest.TestCase):
             f"atualize para 'ControleProducaoSetup-{APP_VERSION}'.",
         )
 
+    def test_iss_cleans_version_dir_and_run_key(self):
+        """Reinstalar a mesma versao nao pode manter DLLs antigas; desinstalar limpa o Run do --notifier."""
+        content = _ISS_PATH.read_text(encoding="utf-8")
+        self.assertIn(r'Name: "{app}\versions\{#MyAppVersion}"', content)
+        self.assertIn("ControleProducaoIndustelNotificacoes", content)
+        self.assertIn("uninsdeletevalue", content)
+
 
 if __name__ == "__main__":
     unittest.main()

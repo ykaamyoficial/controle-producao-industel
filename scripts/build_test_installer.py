@@ -21,7 +21,13 @@ ROOT = Path(__file__).resolve().parents[1]
 BUILD = ROOT / "build_teste"
 DIST = ROOT / "dist_teste"
 OUT = ROOT / "release" / "teste"
-ISCC = Path(os.environ.get("ISCC_PATH", r"C:\Users\Industel\AppData\Local\Programs\Inno Setup 6\ISCC.exe"))
+ISCC_CANDIDATES = (
+    r"C:\Program Files\Inno Setup 7\ISCC.exe",
+    r"C:\Program Files (x86)\Inno Setup 7\ISCC.exe",
+    r"C:\Program Files\Inno Setup 6\ISCC.exe",
+    r"C:\Program Files (x86)\Inno Setup 6\ISCC.exe",
+    os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "Inno Setup 6", "ISCC.exe"),
+)
 TEST_API = "https://producaodev.ykora.com.br"
 TEST_HUE_DEGREES = 28  # laranja/ambar, bem distinto do azul oficial
 IMAGES = ("Logo_Industel_Icone.ico", "Logo_Industel_Icone_256.png", "logo.png")
@@ -95,9 +101,18 @@ def run(cmd: list[str], env: dict) -> None:
     subprocess.run(cmd, cwd=ROOT, env=env, check=True)
 
 
+def find_iscc() -> Path | None:
+    """ISCC_PATH (se definido) manda; senao o primeiro ISCC.exe existente dos locais comuns."""
+    env = os.environ.get("ISCC_PATH", "").strip()
+    if env:
+        return Path(env)
+    return next((Path(c) for c in ISCC_CANDIDATES if Path(c).is_file()), None)
+
+
 def main() -> int:
-    if not ISCC.is_file():
-        print(f"ISCC nao encontrado: {ISCC} (defina ISCC_PATH)", file=sys.stderr)
+    ISCC = find_iscc()
+    if ISCC is None or not ISCC.is_file():
+        print(f"ISCC nao encontrado: {ISCC or ', '.join(ISCC_CANDIDATES)} (defina ISCC_PATH)", file=sys.stderr)
         return 1
     version = app_version()
     iss = (ROOT / "installer" / "ControleProducaoTeste.iss").read_text(encoding="utf-8")

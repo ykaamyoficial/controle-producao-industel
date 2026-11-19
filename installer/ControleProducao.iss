@@ -43,11 +43,20 @@ Name: "{commonappdata}\{#MyDataDir}"; Permissions: users-modify
 Name: "{commonappdata}\{#MyDataDir}\backups"; Permissions: users-modify
 
 [InstallDelete]
+; Limpa a pasta da versao: reinstalar a MESMA versao por cima mantinha DLLs antigas
+; (ex.: icuuc.dll quebra o import do QtWidgets).
+Type: filesandordirs; Name: "{app}\versions\{#MyAppVersion}"
 ; Migracao do layout plano (2.8.x e anteriores) para o versionado: a pasta
 ; _internal e o Updater.exe da RAIZ eram do app antigo. O launcher traz o seu
 ; proprio _internal logo em seguida; o app novo vive em versions\<versao>\.
 Type: filesandordirs; Name: "{app}\_internal"
 Type: files; Name: "{app}\Updater.exe"
+
+[Registry]
+; Nada e criado aqui: so limpa, na desinstalacao, o que o app grava no HKCU
+; (inicio com o Windows do agente de avisos e identidade dos baloes).
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: none; ValueName: "ControleProducaoIndustelNotificacoes"; Flags: dontcreatekey uninsdeletevalue
+Root: HKCU; Subkey: "Software\Classes\AppUserModelId\{#MyAppName}"; ValueType: none; Flags: dontcreatekey uninsdeletekey
 
 [Files]
 ; Launcher (ControleProducao.exe + _internal proprio) na raiz.

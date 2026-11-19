@@ -68,7 +68,12 @@ Resultado registrado na baseline 3.0.0:
 
 ## Gerar o executavel
 
-Execute `gerar_exe_pyside6.bat`. O resultado sera criado na pasta `dist`.
+Caminho oficial (Python 3.11, na raiz do repositorio): `-m PyInstaller Updater.spec`,
+`ControleProducao.spec` e `Launcher.spec` (cada um com `--clean --noconfirm`), depois
+`installer\ControleProducao.iss` no ISCC (Inno Setup), `scripts\build_update_package.py` e
+`scripts\generate_release_manifest.py`. Os `.spec` e `.bat` antigos da raiz
+(`gerar_exe_pyside6.bat`, `gerar_exe_setup.bat`, `Controle Producao 2.0.spec`,
+`Controle Producao Industel Telecom.spec`) sao legados e nao servem para release.
 
 ## Documentacao
 
