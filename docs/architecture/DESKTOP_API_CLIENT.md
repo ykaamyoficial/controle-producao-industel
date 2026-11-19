@@ -163,7 +163,7 @@ Tambem ha teste de integracao opcional `tests/test_desktop_api_integration.py`, 
 
 ```bat
 set DESKTOP_API_INTEGRATION=1
-set DESKTOP_API_BASE_URL=http://127.0.0.1:8000
+set DESKTOP_API_BASE_URL=http://127.0.0.1:8001
 set DESKTOP_API_USERNAME=admin
 set DESKTOP_API_PASSWORD=...
 python -m pytest tests/test_desktop_api_integration.py

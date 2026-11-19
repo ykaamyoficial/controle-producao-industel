@@ -24,7 +24,7 @@ Validacoes executadas:
 - `asyncpg` no Windows falha em `127.0.0.1:5432`;
 - SQLAlchemy async no Windows falha na mesma camada;
 - `asyncpg` dentro do Docker conecta corretamente por `postgres:5432`;
-- API em Docker responde ao Windows por `http://127.0.0.1:8000`.
+- API em Docker responde ao Windows por HTTP (na época `127.0.0.1:8000`; hoje a dev usa `127.0.0.1:8001`, ver "Pre-requisitos").
 
 Tambem foi observado conflito/ambiguidade na porta `5432` no Windows:
 

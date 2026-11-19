@@ -145,10 +145,10 @@ python -m unittest discover -s api/tests -v
 
 ## 9. OpenAPI
 
-Com a API rodando localmente:
+Com a API de dev rodando localmente (porta 8001; a 8000 é a oficial). Em produção `/docs` e `/openapi.json` ficam fechados:
 
-- Swagger UI: `http://127.0.0.1:8000/docs`
-- OpenAPI JSON: `http://127.0.0.1:8000/openapi.json`
+- Swagger UI: `http://127.0.0.1:8001/docs`
+- OpenAPI JSON: `http://127.0.0.1:8001/openapi.json`
 
 ## 10. Health e readiness
 
@@ -160,7 +160,7 @@ GET /api/v1/system/ready
 GET /api/v1/system/version
 ```
 
-`/health` confirma apenas que o processo da API esta ativo.
+`/health` confirma apenas que o processo da API esta ativo. Rota legada da fundação: para verificar uma API, use `/api/v1/health/live` e `/api/v1/health/ready` (ver `HEALTH_CHECKS_AND_SMOKE_TESTS.md`).
 
 `/ready` informa se a infraestrutura esta pronta. Sem `DATABASE_URL`, retorna `database: not_configured`, que e esperado na fundacao.
 

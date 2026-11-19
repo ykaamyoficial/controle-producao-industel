@@ -25,7 +25,7 @@ O ambiente preferencial usa Docker Compose:
 docker-compose.dev.yml
 ```
 
-A partir da Etapa 3.1, o runtime oficial de desenvolvimento e API + PostgreSQL no Docker. O Windows deve acessar a API por HTTP em `http://127.0.0.1:8000`, e a API deve acessar o banco internamente pelo hostname `postgres`.
+A partir da Etapa 3.1, o runtime oficial de desenvolvimento e API + PostgreSQL no Docker. O Windows deve acessar a API de dev por HTTP em `http://127.0.0.1:8001` (a `8000` é da API oficial e nunca é usada pela dev), e a API deve acessar o banco internamente pelo hostname `postgres`.
 
 Detalhes completos:
 

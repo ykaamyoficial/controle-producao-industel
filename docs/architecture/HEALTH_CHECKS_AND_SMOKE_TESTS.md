@@ -160,7 +160,7 @@ python -m api.app.health.smoke --base-url http://servidor:8000 --expected-server
 ```
 
 `exit 0` = PASS, `exit != 0` (1) = FAIL — verificado manualmente contra o
-container de desenvolvimento real (`http://127.0.0.1:8000`, todos os 4 passos
+container de desenvolvimento real (`http://127.0.0.1:8000` na época; hoje a dev usa a porta 8001, todos os 4 passos
 PASS) e contra um endpoint inexistente (timeout, `FAIL`, `exit=1`). Sem
 credenciais hardcoded; `--base-url`/`--timeout`/`--expected-server-version`
 configuráveis; saída humana por padrão, `--json` para consumo por
