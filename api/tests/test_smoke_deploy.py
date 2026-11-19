@@ -19,7 +19,7 @@ from sqlalchemy import delete
 
 from api.app.core.config import get_settings
 from api.app.database.session import dispose_engine, get_engine, get_sessionmaker
-from api.app.health.smoke import SmokeHttpResponse
+from api.app.health.smoke import SmokeHttpResponse, _sanitize
 from api.app.main import create_app
 from api.tests._health_test_support import SmokeHttpAdapterOverTestClient
 from api.tests._migration_test_support import TEST_DATABASE_URL, alembic_config, integration_enabled
@@ -124,6 +124,11 @@ class SmokeDeployFakeServerTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertNotIn(PASSWORD, out + err)
         self.assertIn("***", out)
+
+    def test_secret_crossing_the_400_char_cut_is_masked(self):
+        message = _sanitize("x" * 395 + PASSWORD + " fim", [PASSWORD])
+        self.assertNotIn(PASSWORD[:5], message)
+        self.assertLessEqual(len(message), 400)
 
     def test_bearer_only_sent_after_login(self):
         api = FakeApi()

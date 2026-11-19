@@ -263,11 +263,11 @@ class SmokeTestRunner:
 def _sanitize(message: str, secrets: list[str] | tuple[str, ...] = ()) -> str:
     # httpx ja nao inclui credenciais em mensagens de erro de rede padrao, mas
     # removemos qualquer query string e qualquer segredo conhecido (senha/token).
-    message = message.split("?", 1)[0][:400]
+    # Mascara antes de cortar: o corte no meio de um segredo deixaria o prefixo dele visivel.
     for secret in secrets:
         if secret:
             message = message.replace(secret, "***")
-    return message
+    return message.split("?", 1)[0][:400]
 
 
 def _format_human(report: SmokeTestReport) -> str:
