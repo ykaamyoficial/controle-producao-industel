@@ -177,7 +177,7 @@ Se algo der errado depois que o pessoal lançou dados de Inspeção/Logística: 
 
 ### D5. Migração 0043 e 0044
 
-- 0043 cancela NF `REGISTRADA` sem linha ativa (irreversível na prática, o downgrade não devolve o status). Você disse que é o comportamento desejado; o número exato vem de A1 (`nf_que_a_0043_vai_cancelar`).
+- 0043 cancela NF `REGISTRADA` com ao menos uma linha cancelada e nenhuma ativa (irreversível na prática, o downgrade não devolve o status; a única volta é o dump pré-deploy). Você disse que é o comportamento desejado e a decisão está mantida; o número exato vem de A1 (`nf_que_a_0043_vai_cancelar`).
 - 0044 grava a baixa de estoque das propostas já entregues com a data do deploy, não a data real.
 
 ### D6. Repositório público ou privado

@@ -6,6 +6,14 @@ Marcação: **[AUT]** = exige autorização explícita do Henrique antes de roda
 
 Antes de começar, rode o `CHECKLIST_ANTES_DE_RODAR.md` inteiro. Sem ele fechado, este runbook não começa.
 
+## Decisões do Henrique (2026-11-19)
+
+- **Migração 0043 mantida:** ela cancela NF `REGISTRADA` sem linha ativa e é comportamento desejado. O dump pré-deploy é a única volta (ver Passo 7 e a seção 5).
+- **Almox+ e remanejamento por linhas desligados até o smoke:** `ALMOX_INTEGRATION_*` vazio e `REMANAGEMENT_BY_ROWS_ENABLED=false` neste deploy (Passo 5).
+- **Deploy manual, não pipeline:** este runbook (docker save/load + docker compose); `docker_control` e `release-server.yml` não são usados.
+- **Versões:** API 0.12.0 e Desktop 2.10.0.
+- **Admin por variável de ambiente:** `BOOTSTRAP_ADMIN_PASSWORD` só cria o `admin` se ele não existir; em produção o `admin` já existe, então a variável não muda nada e a senha antiga continua valendo até ser trocada (ver 6.1).
+
 ## 0. Resumo do que muda
 
 | Item | Antes (produção) | Depois |
@@ -179,7 +187,7 @@ docker exec controle_producao_postgres sh -c 'psql -U $POSTGRES_USER -d $POSTGRE
 ```
 A migração roda numa transação única: ou aplica 0039 a 0047, ou nada. Verificação: imprime `20261109_0047`. Este `run` cria o volume `api_data` (vazio, com o dono `apiuser` herdado da imagem).
 
-**Migração 0043 (irreversível na prática):** NFs com status `REGISTRADA` cujas linhas estão todas canceladas viram `CANCELADA` (comportamento desejado pelo Henrique). O downgrade não devolve esse status e ainda aborta se o número da NF tiver sido reutilizado depois. A **migração 0044** grava a baixa de estoque de todas as propostas já `ALMOXARIFADO_ENTREGUE` com a data/hora do deploy (não a data real). O dump do Passo 4 é o seu desfazer. Se a migração falhar (a transação reverte tudo), vá direto aos critérios de rollback (seção 5).
+**Migração 0043 (irreversível na prática):** NFs com status `REGISTRADA` que têm ao menos uma linha cancelada e nenhuma linha ativa viram `CANCELADA`, com motivo, autor e data da última linha cancelada (comportamento desejado pelo Henrique, decisão mantida). NF sem nenhuma linha não é tocada. A 0043 também troca a unicidade (`invoice_number`, `series`) por índice parcial que ignora NF cancelada, liberando o número. O downgrade não devolve o status das NFs e ainda aborta se o número da NF tiver sido reutilizado depois: a única volta é restaurar o dump pré-deploy. A **migração 0044** grava a baixa de estoque de todas as propostas já `ALMOXARIFADO_ENTREGUE` com a data/hora do deploy (não a data real). O dump do Passo 4 é o seu desfazer. Se a migração falhar (a transação reverte tudo), vá direto aos critérios de rollback (seção 5).
 
 ### Passo 8. Subir a API [AUT]
 
