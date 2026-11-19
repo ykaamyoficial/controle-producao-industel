@@ -50,11 +50,14 @@ class PostgreSQLIntegrationTests(unittest.TestCase):
         cls.previous = {
             "DATABASE_URL": os.environ.get("DATABASE_URL"),
             "APP_ENV": os.environ.get("APP_ENV"),
+            "SECRET_KEY": os.environ.get("SECRET_KEY"),
             "OPERATIONAL_COMPANY_CODE": os.environ.get("OPERATIONAL_COMPANY_CODE"),
             "OPERATIONAL_COMPANY_NAME": os.environ.get("OPERATIONAL_COMPANY_NAME"),
             "OPERATIONAL_ENVIRONMENT_TYPE": os.environ.get("OPERATIONAL_ENVIRONMENT_TYPE"),
         }
         os.environ["APP_ENV"] = "test"
+        # /system/ready exige SECRET_KEY >= 32 chars; valor ficticio de teste, so quando o ambiente nao traz um.
+        os.environ["SECRET_KEY"] = os.environ.get("SECRET_KEY") or "postgres-it-test-only-fictitious-secret-key-0123456789"
         os.environ["DATABASE_URL"] = TEST_DATABASE_URL
         os.environ["OPERATIONAL_COMPANY_CODE"] = "teste01"
         os.environ["OPERATIONAL_COMPANY_NAME"] = "teste01"

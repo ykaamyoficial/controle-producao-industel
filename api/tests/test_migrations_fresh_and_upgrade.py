@@ -22,8 +22,10 @@ _SKIP_REASON = "Testes de migration exigem APP_ENV=test e POSTGRES_TEST_DATABASE
 
 
 def _swap_env_for_test_database() -> dict[str, str | None]:
-    previous = {"DATABASE_URL": os.environ.get("DATABASE_URL"), "APP_ENV": os.environ.get("APP_ENV")}
+    previous = {"DATABASE_URL": os.environ.get("DATABASE_URL"), "APP_ENV": os.environ.get("APP_ENV"), "SECRET_KEY": os.environ.get("SECRET_KEY")}
     os.environ["APP_ENV"] = "test"
+    # /system/ready exige SECRET_KEY >= 32 chars; valor ficticio de teste, so quando o ambiente nao traz um.
+    os.environ["SECRET_KEY"] = os.environ.get("SECRET_KEY") or "migrations-test-only-fictitious-secret-key-0123456789"
     os.environ["DATABASE_URL"] = TEST_DATABASE_URL
     get_settings.cache_clear()
     get_engine.cache_clear()
