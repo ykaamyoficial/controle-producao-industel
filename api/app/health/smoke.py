@@ -46,7 +46,7 @@ class HttpxSmokeClient:
     def _request(self, method: str, path: str, *, timeout: float, json_payload: Any = None) -> SmokeHttpResponse:
         import httpx
 
-        # Sem verify=False: a verificacao TLS do httpx fica sempre ligada; sem redirects.
+        # A verificacao TLS do httpx fica no padrao (ligada); sem redirects.
         response = httpx.request(method, f"{self._base_url}{path}", headers=self._headers(), json=json_payload, timeout=timeout)
         try:
             body = response.json()
