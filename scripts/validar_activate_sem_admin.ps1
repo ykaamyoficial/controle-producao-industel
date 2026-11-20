@@ -29,7 +29,7 @@ param(
     [string]$OldUpdaterRepo = ''   # controle negativo: roda 'python -m app.updater' deste checkout antigo (sem --no-elevate) no lugar do Updater.exe novo
 )
 $ErrorActionPreference = 'Stop'
-if (-not $Dist) { $Dist = Join-Path (Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)) 'dist' }
+if (-not $Dist) { $Dist = Join-Path (Split-Path -Parent (Split-Path -Parent $PSCommandPath)) 'dist' }
 $me = [Security.Principal.WindowsIdentity]::GetCurrent().Name
 if (([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     throw 'Rode SEM elevacao (esta sessao e administrador elevada).'
@@ -51,6 +51,8 @@ $pointer = Join-Path $install 'current.json'
 [IO.File]::WriteAllText($pointer, "{`"schema`": 1, `"version`": `"$OldVersion`", `"dir`": `"versions/$OldVersion`", `"previous_version`": null, `"updated_at`": `"`"}", (New-Object Text.UTF8Encoding($false)))
 
 # ACL do instalador: sem heranca; usuarios leem/executam; Modify so no ARQUIVO current.json.
+# O exe de mentira entra antes do icacls: depois dele o usuario nao cria arquivo na pasta.
+if ($Cenario -eq 'FalhaPonteiro') { Copy-Item (Join-Path $env:SystemRoot 'System32\ping.exe') (Join-Path $install "versions\$OldVersion\app-de-mentira.exe") }
 & icacls $install /inheritance:r /Q | Out-Null
 & icacls $install /grant:r '*S-1-5-32-545:(OI)(CI)RX' /Q | Out-Null
 & icacls $pointer /grant '*S-1-5-32-545:(M)' /Q | Out-Null
@@ -65,14 +67,13 @@ $pointerDenied = $false
 try {
     if ($Cenario -eq 'FalhaPonteiro') {
         # Nega escrita no ponteiro (a negacao vence o Modify de Users) e prova que a escrita realmente falha.
-        & icacls $pointer /deny "${me}:(W,WD,AD,DC)" /Q | Out-Null
+        & icacls $pointer /deny "${me}:(WD,AD,WA,WEA)" /Q | Out-Null
         $pointerDenied = $true
         $canWrite = $true; try { $fs = [IO.File]::Open($pointer, 'Open', 'ReadWrite'); $fs.Close() } catch { $canWrite = $false }
         if ($canWrite) { throw 'ACL nao negou a escrita em current.json: teste invalido.' }
         Write-Host 'OK: nao escrevo em current.json.'
-        # "App de mentira" vivo DENTRO da pasta da versao antiga (e o que o Updater mataria se fechasse o app).
+        # "App de mentira" vivo DENTRO da pasta da versao antiga (e o que o Updater mataria se fechasse o app); copiado la antes do icacls.
         $fakeExe = Join-Path $install "versions\$OldVersion\app-de-mentira.exe"
-        Copy-Item (Join-Path $env:SystemRoot 'System32\ping.exe') $fakeExe
         $fake = Start-Process -FilePath $fakeExe -ArgumentList @('-n', '600', '127.0.0.1') -WindowStyle Hidden -PassThru
         Start-Sleep -Milliseconds 500
         if ($fake.HasExited) { throw 'O app de mentira nao subiu: teste invalido.' }
