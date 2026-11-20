@@ -199,7 +199,7 @@ Passos:
 
 **Correção (2.10.1).** `write_pointer` tenta o caminho atômico e, em `PermissionError`, grava direto em `current.json` (uma única escrita de cerca de 200 bytes; `shortcut:` documentado no código). Vale também para o rollback do ponteiro. **Quem executa é o Updater da versão instalada**: PC em 2.9.0 continua com o bug ao atualizar; a correção só vale para atualizações **a partir** da 2.10.1.
 
-**Regra daqui para frente: validar sempre sem administrador.** Antes de publicar qualquer versão do Desktop, rodar o `--activate` do Updater novo numa pasta com a ACL do instalador (usuário atual sem criar arquivo na raiz, `Modify` só em `current.json`), sem elevação, com `CONTROLE_PRODUCAO_DATA_DIR` apontando para uma pasta de teste (nunca `C:\Program Files` nem `C:\ProgramData\Industel` reais). `tests/test_updater_versions.py` e `tests/test_updater_versioned.py` simulam a ACL com `PermissionError` no temp; não substituem o teste real. Se a ACL do instalador mudar, repita. O script `scriptsalidar_activate_sem_admin.ps1 -Work <pasta nova> -StandinExe <app de mentira>` faz exatamente isso (monta o layout, aplica a ACL, roda `Updater.exe --activate` sem elevação e confere `current.json`); `-OldUpdaterRepo <checkout antigo>` serve de controle negativo. Em 2026-11-19 o Updater 2.10.1 passou (2.10.0 -> 2.10.1, `previous_version` 2.10.0, handshake confirmado, sem UAC) e o código da 2.10.0 reproduziu o `PermissionError` de produção.
+**Regra daqui para frente: validar sempre sem administrador.** Antes de publicar qualquer versão do Desktop, rodar o `--activate` do Updater novo numa pasta com a ACL do instalador (usuário atual sem criar arquivo na raiz, `Modify` só em `current.json`), sem elevação, com `CONTROLE_PRODUCAO_DATA_DIR` apontando para uma pasta de teste (nunca `C:\Program Files` nem `C:\ProgramData\Industel` reais). `tests/test_updater_versions.py` e `tests/test_updater_versioned.py` simulam a ACL com `PermissionError` no temp; não substituem o teste real. Se a ACL do instalador mudar, repita. O script `scripts\validar_activate_sem_admin.ps1 -Work <pasta nova> -StandinExe <app de mentira>` faz exatamente isso (monta o layout, aplica a ACL, roda `Updater.exe --activate` sem elevação e confere `current.json`); `-OldUpdaterRepo <checkout antigo>` serve de controle negativo. Em 2026-11-19 o Updater 2.10.1 passou (2.10.0 -> 2.10.1, `previous_version` 2.10.0, handshake confirmado, sem UAC) e o código da 2.10.0 reproduziu o `PermissionError` de produção.
 
 ### Frota ainda em 2.9.0 (com a 2.10.1 publicada e autorizada)
 
@@ -212,3 +212,31 @@ Alternativa, sem administrador no segundo passo:
 3. Fechar o app e abrir de novo: abre na versão nova. Dali em diante o Updater é o corrigido.
 
 Se o PC não conseguir gravar `current.json` (ACL diferente), o script avisa; use o Setup.
+
+## 10. Lição da 2.10.2: a ativação nunca fecha o app antes de garantir o ponteiro
+
+Publicada em 2026-11-19/20 (commits `59edd5b`, `563d684`, `f7ed643`, `06a47a3`; revisão `1fe1254`, `2ee7ef3`, `d52d025`; tag `v2.10.2` no `d52d025`; `09f1d04` corrigiu o script de validação). Política do servidor: `authorized_release_version` 2.10.2, `enforcement` NONE, `policy_revision` 3 (era 2.10.1 / rev 2). `MINIMUM_DESKTOP_VERSION` da API continua 2.10.0; a API não foi alterada.
+
+**O que mudou no Updater/Desktop**
+
+- O `--activate` grava e **relê** o `current.json` **antes** de pedir o fechamento do app (nova fase `CLOSING`). Falha de ponteiro vira `FAILED` com mensagem em pt-BR, o programa continua aberto e nada é fechado.
+- Último recurso: relança elevado (UAC) **uma vez**, com `--no-elevate` no filho (sem loop) e sem segurar o lock. O Updater elevado grava direto no `current.json` para não perder a ACL `Users:(M)`.
+- `_can_write_pointer` testa a abertura real (`os.access` ignora ACL no Windows).
+- O coordenador espera o status da ativação e só retorna `launched=True` em `CLOSING`, `RESTARTING` ou `SUCCESS`.
+- Os diálogos param em 98%; 100% só se `SUCCESS` for visto. O processo antigo fecha antes do handshake, por isso a barra não chega a 100% no diálogo antigo. É esperado.
+- Rollback por handshake ausente grava `ROLLED_BACK` **antes** de reabrir a versão antiga, e o app antigo mostra o aviso (`app/services/update_outcome_notice.py`, chamado antes do portão de compatibilidade, do `UpdateDialog` e do login).
+
+**Regra: validar `--stage` e `--activate` sem administrador, com a ACL do instalador, antes de publicar.** Comando: `scripts\validar_activate_sem_admin.ps1 -Cenario Sucesso|FalhaPonteiro -OldVersion 2.10.1 -NewVersion 2.10.2` (usa `--no-elevate`; trabalhe em pasta de teste, nunca em `Program Files` nem `ProgramData` reais). Os dois cenários devem passar: `Sucesso` (ACTIVATING, CLOSING, RESTARTING, SUCCESS, `current.json` trocado, sem UAC) e `FalhaPonteiro` (`FAILED` em pt-BR, `current.json` intacto, sem `quit.request`, app de mentira vivo, exit 1). O próprio script tinha dois bugs, corrigidos no `09f1d04`: copiar o app de mentira **antes** do `icacls`, e o deny em `current.json` deve ser `(WD,AD,WA,WEA)` (sem `SYNCHRONIZE`).
+
+**Regra: o Updater que roda é o da versão JÁ INSTALADA.** A correção só vale para quem já está na versão com ela. Para a frota em 2.9.0 ou 2.10.0, é preciso uma **ponte única**, uma destas:
+
+1. Instalar o `ControleProducaoSetup-2.10.2.exe` por cima (admin local); ou
+2. Clicar "Atualizar agora" (o `--stage` funciona, com UAC) e depois rodar `scripts\destravar_atualizacao_2_10.bat`, que aceita qualquer versão pronta maior ou igual a 2.10.0 (inclusive 2.10.2) e aponta o `current.json`.
+
+A partir da 2.10.1 o fluxo é automático: da 2.10.1 em diante o botão atualiza sozinho para 2.10.2 (com o Updater 2.10.1 a ativação usa o fallback direto de gravação).
+
+**Pendências e não validado**
+
+- Não validado: UAC real; ciclo real com o Setup instalado em `Program Files`; controle negativo com Updater antigo (o `9833508` já tem o fix e não há como evitar o prompt); preservação da ACL com `os.replace` elevado real.
+- Conhecida: se o filho elevado reabrir o app, o app herda o token elevado.
+- Teste real 2.10.1 -> 2.10.2 pelo botão neste PC (UAC no stage) e conferência do `updater.log`: pendente do Henrique.
