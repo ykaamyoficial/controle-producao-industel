@@ -51,6 +51,14 @@ class VersionedConfig:
     lock_timeout_seconds: int = 1800
     rename_retries: int = 5
     rename_retry_delay_seconds: float = 1.0
+    closing_grace_seconds: float = 1.0  # o coordenador (polling 0,5 s) le CLOSING antes de o watcher fechar a janela
+
+
+@dataclass(frozen=True)
+class _NeedsElevation:
+    """Devolvido por _activate_locked: o ponteiro nao gravou e ha elevacao a tentar -- fora do lock."""
+
+    error: OSError
 
 
 class VersionedUpdater:
@@ -182,11 +190,18 @@ class VersionedUpdater:
         root = Path(request.install_dir)
         try:
             with UpdaterLock(self._lock_path, timeout_seconds=self._config.lock_timeout_seconds):
-                return self._activate_locked(request, root)
+                outcome = self._activate_locked(request, root)
         except UpdaterLockError as exc:
             return self._report(request, PHASE_FAILED, 0, "Ja existe uma atualizacao em andamento.", error=str(exc))
+        if not isinstance(outcome, _NeedsElevation):
+            return outcome
+        # Lock ja liberado: o processo elevado precisa adquiri-lo sem corrida.
+        waiting = self._report(request, PHASE_ACTIVATING, 5, "Aguardando permissao de administrador")
+        if self._elevate():
+            return waiting
+        return self._pointer_failed(request, outcome.error)
 
-    def _activate_locked(self, request: UpdateRequest, root: Path) -> UpdateStatus:
+    def _activate_locked(self, request: UpdateRequest, root: Path) -> UpdateStatus | _NeedsElevation:
         target = request.target_version
         if not versions.app_executable(root, target).is_file():
             return self._report(
@@ -207,11 +222,21 @@ class VersionedUpdater:
             if written is None or written.version != target:
                 raise OSError("current.json nao refletiu a nova versao apos a gravacao.")
         except OSError as exc:
+            if self._elevate is not None:
+                log.error("versioned_activate_pointer_failed | erro=%s | elevando", exc)
+                return _NeedsElevation(exc)
             return self._pointer_failed(request, exc)
 
+        try:
+            clear_handshake_marker(request.request_id)
+        except OSError as exc:
+            return self._abort_before_close(request, root, previous, exc)
         self._report(request, PHASE_CLOSING, 10, "Fechando o programa para concluir a atualizacao")
-        clear_handshake_marker(request.request_id)
-        quit_signal.request_quit(request.request_id)
+        self._sleep(self._config.closing_grace_seconds)
+        try:
+            quit_signal.request_quit(request.request_id)
+        except OSError as exc:
+            return self._abort_before_close(request, root, previous, exc)
 
         leftovers = self._stop_processes(
             root, exclude_pids=(os.getpid(),),
@@ -224,6 +249,7 @@ class VersionedUpdater:
 
         self._report(request, PHASE_RESTARTING, 70, "Abrindo a nova versao")
         launcher = Path(request.executable_path)
+        # Pendencia conhecida: se este Updater estiver elevado, o app reaberto herda o token de administrador.
         try:
             self._launch(launcher, ["--post-update", request.request_id, *request.restart_args])
             confirmed = self._wait_handshake(request.request_id, timeout_seconds=self._config.handshake_timeout_seconds)
@@ -237,10 +263,26 @@ class VersionedUpdater:
             return self._report(request, PHASE_SUCCESS, 100, "Atualizacao concluida.")
         return self._rollback(request, root, previous=previous, reason=failure)
 
+    def _abort_before_close(self, request: UpdateRequest, root: Path, previous: str | None, exc: OSError) -> UpdateStatus:
+        """Ponteiro ja gravado mas o pedido de saida falhou: volta o ponteiro e deixa o app aberto."""
+        log.error("versioned_activate_close_request_failed | erro=%s", exc)
+        restored = False
+        if previous is not None:
+            try:
+                versions.write_pointer(root, previous)
+                restored = True
+            except OSError as restore_exc:
+                log.error("versioned_activate_pointer_restore_failed | erro=%s", restore_exc)
+        suffix = "" if restored or previous is None else " Nao foi possivel restaurar o current.json; peca ao TI para verificar a instalacao."
+        return self._report(
+            request, PHASE_FAILED, 10,
+            "Nao foi possivel pedir o fechamento do programa para concluir a atualizacao. "
+            "O programa continua aberto e na versao atual." + suffix,
+            error=str(exc),
+        )
+
     def _pointer_failed(self, request: UpdateRequest, exc: OSError) -> UpdateStatus:
         log.error("versioned_activate_pointer_failed | erro=%s", exc)
-        if self._elevate is not None and self._elevate():
-            return self._report(request, PHASE_ACTIVATING, 5, "Aguardando permissao de administrador")
         return self._report(
             request, PHASE_FAILED, 5,
             "Nao foi possivel trocar a versao do programa (sem permissao no arquivo current.json). "
@@ -265,6 +307,10 @@ class VersionedUpdater:
                 "(sem permissao no arquivo current.json). Peca ao TI para reinstalar com o Setup.",
                 error=f"{reason}; {exc}",
             )
+        # O status vem ANTES de reabrir a versao antiga: ela le o aviso ja na subida.
+        status = self._report(
+            request, PHASE_ROLLED_BACK, 100, f"A nova versao nao abriu corretamente; a versao {previous} foi restaurada.", error=reason,
+        )
         self._stop_processes(
             versions.version_dir(root, request.target_version), exclude_pids=(os.getpid(),),
             graceful_timeout_seconds=0.0, force_timeout_seconds=self._config.force_timeout_seconds,
@@ -273,9 +319,7 @@ class VersionedUpdater:
             self._launch(Path(request.executable_path), list(request.restart_args))
         except OSError as exc:
             log.error("versioned_rollback_relaunch_failed | erro=%s", exc)
-        return self._report(
-            request, PHASE_ROLLED_BACK, 100, f"A nova versao nao abriu corretamente; a versao {previous} foi restaurada.", error=reason,
-        )
+        return status
 
     # -- utilidades ----------------------------------------------------------
 

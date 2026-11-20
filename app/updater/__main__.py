@@ -24,7 +24,7 @@ from app.updater.exceptions import ConcurrentUpdateError, UpdateFailedError, Upd
 from app.updater.journal_store import UpdateJournalStore
 from app.updater.orchestrator import OrchestratorConfig, UpdaterOrchestrator
 from app.updater import versions
-from app.updater.status import PHASE_FAILED, UpdateStatus, write_status
+from app.updater.status import PHASE_ACTIVATING, PHASE_FAILED, PHASE_STAGING, UpdateStatus, write_status
 from app.updater.versioned import VersionedConfig, VersionedUpdater
 from app.updater.paths import backup_dir, download_dir, ensure_updater_dirs, journal_dir, lock_path, staging_dir, updater_logs_dir
 
@@ -59,6 +59,13 @@ def _can_write_pointer(install_root: Path) -> bool:
         return False
 
 
+def _write_waiting_for_admin(request: UpdateRequest, phase: str, log: logging.Logger) -> None:
+    try:
+        write_status(UpdateStatus(request.request_id, phase, 5, "Aguardando permissao de administrador"))
+    except OSError as exc:
+        log.warning("update_status_write_failed | erro=%s", exc)
+
+
 def _run_versioned(request: UpdateRequest, args, argv, log: logging.Logger) -> int:
     install_root = Path(request.install_dir)
     # Preparar escreve em versions/ (precisa de escrita na raiz); ativar so troca
@@ -67,14 +74,19 @@ def _run_versioned(request: UpdateRequest, args, argv, log: logging.Logger) -> i
     can_write = is_writable(install_root) if args.stage else _can_write_pointer(install_root)
     elevate = None
     if not args.no_elevate and not is_admin():
-        relaunch_argv = argv if argv is not None else sys.argv[1:]
-        elevate = lambda: relaunch_elevated(relaunch_argv)  # noqa: E731 - ultimo recurso se o ponteiro falhar
-    if not args.no_elevate and not is_admin() and not can_write:
-        log.warning("update_elevation_required | install_root=%s | mode=%s", install_root, "stage" if args.stage else "activate")
-        if relaunch_elevated(argv if argv is not None else sys.argv[1:]):
-            log.warning("update_elevation_relaunched | request_id=%s", request.request_id)
-            return 0
-        log.warning("update_elevation_declined_or_failed | request_id=%s", request.request_id)
+        # --no-elevate no filho: trava contra loop de UAC se a elevacao nao for reconhecida.
+        relaunch_argv = [*(argv if argv is not None else sys.argv[1:]), "--no-elevate"]
+        if not can_write:
+            log.warning("update_elevation_required | install_root=%s | mode=%s", install_root, "stage" if args.stage else "activate")
+            # Sem isto o coordenador contaria o tempo do UAC como silencio do Updater.
+            _write_waiting_for_admin(request, PHASE_STAGING if args.stage else PHASE_ACTIVATING, log)
+            if relaunch_elevated(relaunch_argv):
+                log.warning("update_elevation_relaunched | request_id=%s", request.request_id)
+                return 0
+            # UAC recusado: sem segundo prompt no ultimo recurso (elevate segue None).
+            log.warning("update_elevation_declined_or_failed | request_id=%s", request.request_id)
+        else:
+            elevate = lambda: relaunch_elevated(relaunch_argv)  # noqa: E731 - ultimo recurso se o ponteiro falhar
 
     updater = VersionedUpdater(
         lock_path=lock_path(),
@@ -143,7 +155,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if not args.no_elevate and not is_admin() and not is_writable(install_dir):
         log.warning("update_elevation_required | install_dir=%s", install_dir)
-        if relaunch_elevated(argv if argv is not None else sys.argv[1:]):
+        if relaunch_elevated([*(argv if argv is not None else sys.argv[1:]), "--no-elevate"]):
             log.warning("update_elevation_relaunched | request_id=%s", request.request_id)
             return 0
         log.warning("update_elevation_declined_or_failed | request_id=%s", request.request_id)

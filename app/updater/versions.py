@@ -16,6 +16,7 @@ Este modulo e usado tambem pelo launcher, entao depende SO da stdlib.
 from __future__ import annotations
 
 from app import edition
+from app.updater.elevation import is_admin
 
 import json
 import os
@@ -131,6 +132,10 @@ def write_pointer(install_root: Path, version: str, *, previous_version: str | N
     if not root.is_dir():
         root.mkdir(parents=True, exist_ok=True)
     text = json.dumps(payload, indent=2)
+    if os.name == "nt" and pointer_path(root).exists() and is_admin():
+        # Elevado, o os.replace trocaria o arquivo e perderia a ACL Users:(M) do instalador; gravar no proprio arquivo a preserva.
+        pointer_path(root).write_text(text, encoding="utf-8")
+        return pointer
     temp = root / f"{POINTER_FILE_NAME}.{os.getpid()}.tmp"
     try:
         temp.write_text(text, encoding="utf-8")

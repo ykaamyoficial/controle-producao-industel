@@ -55,7 +55,7 @@ class VersionedUpdaterTests(unittest.TestCase):
     def _updater(self, **overrides) -> VersionedUpdater:
         kwargs = dict(
             lock_path=self.tmp / ".lock", status_directory=self.status_dir,
-            config=VersionedConfig(min_free_space_mb=1, rename_retries=1, rename_retry_delay_seconds=0),
+            config=VersionedConfig(min_free_space_mb=1, rename_retries=1, rename_retry_delay_seconds=0, closing_grace_seconds=0),
             process_stopper=self.stopper, process_launch=self.launch, handshake_waiter=self.handshake,
         )
         kwargs.update(overrides)
@@ -223,17 +223,24 @@ class VersionedUpdaterTests(unittest.TestCase):
 
     def test_activate_elevates_as_last_resort_and_releases_lock_without_failed(self):
         request, _ = self._stage()
-        elevate = mock.Mock(return_value=True)
+        seen: dict = {}
+
+        def elevate():
+            # Faz o que o processo elevado faz: adquirir o MESMO lock. Com o lock preso, falharia.
+            with UpdaterLock(self.tmp / ".lock", timeout_seconds=0.5):
+                seen["lock"] = True
+            seen["status"] = read_status("req1", directory=self.status_dir)
+            return True
+
         with mock.patch("app.updater.versioned.quit_signal") as quit_signal,                 mock.patch("app.updater.versioned.versions.write_pointer", side_effect=PermissionError("negado")):
             status = self._updater(elevate=elevate).activate(request)
-        elevate.assert_called_once_with()
+        self.assertTrue(seen["lock"])
+        self.assertEqual((seen["status"].phase, seen["status"].percent), (PHASE_ACTIVATING, 5))  # gravado ANTES de elevar
         self.assertEqual(status.phase, PHASE_ACTIVATING)
         self.assertIn("administrador", status.message)
         self.assertFalse(status.is_failure)
         quit_signal.request_quit.assert_not_called()
         self.stopper.assert_not_called()
-        with UpdaterLock(self.tmp / ".lock", timeout_seconds=1):  # lock liberado para o processo elevado
-            pass
 
     def test_activate_fails_when_elevation_is_declined(self):
         request, _ = self._stage()
@@ -271,6 +278,55 @@ class VersionedUpdaterTests(unittest.TestCase):
         self.assertEqual(status.phase, PHASE_SUCCESS)
         self.assertEqual(calls, ["pointer", "quit", "stop", "launch"])
         self.assertEqual(phases, [PHASE_ACTIVATING, "CLOSING", "RESTARTING", PHASE_SUCCESS])
+
+    def test_closing_is_reported_then_grace_sleep_then_quit_request(self):
+        request, _ = self._stage()
+        calls: list[str] = []
+        with mock.patch("app.updater.versioned.quit_signal") as quit_signal,                 mock.patch("app.updater.versioned.write_status", side_effect=lambda status, **_: calls.append(status.phase)):
+            quit_signal.request_quit.side_effect = lambda *_: calls.append("quit")
+            sleep = mock.Mock(side_effect=lambda seconds: calls.append(f"sleep={seconds}"))
+            updater = self._updater(sleep=sleep, config=VersionedConfig(min_free_space_mb=1, closing_grace_seconds=1.0))
+            updater.activate(request)
+        self.assertEqual(calls[calls.index("CLOSING"):calls.index("CLOSING") + 3], ["CLOSING", "sleep=1.0", "quit"])
+
+    def test_quit_request_failure_restores_pointer_and_leaves_app_open(self):
+        request, _ = self._stage()
+        with mock.patch("app.updater.versioned.quit_signal") as quit_signal:
+            quit_signal.request_quit.side_effect = PermissionError("sem acesso")
+            status = self._updater().activate(request)
+        self.assertEqual(status.phase, PHASE_FAILED)
+        self.assertIn("continua aberto", status.message)
+        self.assertIn("sem acesso", status.error)
+        self.assertEqual(v.read_pointer(self.root).version, "2.8.0")
+        self.stopper.assert_not_called()
+        self.launch.assert_not_called()
+        self.assertEqual(read_status("req1", directory=self.status_dir).phase, PHASE_FAILED)
+
+    def test_handshake_marker_failure_restores_pointer_and_never_asks_the_app_to_quit(self):
+        request, _ = self._stage()
+        with mock.patch("app.updater.versioned.quit_signal") as quit_signal,                 mock.patch("app.updater.versioned.clear_handshake_marker", side_effect=OSError("marcador preso")):
+            status = self._updater().activate(request)
+        self.assertEqual(status.phase, PHASE_FAILED)
+        self.assertIn("marcador preso", status.error)
+        self.assertEqual(v.read_pointer(self.root).version, "2.8.0")
+        quit_signal.request_quit.assert_not_called()
+        self.stopper.assert_not_called()
+
+    def test_rollback_status_is_written_before_the_old_app_is_relaunched(self):
+        request, _ = self._stage()
+        self.handshake.return_value = False
+        at_launch: list = []
+
+        def launch(*args, **kwargs):
+            at_launch.append(read_status("req1", directory=self.status_dir))
+            return 1
+
+        self.launch.side_effect = launch
+        status = self._updater().activate(request)
+        self.assertEqual(status.phase, PHASE_ROLLED_BACK)
+        self.assertEqual(len(at_launch), 2)  # nova versao, depois a antiga
+        self.assertEqual(at_launch[0].phase, "RESTARTING")
+        self.assertEqual(at_launch[1].phase, PHASE_ROLLED_BACK)  # a versao antiga ja encontra o aviso
 
     def test_rollback_without_handshake_restores_pointer_relaunches_old_app_and_explains(self):
         request, _ = self._stage()

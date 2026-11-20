@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -22,6 +23,9 @@ PHASE_RESTARTING = "RESTARTING"
 PHASE_SUCCESS = "SUCCESS"
 PHASE_FAILED = "FAILED"
 PHASE_ROLLED_BACK = "ROLLED_BACK"
+
+_REPLACE_ATTEMPTS = 4
+_REPLACE_RETRY_SECONDS = 0.05
 
 TERMINAL_PHASES = frozenset({PHASE_STAGED, PHASE_SUCCESS, PHASE_FAILED, PHASE_ROLLED_BACK})
 
@@ -52,7 +56,16 @@ def write_status(status: UpdateStatus, *, directory: Path | None = None) -> None
     target.parent.mkdir(parents=True, exist_ok=True)
     temp = target.with_name(f"{target.name}.{os.getpid()}.tmp")
     temp.write_text(json.dumps(asdict(status), ensure_ascii=False), encoding="utf-8")
-    os.replace(temp, target)
+    # No Windows o os.replace falha com PermissionError se o leitor (polling) esta com o arquivo aberto.
+    for attempt in range(_REPLACE_ATTEMPTS):
+        try:
+            os.replace(temp, target)
+            return
+        except PermissionError:
+            if attempt == _REPLACE_ATTEMPTS - 1:
+                temp.unlink(missing_ok=True)
+                raise
+            time.sleep(_REPLACE_RETRY_SECONDS)
 
 
 def read_status(request_id: str, *, directory: Path | None = None) -> UpdateStatus | None:

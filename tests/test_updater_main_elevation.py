@@ -46,6 +46,7 @@ class CanWritePointerTests(unittest.TestCase):
         if denied.returncode != 0:
             self.skipTest(f"icacls indisponivel: {denied.stdout}{denied.stderr}")
         self.addCleanup(lambda: subprocess.run(["icacls", str(pointer), "/remove:d", user], capture_output=True))
+        self.assertIs(os.access(pointer, os.W_OK), True)  # o atalho que enganava: o SO diz que sim
         self.assertFalse(updater_main._can_write_pointer(self.root))
 
 
@@ -56,7 +57,7 @@ class RunVersionedElevationTests(unittest.TestCase):
         self.updater_cls.return_value.activate.return_value = UpdateStatus("req1", PHASE_SUCCESS, 100, "ok")
         patcher = mock.patch.multiple(
             updater_main, VersionedUpdater=self.updater_cls, lock_path=mock.Mock(return_value=Path("x.lock")),
-            download_dir=mock.Mock(return_value=Path("dl")),
+            download_dir=mock.Mock(return_value=Path("dl")), write_status=mock.Mock(),  # nunca grava no status real
         )
         patcher.start()
         self.addCleanup(patcher.stop)
@@ -79,8 +80,25 @@ class RunVersionedElevationTests(unittest.TestCase):
     def test_precheck_elevates_when_not_admin_and_cannot_write(self):
         code, relaunch = self._run(admin=False, can_write=False, no_elevate=False)
         self.assertEqual(code, 0)
-        relaunch.assert_called_once_with(["--request", "r.json", "--activate"])
+        relaunch.assert_called_once_with(["--request", "r.json", "--activate", "--no-elevate"])
         self.updater_cls.assert_not_called()
+
+    def test_declined_precheck_uac_never_prompts_twice(self):
+        code, relaunch = self._run(admin=False, can_write=False, no_elevate=False, relaunch=False)
+        self.assertEqual(relaunch.call_count, 1)
+        self.assertIsNone(self.updater_cls.call_args.kwargs["elevate"])
+        self.assertEqual(code, 0)
+
+    def test_precheck_writes_waiting_status_before_the_uac_prompt(self):
+        order = []
+        with mock.patch.object(updater_main, "write_status", side_effect=lambda status, **_: order.append(("status", status))):
+            args = Namespace(stage=False, activate=True, no_elevate=False, app_exit_timeout_seconds=60.0, handshake_timeout_seconds=30.0)
+            with mock.patch.object(updater_main, "is_admin", return_value=False),                     mock.patch.object(updater_main, "_can_write_pointer", return_value=False),                     mock.patch.object(updater_main, "relaunch_elevated", side_effect=lambda argv: order.append(("uac", argv)) or True):
+                updater_main._run_versioned(self.request, args, ["--request", "r.json", "--activate"], mock.Mock())
+        self.assertEqual([kind for kind, _ in order], ["status", "uac"])
+        status = order[0][1]
+        self.assertEqual((status.request_id, status.phase, status.percent), ("req1", PHASE_ACTIVATING, 5))
+        self.assertIn("administrador", status.message)
 
     def test_no_elevate_disables_precheck_and_last_resort(self):
         code, relaunch = self._run(admin=False, can_write=False, no_elevate=True)
@@ -96,7 +114,7 @@ class RunVersionedElevationTests(unittest.TestCase):
     def test_non_admin_with_writable_pointer_gets_last_resort_elevation_with_same_argv(self):
         _, relaunch = self._run(admin=False, can_write=True, no_elevate=False, call_elevate=True)
         self.assertTrue(self.elevate_result)
-        relaunch.assert_called_once_with(["--request", "r.json", "--activate"])
+        relaunch.assert_called_once_with(["--request", "r.json", "--activate", "--no-elevate"])
 
     def test_waiting_for_elevated_process_is_not_a_failure_exit(self):
         self.updater_cls.return_value.activate.return_value = UpdateStatus("req1", PHASE_ACTIVATING, 5, "Aguardando permissao de administrador")

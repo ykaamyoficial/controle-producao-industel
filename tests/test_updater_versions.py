@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
 from contextlib import contextmanager
@@ -52,6 +53,25 @@ class VersionsTests(unittest.TestCase):
         pointer = v.read_pointer(self.root)
         self.assertEqual((pointer.version, pointer.previous_version), ("2.9.0", "2.8.0"))
         self.assertEqual([p.name for p in self.root.iterdir()], ["current.json"])
+
+    def test_write_pointer_elevated_writes_in_place_to_keep_the_installer_acl(self):
+        pointer = self.root / "current.json"
+        pointer.write_text("{}")
+        with mock.patch.object(v, "os", wraps=os) as fake_os, mock.patch.object(v, "is_admin", return_value=True):
+            fake_os.name = "nt"
+            fake_os.replace = mock.Mock(side_effect=AssertionError("os.replace trocaria o arquivo e perderia a ACL"))
+            v.write_pointer(self.root, "2.10.1", previous_version="2.10.0")
+        fake_os.replace.assert_not_called()
+        self.assertEqual(v.read_pointer(self.root).version, "2.10.1")
+        self.assertEqual([p.name for p in self.root.iterdir()], ["current.json"])
+
+    def test_write_pointer_not_elevated_keeps_atomic_replace(self):
+        (self.root / "current.json").write_text("{}")
+        with mock.patch.object(v, "os", wraps=os) as fake_os, mock.patch.object(v, "is_admin", return_value=False):
+            fake_os.name = "nt"
+            fake_os.replace = mock.Mock(side_effect=os.replace)
+            v.write_pointer(self.root, "2.10.1")
+        fake_os.replace.assert_called_once()
 
     def test_write_pointer_falls_back_to_direct_write_without_folder_permission(self):
         (self.root / "current.json").write_text("{}")
