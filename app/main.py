@@ -311,6 +311,9 @@ def main():
     # Caixas de mensagem e de entrada de texto do Qt com a mesma casca.
     install_message_boxes()
 
+    # Antes do portao de compatibilidade, do UpdateDialog e do login: o rollback precisa ser avisado mesmo se algum deles encerrar a abertura.
+    show_pending_update_failure_notice(None)
+
     if not run_startup_bootstrap():
         return 0
 
@@ -342,7 +345,6 @@ def main():
     from app.services.update_quit_watcher import install_quit_watcher
 
     install_quit_watcher(app, lambda: (window.close(), app.quit()))
-    show_pending_update_failure_notice(window)
     return app.exec()
 
 

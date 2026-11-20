@@ -86,5 +86,19 @@ class ShowPendingNoticeTests(unittest.TestCase):
         provider.assert_not_called()
 
 
+class MainNoticeOrderTests(unittest.TestCase):
+    def test_notice_is_shown_before_bootstrap_compatibility_gate_and_login(self):
+        import sys
+
+        import app.main as main_module
+
+        calls: list[tuple] = []
+        saved_hook = sys.excepthook
+        self.addCleanup(lambda: setattr(sys, "excepthook", saved_hook))
+        with mock.patch.object(main_module, "configure_logging"),                 mock.patch.object(main_module, "confirm_post_update_handshake"),                 mock.patch.object(main_module, "configure_windows_taskbar_icon"),                 mock.patch.object(main_module, "QApplication"),                 mock.patch.object(main_module, "app_icon"),                 mock.patch("app.services.notifier_agent.acquire_main_app_mutex"),                 mock.patch("app.ui.fonts.load_app_fonts"),                 mock.patch("app.ui.wheel_guard.install_combo_wheel_guard"),                 mock.patch("app.ui.components.floating_chrome.install_floating_chrome"),                 mock.patch("app.ui.components.message_boxes.install_message_boxes", side_effect=lambda: calls.append(("boxes",))),                 mock.patch.object(main_module, "show_pending_update_failure_notice", side_effect=lambda *a, **k: calls.append(("notice", a))),                 mock.patch.object(main_module, "run_startup_bootstrap", side_effect=lambda: calls.append(("bootstrap",)) or False):
+            self.assertEqual(main_module.main(), 0)
+        self.assertEqual(calls, [("boxes",), ("notice", (None,)), ("bootstrap",)])
+
+
 if __name__ == "__main__":
     unittest.main()
