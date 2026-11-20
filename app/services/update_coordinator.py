@@ -299,8 +299,11 @@ class UpdateCoordinator:
                     return status
                 if now - last_change > self._status_stall_timeout:
                     return None
-            elif last_seen is None and now - started > self._status_start_timeout:
-                return None
+            elif last_seen is None:
+                if now - started > self._status_start_timeout:
+                    return None
+            elif now - last_change > self._status_stall_timeout:
+                return None  # visto antes e agora sumiu/ficou ilegivel: mesmo limite de travamento
             self._sleep(0.5)
 
     def _resolve_install_paths(self) -> tuple[str, str]:

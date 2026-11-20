@@ -148,6 +148,13 @@ class VersionedUpdateFlowTests(UpdateCoordinatorTestCase):
         )
         self.assertFalse(coordinator.start_update(**URLS).launched)
 
+    def test_activation_status_vanishing_after_being_seen_times_out_as_stalled(self):
+        # Visto ACTIVATING e depois o arquivo some/ilegivel (None) para sempre: sem o limite de travamento isto nunca terminava.
+        coordinator = self._after_stage(self._status(PHASE_ACTIVATING, 5), *[None] * 2000, status_stall_timeout_seconds=5.0)
+        result = coordinator.start_update(**URLS)
+        self.assertFalse(result.launched)
+        self.assertIn("continua aberto", result.error_message)
+
     def test_progress_never_reaches_100_in_the_coordinator(self):
         seen: list[int] = []
         coordinator = self._after_stage(self._status(PHASE_ACTIVATING, 5), self._status(PHASE_SUCCESS, 100))
